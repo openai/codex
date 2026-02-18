@@ -2012,7 +2012,7 @@ impl Session {
     }
     fn build_settings_update_items(
         &self,
-        previous_context: Option<&Arc<TurnContext>>,
+        previous_context: Option<&TurnContextItem>,
         resumed_model: Option<&str>,
         current_context: &TurnContext,
     ) -> Vec<ResponseItem> {
@@ -2023,7 +2023,7 @@ impl Session {
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
         crate::context_manager::updates::build_settings_update_items(
-            previous_context.map(Arc::as_ref),
+            previous_context,
             resumed_model,
             current_context,
             shell.as_ref(),
@@ -2658,6 +2658,16 @@ impl Session {
         state.clone_history()
     }
 
+    pub(crate) async fn previous_context_item(&self) -> Option<TurnContextItem> {
+        let state = self.state.lock().await;
+        state.previous_context_item()
+    }
+
+    pub(crate) async fn set_previous_context_item(&self, item: Option<TurnContextItem>) {
+        let mut state = self.state.lock().await;
+        state.set_previous_context_item(item);
+    }
+
     pub(crate) async fn update_token_usage_info(
         &self,
         turn_context: &TurnContext,
@@ -3121,7 +3131,12 @@ impl Session {
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
     // Seed with context in case there is an OverrideTurnContext first.
-    let mut previous_context: Option<Arc<TurnContext>> = Some(sess.new_default_turn().await);
+    let initial_context = sess.new_default_turn().await;
+    let initial_collaboration_mode = initial_context.collaboration_mode.clone();
+    sess.set_previous_context_item(Some(
+        initial_context.to_turn_context_item(initial_collaboration_mode),
+    ))
+    .await;
 
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
@@ -3171,8 +3186,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 .await;
             }
             Op::UserInput { .. } | Op::UserTurn { .. } => {
-                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
-                    .await;
+                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
             }
             Op::ExecApproval {
                 id: approval_id,
@@ -3249,13 +3263,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::set_thread_name(&sess, sub.id.clone(), name).await;
             }
             Op::RunUserShellCommand { command } => {
-                handlers::run_user_shell_command(
-                    &sess,
-                    sub.id.clone(),
-                    command,
-                    &mut previous_context,
-                )
-                .await;
+                handlers::run_user_shell_command(&sess, sub.id.clone(), command).await;
             }
             Op::ResolveElicitation {
                 server_name,
@@ -3283,7 +3291,6 @@ mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::SteerInputError;
-    use crate::codex::TurnContext;
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
@@ -3360,12 +3367,7 @@ mod handlers {
         }
     }
 
-    pub async fn user_input_or_turn(
-        sess: &Arc<Session>,
-        sub_id: String,
-        op: Op,
-        previous_context: &mut Option<Arc<TurnContext>>,
-    ) {
+    pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
         let (items, updates) = match op {
             Op::UserTurn {
                 cwd,
@@ -3428,8 +3430,9 @@ mod handlers {
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
             sess.seed_initial_context_if_needed(&current_context).await;
             let previous_model = sess.previous_model().await;
+            let previous_context_item = sess.previous_context_item().await;
             let update_items = sess.build_settings_update_items(
-                previous_context.as_ref(),
+                previous_context_item.as_ref(),
                 previous_model.as_deref(),
                 &current_context,
             );
@@ -3443,16 +3446,15 @@ mod handlers {
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
             sess.spawn_task(Arc::clone(&current_context), items, regular_task)
                 .await;
-            *previous_context = Some(current_context);
+            let collaboration_mode = current_context.collaboration_mode.clone();
+            sess.set_previous_context_item(Some(
+                current_context.to_turn_context_item(collaboration_mode),
+            ))
+            .await;
         }
     }
 
-    pub async fn run_user_shell_command(
-        sess: &Arc<Session>,
-        sub_id: String,
-        command: String,
-        previous_context: &mut Option<Arc<TurnContext>>,
-    ) {
+    pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command: String) {
         if let Some((turn_context, cancellation_token)) =
             sess.active_turn_context_and_cancellation_token().await
         {
@@ -3477,7 +3479,9 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
-        *previous_context = Some(turn_context);
+        let collaboration_mode = turn_context.collaboration_mode.clone();
+        sess.set_previous_context_item(Some(turn_context.to_turn_context_item(collaboration_mode)))
+            .await;
     }
 
     pub async fn resolve_elicitation(
@@ -7732,8 +7736,14 @@ mod tests {
         .expect("rebuild config layer stack with network requirements");
         current_context.config = Arc::new(config);
 
-        let update_items =
-            session.build_settings_update_items(Some(&previous_context), None, &current_context);
+        let previous_collaboration_mode = previous_context.collaboration_mode.clone();
+        let previous_context_item =
+            previous_context.to_turn_context_item(previous_collaboration_mode);
+        let update_items = session.build_settings_update_items(
+            Some(&previous_context_item),
+            None,
+            &current_context,
+        );
 
         let environment_update = update_items
             .iter()
