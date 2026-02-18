@@ -157,8 +157,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     ) -> Option<NetworkApprovalSpec> {
         req.network.as_ref()?;
         Some(NetworkApprovalSpec {
-            command: req.command.clone(),
-            cwd: req.cwd.clone(),
             network: req.network.clone(),
             mode: NetworkApprovalMode::Deferred,
         })

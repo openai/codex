@@ -154,8 +154,6 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
     ) -> Option<NetworkApprovalSpec> {
         req.network.as_ref()?;
         Some(NetworkApprovalSpec {
-            command: req.command.clone(),
-            cwd: req.cwd.clone(),
             network: req.network.clone(),
             mode: NetworkApprovalMode::Immediate,
         })
