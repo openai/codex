@@ -153,6 +153,9 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
     ensure_mount_targets_exist(&writable_roots)?;
 
     // Read-only root, then mount a minimal device tree.
+    // In vendored bubblewrap (`bubblewrap.c`, `SETUP_MOUNT_DEV`), `--dev /dev`
+    // creates the standard minimal nodes: null, zero, full, random, urandom,
+    // and tty.
     // `/dev` must be mounted before writable roots so explicit `/dev/*`
     // writable binds remain visible.
     let mut args = vec![
