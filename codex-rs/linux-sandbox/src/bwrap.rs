@@ -152,18 +152,16 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
     let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
     ensure_mount_targets_exist(&writable_roots)?;
 
-    let mut args = Vec::new();
-
-    // Read-only root, then selectively re-enable writes.
-    args.push("--ro-bind".to_string());
-    args.push("/".to_string());
-    args.push("/".to_string());
-
-    // Ensure standard device nodes (including `/dev/urandom`) are available.
-    // This must be mounted before writable roots so explicit `/dev/*` writable
-    // binds remain visible.
-    args.push("--dev".to_string());
-    args.push("/dev".to_string());
+    // Read-only root, then mount a minimal device tree.
+    // `/dev` must be mounted before writable roots so explicit `/dev/*`
+    // writable binds remain visible.
+    let mut args = vec![
+        "--ro-bind".to_string(),
+        "/".to_string(),
+        "/".to_string(),
+        "--dev".to_string(),
+        "/dev".to_string(),
+    ];
 
     for writable_root in &writable_roots {
         let root = writable_root.root.as_path();
