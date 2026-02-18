@@ -43,6 +43,7 @@ js_repl_node_path = "/absolute/path/to/node"
 search path. Path-style specifiers (`./`, `../`, absolute paths, `file:` URLs) are rejected.
 
 Module resolution proceeds in the following order:
+
 1. `CODEX_JS_REPL_NODE_MODULE_DIRS` (PATH-delimited list)
 2. `js_repl_node_module_dirs` in config/profile (array of absolute paths)
 3. Thread working directory (cwd, always included as the last fallback)
