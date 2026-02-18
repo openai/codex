@@ -321,7 +321,6 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use codex_core::protocol::SandboxPolicy;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -371,81 +370,5 @@ mod tests {
                 "/bin/true".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn read_only_policy_mounts_dev_tree() {
-        let command = vec!["/bin/true".to_string()];
-        let args = create_bwrap_command_args(
-            command,
-            &SandboxPolicy::new_read_only_policy(),
-            Path::new("/"),
-            BwrapOptions {
-                mount_proc: true,
-                network_mode: BwrapNetworkMode::FullAccess,
-            },
-        )
-        .expect("create bwrap args");
-
-        assert_eq!(
-            args,
-            vec![
-                "--new-session".to_string(),
-                "--die-with-parent".to_string(),
-                "--ro-bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                "--dev".to_string(),
-                "/dev".to_string(),
-                "--unshare-pid".to_string(),
-                "--proc".to_string(),
-                "/proc".to_string(),
-                "--".to_string(),
-                "/bin/true".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn workspace_write_dev_subpath_bind_mounts_after_dev_tree() {
-        if !Path::new("/dev/shm").exists() {
-            return;
-        }
-
-        let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![
-                AbsolutePathBuf::from_absolute_path("/dev/shm")
-                    .expect("expected /dev/shm to be an absolute path"),
-            ],
-            read_only_access: Default::default(),
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
-
-        let args = create_bwrap_command_args(
-            vec!["/bin/true".to_string()],
-            &policy,
-            Path::new("/tmp"),
-            BwrapOptions {
-                mount_proc: true,
-                network_mode: BwrapNetworkMode::FullAccess,
-            },
-        )
-        .expect("create bwrap args");
-
-        let dev_mount_index = args
-            .windows(2)
-            .position(|window| window[0] == "--dev" && window[1] == "/dev")
-            .expect("expected --dev /dev in args");
-
-        let dev_subpath_bind_index = args
-            .windows(3)
-            .position(|window| {
-                window[0] == "--bind" && window[1] == "/dev/shm" && window[2] == "/dev/shm"
-            })
-            .expect("expected /dev/shm bind mount in args");
-
-        assert_eq!(dev_mount_index < dev_subpath_bind_index, true);
     }
 }

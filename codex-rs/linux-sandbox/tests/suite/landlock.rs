@@ -168,14 +168,64 @@ async fn test_root_write() {
 
 #[tokio::test]
 async fn test_dev_null_write() {
-    run_cmd(
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+        return;
+    }
+
+    let output = run_cmd_result_with_writable_roots(
         &["bash", "-lc", "echo blah > /dev/null"],
         &[],
         // We have seen timeouts when running this test in CI on GitHub,
         // so we are using a generous timeout until we can diagnose further.
         LONG_TIMEOUT_MS,
+        true,
     )
-    .await;
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn bwrap_preserves_writable_dev_shm_bind_mount() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+        return;
+    }
+    if !std::path::Path::new("/dev/shm").exists() {
+        eprintln!("skipping bwrap test: /dev/shm is unavailable in this environment");
+        return;
+    }
+
+    let target_file = match NamedTempFile::new_in("/dev/shm") {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("skipping bwrap test: failed to create /dev/shm temp file: {err}");
+            return;
+        }
+    };
+    let target_path = target_file.path().to_path_buf();
+    std::fs::write(&target_path, "host-before").expect("seed /dev/shm file");
+
+    let output = run_cmd_result_with_writable_roots(
+        &[
+            "bash",
+            "-lc",
+            &format!("printf sandbox-after > {}", target_path.to_string_lossy()),
+        ],
+        &[PathBuf::from("/dev/shm")],
+        LONG_TIMEOUT_MS,
+        true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+    assert_eq!(
+        std::fs::read_to_string(&target_path).expect("read /dev/shm file"),
+        "sandbox-after"
+    );
 }
 
 #[tokio::test]
