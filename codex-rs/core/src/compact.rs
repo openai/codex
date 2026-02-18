@@ -363,16 +363,8 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
 pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
     items
         .iter()
-        .filter_map(|item| match crate::event_mapping::parse_turn_item(item) {
-            Some(TurnItem::UserMessage(user)) => {
-                if is_summary_message(&user.message()) {
-                    None
-                } else {
-                    Some(user.message())
-                }
-            }
-            _ => None,
-        })
+        .filter_map(parsed_user_message_text)
+        .filter(|message| !is_summary_message(message))
         .collect()
 }
 
@@ -405,13 +397,9 @@ pub(crate) fn insert_initial_context_before_last_user_anchor(
         .iter()
         .rposition(is_real_user_message)
         .or_else(|| {
-            compacted_history.iter().rposition(|item| {
-                matches!(
-                    crate::event_mapping::parse_turn_item(item),
-                    Some(TurnItem::UserMessage(user_message))
-                        if is_summary_message(&user_message.message())
-                )
-            })
+            compacted_history
+                .iter()
+                .rposition(is_summary_user_message_item)
         });
     if let Some(index) = insertion_index {
         compacted_history.splice(index..index, initial_context);
@@ -419,10 +407,18 @@ pub(crate) fn insert_initial_context_before_last_user_anchor(
 }
 
 fn is_real_user_message(item: &ResponseItem) -> bool {
-    matches!(
-        crate::event_mapping::parse_turn_item(item),
-        Some(TurnItem::UserMessage(user_message)) if !is_summary_message(&user_message.message())
-    )
+    parsed_user_message_text(item).is_some_and(|message| !is_summary_message(&message))
+}
+
+fn is_summary_user_message_item(item: &ResponseItem) -> bool {
+    parsed_user_message_text(item).is_some_and(|message| is_summary_message(&message))
+}
+
+fn parsed_user_message_text(item: &ResponseItem) -> Option<String> {
+    match crate::event_mapping::parse_turn_item(item) {
+        Some(TurnItem::UserMessage(user_message)) => Some(user_message.message()),
+        _ => None,
+    }
 }
 
 fn is_user_shell_command_record(item: &ResponseItem) -> bool {
@@ -466,10 +462,7 @@ pub(crate) fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
                 return true;
             }
 
-            matches!(
-                crate::event_mapping::parse_turn_item(item),
-                Some(TurnItem::UserMessage(_))
-            )
+            parsed_user_message_text(item).is_some()
         }
         // Keep compaction records for local/remote history continuity and token accounting.
         ResponseItem::Compaction { .. } => true,
