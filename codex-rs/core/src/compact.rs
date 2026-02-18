@@ -304,9 +304,7 @@ async fn run_compact_task_inner(
     let incoming_user_items = match incoming_items.as_ref() {
         Some(items) => items
             .iter()
-            .filter(|item| {
-                should_keep_compacted_history_item(item) && !is_summary_user_message_item(item)
-            })
+            .filter(|item| is_real_user_message(item))
             .cloned()
             .collect(),
         None => Vec::new(),
@@ -411,9 +409,8 @@ pub(crate) fn process_compacted_history(
             // applies to that user input rather than an earlier turn. If compaction output has no
             // real user messages, insert before the last summary user message to keep canonical
             // context present for the next sampling request.
-            let insertion_index = if let Some(last_real_user_index) = compacted_history
-                .iter()
-                .rposition(is_non_summary_user_message)
+            let insertion_index = if let Some(last_real_user_index) =
+                compacted_history.iter().rposition(is_real_user_message)
             {
                 last_real_user_index
             } else if let Some(last_summary_index) = compacted_history.iter().rposition(|item| {
@@ -435,7 +432,7 @@ pub(crate) fn process_compacted_history(
     compacted_history
 }
 
-fn is_non_summary_user_message(item: &ResponseItem) -> bool {
+fn is_real_user_message(item: &ResponseItem) -> bool {
     should_keep_compacted_history_item(item) && !is_summary_user_message_item(item)
 }
 
@@ -1017,7 +1014,7 @@ do things
     }
 
     #[test]
-    fn non_summary_user_message_includes_image_only_user_messages() {
+    fn real_user_message_includes_image_only_user_messages() {
         let image_only_user = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -1028,11 +1025,11 @@ do things
             phase: None,
         };
 
-        assert!(super::is_non_summary_user_message(&image_only_user));
+        assert!(super::is_real_user_message(&image_only_user));
     }
 
     #[test]
-    fn non_summary_user_message_includes_user_shell_command_records() {
+    fn real_user_message_includes_user_shell_command_records() {
         let shell_command_user = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -1043,7 +1040,7 @@ do things
             phase: None,
         };
 
-        assert!(super::is_non_summary_user_message(&shell_command_user));
+        assert!(super::is_real_user_message(&shell_command_user));
     }
 
     #[test]
