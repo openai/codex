@@ -148,22 +148,13 @@ fn run_bwrap_with_proc_fallback(
     allow_network_for_proxy: bool,
 ) -> ! {
     let mut mount_proc = mount_proc;
-    let mut network_mode = bwrap_network_mode(sandbox_policy, allow_network_for_proxy);
 
     if mount_proc && !preflight_proc_mount_support(sandbox_policy_cwd, sandbox_policy) {
         eprintln!("codex-linux-sandbox: bwrap could not mount /proc; retrying with --no-proc");
         mount_proc = false;
     }
 
-    if network_mode != BwrapNetworkMode::FullAccess
-        && !preflight_unshare_net_support(sandbox_policy_cwd, sandbox_policy, mount_proc)
-    {
-        eprintln!(
-            "codex-linux-sandbox: bwrap could not configure loopback in a network namespace; retrying without --unshare-net"
-        );
-        network_mode = BwrapNetworkMode::FullAccess;
-    }
-
+    let network_mode = bwrap_network_mode(sandbox_policy, allow_network_for_proxy);
     let options = BwrapOptions {
         mount_proc,
         network_mode,
@@ -224,25 +215,6 @@ fn preflight_proc_mount_support(
     );
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
     !is_proc_mount_failure(stderr.as_str())
-}
-
-fn preflight_unshare_net_support(
-    sandbox_policy_cwd: &Path,
-    sandbox_policy: &codex_core::protocol::SandboxPolicy,
-    mount_proc: bool,
-) -> bool {
-    let preflight_command = vec![resolve_true_command()];
-    let preflight_argv = build_bwrap_argv(
-        preflight_command,
-        sandbox_policy,
-        sandbox_policy_cwd,
-        BwrapOptions {
-            mount_proc,
-            network_mode: BwrapNetworkMode::Isolated,
-        },
-    );
-    let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
-    !is_unshare_net_loopback_failure(stderr.as_str())
 }
 
 fn resolve_true_command() -> String {
@@ -335,14 +307,7 @@ fn close_fd_or_panic(fd: libc::c_int, context: &str) {
 fn is_proc_mount_failure(stderr: &str) -> bool {
     stderr.contains("Can't mount proc")
         && stderr.contains("/newroot/proc")
-        && (stderr.contains("Invalid argument")
-            || stderr.contains("Operation not permitted")
-            || stderr.contains("Permission denied"))
-}
-
-fn is_unshare_net_loopback_failure(stderr: &str) -> bool {
-    stderr.contains("loopback: Failed RTM_NEW")
-        && (stderr.contains("Operation not permitted") || stderr.contains("Permission denied"))
+        && stderr.contains("Invalid argument")
 }
 
 /// Build the inner command that applies seccomp after bubblewrap.
@@ -417,27 +382,9 @@ mod tests {
     }
 
     #[test]
-    fn detects_proc_mount_operation_not_permitted_failure() {
-        let stderr = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted";
-        assert_eq!(is_proc_mount_failure(stderr), true);
-    }
-
-    #[test]
     fn ignores_non_proc_mount_errors() {
         let stderr = "bwrap: Can't bind mount /dev/null: Operation not permitted";
         assert_eq!(is_proc_mount_failure(stderr), false);
-    }
-
-    #[test]
-    fn detects_loopback_unshare_operation_not_permitted_failure() {
-        let stderr = "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted";
-        assert_eq!(is_unshare_net_loopback_failure(stderr), true);
-    }
-
-    #[test]
-    fn ignores_non_loopback_unshare_errors() {
-        let stderr = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted";
-        assert_eq!(is_unshare_net_loopback_failure(stderr), false);
     }
 
     #[test]
