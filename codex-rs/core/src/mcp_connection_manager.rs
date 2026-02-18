@@ -25,9 +25,11 @@ use anyhow::anyhow;
 use async_channel::Sender;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
+use codex_config::Constrained;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpStartupCompleteEvent;
@@ -44,6 +46,7 @@ use futures::future::FutureExt;
 use futures::future::Shared;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::CreateElicitationRequestParams;
+use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::FormElicitationCapability;
 use rmcp::model::Implementation;
@@ -182,12 +185,20 @@ static CODEX_APPS_TOOLS_CACHE: LazyLock<StdMutex<Option<CachedCodexAppsTools>>> 
 
 type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
+    approval_policy: Arc<StdMutex<AskForApproval>>,
 }
 
 impl ElicitationRequestManager {
+    fn new(approval_policy: AskForApproval) -> Self {
+        Self {
+            requests: Arc::new(Mutex::new(HashMap::new())),
+            approval_policy: Arc::new(StdMutex::new(approval_policy)),
+        }
+    }
+
     async fn resolve(
         &self,
         server_name: String,
@@ -205,11 +216,23 @@ impl ElicitationRequestManager {
 
     fn make_sender(&self, server_name: String, tx_event: Sender<Event>) -> SendElicitation {
         let elicitation_requests = self.requests.clone();
+        let approval_policy = self.approval_policy.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
             let server_name = server_name.clone();
+            let approval_policy = approval_policy.clone();
             async move {
+                if approval_policy
+                    .lock()
+                    .is_ok_and(|policy| policy.rejects_mcp_elicitations())
+                {
+                    return Ok(ElicitationResponse {
+                        action: ElicitationAction::Decline,
+                        content: None,
+                    });
+                }
+
                 let (tx, rx) = oneshot::channel();
                 {
                     let mut lock = elicitation_requests.lock().await;
@@ -346,15 +369,27 @@ pub struct SandboxState {
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
-#[derive(Default)]
 pub(crate) struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     elicitation_requests: ElicitationRequestManager,
 }
 
 impl McpConnectionManager {
+    pub(crate) fn new(approval_policy: &Constrained<AskForApproval>) -> Self {
+        Self {
+            clients: HashMap::new(),
+            elicitation_requests: ElicitationRequestManager::new(approval_policy.value()),
+        }
+    }
+
     pub(crate) fn has_servers(&self) -> bool {
         !self.clients.is_empty()
+    }
+
+    pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
+        if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
+            *policy = approval_policy.clone();
+        }
     }
 
     pub async fn initialize(
@@ -371,7 +406,7 @@ impl McpConnectionManager {
         }
         let mut clients = HashMap::new();
         let mut join_set = JoinSet::new();
-        let elicitation_requests = ElicitationRequestManager::default();
+        let elicitation_requests = ElicitationRequestManager::new(approval_policy.value());
         let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             let cancel_token = cancel_token.child_token();
