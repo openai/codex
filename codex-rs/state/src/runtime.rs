@@ -45,15 +45,9 @@ mod memories;
 // Memory-specific CRUD and phase job lifecycle methods live in `runtime/memories.rs`.
 
 const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
-// Estimated payload bytes used for partition caps. This intentionally ignores
-// SQLite storage overhead and focuses on user-visible log content size.
-const LOG_ROW_ESTIMATED_BYTES_SQL: &str = r#"
-                LENGTH(CAST(COALESCE(message, '') AS BLOB))
-                + LENGTH(CAST(level AS BLOB))
-                + LENGTH(CAST(target AS BLOB))
-                + LENGTH(CAST(COALESCE(module_path, '') AS BLOB))
-                + LENGTH(CAST(COALESCE(file, '') AS BLOB))
-"#;
+// Estimated payload bytes used for partition caps.
+// This value is computed at insert time and persisted per row.
+const LOG_ROW_ESTIMATED_BYTES_SQL: &str = "estimated_bytes";
 
 #[derive(Clone)]
 pub struct StateRuntime {
@@ -374,9 +368,14 @@ FROM threads
 
         let mut tx = self.pool.begin().await?;
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, process_uuid, module_path, file, line) ",
+            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, process_uuid, module_path, file, line, estimated_bytes) ",
         );
         builder.push_values(entries, |mut row, entry| {
+            let estimated_bytes = entry.message.as_ref().map_or(0, String::len) as i64
+                + entry.level.len() as i64
+                + entry.target.len() as i64
+                + entry.module_path.as_ref().map_or(0, String::len) as i64
+                + entry.file.as_ref().map_or(0, String::len) as i64;
             row.push_bind(entry.ts)
                 .push_bind(entry.ts_nanos)
                 .push_bind(&entry.level)
@@ -386,7 +385,8 @@ FROM threads
                 .push_bind(&entry.process_uuid)
                 .push_bind(&entry.module_path)
                 .push_bind(&entry.file)
-                .push_bind(entry.line);
+                .push_bind(entry.line)
+                .push_bind(estimated_bytes);
         });
         builder.build().execute(&mut *tx).await?;
         self.prune_logs_after_insert(entries, &mut tx).await?;
