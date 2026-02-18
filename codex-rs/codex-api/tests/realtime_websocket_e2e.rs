@@ -8,6 +8,7 @@ use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::provider::Provider;
 use codex_api::provider::RetryConfig;
+use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
 use serde_json::Value;
@@ -56,7 +57,7 @@ fn test_provider() -> Provider {
 
 #[tokio::test]
 async fn realtime_ws_e2e_session_create_and_event_flow() {
-    let (addr, server) = spawn_realtime_ws_server(|mut ws| async move {
+    let (addr, server) = spawn_realtime_ws_server(|mut ws: RealtimeWsStream| async move {
         let first = ws
             .next()
             .await
@@ -168,7 +169,7 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
 
 #[tokio::test]
 async fn realtime_ws_e2e_send_while_next_event_waits() {
-    let (addr, server) = spawn_realtime_ws_server(|mut ws| async move {
+    let (addr, server) = spawn_realtime_ws_server(|mut ws: RealtimeWsStream| async move {
         let first = ws
             .next()
             .await
@@ -249,7 +250,7 @@ async fn realtime_ws_e2e_send_while_next_event_waits() {
 
 #[tokio::test]
 async fn realtime_ws_e2e_disconnected_emitted_once() {
-    let (addr, server) = spawn_realtime_ws_server(|mut ws| async move {
+    let (addr, server) = spawn_realtime_ws_server(|mut ws: RealtimeWsStream| async move {
         let first = ws
             .next()
             .await
@@ -289,7 +290,7 @@ async fn realtime_ws_e2e_disconnected_emitted_once() {
 
 #[tokio::test]
 async fn realtime_ws_e2e_ignores_unknown_text_events() {
-    let (addr, server) = spawn_realtime_ws_server(|mut ws| async move {
+    let (addr, server) = spawn_realtime_ws_server(|mut ws: RealtimeWsStream| async move {
         let first = ws
             .next()
             .await
