@@ -100,6 +100,8 @@ export type { ModelListResponse } from "./ModelListResponse";
 export type { ModelRerouteReason } from "./ModelRerouteReason";
 export type { ModelReroutedNotification } from "./ModelReroutedNotification";
 export type { NetworkAccess } from "./NetworkAccess";
+export type { NetworkApprovalContext } from "./NetworkApprovalContext";
+export type { NetworkApprovalProtocol } from "./NetworkApprovalProtocol";
 export type { NetworkRequirements } from "./NetworkRequirements";
 export type { OverriddenMetadata } from "./OverriddenMetadata";
 export type { PatchApplyStatus } from "./PatchApplyStatus";

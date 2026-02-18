@@ -42,6 +42,7 @@ use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
+use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
 use codex_app_server_protocol::PlanDeltaNotification;
@@ -103,6 +104,20 @@ use tokio::sync::oneshot;
 use tracing::error;
 
 type JsonValue = serde_json::Value;
+
+struct CommandExecutionApprovalPresentation {
+    network_approval_context: Option<V2NetworkApprovalContext>,
+    command: Option<String>,
+    cwd: Option<PathBuf>,
+    command_actions: Option<Vec<V2ParsedCommand>>,
+    completion_item: Option<CommandExecutionCompletionItem>,
+}
+
+struct CommandExecutionCompletionItem {
+    command: String,
+    cwd: PathBuf,
+    command_actions: Vec<V2ParsedCommand>,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
@@ -223,6 +238,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command,
                 cwd,
                 reason,
+                network_approval_context,
                 proposed_execpolicy_amendment,
                 parsed_cmd,
                 ..
@@ -257,7 +273,31 @@ pub(crate) async fn apply_bespoke_event_handling(
                         .cloned()
                         .map(V2ParsedCommand::from)
                         .collect::<Vec<_>>();
-                    let command_string = shlex_join(&command);
+                    let network_approval_context_v2 =
+                        network_approval_context.map(V2NetworkApprovalContext::from);
+                    let presentation = if let Some(context) = network_approval_context_v2 {
+                        CommandExecutionApprovalPresentation {
+                            network_approval_context: Some(context),
+                            command: None,
+                            cwd: None,
+                            command_actions: None,
+                            completion_item: None,
+                        }
+                    } else {
+                        let command_string = shlex_join(&command);
+                        let completion_item = CommandExecutionCompletionItem {
+                            command: command_string.clone(),
+                            cwd: cwd.clone(),
+                            command_actions: command_actions.clone(),
+                        };
+                        CommandExecutionApprovalPresentation {
+                            network_approval_context: None,
+                            command: Some(command_string),
+                            cwd: Some(cwd.clone()),
+                            command_actions: Some(command_actions.clone()),
+                            completion_item: Some(completion_item),
+                        }
+                    };
                     let proposed_execpolicy_amendment_v2 =
                         proposed_execpolicy_amendment.map(V2ExecPolicyAmendment::from);
 
@@ -267,9 +307,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                         item_id: call_id.clone(),
                         approval_id: approval_id.clone(),
                         reason,
-                        command: Some(command_string.clone()),
-                        cwd: Some(cwd.clone()),
-                        command_actions: Some(command_actions.clone()),
+                        network_approval_context: presentation.network_approval_context.clone(),
+                        command: presentation.command.clone(),
+                        cwd: presentation.cwd.clone(),
+                        command_actions: presentation.command_actions.clone(),
                         proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                     };
                     let rx = outgoing
@@ -283,9 +324,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             conversation_id,
                             approval_id,
                             call_id,
-                            command_string,
-                            cwd,
-                            command_actions,
+                            presentation.completion_item,
                             rx,
                             conversation,
                             outgoing,
@@ -1769,9 +1808,7 @@ async fn on_command_execution_request_approval_response(
     conversation_id: ThreadId,
     approval_id: Option<String>,
     item_id: String,
-    command: String,
-    cwd: PathBuf,
-    command_actions: Vec<V2ParsedCommand>,
+    completion_item: Option<CommandExecutionCompletionItem>,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
@@ -1841,15 +1878,16 @@ async fn on_command_execution_request_approval_response(
 
     if let Some(status) = completion_status
         && !suppress_subcommand_completion_item
+        && let Some(completion_item) = completion_item
     {
         complete_command_execution_item(
             conversation_id,
             event_turn_id.clone(),
             item_id.clone(),
-            command.clone(),
-            cwd.clone(),
+            completion_item.command,
+            completion_item.cwd,
             None,
-            command_actions.clone(),
+            completion_item.command_actions,
             status,
             &outgoing,
         )
