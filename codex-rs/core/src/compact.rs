@@ -442,9 +442,6 @@ fn is_user_shell_command_record(item: &ResponseItem) -> bool {
 pub(crate) fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } => {
-            if role == "developer" {
-                return false;
-            }
             if role != "user" {
                 return false;
             }
