@@ -343,9 +343,7 @@ fn script_run_token(tokens: &[String]) -> Option<&str> {
     ];
     const SCRIPT_EXTENSIONS: [&str; 7] = [".py", ".sh", ".js", ".ts", ".rb", ".pl", ".ps1"];
 
-    let Some(runner_token) = tokens.first() else {
-        return None;
-    };
+    let runner_token = tokens.first()?;
     let runner = command_basename(runner_token).to_ascii_lowercase();
     let runner = runner.strip_suffix(".exe").unwrap_or(&runner);
     if !RUNNERS.contains(&runner) {
