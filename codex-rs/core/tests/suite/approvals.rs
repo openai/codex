@@ -1603,7 +1603,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             }
             test.codex
                 .submit(Op::ExecApproval {
-                    id: approval.call_id,
+                    id: approval.effective_approval_id(),
                     turn_id: None,
                     decision: decision.clone(),
                 })
@@ -1823,7 +1823,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
 
     test.codex
         .submit(Op::ExecApproval {
-            id: approval.call_id,
+            id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: expected_execpolicy_amendment.clone(),
@@ -1988,7 +1988,7 @@ async fn compound_command_with_one_safe_command_still_requires_approval() -> Res
     let approval = expect_exec_approval(&test, expected_command.as_str()).await;
     test.codex
         .submit(Op::ExecApproval {
-            id: approval.call_id,
+            id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Denied,
         })

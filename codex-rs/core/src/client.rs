@@ -212,6 +212,8 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
     ) -> Self {
+        let enable_responses_websockets =
+            enable_responses_websockets || enable_responses_websockets_v2;
         Self {
             state: Arc::new(ModelClientState {
                 auth_manager,
@@ -351,7 +353,9 @@ impl ModelClient {
     /// to be eligible.
     pub fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
         self.state.provider.supports_websockets
-            && (self.state.enable_responses_websockets || model_info.prefer_websockets)
+            && (self.state.enable_responses_websockets
+                || self.state.enable_responses_websockets_v2
+                || model_info.prefer_websockets)
     }
 
     fn responses_websockets_v2_enabled(&self) -> bool {

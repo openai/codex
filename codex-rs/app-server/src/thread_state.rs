@@ -20,6 +20,7 @@ type PendingInterruptQueue = Vec<(
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
     pub(crate) file_change_started: HashSet<String>,
+    pub(crate) command_execution_started: HashSet<String>,
     pub(crate) last_error: Option<TurnError>,
 }
 

@@ -1302,6 +1302,7 @@ impl CodexClient {
             thread_id,
             turn_id,
             item_id,
+            approval_id,
             reason,
             command,
             cwd,
@@ -1310,7 +1311,8 @@ impl CodexClient {
         } = params;
 
         println!(
-            "\n< commandExecution approval requested for thread {thread_id}, turn {turn_id}, item {item_id}"
+            "\n< commandExecution approval requested for thread {thread_id}, turn {turn_id}, item {item_id}, approval {}",
+            approval_id.as_deref().unwrap_or("<none>")
         );
         if let Some(reason) = reason.as_deref() {
             println!("< reason: {reason}");
