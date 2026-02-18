@@ -308,8 +308,7 @@ async fn run_compact_task_inner(
                 // TODO(ccunningham): Truncate user shell-command records before preserving them
                 // in incoming compaction items so they cannot cause repeated context-window
                 // overflows across pre-turn compaction attempts.
-                (should_keep_compacted_history_item(item) || is_user_shell_command_record(item))
-                    && !is_summary_user_message_item(item)
+                should_keep_compacted_history_item(item) || is_user_shell_command_record(item)
             })
             .cloned()
             .collect(),
@@ -442,13 +441,6 @@ fn is_real_user_message(item: &ResponseItem) -> bool {
     matches!(
         crate::event_mapping::parse_turn_item(item),
         Some(TurnItem::UserMessage(user_message)) if !is_summary_message(&user_message.message())
-    )
-}
-
-fn is_summary_user_message_item(item: &ResponseItem) -> bool {
-    matches!(
-        crate::event_mapping::parse_turn_item(item),
-        Some(TurnItem::UserMessage(user_message)) if is_summary_message(&user_message.message())
     )
 }
 
