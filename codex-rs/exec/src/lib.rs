@@ -253,6 +253,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         codex_linux_sandbox_exe,
         js_repl_node_path: None,
         js_repl_node_module_dirs: None,
+        zsh_path: None,
         base_instructions: None,
         developer_instructions: None,
         personality: None,

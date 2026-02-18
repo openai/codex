@@ -7,6 +7,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadArchivedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -14,6 +15,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_core::find_thread_path_by_id_str;
+use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -122,6 +124,17 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     )
     .await??;
     let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
+    let archive_notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/archived"),
+    )
+    .await??;
+    let archived_notification: ThreadArchivedNotification = serde_json::from_value(
+        archive_notification
+            .params
+            .expect("thread/archived notification params"),
+    )?;
+    assert_eq!(archived_notification.thread_id, thread.id);
 
     // Verify file moved.
     let archived_directory = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);

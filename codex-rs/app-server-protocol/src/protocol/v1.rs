@@ -258,6 +258,8 @@ pub struct ExecCommandApprovalParams {
     /// Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent]
     /// and [codex_core::protocol::ExecCommandEndEvent].
     pub call_id: String,
+    /// Identifier for this specific approval callback.
+    pub approval_id: Option<String>,
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub reason: Option<String>,
