@@ -458,6 +458,7 @@ const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
     "connector_68de829bf7648191acd70a907364c67c",
     "connector_68e004f14af881919eb50893d3d9f523",
     "connector_69272cb413a081919685ec3c88d1744e",
+    "connector_0f9c9d4592e54d0a9a12b3f44a1e2010",
 ];
 const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
