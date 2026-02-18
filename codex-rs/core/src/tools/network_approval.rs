@@ -213,9 +213,13 @@ impl NetworkApprovalService {
         call_outcomes.remove(registration_id);
     }
 
-    async fn owner_call_context(&self) -> Option<Arc<ActiveNetworkApprovalCall>> {
+    async fn resolve_call_context(&self) -> Option<Arc<ActiveNetworkApprovalCall>> {
         let active_calls = self.active_calls.lock().await;
-        active_calls.values().next().cloned()
+        if active_calls.len() == 1 {
+            return active_calls.values().next().cloned();
+        }
+
+        None
     }
 
     async fn get_or_create_pending_approval(
@@ -254,7 +258,7 @@ impl NetworkApprovalService {
             return;
         };
 
-        let Some(owner_call) = self.owner_call_context().await else {
+        let Some(owner_call) = self.resolve_call_context().await else {
             return;
         };
 
@@ -287,7 +291,7 @@ impl NetworkApprovalService {
             }
         }
 
-        let Some(owner_call) = self.owner_call_context().await else {
+        let Some(owner_call) = self.resolve_call_context().await else {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
 
@@ -638,5 +642,35 @@ mod tests {
             service.take_call_outcome("registration-1").await,
             Some(NetworkApprovalOutcome::DeniedByUser)
         );
+    }
+
+    #[tokio::test]
+    async fn record_blocked_request_ignores_ambiguous_unattributed_blocked_requests() {
+        let service = NetworkApprovalService::default();
+        service
+            .register_call(
+                "registration-1".to_string(),
+                "turn-1".to_string(),
+                "call-1".to_string(),
+                vec!["curl".to_string(), "example.com".to_string()],
+                PathBuf::from("/tmp"),
+            )
+            .await;
+        service
+            .register_call(
+                "registration-2".to_string(),
+                "turn-2".to_string(),
+                "call-2".to_string(),
+                vec!["curl".to_string(), "example.org".to_string()],
+                PathBuf::from("/tmp"),
+            )
+            .await;
+
+        service
+            .record_blocked_request(denied_blocked_request("example.com"))
+            .await;
+
+        assert_eq!(service.take_call_outcome("registration-1").await, None);
+        assert_eq!(service.take_call_outcome("registration-2").await, None);
     }
 }
