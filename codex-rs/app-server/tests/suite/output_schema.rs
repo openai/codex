@@ -9,7 +9,7 @@ use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
-use codex_core::protocol::AskForApproval;
+use codex_app_server_protocol::AskForApprovalProtocolV1;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -83,7 +83,7 @@ async fn send_user_turn_accepts_output_schema_v1() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: codex_home.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
+            approval_policy: AskForApprovalProtocolV1::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Medium),
@@ -185,7 +185,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: codex_home.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
+            approval_policy: AskForApprovalProtocolV1::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Medium),
@@ -233,7 +233,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: codex_home.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
+            approval_policy: AskForApprovalProtocolV1::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Medium),

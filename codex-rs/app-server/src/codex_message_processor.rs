@@ -24,7 +24,7 @@ use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
-use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::AskForApprovalProtocolV1 as V1AskForApproval;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthStatusChangeNotification;
 use codex_app_server_protocol::CancelLoginAccountParams;
@@ -122,6 +122,7 @@ use codex_app_server_protocol::SkillsRemoteWriteResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadArchivedNotification;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -147,6 +148,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
+use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
@@ -223,6 +225,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
@@ -1829,7 +1832,7 @@ impl CodexMessageProcessor {
             model,
             config_profile: profile,
             cwd: cwd.clone().map(PathBuf::from),
-            approval_policy,
+            approval_policy: approval_policy.map(V1AskForApproval::to_core),
             sandbox_mode,
             model_provider,
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
@@ -1939,7 +1942,7 @@ impl CodexMessageProcessor {
             model,
             model_provider,
             cwd,
-            approval_policy,
+            approval_policy.map(|policy| policy.to_core()),
             sandbox,
             base_instructions,
             developer_instructions,
@@ -2062,7 +2065,7 @@ impl CodexMessageProcessor {
         model: Option<String>,
         model_provider: Option<String>,
         cwd: Option<String>,
-        approval_policy: Option<codex_app_server_protocol::AskForApproval>,
+        approval_policy: Option<AskForApproval>,
         sandbox: Option<SandboxMode>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
@@ -2072,8 +2075,7 @@ impl CodexMessageProcessor {
             model,
             model_provider,
             cwd: cwd.map(PathBuf::from),
-            approval_policy: approval_policy
-                .map(codex_app_server_protocol::AskForApproval::to_core),
+            approval_policy,
             sandbox_mode: sandbox.map(SandboxMode::to_core),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             base_instructions,
@@ -2126,10 +2128,17 @@ impl CodexMessageProcessor {
                 }
             };
 
+        let thread_id_str = thread_id.to_string();
         match self.archive_thread_common(thread_id, &rollout_path).await {
             Ok(()) => {
                 let response = ThreadArchiveResponse {};
                 self.outgoing.send_response(request_id, response).await;
+                let notification = ThreadArchivedNotification {
+                    thread_id: thread_id_str,
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadArchived(notification))
+                    .await;
             }
             Err(err) => {
                 self.outgoing.send_error(request_id, err).await;
@@ -2335,8 +2344,13 @@ impl CodexMessageProcessor {
 
         match result {
             Ok(thread) => {
+                let thread_id = thread.id.clone();
                 let response = ThreadUnarchiveResponse { thread };
                 self.outgoing.send_response(request_id, response).await;
+                let notification = ThreadUnarchivedNotification { thread_id };
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadUnarchived(notification))
+                    .await;
             }
             Err(err) => {
                 self.outgoing.send_error(request_id, err).await;
@@ -2767,7 +2781,7 @@ impl CodexMessageProcessor {
             model,
             model_provider,
             cwd,
-            approval_policy,
+            approval_policy.map(|policy| policy.to_core()),
             sandbox,
             base_instructions,
             developer_instructions,
@@ -3234,7 +3248,7 @@ impl CodexMessageProcessor {
             model,
             model_provider,
             cwd,
-            approval_policy,
+            approval_policy.map(|policy| policy.to_core()),
             sandbox,
             base_instructions,
             developer_instructions,
@@ -4184,7 +4198,7 @@ impl CodexMessageProcessor {
                     model,
                     config_profile: profile,
                     cwd: cwd.map(PathBuf::from),
-                    approval_policy,
+                    approval_policy: approval_policy.map(V1AskForApproval::to_core),
                     sandbox_mode,
                     model_provider,
                     codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
@@ -4379,7 +4393,7 @@ impl CodexMessageProcessor {
                     model,
                     config_profile: profile,
                     cwd: cwd.map(PathBuf::from),
-                    approval_policy,
+                    approval_policy: approval_policy.map(V1AskForApproval::to_core),
                     sandbox_mode,
                     model_provider,
                     codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
@@ -4753,7 +4767,7 @@ impl CodexMessageProcessor {
             .submit(Op::UserTurn {
                 items: mapped_items,
                 cwd,
-                approval_policy,
+                approval_policy: approval_policy.to_core(),
                 sandbox_policy,
                 model,
                 effort,
@@ -5238,7 +5252,7 @@ impl CodexMessageProcessor {
             let _ = thread
                 .submit(Op::OverrideTurnContext {
                     cwd: params.cwd,
-                    approval_policy: params.approval_policy.map(AskForApproval::to_core),
+                    approval_policy: params.approval_policy.map(|policy| policy.to_core()),
                     sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
                     windows_sandbox_level: None,
                     model: params.model,
@@ -6084,7 +6098,7 @@ fn collect_resume_override_mismatches(
     }
     if let Some(requested_approval) = request.approval_policy.as_ref() {
         let active_approval: AskForApproval = config_snapshot.approval_policy.into();
-        if requested_approval != &active_approval {
+        if *requested_approval != active_approval.into() {
             mismatch_details.push(format!(
                 "approval_policy requested={requested_approval:?} active={active_approval:?}"
             ));

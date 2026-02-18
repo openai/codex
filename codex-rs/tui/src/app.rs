@@ -1452,8 +1452,11 @@ impl App {
                         )
                         .await?
                         {
-                            Some(cwd) => cwd,
-                            None => current_cwd.clone(),
+                            crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
+                            crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
+                            crate::ResolveCwdOutcome::Exit => {
+                                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                            }
                         };
                         let mut resume_config = if crate::cwds_differ(&current_cwd, &resume_cwd) {
                             match self.rebuild_config_for_cwd(resume_cwd).await {

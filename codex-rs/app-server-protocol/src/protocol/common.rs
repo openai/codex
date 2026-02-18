@@ -769,6 +769,8 @@ server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
+    ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
@@ -828,7 +830,6 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
     use codex_protocol::parse_command::ParsedCommand;
-    use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -842,7 +843,7 @@ mod tests {
                 model_provider: None,
                 profile: None,
                 cwd: None,
-                approval_policy: Some(AskForApproval::OnRequest),
+                approval_policy: Some(v1::AskForApprovalProtocolV1::OnRequest),
                 sandbox: None,
                 config: None,
                 base_instructions: None,

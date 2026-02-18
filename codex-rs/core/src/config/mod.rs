@@ -206,6 +206,13 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
+    /// Optional commit attribution text for commit message co-author trailers.
+    ///
+    /// - `None`: use default attribution (`Codex <noreply@openai.com>`)
+    /// - `Some("")` or whitespace-only: disable commit attribution
+    /// - `Some("...")`: use the provided attribution text verbatim
+    pub commit_attribution: Option<String>,
+
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
@@ -886,7 +893,7 @@ pub struct ConfigToml {
     pub model_auto_compact_token_limit: Option<i64>,
 
     /// Default approval policy for executing commands.
-    pub approval_policy: Option<AskForApproval>,
+    pub approval_policy: Option<AskForApprovalToml>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
@@ -916,6 +923,11 @@ pub struct ConfigToml {
 
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
+
+    /// Optional commit attribution text for commit message co-author trailers.
+    ///
+    /// Set to an empty string to disable automatic commit attribution.
+    pub commit_attribution: Option<String>,
 
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     #[serde(default)]
@@ -1101,7 +1113,9 @@ impl From<ConfigToml> for UserSavedConfig {
             .collect();
 
         Self {
-            approval_policy: config_toml.approval_policy,
+            approval_policy: config_toml
+                .approval_policy
+                .and_then(|approval_policy| Some(approval_policy.to_core()).map(Into::into)),
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
             forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
@@ -1114,6 +1128,71 @@ impl From<ConfigToml> for UserSavedConfig {
             profile: config_toml.profile,
             profiles,
         }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum AskForApprovalToml {
+    /// Under this policy, only "known safe" commands—those matching
+    /// `is_safe_command()` and performing read-only file operations—are
+    /// auto-approved. Everything else will ask the user to approve.
+    #[serde(rename = "untrusted")]
+    UnlessTrusted,
+
+    /// DEPRECATED: *All* commands are auto-approved, but they are expected to
+    /// run inside a sandbox where network access is disabled and writes are
+    /// confined to a specific set of paths. If the command fails, it will be
+    /// escalated to the user to approve execution without a sandbox.
+    /// Prefer `OnRequest` for interactive runs or `Never` for non-interactive
+    /// runs.
+    OnFailure,
+
+    /// The model decides when to ask the user for approval.
+    #[default]
+    OnRequest,
+
+    /// Never ask the user to approve commands. Failures are immediately returned
+    /// to the model, and never escalated to the user for approval.
+    Never,
+}
+
+impl AskForApprovalToml {
+    pub fn to_core(self) -> AskForApproval {
+        match self {
+            AskForApprovalToml::UnlessTrusted => AskForApproval::UnlessTrusted,
+            AskForApprovalToml::OnFailure => AskForApproval::OnFailure,
+            AskForApprovalToml::OnRequest => AskForApproval::OnRequest,
+            AskForApprovalToml::Never => AskForApproval::Never,
+        }
+    }
+}
+
+impl From<AskForApproval> for AskForApprovalToml {
+    fn from(value: AskForApproval) -> Self {
+        match value {
+            AskForApproval::UnlessTrusted => AskForApprovalToml::UnlessTrusted,
+            AskForApproval::OnFailure => AskForApprovalToml::OnFailure,
+            AskForApproval::OnRequest => AskForApprovalToml::OnRequest,
+            AskForApproval::Never => AskForApprovalToml::Never,
+        }
+    }
+}
+
+impl From<AskForApprovalToml> for AskForApproval {
+    fn from(value: AskForApprovalToml) -> Self {
+        value.to_core()
     }
 }
 
@@ -1558,8 +1637,8 @@ impl Config {
             || config_profile.approval_policy.is_some()
             || cfg.approval_policy.is_some();
         let mut approval_policy = approval_policy_override
-            .or(config_profile.approval_policy)
-            .or(cfg.approval_policy)
+            .or_else(|| config_profile.approval_policy.map(AskForApprovalToml::to_core))
+            .or_else(|| cfg.approval_policy.map(AskForApprovalToml::to_core))
             .unwrap_or_else(|| {
                 if active_project.is_trusted() {
                     AskForApproval::OnRequest
@@ -1696,6 +1775,8 @@ impl Config {
             }
         });
 
+        let commit_attribution = cfg.commit_attribution;
+
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
         // behaviour matches other path-like config values.
@@ -1816,6 +1897,7 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
+            commit_attribution,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
@@ -4192,6 +4274,7 @@ model_verbosity = "high"
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
+                commit_attribution: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
@@ -4304,6 +4387,7 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -4414,6 +4498,7 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -4510,6 +4595,7 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,

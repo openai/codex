@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::config::types::Personality;
 use crate::config::types::WindowsToml;
-use crate::protocol::AskForApproval;
+use crate::config::AskForApprovalToml;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
@@ -21,7 +21,7 @@ pub struct ConfigProfile {
     /// The key in the `model_providers` map identifying the
     /// [`ModelProviderInfo`] to use.
     pub model_provider: Option<String>,
-    pub approval_policy: Option<AskForApproval>,
+    pub approval_policy: Option<AskForApprovalToml>,
     pub sandbox_mode: Option<SandboxMode>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
@@ -57,7 +57,9 @@ impl From<ConfigProfile> for codex_app_server_protocol::Profile {
         Self {
             model: config_profile.model,
             model_provider: config_profile.model_provider,
-            approval_policy: config_profile.approval_policy,
+            approval_policy: config_profile
+                .approval_policy
+                .map(|approval_policy| approval_policy.to_core().into()),
             model_reasoning_effort: config_profile.model_reasoning_effort,
             model_reasoning_summary: config_profile.model_reasoning_summary,
             model_verbosity: config_profile.model_verbosity,

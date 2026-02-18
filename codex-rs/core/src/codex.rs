@@ -17,6 +17,7 @@ use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
+use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -2582,6 +2583,13 @@ impl Session {
         }
         if turn_context.features.enabled(Feature::Apps) {
             items.push(DeveloperInstructions::new(render_apps_section()).into());
+        }
+        if turn_context.features.enabled(Feature::CodexGitCommit)
+            && let Some(commit_message_instruction) = commit_message_trailer_instruction(
+                turn_context.config.commit_attribution.as_deref(),
+            )
+        {
+            items.push(DeveloperInstructions::new(commit_message_instruction).into());
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(
