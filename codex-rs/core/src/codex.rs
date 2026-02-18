@@ -4720,6 +4720,14 @@ async fn persist_pre_turn_items_for_compaction_outcome(
     response_item: ResponseItem,
 ) {
     match outcome {
+        PreTurnCompactionOutcome::NotNeeded => {
+            if !pre_turn_context_items.is_empty() {
+                sess.record_conversation_items(turn_context, pre_turn_context_items)
+                    .await;
+            }
+            sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), input, response_item)
+                .await;
+        }
         PreTurnCompactionOutcome::CompactedWithIncomingItems => {
             // Pre-turn compaction includes incoming items only for the compaction request itself.
             // Persist canonical turn context directly above the incoming user item so context
@@ -4727,14 +4735,6 @@ async fn persist_pre_turn_items_for_compaction_outcome(
             let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
             if !initial_context.is_empty() {
                 sess.record_conversation_items(turn_context, &initial_context)
-                    .await;
-            }
-            sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), input, response_item)
-                .await;
-        }
-        PreTurnCompactionOutcome::NotNeeded => {
-            if !pre_turn_context_items.is_empty() {
-                sess.record_conversation_items(turn_context, pre_turn_context_items)
                     .await;
             }
             sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), input, response_item)
