@@ -188,6 +188,29 @@ async fn test_dev_null_write() {
 }
 
 #[tokio::test]
+async fn bwrap_populates_minimal_dev_nodes() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+        return;
+    }
+
+    let output = run_cmd_result_with_writable_roots(
+        &[
+            "bash",
+            "-lc",
+            "for node in null zero full random urandom tty; do [ -c \"/dev/$node\" ] || { echo \"missing /dev/$node\" >&2; exit 1; }; done",
+        ],
+        &[],
+        LONG_TIMEOUT_MS,
+        true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+}
+
+#[tokio::test]
 async fn bwrap_preserves_writable_dev_shm_bind_mount() {
     if should_skip_bwrap_tests().await {
         eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
