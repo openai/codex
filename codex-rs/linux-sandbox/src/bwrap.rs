@@ -135,11 +135,12 @@ fn create_bwrap_flags(
 ///
 /// The mount order is important:
 /// 1. `--ro-bind / /` makes the entire filesystem read-only.
-/// 2. `--bind <root> <root>` re-enables writes for allowed roots.
-/// 3. `--ro-bind <subpath> <subpath>` re-applies read-only protections under
-///    those writable roots so protected subpaths win.
-/// 4. `--dev /dev` mounts a minimal writable `/dev` with standard device nodes
+/// 2. `--dev /dev` mounts a minimal writable `/dev` with standard device nodes
 ///    (including `/dev/urandom`) even under a read-only root.
+/// 3. `--bind <root> <root>` re-enables writes for allowed roots, including
+///    writable subpaths under `/dev` (for example, `/dev/shm`).
+/// 4. `--ro-bind <subpath> <subpath>` re-applies read-only protections under
+///    those writable roots so protected subpaths win.
 fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<Vec<String>> {
     if !sandbox_policy.has_full_disk_read_access() {
         return Err(CodexErr::UnsupportedOperation(
@@ -157,6 +158,12 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
     args.push("--ro-bind".to_string());
     args.push("/".to_string());
     args.push("/".to_string());
+
+    // Ensure standard device nodes (including `/dev/urandom`) are available.
+    // This must be mounted before writable roots so explicit `/dev/*` writable
+    // binds remain visible.
+    args.push("--dev".to_string());
+    args.push("/dev".to_string());
 
     for writable_root in &writable_roots {
         let root = writable_root.root.as_path();
@@ -196,10 +203,6 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
             args.push(path_to_string(&subpath));
         }
     }
-
-    // Ensure standard device nodes (including `/dev/urandom`) are available.
-    args.push("--dev".to_string());
-    args.push("/dev".to_string());
 
     Ok(args)
 }
@@ -316,6 +319,7 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::protocol::AbsolutePathBuf;
     use codex_core::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
 
@@ -399,5 +403,48 @@ mod tests {
                 "/bin/true".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn workspace_write_dev_subpath_bind_mounts_after_dev_tree() {
+        if !Path::new("/dev/shm").exists() {
+            return;
+        }
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![
+                AbsolutePathBuf::from_absolute_path("/dev/shm")
+                    .expect("expected /dev/shm to be an absolute path"),
+            ],
+            read_only_access: Default::default(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let args = create_bwrap_command_args(
+            vec!["/bin/true".to_string()],
+            &policy,
+            Path::new("/tmp"),
+            BwrapOptions {
+                mount_proc: true,
+                network_mode: BwrapNetworkMode::FullAccess,
+            },
+        )
+        .expect("create bwrap args");
+
+        let dev_mount_index = args
+            .windows(2)
+            .position(|window| window[0] == "--dev" && window[1] == "/dev")
+            .expect("expected --dev /dev in args");
+
+        let dev_subpath_bind_index = args
+            .windows(3)
+            .position(|window| {
+                window[0] == "--bind" && window[1] == "/dev/shm" && window[2] == "/dev/shm"
+            })
+            .expect("expected /dev/shm bind mount in args");
+
+        assert_eq!(dev_mount_index < dev_subpath_bind_index, true);
     }
 }
