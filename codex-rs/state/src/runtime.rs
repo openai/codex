@@ -429,8 +429,8 @@ FROM threads
                 .map(|row| row.try_get("thread_id"))
                 .collect::<Result<_, _>>()?;
             if !over_limit_thread_ids.is_empty() {
-                // Keep newest rows in each thread and delete older rows once
-                // cumulative bytes exceed the partition budget.
+                // Enforce a strict per-thread cap by deleting every row whose
+                // newest-first cumulative bytes exceed the partition budget.
                 let mut prune_threads = QueryBuilder::<Sqlite>::new(
                     r#"
 DELETE FROM logs
@@ -448,11 +448,7 @@ WHERE id IN (
             ) OVER (
                 PARTITION BY thread_id
                 ORDER BY ts DESC, ts_nanos DESC, id DESC
-            ) AS cumulative_bytes,
-            ROW_NUMBER() OVER (
-                PARTITION BY thread_id
-                ORDER BY ts DESC, ts_nanos DESC, id DESC
-            ) AS newest_rank
+            ) AS cumulative_bytes
         FROM logs
         WHERE thread_id IN (
 "#,
@@ -471,7 +467,7 @@ WHERE id IN (
 "#,
                 );
                 prune_threads.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
-                prune_threads.push("\n      AND newest_rank > 1\n)");
+                prune_threads.push("\n)");
                 prune_threads.build().execute(self.pool.as_ref()).await?;
             }
         }
@@ -507,8 +503,8 @@ WHERE id IN (
                 .map(|row| row.try_get("process_uuid"))
                 .collect::<Result<_, _>>()?;
             if !over_limit_process_uuids.is_empty() {
-                // Same newest-first trim policy as thread pruning, but only
-                // for threadless rows in the affected process UUIDs.
+                // Same strict cap policy as thread pruning, but only for
+                // threadless rows in the affected process UUIDs.
                 let mut prune_threadless_process_logs = QueryBuilder::<Sqlite>::new(
                     r#"
 DELETE FROM logs
@@ -526,11 +522,7 @@ WHERE id IN (
             ) OVER (
                 PARTITION BY process_uuid
                 ORDER BY ts DESC, ts_nanos DESC, id DESC
-            ) AS cumulative_bytes,
-            ROW_NUMBER() OVER (
-                PARTITION BY process_uuid
-                ORDER BY ts DESC, ts_nanos DESC, id DESC
-            ) AS newest_rank
+            ) AS cumulative_bytes
         FROM logs
         WHERE thread_id IS NULL
           AND process_uuid IN (
@@ -550,7 +542,7 @@ WHERE id IN (
 "#,
                 );
                 prune_threadless_process_logs.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
-                prune_threadless_process_logs.push("\n      AND newest_rank > 1\n)");
+                prune_threadless_process_logs.push("\n)");
                 prune_threadless_process_logs
                     .build()
                     .execute(self.pool.as_ref())
@@ -589,11 +581,7 @@ WHERE id IN (
             ) OVER (
                 PARTITION BY process_uuid
                 ORDER BY ts DESC, ts_nanos DESC, id DESC
-            ) AS cumulative_bytes,
-            ROW_NUMBER() OVER (
-                PARTITION BY process_uuid
-                ORDER BY ts DESC, ts_nanos DESC, id DESC
-            ) AS newest_rank
+            ) AS cumulative_bytes
         FROM logs
         WHERE thread_id IS NULL
           AND process_uuid IS NULL
@@ -602,7 +590,7 @@ WHERE id IN (
 "#,
                 );
                 prune_threadless_null_process_logs.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
-                prune_threadless_null_process_logs.push("\n      AND newest_rank > 1\n)");
+                prune_threadless_null_process_logs.push("\n)");
                 prune_threadless_null_process_logs
                     .build()
                     .execute(self.pool.as_ref())
@@ -2840,7 +2828,7 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
-    async fn insert_logs_keeps_newest_thread_row_when_single_row_exceeds_size_limit() {
+    async fn insert_logs_prunes_single_thread_row_when_it_exceeds_size_limit() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
@@ -2871,8 +2859,7 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("query thread logs");
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].ts, 1);
+        assert!(rows.is_empty());
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -2944,7 +2931,7 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
-    async fn insert_logs_keeps_newest_threadless_process_row_when_single_row_exceeds_size_limit() {
+    async fn insert_logs_prunes_single_threadless_process_row_when_it_exceeds_size_limit() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
@@ -2975,8 +2962,7 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("query threadless logs");
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].process_uuid.as_deref(), Some("proc-oversized"));
+        assert!(rows.is_empty());
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -3047,7 +3033,7 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
-    async fn insert_logs_keeps_newest_threadless_null_process_row_when_single_row_exceeds_limit() {
+    async fn insert_logs_prunes_single_threadless_null_process_row_when_it_exceeds_limit() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
@@ -3078,8 +3064,7 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("query threadless logs");
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].process_uuid, None);
+        assert!(rows.is_empty());
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
