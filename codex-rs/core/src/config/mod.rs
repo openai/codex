@@ -55,8 +55,6 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
-use codex_network_proxy::NetworkMode;
-use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModeKind;
@@ -85,12 +83,14 @@ use tempfile::tempdir;
 #[cfg(not(target_os = "macos"))]
 type MacOsSeatbeltProfileExtensions = ();
 
+use crate::config::permissions::network_proxy_config_from_permissions;
 use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
 pub mod edit;
 mod network_proxy_spec;
+mod permissions;
 pub mod profile;
 pub mod schema;
 pub mod service;
@@ -101,6 +101,8 @@ pub use codex_config::ConstraintResult;
 
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
+pub use permissions::NetworkToml;
+pub use permissions::PermissionsToml;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
 
@@ -1134,100 +1136,6 @@ impl From<ConfigToml> for UserSavedConfig {
             profiles,
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-pub struct PermissionsToml {
-    /// Network proxy settings used by managed network mode.
-    pub network: Option<NetworkToml>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-pub struct NetworkToml {
-    pub enabled: Option<bool>,
-    pub proxy_url: Option<String>,
-    pub admin_url: Option<String>,
-    pub enable_socks5: Option<bool>,
-    pub socks_url: Option<String>,
-    pub enable_socks5_udp: Option<bool>,
-    pub allow_upstream_proxy: Option<bool>,
-    pub dangerously_allow_non_loopback_proxy: Option<bool>,
-    pub dangerously_allow_non_loopback_admin: Option<bool>,
-    pub mode: Option<NetworkMode>,
-    pub allowed_domains: Option<Vec<String>>,
-    pub denied_domains: Option<Vec<String>>,
-    pub allow_unix_sockets: Option<Vec<String>>,
-    pub allow_local_binding: Option<bool>,
-}
-
-impl NetworkToml {
-    pub(crate) fn apply_to_network_proxy_config(&self, config: &mut NetworkProxyConfig) {
-        if let Some(enabled) = self.enabled {
-            config.network.enabled = enabled;
-        }
-        if let Some(proxy_url) = self.proxy_url.as_ref() {
-            config.network.proxy_url = proxy_url.clone();
-        }
-        if let Some(admin_url) = self.admin_url.as_ref() {
-            config.network.admin_url = admin_url.clone();
-        }
-        if let Some(enable_socks5) = self.enable_socks5 {
-            config.network.enable_socks5 = enable_socks5;
-        }
-        if let Some(socks_url) = self.socks_url.as_ref() {
-            config.network.socks_url = socks_url.clone();
-        }
-        if let Some(enable_socks5_udp) = self.enable_socks5_udp {
-            config.network.enable_socks5_udp = enable_socks5_udp;
-        }
-        if let Some(allow_upstream_proxy) = self.allow_upstream_proxy {
-            config.network.allow_upstream_proxy = allow_upstream_proxy;
-        }
-        if let Some(dangerously_allow_non_loopback_proxy) =
-            self.dangerously_allow_non_loopback_proxy
-        {
-            config.network.dangerously_allow_non_loopback_proxy =
-                dangerously_allow_non_loopback_proxy;
-        }
-        if let Some(dangerously_allow_non_loopback_admin) =
-            self.dangerously_allow_non_loopback_admin
-        {
-            config.network.dangerously_allow_non_loopback_admin =
-                dangerously_allow_non_loopback_admin;
-        }
-        if let Some(mode) = self.mode {
-            config.network.mode = mode;
-        }
-        if let Some(allowed_domains) = self.allowed_domains.as_ref() {
-            config.network.allowed_domains = allowed_domains.clone();
-        }
-        if let Some(denied_domains) = self.denied_domains.as_ref() {
-            config.network.denied_domains = denied_domains.clone();
-        }
-        if let Some(allow_unix_sockets) = self.allow_unix_sockets.as_ref() {
-            config.network.allow_unix_sockets = allow_unix_sockets.clone();
-        }
-        if let Some(allow_local_binding) = self.allow_local_binding {
-            config.network.allow_local_binding = allow_local_binding;
-        }
-    }
-
-    pub(crate) fn to_network_proxy_config(&self) -> NetworkProxyConfig {
-        let mut config = NetworkProxyConfig::default();
-        self.apply_to_network_proxy_config(&mut config);
-        config
-    }
-}
-
-fn network_proxy_config_from_permissions(
-    permissions: Option<&PermissionsToml>,
-) -> NetworkProxyConfig {
-    permissions
-        .and_then(|permissions| permissions.network.as_ref())
-        .map_or_else(
-            NetworkProxyConfig::default,
-            NetworkToml::to_network_proxy_config,
-        )
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
