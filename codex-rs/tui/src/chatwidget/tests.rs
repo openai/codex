@@ -3739,7 +3739,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
 }
 
 #[tokio::test]
-async fn experimental_mode_plan_applies_on_startup() {
+async fn experimental_mode_plan_is_ignored_on_startup() {
     let codex_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -3783,7 +3783,7 @@ async fn experimental_mode_plan_applies_on_startup() {
     };
 
     let chat = ChatWidget::new(init, thread_manager);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_model(), resolved_model);
 }
 

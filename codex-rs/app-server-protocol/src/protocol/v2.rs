@@ -18,6 +18,7 @@ use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
+use codex_protocol::models::MessagePhase as CoreMessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -2550,6 +2551,24 @@ impl From<CoreUserInput> for UserInput {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum MessagePhase {
+    Commentary,
+    FinalAnswer,
+}
+
+impl From<CoreMessagePhase> for MessagePhase {
+    fn from(value: CoreMessagePhase) -> Self {
+        match value {
+            CoreMessagePhase::Commentary => Self::Commentary,
+            CoreMessagePhase::FinalAnswer => Self::FinalAnswer,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
@@ -2559,7 +2578,12 @@ pub enum ThreadItem {
     UserMessage { id: String, content: Vec<UserInput> },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    AgentMessage { id: String, text: String },
+    AgentMessage {
+        id: String,
+        text: String,
+        #[serde(default)]
+        phase: Option<MessagePhase>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     /// EXPERIMENTAL - proposed plan item content. The completed plan item is
@@ -2710,7 +2734,11 @@ impl From<CoreTurnItem> for ThreadItem {
                         CoreAgentMessageContent::Text { text } => text,
                     })
                     .collect::<String>();
-                ThreadItem::AgentMessage { id: agent.id, text }
+                ThreadItem::AgentMessage {
+                    id: agent.id,
+                    text,
+                    phase: agent.phase.map(Into::into),
+                }
             }
             CoreTurnItem::Plan(plan) => ThreadItem::Plan {
                 id: plan.id,
@@ -3485,6 +3513,7 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::items::WebSearchItem;
+    use codex_protocol::models::MessagePhase as CoreMessagePhase;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
@@ -3685,6 +3714,24 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "agent-1".to_string(),
                 text: "Hello world".to_string(),
+                phase: None,
+            }
+        );
+
+        let agent_item_with_phase = TurnItem::AgentMessage(AgentMessageItem {
+            id: "agent-2".to_string(),
+            content: vec![AgentMessageContent::Text {
+                text: "final".to_string(),
+            }],
+            phase: Some(CoreMessagePhase::FinalAnswer),
+        });
+
+        assert_eq!(
+            ThreadItem::from(agent_item_with_phase),
+            ThreadItem::AgentMessage {
+                id: "agent-2".to_string(),
+                text: "final".to_string(),
+                phase: Some(MessagePhase::FinalAnswer),
             }
         );
 
