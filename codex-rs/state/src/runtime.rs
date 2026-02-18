@@ -44,6 +44,10 @@ use uuid::Uuid;
 mod memories;
 // Memory-specific CRUD and phase job lifecycle methods live in `runtime/memories.rs`.
 
+// "Partition" is the retention bucket we cap at 10 MiB:
+// - one bucket per non-null thread_id
+// - one bucket per threadless (thread_id IS NULL) non-null process_uuid
+// - one bucket for threadless rows with process_uuid IS NULL
 const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
 
 #[derive(Clone)]
