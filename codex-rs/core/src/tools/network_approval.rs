@@ -287,6 +287,7 @@ impl NetworkApprovalService {
         let target = Self::format_network_target(key.protocol, request.host.as_str(), key.port);
         let policy_denial_message =
             format!("Network access to \"{target}\" was blocked by policy.");
+        let prompt_reason = format!("{} is not in the allowed_domains", request.host);
 
         let Some(turn_context) = Self::active_turn_context(session).await else {
             pending.set_decision(PendingApprovalDecision::Deny).await;
@@ -319,9 +320,7 @@ impl NetworkApprovalService {
                 None,
                 prompt_command,
                 turn_context.cwd.clone(),
-                Some(format!(
-                    "Network access to \"{target}\" is blocked by policy."
-                )),
+                Some(prompt_reason),
                 Some(NetworkApprovalContext {
                     host: request.host.clone(),
                     protocol,
