@@ -45,9 +45,6 @@ mod memories;
 // Memory-specific CRUD and phase job lifecycle methods live in `runtime/memories.rs`.
 
 const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
-// Estimated payload bytes used for partition caps.
-// This value is computed at insert time and persisted per row.
-const LOG_ROW_ESTIMATED_BYTES_SQL: &str = "estimated_bytes";
 
 #[derive(Clone)]
 pub struct StateRuntime {
@@ -428,7 +425,7 @@ FROM threads
                 }
             }
             over_limit_threads_query.push(") GROUP BY thread_id HAVING SUM(");
-            over_limit_threads_query.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+            over_limit_threads_query.push("estimated_bytes");
             over_limit_threads_query.push(") > ");
             over_limit_threads_query.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
             let over_limit_thread_ids: Vec<String> = over_limit_threads_query
@@ -452,7 +449,7 @@ WHERE id IN (
             SUM(
 "#,
                 );
-                prune_threads.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+                prune_threads.push("estimated_bytes");
                 prune_threads.push(
                     r#"
             ) OVER (
@@ -502,7 +499,7 @@ WHERE id IN (
                 }
             }
             over_limit_processes_query.push(") GROUP BY process_uuid HAVING SUM(");
-            over_limit_processes_query.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+            over_limit_processes_query.push("estimated_bytes");
             over_limit_processes_query.push(") > ");
             over_limit_processes_query.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
             let over_limit_process_uuids: Vec<String> = over_limit_processes_query
@@ -526,7 +523,7 @@ WHERE id IN (
             SUM(
 "#,
                 );
-                prune_threadless_process_logs.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+                prune_threadless_process_logs.push("estimated_bytes");
                 prune_threadless_process_logs.push(
                     r#"
             ) OVER (
@@ -563,7 +560,7 @@ WHERE id IN (
             // Rows without a process UUID still need a cap; treat NULL as its
             // own threadless partition.
             let mut null_process_usage_query = QueryBuilder::<Sqlite>::new("SELECT SUM(");
-            null_process_usage_query.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+            null_process_usage_query.push("estimated_bytes");
             null_process_usage_query.push(
                 ") AS total_bytes FROM logs WHERE thread_id IS NULL AND process_uuid IS NULL",
             );
@@ -585,7 +582,7 @@ WHERE id IN (
             SUM(
 "#,
                 );
-                prune_threadless_null_process_logs.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+                prune_threadless_null_process_logs.push("estimated_bytes");
                 prune_threadless_null_process_logs.push(
                     r#"
             ) OVER (
