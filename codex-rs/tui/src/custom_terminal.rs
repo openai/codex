@@ -511,8 +511,10 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
 
         to_skip = display_width(current.symbol()).saturating_sub(1);
 
-        let affected_width =
-            std::cmp::max(display_width(current.symbol()), display_width(previous.symbol()));
+        let affected_width = std::cmp::max(
+            display_width(current.symbol()),
+            display_width(previous.symbol()),
+        );
         invalidated = std::cmp::max(affected_width, invalidated).saturating_sub(1);
     }
     updates

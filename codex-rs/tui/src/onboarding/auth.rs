@@ -51,7 +51,10 @@ pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
     // Sanitize: strip any characters that could break out of the OSC 8
     // sequence (ESC or BEL) to prevent terminal escape injection from a
     // malformed or compromised upstream URL.
-    let safe_url: String = url.chars().filter(|&c| c != '\x1B' && c != '\x07').collect();
+    let safe_url: String = url
+        .chars()
+        .filter(|&c| c != '\x1B' && c != '\x07')
+        .collect();
     if safe_url.is_empty() {
         return;
     }
