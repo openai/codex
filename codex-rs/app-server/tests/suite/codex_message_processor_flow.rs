@@ -7,6 +7,7 @@ use app_test_support::format_with_current_shell;
 use app_test_support::to_response;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
+use codex_app_server_protocol::AskForApprovalProtocolV1;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::InputItem;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -21,7 +22,6 @@ use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerRequest;
-use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
@@ -331,7 +331,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: working_directory.clone(),
-            approval_policy: AskForApproval::Never,
+            approval_policy: AskForApprovalProtocolV1::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Medium),
@@ -405,7 +405,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
     let new_conv_id = mcp
         .send_new_conversation_request(NewConversationParams {
             cwd: Some(first_cwd.to_string_lossy().into_owned()),
-            approval_policy: Some(AskForApproval::Never),
+            approval_policy: Some(AskForApprovalProtocolV1::Never),
             sandbox: Some(SandboxMode::WorkspaceWrite),
             ..Default::default()
         })
@@ -441,7 +441,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
                 text_elements: Vec::new(),
             }],
             cwd: first_cwd.clone(),
-            approval_policy: AskForApproval::Never,
+            approval_policy: AskForApprovalProtocolV1::Never,
             sandbox_policy: SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![first_cwd.try_into()?],
                 read_only_access: Default::default(),
@@ -475,7 +475,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
                 text_elements: Vec::new(),
             }],
             cwd: second_cwd.clone(),
-            approval_policy: AskForApproval::Never,
+            approval_policy: AskForApprovalProtocolV1::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: model.clone(),
             effort: Some(ReasoningEffort::Medium),
