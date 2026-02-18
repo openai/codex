@@ -57,8 +57,10 @@ pub struct NetworkApprovalContext {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecApprovalRequestEvent {
-    /// Identifier for the associated exec call, if available.
+    /// Identifier for the associated command execution item.
     pub call_id: String,
+    /// Identifier for this specific approval callback.
+    pub approval_id: String,
     /// Turn ID that this command belongs to.
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]

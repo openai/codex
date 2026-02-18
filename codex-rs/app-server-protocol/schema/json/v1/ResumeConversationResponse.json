@@ -1452,8 +1452,8 @@
         },
         {
           "properties": {
-            "call_id": {
-              "description": "Identifier for the associated exec call, if available.",
+            "approval_id": {
+              "description": "Identifier for this specific approval callback.",
               "type": "string"
             },
             "command": {
@@ -1465,6 +1465,10 @@
             },
             "cwd": {
               "description": "The command's working directory.",
+              "type": "string"
+            },
+            "item_id": {
+              "description": "Identifier for the associated command execution item.",
               "type": "string"
             },
             "network_approval_context": {
@@ -1502,8 +1506,7 @@
               ]
             },
             "turn_id": {
-              "default": "",
-              "description": "Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "description": "Turn ID that this command belongs to.",
               "type": "string"
             },
             "type": {
@@ -1515,10 +1518,12 @@
             }
           },
           "required": [
-            "call_id",
+            "approval_id",
             "command",
             "cwd",
+            "item_id",
             "parsed_cmd",
+            "turn_id",
             "type"
           ],
           "title": "ExecApprovalRequestEventMsg",

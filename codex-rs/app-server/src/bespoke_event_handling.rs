@@ -216,6 +216,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         },
         EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
+            approval_id,
             turn_id,
             command,
             cwd,
@@ -227,7 +228,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             ApiVersion::V1 => {
                 let params = ExecCommandApprovalParams {
                     conversation_id,
-                    call_id: call_id.clone(),
+                    call_id: approval_id.clone(),
                     command,
                     cwd,
                     reason,
@@ -237,11 +238,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_request(ServerRequestPayload::ExecCommandApproval(params))
                     .await;
                 tokio::spawn(async move {
-                    on_exec_approval_response(call_id, event_turn_id, rx, conversation).await;
+                    on_exec_approval_response(approval_id, event_turn_id, rx, conversation).await;
                 });
             }
             ApiVersion::V2 => {
-                let item_id = call_id.clone();
                 let command_actions = parsed_cmd
                     .iter()
                     .cloned()
@@ -254,9 +254,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let params = CommandExecutionRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: turn_id.clone(),
-                    // Until we migrate the core to be aware of a first class CommandExecutionItem
-                    // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
-                    item_id: item_id.clone(),
+                    item_id: call_id.clone(),
+                    approval_id: approval_id.clone(),
                     reason,
                     command: Some(command_string.clone()),
                     cwd: Some(cwd.clone()),
@@ -272,13 +271,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                     on_command_execution_request_approval_response(
                         event_turn_id,
                         conversation_id,
-                        item_id,
+                        approval_id,
+                        call_id,
                         command_string,
                         cwd,
                         command_actions,
                         rx,
                         conversation,
                         outgoing,
+                        thread_state.clone(),
                     )
                     .await;
                 });
@@ -933,6 +934,14 @@ pub(crate) async fn apply_bespoke_event_handling(
             let cwd = exec_command_begin_event.cwd;
             let process_id = exec_command_begin_event.process_id;
 
+            {
+                let mut state = thread_state.lock().await;
+                state
+                    .turn_summary
+                    .command_execution_started
+                    .insert(item_id.clone());
+            }
+
             let item = ThreadItem::CommandExecution {
                 id: item_id,
                 command,
@@ -1019,6 +1028,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 status,
                 ..
             } = exec_command_end_event;
+
+            {
+                let mut state = thread_state.lock().await;
+                state
+                    .turn_summary
+                    .command_execution_started
+                    .remove(&call_id);
+            }
 
             let status: CommandExecutionStatus = (&status).into();
             let command_actions = parsed_cmd
@@ -1739,6 +1756,7 @@ async fn on_file_change_request_approval_response(
 async fn on_command_execution_request_approval_response(
     event_turn_id: String,
     conversation_id: ThreadId,
+    approval_id: String,
     item_id: String,
     command: String,
     cwd: PathBuf,
@@ -1746,6 +1764,7 @@ async fn on_command_execution_request_approval_response(
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
+    thread_state: Arc<Mutex<ThreadState>>,
 ) {
     let response = receiver.await;
     let (decision, completion_status) = match response {
@@ -1794,7 +1813,24 @@ async fn on_command_execution_request_approval_response(
         }
     };
 
-    if let Some(status) = completion_status {
+    let suppress_subcommand_completion_item = {
+        // For regular shell/unified_exec approvals (non-zsh-fork), approvals are
+        // command-level so approval_id == item_id. For zsh-fork subcommand
+        // approvals, approval_id is distinct and item_id is the parent command.
+        if approval_id != item_id {
+            let state = thread_state.lock().await;
+            state
+                .turn_summary
+                .command_execution_started
+                .contains(&item_id)
+        } else {
+            false
+        }
+    };
+
+    if let Some(status) = completion_status
+        && !suppress_subcommand_completion_item
+    {
         complete_command_execution_item(
             conversation_id,
             event_turn_id.clone(),
@@ -1811,7 +1847,7 @@ async fn on_command_execution_request_approval_response(
 
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
-            id: item_id,
+            id: approval_id,
             turn_id: Some(event_turn_id),
             decision,
         })
