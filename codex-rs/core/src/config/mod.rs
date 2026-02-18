@@ -1204,6 +1204,7 @@ pub struct AgentRoleToml {
     pub description: Option<String>,
 
     /// Path to a role-specific config layer.
+    /// Relative paths are resolved relative to the `config.toml` that defines them.
     pub config_file: Option<AbsolutePathBuf>,
 }
 
@@ -1659,19 +1660,20 @@ impl Config {
                     .roles
                     .iter()
                     .map(|(name, role)| {
-                        (
+                        let config_file =
+                            role.config_file.as_ref().map(AbsolutePathBuf::to_path_buf);
+                        Self::validate_agent_role_config_file(name, config_file.as_deref())?;
+                        Ok((
                             name.clone(),
                             AgentRoleConfig {
                                 description: role.description.clone(),
-                                config_file: role
-                                    .config_file
-                                    .as_ref()
-                                    .map(AbsolutePathBuf::to_path_buf),
+                                config_file,
                             },
-                        )
+                        ))
                     })
-                    .collect()
+                    .collect::<std::io::Result<BTreeMap<_, _>>>()
             })
+            .transpose()?
             .unwrap_or_default();
 
         let ghost_snapshot = {
@@ -2024,6 +2026,36 @@ impl Config {
             ))
         } else {
             Ok(Some(s))
+        }
+    }
+
+    fn validate_agent_role_config_file(
+        role_name: &str,
+        config_file: Option<&Path>,
+    ) -> std::io::Result<()> {
+        let Some(config_file) = config_file else {
+            return Ok(());
+        };
+
+        let metadata = std::fs::metadata(config_file).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "agents.{role_name}.config_file must point to an existing file at {}: {e}",
+                    config_file.display()
+                ),
+            )
+        })?;
+        if metadata.is_file() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "agents.{role_name}.config_file must point to a file: {}",
+                    config_file.display()
+                ),
+            ))
         }
     }
 
@@ -4057,6 +4089,74 @@ model = "gpt-5.1-codex"
         assert_eq!(
             config.compact_prompt.as_deref(),
             Some("summarize differently")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let missing_path = codex_home.path().join("agents").join("researcher.toml");
+        let cfg = ConfigToml {
+            agents: Some(AgentsToml {
+                max_threads: None,
+                roles: BTreeMap::from([(
+                    "researcher".to_string(),
+                    AgentRoleToml {
+                        description: Some("Research role".to_string()),
+                        config_file: Some(AbsolutePathBuf::from_absolute_path(missing_path)?),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        };
+
+        let result = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        );
+        let err = result.expect_err("missing role config file should be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let message = err.to_string();
+        assert!(message.contains("agents.researcher.config_file"));
+        assert!(message.contains("must point to an existing file"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn agent_role_relative_config_file_resolves_against_config_toml() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let role_config_path = codex_home.path().join("agents").join("researcher.toml");
+        tokio::fs::create_dir_all(
+            role_config_path
+                .parent()
+                .expect("role config should have a parent directory"),
+        )
+        .await?;
+        tokio::fs::write(&role_config_path, "model = \"gpt-5\"").await?;
+        tokio::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"[agents.researcher]
+description = "Research role"
+config_file = "./agents/researcher.toml"
+"#,
+        )
+        .await?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await?;
+        assert_eq!(
+            config
+                .agent_roles
+                .get("researcher")
+                .and_then(|role| role.config_file.as_ref()),
+            Some(&role_config_path)
         );
 
         Ok(())

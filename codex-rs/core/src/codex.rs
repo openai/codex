@@ -4869,8 +4869,7 @@ async fn run_sampling_request(
 
     let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
 
-    let tools =
-        crate::tools::spec::filter_tools_for_model(router.specs(), &turn_context.tools_config);
+    let tools = router.specs();
     let base_instructions = sess.get_base_instructions().await;
 
     let prompt = Prompt {

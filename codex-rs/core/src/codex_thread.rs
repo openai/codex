@@ -3,6 +3,7 @@ use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
+use crate::file_watcher::WatchRegistration;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
@@ -33,15 +34,21 @@ pub struct ThreadConfigSnapshot {
 pub struct CodexThread {
     codex: Codex,
     rollout_path: Option<PathBuf>,
+    _watch_registration: WatchRegistration,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
 /// (formerly called a conversation) in Codex.
 impl CodexThread {
-    pub(crate) fn new(codex: Codex, rollout_path: Option<PathBuf>) -> Self {
+    pub(crate) fn new(
+        codex: Codex,
+        rollout_path: Option<PathBuf>,
+        watch_registration: WatchRegistration,
+    ) -> Self {
         Self {
             codex,
             rollout_path,
+            _watch_registration: watch_registration,
         }
     }
 
