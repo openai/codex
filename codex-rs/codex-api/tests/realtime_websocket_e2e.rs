@@ -77,7 +77,7 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
             RealtimeSessionConfig {
                 api_url,
                 prompt: "backend prompt".to_string(),
-                session_id: Some("conv_123".to_string()),
+                conversation_id: Some("conv_123".to_string()),
             },
             HeaderMap::new(),
             HeaderMap::new(),
@@ -168,7 +168,7 @@ async fn realtime_ws_e2e_send_while_next_event_waits() {
             RealtimeSessionConfig {
                 api_url,
                 prompt: "backend prompt".to_string(),
-                session_id: Some("conv_123".to_string()),
+                conversation_id: Some("conv_123".to_string()),
             },
             HeaderMap::new(),
             HeaderMap::new(),
@@ -230,7 +230,7 @@ async fn realtime_ws_e2e_disconnected_emitted_once() {
             RealtimeSessionConfig {
                 api_url,
                 prompt: "backend prompt".to_string(),
-                session_id: Some("conv_123".to_string()),
+                conversation_id: Some("conv_123".to_string()),
             },
             HeaderMap::new(),
             HeaderMap::new(),
@@ -290,7 +290,7 @@ async fn realtime_ws_e2e_ignores_unknown_text_events() {
             RealtimeSessionConfig {
                 api_url,
                 prompt: "backend prompt".to_string(),
-                session_id: Some("conv_123".to_string()),
+                conversation_id: Some("conv_123".to_string()),
             },
             HeaderMap::new(),
             HeaderMap::new(),

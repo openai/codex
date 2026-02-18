@@ -7,7 +7,7 @@ use tracing::debug;
 pub struct RealtimeSessionConfig {
     pub api_url: String,
     pub prompt: String,
-    pub session_id: Option<String>,
+    pub conversation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
