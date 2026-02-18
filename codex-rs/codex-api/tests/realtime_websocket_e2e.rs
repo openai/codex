@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::time::Duration;
 
 use codex_api::RealtimeAudioFrame;
@@ -7,7 +8,6 @@ use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::provider::Provider;
 use codex_api::provider::RetryConfig;
-use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
 use serde_json::Value;
@@ -16,15 +16,47 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
-#[tokio::test]
-async fn realtime_ws_e2e_session_create_and_event_flow() {
+type RealtimeWsStream = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
+
+async fn spawn_realtime_ws_server<Handler, Fut>(
+    handler: Handler,
+) -> (String, tokio::task::JoinHandle<()>)
+where
+    Handler: FnOnce(RealtimeWsStream) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("local addr");
+    let addr = listener.local_addr().expect("local addr").to_string();
 
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("accept");
-        let mut ws = accept_async(stream).await.expect("accept ws");
+        let ws = accept_async(stream).await.expect("accept ws");
+        handler(ws).await;
+    });
 
+    (addr, server)
+}
+
+fn test_provider() -> Provider {
+    Provider {
+        name: "test".to_string(),
+        base_url: "http://localhost".to_string(),
+        query_params: Some(HashMap::new()),
+        headers: HeaderMap::new(),
+        retry: RetryConfig {
+            max_attempts: 1,
+            base_delay: Duration::from_millis(1),
+            retry_429: false,
+            retry_5xx: false,
+            retry_transport: false,
+        },
+        stream_idle_timeout: Duration::from_secs(5),
+    }
+}
+
+#[tokio::test]
+async fn realtime_ws_e2e_session_create_and_event_flow() {
+    let (addr, server) = spawn_realtime_ws_server(|mut ws| async move {
         let first = ws
             .next()
             .await
@@ -76,23 +108,10 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
         ))
         .await
         .expect("send audio out");
-    });
+    })
+    .await;
 
-    let provider = Provider {
-        name: "test".to_string(),
-        base_url: "http://localhost".to_string(),
-        query_params: Some(HashMap::new()),
-        headers: HeaderMap::new(),
-        retry: RetryConfig {
-            max_attempts: 1,
-            base_delay: Duration::from_millis(1),
-            retry_429: false,
-            retry_5xx: false,
-            retry_transport: false,
-        },
-        stream_idle_timeout: Duration::from_secs(5),
-    };
-    let client = RealtimeWebsocketClient::new(provider);
+    let client = RealtimeWebsocketClient::new(test_provider());
     let connection = client
         .connect(
             RealtimeSessionConfig {
@@ -149,13 +168,7 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
 
 #[tokio::test]
 async fn realtime_ws_e2e_send_while_next_event_waits() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("local addr");
-
-    let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("accept");
-        let mut ws = accept_async(stream).await.expect("accept ws");
-
+    let (addr, server) = spawn_realtime_ws_server(|mut ws| async move {
         let first = ws
             .next()
             .await
@@ -186,23 +199,10 @@ async fn realtime_ws_e2e_send_while_next_event_waits() {
         ))
         .await
         .expect("send session.created");
-    });
+    })
+    .await;
 
-    let provider = Provider {
-        name: "test".to_string(),
-        base_url: "http://localhost".to_string(),
-        query_params: Some(HashMap::new()),
-        headers: HeaderMap::new(),
-        retry: RetryConfig {
-            max_attempts: 1,
-            base_delay: Duration::from_millis(1),
-            retry_429: false,
-            retry_5xx: false,
-            retry_transport: false,
-        },
-        stream_idle_timeout: Duration::from_secs(5),
-    };
-    let client = RealtimeWebsocketClient::new(provider);
+    let client = RealtimeWebsocketClient::new(test_provider());
     let connection = client
         .connect(
             RealtimeSessionConfig {
@@ -249,13 +249,7 @@ async fn realtime_ws_e2e_send_while_next_event_waits() {
 
 #[tokio::test]
 async fn realtime_ws_e2e_disconnected_emitted_once() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("local addr");
-
-    let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("accept");
-        let mut ws = accept_async(stream).await.expect("accept ws");
-
+    let (addr, server) = spawn_realtime_ws_server(|mut ws| async move {
         let first = ws
             .next()
             .await
@@ -267,23 +261,10 @@ async fn realtime_ws_e2e_disconnected_emitted_once() {
         assert_eq!(first_json["type"], "session.create");
 
         ws.send(Message::Close(None)).await.expect("send close");
-    });
+    })
+    .await;
 
-    let provider = Provider {
-        name: "test".to_string(),
-        base_url: "http://localhost".to_string(),
-        query_params: Some(HashMap::new()),
-        headers: HeaderMap::new(),
-        retry: RetryConfig {
-            max_attempts: 1,
-            base_delay: Duration::from_millis(1),
-            retry_429: false,
-            retry_5xx: false,
-            retry_transport: false,
-        },
-        stream_idle_timeout: Duration::from_secs(5),
-    };
-    let client = RealtimeWebsocketClient::new(provider);
+    let client = RealtimeWebsocketClient::new(test_provider());
     let connection = client
         .connect(
             RealtimeSessionConfig {
@@ -308,13 +289,7 @@ async fn realtime_ws_e2e_disconnected_emitted_once() {
 
 #[tokio::test]
 async fn realtime_ws_e2e_ignores_unknown_text_events() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("local addr");
-
-    let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("accept");
-        let mut ws = accept_async(stream).await.expect("accept ws");
-
+    let (addr, server) = spawn_realtime_ws_server(|mut ws| async move {
         let first = ws
             .next()
             .await
@@ -346,23 +321,10 @@ async fn realtime_ws_e2e_ignores_unknown_text_events() {
         ))
         .await
         .expect("send session.created");
-    });
+    })
+    .await;
 
-    let provider = Provider {
-        name: "test".to_string(),
-        base_url: "http://localhost".to_string(),
-        query_params: Some(HashMap::new()),
-        headers: HeaderMap::new(),
-        retry: RetryConfig {
-            max_attempts: 1,
-            base_delay: Duration::from_millis(1),
-            retry_429: false,
-            retry_5xx: false,
-            retry_transport: false,
-        },
-        stream_idle_timeout: Duration::from_secs(5),
-    };
-    let client = RealtimeWebsocketClient::new(provider);
+    let client = RealtimeWebsocketClient::new(test_provider());
     let connection = client
         .connect(
             RealtimeSessionConfig {

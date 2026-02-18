@@ -19,15 +19,8 @@ pub struct RealtimeAudioFrame {
     pub samples_per_channel: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RealtimeConnectionState {
-    Connected,
-    Disconnected,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RealtimeEvent {
-    State(RealtimeConnectionState),
     SessionCreated { session_id: String },
     SessionUpdated { backend_prompt: Option<String> },
     AudioOut(RealtimeAudioFrame),
@@ -86,43 +79,8 @@ pub(super) struct ConversationItemContent {
     pub(super) text: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-enum RealtimeInboundMessage {
-    #[serde(rename = "session.created")]
-    SessionCreated {
-        session_id: Option<String>,
-        session: Option<RealtimeInboundSession>,
-    },
-    #[serde(rename = "session.updated")]
-    SessionUpdated {
-        session: Option<RealtimeInboundSession>,
-    },
-    #[serde(rename = "response.output_audio.delta")]
-    OutputAudioDelta {
-        delta: Option<String>,
-        data: Option<String>,
-        sample_rate: Option<u32>,
-        num_channels: Option<u16>,
-        samples_per_channel: Option<u32>,
-    },
-    #[serde(rename = "conversation.item.added")]
-    ConversationItemAdded { item: Option<Value> },
-    #[serde(rename = "error")]
-    Error {
-        error: Option<Value>,
-        message: Option<String>,
-    },
-}
-
-#[derive(Debug, Deserialize)]
-struct RealtimeInboundSession {
-    id: Option<String>,
-    backend_prompt: Option<String>,
-}
-
 pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
-    let parsed: RealtimeInboundMessage = match serde_json::from_str(payload) {
+    let parsed: Value = match serde_json::from_str(payload) {
         Ok(msg) => msg,
         Err(err) => {
             debug!("failed to parse realtime event: {err}, data: {payload}");
@@ -130,40 +88,74 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
         }
     };
 
-    match parsed {
-        RealtimeInboundMessage::SessionCreated {
-            session_id,
-            session,
-        } => {
-            let session_id = session.and_then(|s| s.id).or(session_id);
+    let message_type = match parsed.get("type").and_then(Value::as_str) {
+        Some(message_type) => message_type,
+        None => {
+            debug!("received realtime event without type field: {payload}");
+            return None;
+        }
+    };
+    match message_type {
+        "session.created" => {
+            let session = parsed.get("session").and_then(Value::as_object);
+            let session_id = session
+                .and_then(|session| session.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| {
+                    parsed
+                        .get("session_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                });
             session_id.map(|id| RealtimeEvent::SessionCreated { session_id: id })
         }
-        RealtimeInboundMessage::SessionUpdated { session } => Some(RealtimeEvent::SessionUpdated {
-            backend_prompt: session.and_then(|s| s.backend_prompt),
-        }),
-        RealtimeInboundMessage::OutputAudioDelta {
-            delta,
-            data,
-            sample_rate,
-            num_channels,
-            samples_per_channel,
-        } => {
-            let data = delta.or(data)?;
-            let sample_rate = sample_rate?;
-            let num_channels = num_channels?;
+        "session.updated" => {
+            let backend_prompt = parsed
+                .get("session")
+                .and_then(Value::as_object)
+                .and_then(|session| session.get("backend_prompt"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            Some(RealtimeEvent::SessionUpdated { backend_prompt })
+        }
+        "response.output_audio.delta" => {
+            let data = parsed
+                .get("delta")
+                .and_then(Value::as_str)
+                .or_else(|| parsed.get("data").and_then(Value::as_str))
+                .map(str::to_string)?;
+            let sample_rate = parsed
+                .get("sample_rate")
+                .and_then(Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok())?;
+            let num_channels = parsed
+                .get("num_channels")
+                .and_then(Value::as_u64)
+                .and_then(|v| u16::try_from(v).ok())?;
             Some(RealtimeEvent::AudioOut(RealtimeAudioFrame {
                 data,
                 sample_rate,
                 num_channels,
-                samples_per_channel,
+                samples_per_channel: parsed
+                    .get("samples_per_channel")
+                    .and_then(Value::as_u64)
+                    .and_then(|v| u32::try_from(v).ok()),
             }))
         }
-        RealtimeInboundMessage::ConversationItemAdded { item } => {
-            item.map(RealtimeEvent::ConversationItemAdded)
-        }
-        RealtimeInboundMessage::Error { error, message } => {
-            let message = message.or_else(|| error.map(|e| e.to_string()))?;
-            Some(RealtimeEvent::Error(message))
+        "conversation.item.added" => parsed
+            .get("item")
+            .cloned()
+            .map(RealtimeEvent::ConversationItemAdded),
+        "error" => parsed
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| parsed.get("error").map(|value| value.to_string()))
+            .map(RealtimeEvent::Error),
+        _ => {
+            debug!("received unsupported realtime event type: {message_type}, data: {payload}");
+            None
         }
     }
 }
