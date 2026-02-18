@@ -18,6 +18,7 @@ use crate::protocol::WarningEvent;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
+use crate::user_shell_command::is_user_shell_command_text;
 use crate::util::backoff;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
@@ -303,7 +304,9 @@ async fn run_compact_task_inner(
     let incoming_user_items = match incoming_items.as_ref() {
         Some(items) => items
             .iter()
-            .filter(|item| is_non_summary_user_message(item))
+            .filter(|item| {
+                should_keep_compacted_history_item(item) && !is_summary_user_message_item(item)
+            })
             .cloned()
             .collect(),
         None => Vec::new(),
@@ -433,13 +436,14 @@ pub(crate) fn process_compacted_history(
 }
 
 fn is_non_summary_user_message(item: &ResponseItem) -> bool {
-    match crate::event_mapping::parse_turn_item(item) {
-        Some(TurnItem::UserMessage(user_message)) => {
-            let message = user_message.message();
-            !is_summary_message(&message)
-        }
-        _ => false,
-    }
+    should_keep_compacted_history_item(item) && !is_summary_user_message_item(item)
+}
+
+fn is_summary_user_message_item(item: &ResponseItem) -> bool {
+    matches!(
+        crate::event_mapping::parse_turn_item(item),
+        Some(TurnItem::UserMessage(user_message)) if is_summary_message(&user_message.message())
+    )
 }
 
 /// Returns whether an item from remote compaction output should be preserved.
@@ -451,18 +455,39 @@ fn is_non_summary_user_message(item: &ResponseItem) -> bool {
 /// - `developer` messages because remote output can include stale/duplicated
 ///   instruction content.
 /// - non-user-content `user` messages (session prefix/instruction wrappers),
-///   keeping only real user messages as parsed by `parse_turn_item`.
+///   keeping real user messages plus user shell-command records.
 ///
 /// This intentionally keeps `user`-role warnings and compaction-generated
-/// summary messages because they parse as `TurnItem::UserMessage`.
+/// summary messages because they parse as `TurnItem::UserMessage`, and keeps
+/// `<user_shell_command>` user records for shell-execution continuity.
 fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
-        ResponseItem::Message { role, .. } if role == "developer" => false,
-        ResponseItem::Message { role, .. } if role == "user" => matches!(
-            crate::event_mapping::parse_turn_item(item),
-            Some(TurnItem::UserMessage(_))
-        ),
-        _ => true,
+        ResponseItem::Message { role, content, .. } => {
+            if role == "developer" {
+                return false;
+            }
+            if role != "user" {
+                return true;
+            }
+
+            matches!(
+                crate::event_mapping::parse_turn_item(item),
+                Some(TurnItem::UserMessage(_))
+            ) || matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }] if is_user_shell_command_text(text)
+            )
+        }
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::Other => true,
     }
 }
 
@@ -1004,6 +1029,49 @@ do things
         };
 
         assert!(super::is_non_summary_user_message(&image_only_user));
+    }
+
+    #[test]
+    fn non_summary_user_message_includes_user_shell_command_records() {
+        let shell_command_user = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<user_shell_command>\necho hi\n</user_shell_command>".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+
+        assert!(super::is_non_summary_user_message(&shell_command_user));
+    }
+
+    #[test]
+    fn should_keep_compacted_history_item_drops_user_session_prefix_but_keeps_user_shell_command() {
+        let session_prefix = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>"
+                    .to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+        let shell_command_user = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<user_shell_command>\necho hi\n</user_shell_command>".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+
+        assert!(!super::should_keep_compacted_history_item(&session_prefix));
+        assert!(super::should_keep_compacted_history_item(
+            &shell_command_user
+        ));
     }
 
     #[test]
