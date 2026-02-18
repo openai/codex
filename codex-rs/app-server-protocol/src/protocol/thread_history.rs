@@ -65,7 +65,6 @@ pub struct ThreadHistoryBuilder {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
     next_item_index: i64,
-    drop_unknown_turn_scoped_items: bool,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -80,14 +79,6 @@ impl ThreadHistoryBuilder {
             turns: Vec::new(),
             current_turn: None,
             next_item_index: 1,
-            drop_unknown_turn_scoped_items: false,
-        }
-    }
-
-    pub fn for_active_turn_tracking() -> Self {
-        Self {
-            drop_unknown_turn_scoped_items: true,
-            ..Self::new()
         }
     }
 
@@ -845,14 +836,10 @@ impl ThreadHistoryBuilder {
             return;
         }
 
-        if self.drop_unknown_turn_scoped_items {
-            eprintln!(
-                "dropping turn-scoped item `{}` for unknown turn id `{turn_id}`",
-                item.item_id()
-            );
-            return;
-        }
-        self.upsert_item_in_current_turn(item);
+        eprintln!(
+            "dropping turn-scoped item `{}` for unknown turn id `{turn_id}`",
+            item.item_id()
+        );
     }
 
     fn upsert_item_in_current_turn(&mut self, item: ThreadItem) {
@@ -1061,7 +1048,7 @@ mod tests {
             }),
         ];
 
-        let mut builder = ThreadHistoryBuilder::for_active_turn_tracking();
+        let mut builder = ThreadHistoryBuilder::new();
         for event in &events {
             builder.handle_event(event);
         }
@@ -1469,6 +1456,11 @@ mod tests {
     #[test]
     fn reconstructs_tool_items_from_persisted_completion_events() {
         let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
             EventMsg::UserMessage(UserMessageEvent {
                 message: "run tools".into(),
                 images: None,
@@ -1568,6 +1560,11 @@ mod tests {
     #[test]
     fn reconstructs_declined_exec_and_patch_items() {
         let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
             EventMsg::UserMessage(UserMessageEvent {
                 message: "run tools".into(),
                 images: None,
@@ -1782,7 +1779,7 @@ mod tests {
             }),
         ];
 
-        let mut builder = ThreadHistoryBuilder::for_active_turn_tracking();
+        let mut builder = ThreadHistoryBuilder::new();
         for event in &events {
             builder.handle_event(event);
         }

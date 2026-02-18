@@ -39,6 +39,7 @@ pub(crate) struct TurnSummary {
     pub(crate) last_error: Option<TurnError>,
 }
 
+#[derive(Default)]
 pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
@@ -49,22 +50,6 @@ pub(crate) struct ThreadState {
     current_turn_history: ThreadHistoryBuilder,
     listener_thread: Option<Weak<CodexThread>>,
     subscribed_connections: HashSet<ConnectionId>,
-}
-
-impl Default for ThreadState {
-    fn default() -> Self {
-        Self {
-            pending_interrupts: PendingInterruptQueue::default(),
-            pending_rollbacks: None,
-            turn_summary: TurnSummary::default(),
-            cancel_tx: None,
-            experimental_raw_events: false,
-            listener_command_tx: None,
-            current_turn_history: ThreadHistoryBuilder::for_active_turn_tracking(),
-            listener_thread: None,
-            subscribed_connections: HashSet::default(),
-        }
-    }
 }
 
 impl ThreadState {

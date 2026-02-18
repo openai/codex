@@ -435,19 +435,17 @@ pub async fn run_main_with_transport(
         let outbound_control_tx = outbound_control_tx;
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
-        let mut processor = MessageProcessor::new(
-            MessageProcessorArgs {
-                outgoing: outgoing_message_sender,
-                codex_linux_sandbox_exe,
-                config: Arc::new(config),
-                cli_overrides,
-                loader_overrides,
-                cloud_requirements: cloud_requirements.clone(),
-                feedback: feedback.clone(),
-                config_warnings,
-            },
+        let mut processor = MessageProcessor::new(MessageProcessorArgs {
+            outgoing: outgoing_message_sender,
+            codex_linux_sandbox_exe,
+            config: Arc::new(config),
             single_client_mode,
-        );
+            cli_overrides,
+            loader_overrides,
+            cloud_requirements: cloud_requirements.clone(),
+            feedback: feedback.clone(),
+            config_warnings,
+        });
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
         async move {
