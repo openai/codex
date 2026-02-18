@@ -223,6 +223,7 @@ async fn run_command_under_sandbox(
                 None,
                 None,
                 managed_network_requirements_enabled,
+                codex_core::config::NetworkProxyAuditMetadata::default(),
             )
             .await
             .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?,

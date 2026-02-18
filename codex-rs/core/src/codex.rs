@@ -245,7 +245,6 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
-use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -841,7 +840,7 @@ impl Session {
         audit_metadata: NetworkProxyAuditMetadata,
     ) -> anyhow::Result<(StartedNetworkProxy, SessionNetworkProxyRuntime)> {
         let network_proxy = spec
-            .start_proxy_with_audit_metadata(
+            .start_proxy(
                 sandbox_policy,
                 network_policy_decider,
                 blocked_request_observer,
@@ -1175,13 +1174,7 @@ impl Session {
         let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
             conversation_id: Some(conversation_id.to_string()),
             app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            auth_mode: auth_mode.map(|mode| mode.to_string()),
-            originator: Some(sanitize_metric_tag_value(originator.as_str())),
             user_account_id: auth.and_then(CodexAuth::get_account_id),
-            user_email: auth.and_then(CodexAuth::get_account_email),
-            terminal_type: Some(terminal_type),
-            model: Some(model_slug.to_string()),
-            slug: Some(model_slug.to_string()),
         };
         config.features.emit_metrics(&otel_manager);
         otel_manager.counter(

@@ -1718,6 +1718,7 @@ impl CodexMessageProcessor {
                     None,
                     None,
                     managed_network_requirements_enabled,
+                    codex_core::config::NetworkProxyAuditMetadata::default(),
                 )
                 .await
             {

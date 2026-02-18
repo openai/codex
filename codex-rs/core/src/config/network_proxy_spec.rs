@@ -103,23 +103,6 @@ impl NetworkProxySpec {
         policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
         blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
         enable_network_approval_flow: bool,
-    ) -> std::io::Result<StartedNetworkProxy> {
-        self.start_proxy_with_audit_metadata(
-            sandbox_policy,
-            policy_decider,
-            blocked_request_observer,
-            enable_network_approval_flow,
-            NetworkProxyAuditMetadata::default(),
-        )
-        .await
-    }
-
-    pub async fn start_proxy_with_audit_metadata(
-        &self,
-        sandbox_policy: &SandboxPolicy,
-        policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
-        blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
-        enable_network_approval_flow: bool,
         audit_metadata: NetworkProxyAuditMetadata,
     ) -> std::io::Result<StartedNetworkProxy> {
         let state = self.build_state_with_audit_metadata(audit_metadata)?;
@@ -239,13 +222,7 @@ mod tests {
         let metadata = NetworkProxyAuditMetadata {
             conversation_id: Some("conversation-1".to_string()),
             app_version: Some("1.2.3".to_string()),
-            auth_mode: Some("chatgpt".to_string()),
-            originator: Some("codex_cli_rs".to_string()),
             user_account_id: Some("acct-1".to_string()),
-            user_email: Some("user@example.com".to_string()),
-            terminal_type: Some("terminal".to_string()),
-            model: Some("gpt-5".to_string()),
-            slug: Some("gpt-5".to_string()),
         };
 
         let state = spec
