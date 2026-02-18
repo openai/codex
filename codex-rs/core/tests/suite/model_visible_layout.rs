@@ -145,6 +145,8 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// TODO(ccunningham): Diff `user_instructions` and emit updates when AGENTS.md content changes
+// (for example after cwd changes), then update this test to assert refreshed AGENTS content.
 async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
