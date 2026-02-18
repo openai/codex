@@ -161,24 +161,32 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         );
     }
 
-    let tools = mcp_connection_manager.list_all_tools().await;
+    let mut tools = mcp_connection_manager.list_all_tools().await;
+    let mut should_reload_tools = false;
     let codex_apps_ready = if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
         let immediate_ready = mcp_connection_manager
             .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::ZERO)
             .await;
-        if immediate_ready || !tools.is_empty() {
-            immediate_ready
-        } else {
+        if immediate_ready {
+            true
+        } else if tools.is_empty() {
             let timeout = cfg
                 .startup_timeout_sec
                 .unwrap_or(CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS);
-            mcp_connection_manager
+            let ready = mcp_connection_manager
                 .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
-                .await
+                .await;
+            should_reload_tools = ready;
+            ready
+        } else {
+            false
         }
     } else {
         false
     };
+    if should_reload_tools {
+        tools = mcp_connection_manager.list_all_tools().await;
+    }
     cancel_token.cancel();
 
     let accessible_connectors =

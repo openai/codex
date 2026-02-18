@@ -6884,11 +6884,10 @@ impl ChatWidget {
             Err(err) => {
                 if matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
                     warn!("failed to refresh apps list; retaining current apps snapshot: {err}");
-                    return;
+                } else {
+                    self.connectors_cache = ConnectorsCacheState::Failed(err);
+                    self.bottom_pane.set_connectors_snapshot(None);
                 }
-
-                self.connectors_cache = ConnectorsCacheState::Failed(err);
-                self.bottom_pane.set_connectors_snapshot(None);
             }
         }
 
