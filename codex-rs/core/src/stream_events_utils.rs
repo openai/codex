@@ -55,7 +55,7 @@ struct ImplicitSkillCandidate {
 
 #[derive(Default)]
 struct ImplicitSkillDetector {
-    by_scripts_workdir: HashMap<PathBuf, ImplicitSkillCandidate>,
+    by_scripts_dir: HashMap<PathBuf, ImplicitSkillCandidate>,
     by_skill_doc_path: HashMap<PathBuf, ImplicitSkillCandidate>,
 }
 
@@ -119,7 +119,7 @@ pub(crate) async fn build_implicit_invocation_context(
 
         if let Some(skill_dir) = candidate.invocation.skill_path.parent() {
             let scripts_dir = normalize_path(&skill_dir.join("scripts"));
-            detector.by_scripts_workdir.insert(scripts_dir, candidate);
+            detector.by_scripts_dir.insert(scripts_dir, candidate);
         }
     }
 
@@ -301,10 +301,9 @@ fn detect_implicit_skill_invocation(
     let workdir = normalize_path(workdir.as_path());
     let tokens = tokenize_command(command.as_str());
 
-    if command_looks_like_script_run(tokens.as_slice())
-        && let Some(candidate) = detector.by_scripts_workdir.get(&workdir)
+    if let Some(candidate) = detect_skill_script_run(detector, tokens.as_slice(), workdir.as_path())
     {
-        return Some(candidate.clone());
+        return Some(candidate);
     }
 
     if let Some(candidate) = detect_skill_doc_read(detector, tokens.as_slice(), workdir.as_path()) {
@@ -338,19 +337,19 @@ fn tokenize_command(command: &str) -> Vec<String> {
     })
 }
 
-fn command_looks_like_script_run(tokens: &[String]) -> bool {
+fn script_run_token(tokens: &[String]) -> Option<&str> {
     const RUNNERS: [&str; 10] = [
         "python", "python3", "bash", "zsh", "sh", "node", "deno", "ruby", "perl", "pwsh",
     ];
     const SCRIPT_EXTENSIONS: [&str; 7] = [".py", ".sh", ".js", ".ts", ".rb", ".pl", ".ps1"];
 
     let Some(runner_token) = tokens.first() else {
-        return false;
+        return None;
     };
     let runner = command_basename(runner_token).to_ascii_lowercase();
     let runner = runner.strip_suffix(".exe").unwrap_or(&runner);
     if !RUNNERS.contains(&runner) {
-        return false;
+        return None;
     }
 
     let mut script_token: Option<&str> = None;
@@ -364,13 +363,38 @@ fn command_looks_like_script_run(tokens: &[String]) -> bool {
         script_token = Some(token.as_str());
         break;
     }
-    let Some(script_token) = script_token else {
-        return false;
-    };
-    let script_token = script_token.to_ascii_lowercase();
-    SCRIPT_EXTENSIONS
+    let script_token = script_token?;
+    if SCRIPT_EXTENSIONS
         .iter()
-        .any(|extension| script_token.ends_with(extension))
+        .any(|extension| script_token.to_ascii_lowercase().ends_with(extension))
+    {
+        return Some(script_token);
+    }
+
+    None
+}
+
+fn detect_skill_script_run(
+    detector: &ImplicitSkillDetector,
+    tokens: &[String],
+    workdir: &Path,
+) -> Option<ImplicitSkillCandidate> {
+    let script_token = script_run_token(tokens)?;
+    let script_path = Path::new(script_token);
+    let script_path = if script_path.is_absolute() {
+        script_path.to_path_buf()
+    } else {
+        workdir.join(script_path)
+    };
+    let script_path = normalize_path(script_path.as_path());
+
+    for ancestor in script_path.ancestors() {
+        if let Some(candidate) = detector.by_scripts_dir.get(ancestor) {
+            return Some(candidate.clone());
+        }
+    }
+
+    None
 }
 
 fn detect_skill_doc_read(
@@ -518,9 +542,10 @@ mod tests {
     use super::ImplicitSkillDetector;
     use super::InvokeType;
     use super::SkillInvocation;
-    use super::command_looks_like_script_run;
     use super::detect_skill_doc_read;
+    use super::detect_skill_script_run;
     use super::normalize_path;
+    use super::script_run_token;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::path::Path;
@@ -534,7 +559,7 @@ mod tests {
             "scripts/fetch_comments.py".to_string(),
         ];
 
-        assert_eq!(command_looks_like_script_run(&tokens), true);
+        assert_eq!(script_run_token(&tokens).is_some(), true);
     }
 
     #[test]
@@ -545,7 +570,7 @@ mod tests {
             "print(1)".to_string(),
         ];
 
-        assert_eq!(command_looks_like_script_run(&tokens), false);
+        assert_eq!(script_run_token(&tokens).is_some(), false);
     }
 
     #[test]
@@ -564,7 +589,7 @@ mod tests {
         };
 
         let detector = ImplicitSkillDetector {
-            by_scripts_workdir: HashMap::new(),
+            by_scripts_dir: HashMap::new(),
             by_skill_doc_path: HashMap::from([(normalized_skill_doc_path, candidate)]),
         };
 
@@ -575,6 +600,70 @@ mod tests {
             "head".to_string(),
         ];
         let found = detect_skill_doc_read(&detector, &tokens, Path::new("/tmp"));
+
+        assert_eq!(
+            found.map(|value| value.skill_id),
+            Some("skill-id".to_string())
+        );
+    }
+
+    #[test]
+    fn skill_script_run_detection_matches_relative_path_from_skill_root() {
+        let skill_doc_path = PathBuf::from("/tmp/skill-test/SKILL.md");
+        let scripts_dir = normalize_path(Path::new("/tmp/skill-test/scripts"));
+        let invocation = SkillInvocation {
+            skill_name: "test-skill".to_string(),
+            skill_scope: codex_protocol::protocol::SkillScope::User,
+            skill_path: skill_doc_path,
+            invoke_type: InvokeType::Implicit,
+        };
+        let candidate = ImplicitSkillCandidate {
+            invocation,
+            skill_id: "skill-id".to_string(),
+        };
+
+        let detector = ImplicitSkillDetector {
+            by_scripts_dir: HashMap::from([(scripts_dir, candidate)]),
+            by_skill_doc_path: HashMap::new(),
+        };
+        let tokens = vec![
+            "python3".to_string(),
+            "scripts/fetch_comments.py".to_string(),
+        ];
+
+        let found = detect_skill_script_run(&detector, &tokens, Path::new("/tmp/skill-test"));
+
+        assert_eq!(
+            found.map(|value| value.skill_id),
+            Some("skill-id".to_string())
+        );
+    }
+
+    #[test]
+    fn skill_script_run_detection_matches_absolute_path_from_any_workdir() {
+        let skill_doc_path = PathBuf::from("/tmp/skill-test/SKILL.md");
+        let scripts_dir = normalize_path(Path::new("/tmp/skill-test/scripts"));
+        let invocation = SkillInvocation {
+            skill_name: "test-skill".to_string(),
+            skill_scope: codex_protocol::protocol::SkillScope::User,
+            skill_path: skill_doc_path,
+            invoke_type: InvokeType::Implicit,
+        };
+        let candidate = ImplicitSkillCandidate {
+            invocation,
+            skill_id: "skill-id".to_string(),
+        };
+
+        let detector = ImplicitSkillDetector {
+            by_scripts_dir: HashMap::from([(scripts_dir, candidate)]),
+            by_skill_doc_path: HashMap::new(),
+        };
+        let tokens = vec![
+            "python3".to_string(),
+            "/tmp/skill-test/scripts/fetch_comments.py".to_string(),
+        ];
+
+        let found = detect_skill_script_run(&detector, &tokens, Path::new("/tmp/other"));
 
         assert_eq!(
             found.map(|value| value.skill_id),
