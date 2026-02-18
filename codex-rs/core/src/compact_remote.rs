@@ -99,6 +99,7 @@ async fn run_remote_compact_task_inner_impl(
         &base_instructions,
         incoming_items.as_deref(),
     );
+    let historical_items_before_incoming = history.raw_items().to_vec();
     if let Some(incoming_items) = incoming_items.as_ref() {
         history.record_items(incoming_items.iter(), turn_context.truncation_policy);
     }
@@ -180,7 +181,11 @@ async fn run_remote_compact_task_inner_impl(
             .filter(|item| should_keep_compacted_history_item(item))
             .cloned()
             .collect();
-        remove_incoming_echoes_from_compacted_history(&mut new_history, &incoming_history_items);
+        remove_incoming_echoes_from_compacted_history(
+            &mut new_history,
+            &incoming_history_items,
+            &historical_items_before_incoming,
+        );
     }
     // Reattach stripped model-switch updates into replacement history so post-compaction
     // sampling keeps model-switch guidance regardless of compaction callsite.
@@ -234,34 +239,48 @@ fn build_compact_request_log_data(
 fn remove_incoming_echoes_from_compacted_history(
     new_history: &mut Vec<ResponseItem>,
     incoming_history_items: &[ResponseItem],
+    historical_items_before_incoming: &[ResponseItem],
 ) {
+    let items_match =
+        |candidate: &ResponseItem, incoming_item: &ResponseItem| match (candidate, incoming_item) {
+            (
+                ResponseItem::Message {
+                    role: candidate_role,
+                    content: candidate_content,
+                    ..
+                },
+                ResponseItem::Message {
+                    role: incoming_role,
+                    content: incoming_content,
+                    ..
+                },
+            ) => candidate_role == incoming_role && candidate_content == incoming_content,
+            (
+                ResponseItem::Compaction {
+                    encrypted_content: candidate_content,
+                },
+                ResponseItem::Compaction {
+                    encrypted_content: incoming_content,
+                },
+            ) => candidate_content == incoming_content,
+            _ => candidate == incoming_item,
+        };
+
     for incoming_item in incoming_history_items {
-        if let Some(index) =
-            new_history
-                .iter()
-                .rposition(|candidate| match (candidate, incoming_item) {
-                    (
-                        ResponseItem::Message {
-                            role: candidate_role,
-                            content: candidate_content,
-                            ..
-                        },
-                        ResponseItem::Message {
-                            role: incoming_role,
-                            content: incoming_content,
-                            ..
-                        },
-                    ) => candidate_role == incoming_role && candidate_content == incoming_content,
-                    (
-                        ResponseItem::Compaction {
-                            encrypted_content: candidate_content,
-                        },
-                        ResponseItem::Compaction {
-                            encrypted_content: incoming_content,
-                        },
-                    ) => candidate_content == incoming_content,
-                    _ => candidate == incoming_item,
-                })
+        let historical_count = historical_items_before_incoming
+            .iter()
+            .filter(|candidate| items_match(candidate, incoming_item))
+            .count();
+        let compacted_count = new_history
+            .iter()
+            .filter(|candidate| items_match(candidate, incoming_item))
+            .count();
+        if compacted_count <= historical_count {
+            continue;
+        }
+        if let Some(index) = new_history
+            .iter()
+            .rposition(|candidate| items_match(candidate, incoming_item))
         {
             new_history.remove(index);
         }
@@ -371,6 +390,10 @@ mod tests {
         }
     }
 
+    fn summary_user_message(text: &str) -> ResponseItem {
+        user_message(&format!("{}\n{text}", crate::compact::SUMMARY_PREFIX))
+    }
+
     #[test]
     fn trim_accounts_for_incoming_items_tokens() {
         let base_instructions = BaseInstructions {
@@ -424,5 +447,50 @@ mod tests {
             "incoming projection should trim trailing codex-generated history to fit pre-turn request"
         );
         assert_eq!(history.raw_items(), vec![user_message("USER_ONE")]);
+    }
+
+    #[test]
+    fn remove_incoming_echoes_preserves_historical_duplicates_when_not_echoed() {
+        let mut compacted_history = vec![
+            user_message("REPEAT_MESSAGE"),
+            summary_user_message("LATEST_SUMMARY"),
+        ];
+        let incoming_items = vec![user_message("REPEAT_MESSAGE")];
+        let historical_items_before_incoming = vec![user_message("REPEAT_MESSAGE")];
+
+        remove_incoming_echoes_from_compacted_history(
+            &mut compacted_history,
+            &incoming_items,
+            &historical_items_before_incoming,
+        );
+
+        let expected = vec![
+            user_message("REPEAT_MESSAGE"),
+            summary_user_message("LATEST_SUMMARY"),
+        ];
+        assert_eq!(compacted_history, expected);
+    }
+
+    #[test]
+    fn remove_incoming_echoes_removes_net_new_echoes_only() {
+        let mut compacted_history = vec![
+            user_message("REPEAT_MESSAGE"),
+            user_message("REPEAT_MESSAGE"),
+            summary_user_message("LATEST_SUMMARY"),
+        ];
+        let incoming_items = vec![user_message("REPEAT_MESSAGE")];
+        let historical_items_before_incoming = vec![user_message("REPEAT_MESSAGE")];
+
+        remove_incoming_echoes_from_compacted_history(
+            &mut compacted_history,
+            &incoming_items,
+            &historical_items_before_incoming,
+        );
+
+        let expected = vec![
+            user_message("REPEAT_MESSAGE"),
+            summary_user_message("LATEST_SUMMARY"),
+        ];
+        assert_eq!(compacted_history, expected);
     }
 }
