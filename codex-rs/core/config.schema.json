@@ -500,14 +500,6 @@
       },
       "type": "object"
     },
-    "ModeKind": {
-      "description": "Initial collaboration mode to use when the TUI starts.",
-      "enum": [
-        "plan",
-        "default"
-      ],
-      "type": "string"
-    },
     "ModelProviderInfo": {
       "additionalProperties": false,
       "description": "Serializable representation of a provider definition.",
@@ -1149,15 +1141,6 @@
           "default": true,
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
-        },
-        "experimental_mode": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ModeKind"
-            }
-          ],
-          "default": null,
-          "description": "Start the TUI in the specified collaboration mode (plan/default). Defaults to unset."
         },
         "notification_method": {
           "allOf": [
