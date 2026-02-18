@@ -1061,11 +1061,11 @@ mod tests {
             }),
         ];
 
-        let items = events
-            .into_iter()
-            .map(RolloutItem::EventMsg)
-            .collect::<Vec<_>>();
-        let turns = build_turns_from_rollout_items(&items);
+        let mut builder = ThreadHistoryBuilder::for_active_turn_tracking();
+        for event in &events {
+            builder.handle_event(event);
+        }
+        let turns = builder.finish();
         assert_eq!(turns.len(), 2);
 
         let first = &turns[0];
@@ -1782,11 +1782,11 @@ mod tests {
             }),
         ];
 
-        let items = events
-            .into_iter()
-            .map(RolloutItem::EventMsg)
-            .collect::<Vec<_>>();
-        let turns = build_turns_from_rollout_items(&items);
+        let mut builder = ThreadHistoryBuilder::for_active_turn_tracking();
+        for event in &events {
+            builder.handle_event(event);
+        }
+        let turns = builder.finish();
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].id, "turn-a");
         assert_eq!(turns[1].id, "turn-b");
