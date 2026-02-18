@@ -49,8 +49,7 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
     .await
     .context("failed to load Codex config")?;
 
-    let merged_toml = config_layer_stack.effective_config();
-    let config = config_from_toml(&merged_toml)?;
+    let config = config_from_layers(&config_layer_stack)?;
 
     let constraints = enforce_trusted_constraints(&config_layer_stack, &config)?;
     let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
@@ -161,17 +160,23 @@ fn network_tables_from_toml(value: &toml::Value) -> Result<NetworkTablesToml> {
         .context("failed to deserialize network tables from config")
 }
 
-fn config_from_toml(value: &toml::Value) -> Result<NetworkProxyConfig> {
-    let parsed = network_tables_from_toml(value)?;
-    let mut config = NetworkProxyConfig::default();
+fn apply_network_tables(config: &mut NetworkProxyConfig, parsed: NetworkTablesToml) {
     if let Some(network) = parsed.network {
-        network.apply_to_network_proxy_config(&mut config);
+        network.apply_to_network_proxy_config(config);
     }
     if let Some(network) = parsed
         .permissions
         .and_then(|permissions| permissions.network)
     {
-        network.apply_to_network_proxy_config(&mut config);
+        network.apply_to_network_proxy_config(config);
+    }
+}
+
+fn config_from_layers(layers: &ConfigLayerStack) -> Result<NetworkProxyConfig> {
+    let mut config = NetworkProxyConfig::default();
+    for layer in layers.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false) {
+        let parsed = network_tables_from_toml(&layer.config)?;
+        apply_network_tables(&mut config, parsed);
     }
     Ok(config)
 }
@@ -245,5 +250,42 @@ impl ConfigReloader for MtimeConfigReloader {
         let mut guard = self.layer_mtimes.write().await;
         *guard = layer_mtimes;
         Ok(state)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn higher_precedence_network_table_beats_lower_permissions_network_table() {
+        let lower_permissions: toml::Value = toml::from_str(
+            r#"
+[permissions.network]
+allowed_domains = ["lower.example.com"]
+"#,
+        )
+        .expect("lower layer should parse");
+        let higher_network: toml::Value = toml::from_str(
+            r#"
+[network]
+allowed_domains = ["higher.example.com"]
+"#,
+        )
+        .expect("higher layer should parse");
+
+        let mut config = NetworkProxyConfig::default();
+        apply_network_tables(
+            &mut config,
+            network_tables_from_toml(&lower_permissions).expect("lower layer should deserialize"),
+        );
+        apply_network_tables(
+            &mut config,
+            network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
+        );
+
+        assert_eq!(config.network.allowed_domains, vec!["higher.example.com"]);
     }
 }
