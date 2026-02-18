@@ -874,6 +874,8 @@ fn emit_http_block_decision_audit_event(
     emit_block_decision_audit_event(app_state, args);
 }
 
+fn emit_http_allow_decision_audit_event(
+    app_state: &NetworkProxyState,
     args: BlockDecisionAuditEventArgs<'_>,
 ) {
     emit_allow_decision_audit_event(app_state, args);
