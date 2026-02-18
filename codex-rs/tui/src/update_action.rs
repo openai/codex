@@ -52,6 +52,8 @@ fn detect_update_action(
         Some(UpdateAction::NpmGlobalLatest)
     } else if managed_by_bun {
         Some(UpdateAction::BunGlobalLatest)
+    } else if let Some(inferred) = infer_update_action_from_exe_path(current_exe) {
+        Some(inferred)
     } else if is_macos
         && (current_exe.starts_with("/opt/homebrew") || current_exe.starts_with("/usr/local"))
     {
@@ -59,6 +61,31 @@ fn detect_update_action(
     } else {
         None
     }
+}
+
+#[cfg(any(not(debug_assertions), test))]
+fn infer_update_action_from_exe_path(current_exe: &std::path::Path) -> Option<UpdateAction> {
+    let components: Vec<String> = current_exe
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .map(|component| component.to_ascii_lowercase())
+        .collect();
+
+    let managed_by_bun_path = components.iter().any(|component| component == ".bun");
+    if managed_by_bun_path {
+        return Some(UpdateAction::BunGlobalLatest);
+    }
+
+    let has_node_modules = components.iter().any(|component| component == "node_modules");
+    let has_codex_package = components
+        .windows(2)
+        .any(|window| window[0] == "@openai" && window[1].starts_with("codex"));
+
+    if has_node_modules && has_codex_package {
+        return Some(UpdateAction::NpmGlobalLatest);
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -96,6 +123,38 @@ mod tests {
                 false
             ),
             Some(UpdateAction::BrewUpgrade)
+        );
+
+        assert_eq!(
+            detect_update_action(
+                false,
+                std::path::Path::new("/home/user/.bun/bin/codex"),
+                false,
+                false
+            ),
+            Some(UpdateAction::BunGlobalLatest)
+        );
+
+        assert_eq!(
+            detect_update_action(
+                false,
+                std::path::Path::new("C:\\Users\\user\\.bun\\bin\\codex.exe"),
+                false,
+                false
+            ),
+            Some(UpdateAction::BunGlobalLatest)
+        );
+
+        assert_eq!(
+            detect_update_action(
+                false,
+                std::path::Path::new(
+                    "/usr/local/lib/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/codex/codex"
+                ),
+                false,
+                false
+            ),
+            Some(UpdateAction::NpmGlobalLatest)
         );
     }
 }
