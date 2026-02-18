@@ -30,7 +30,6 @@ pub use crate::endpoint::compact::CompactClient;
 pub use crate::endpoint::memories::MemoriesClient;
 pub use crate::endpoint::models::ModelsClient;
 pub use crate::endpoint::realtime_websocket::RealtimeAudioFrame;
-pub use crate::endpoint::realtime_websocket::RealtimeConnectionState;
 pub use crate::endpoint::realtime_websocket::RealtimeEvent;
 pub use crate::endpoint::realtime_websocket::RealtimeSessionConfig;
 pub use crate::endpoint::realtime_websocket::RealtimeWebsocketClient;

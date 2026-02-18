@@ -3,6 +3,8 @@ use crate::auth::add_auth_headers_to_header_map;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
+use crate::endpoint::websocket_pump::WebsocketMessage;
+use crate::endpoint::websocket_pump::WebsocketPump;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
@@ -11,8 +13,6 @@ use crate::sse::responses::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
-use futures::SinkExt;
-use futures::StreamExt;
 use http::HeaderMap;
 use http::HeaderName;
 use http::HeaderValue;
@@ -23,10 +23,8 @@ use serde_json::map::Map as JsonMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
@@ -43,120 +41,26 @@ use tungstenite::protocol::WebSocketConfig;
 use url::Url;
 
 struct WsStream {
-    tx_command: mpsc::Sender<WsCommand>,
-    rx_message: mpsc::UnboundedReceiver<Result<Message, WsError>>,
-    pump_task: tokio::task::JoinHandle<()>,
-}
-
-enum WsCommand {
-    Send {
-        message: Message,
-        tx_result: oneshot::Sender<Result<(), WsError>>,
-    },
-    Close {
-        tx_result: oneshot::Sender<Result<(), WsError>>,
-    },
+    pump: WebsocketPump,
+    rx_message: mpsc::UnboundedReceiver<WebsocketMessage>,
 }
 
 impl WsStream {
-    fn new(inner: WebSocketStream<MaybeTlsStream<TcpStream>>) -> Self {
-        let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
-        let (tx_message, rx_message) = mpsc::unbounded_channel::<Result<Message, WsError>>();
-
-        let pump_task = tokio::spawn(async move {
-            let mut inner = inner;
-            loop {
-                tokio::select! {
-                    command = rx_command.recv() => {
-                        let Some(command) = command else {
-                            break;
-                        };
-                        match command {
-                            WsCommand::Send { message, tx_result } => {
-                                let result = inner.send(message).await;
-                                let should_break = result.is_err();
-                                let _ = tx_result.send(result);
-                                if should_break {
-                                    break;
-                                }
-                            }
-                            WsCommand::Close { tx_result } => {
-                                let result = inner.close(None).await;
-                                let _ = tx_result.send(result);
-                                break;
-                            }
-                        }
-                    }
-                    message = inner.next() => {
-                        let Some(message) = message else {
-                            break;
-                        };
-                        match message {
-                            Ok(Message::Ping(payload)) => {
-                                if let Err(err) = inner.send(Message::Pong(payload)).await {
-                                    let _ = tx_message.send(Err(err));
-                                    break;
-                                }
-                            }
-                            Ok(Message::Pong(_)) => {}
-                            Ok(message @ (Message::Text(_)
-                            | Message::Binary(_)
-                            | Message::Close(_)
-                            | Message::Frame(_))) => {
-                                let is_close = matches!(message, Message::Close(_));
-                                if tx_message.send(Ok(message)).is_err() {
-                                    break;
-                                }
-                                if is_close {
-                                    break;
-                                }
-                            }
-                            Err(err) => {
-                                let _ = tx_message.send(Err(err));
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        Self {
-            tx_command,
-            rx_message,
-            pump_task,
-        }
-    }
-
-    async fn request(
-        &self,
-        make_command: impl FnOnce(oneshot::Sender<Result<(), WsError>>) -> WsCommand,
-    ) -> Result<(), WsError> {
-        let (tx_result, rx_result) = oneshot::channel();
-        if self.tx_command.send(make_command(tx_result)).await.is_err() {
-            return Err(WsError::ConnectionClosed);
-        }
-        rx_result.await.unwrap_or(Err(WsError::ConnectionClosed))
+    fn new(inner: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>) -> Self {
+        let (pump, rx_message) = WebsocketPump::new(inner);
+        Self { pump, rx_message }
     }
 
     async fn send(&self, message: Message) -> Result<(), WsError> {
-        self.request(|tx_result| WsCommand::Send { message, tx_result })
-            .await
+        self.pump.send(message).await
     }
 
     async fn close(&self) -> Result<(), WsError> {
-        self.request(|tx_result| WsCommand::Close { tx_result })
-            .await
+        self.pump.close().await
     }
 
     async fn next(&mut self) -> Option<Result<Message, WsError>> {
         self.rx_message.recv().await
-    }
-}
-
-impl Drop for WsStream {
-    fn drop(&mut self) {
-        self.pump_task.abort();
     }
 }
 
