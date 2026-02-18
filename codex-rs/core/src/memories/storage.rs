@@ -83,13 +83,9 @@ async fn rebuild_raw_memories_file(
         .map_err(raw_memories_format_error)?;
         writeln!(body, "cwd: {}", memory.cwd.display()).map_err(raw_memories_format_error)?;
         writeln!(body).map_err(raw_memories_format_error)?;
-        // TODO(codex) instead replace any line starting with `rollout_summary_file: ` by `rollout_summary_file: {rollout_summary_file_stem(memory)}.md`
         let rollout_summary_file = format!("{}.md", rollout_summary_file_stem(memory));
-        let raw_memory = if let Some(slug) = &memory.rollout_slug {
-            memory.raw_memory.clone().replace(slug, &rollout_summary_file)
-        } else {
-            memory.raw_memory.clone()
-        };
+        let raw_memory =
+            replace_rollout_summary_file_in_raw_memory(&memory.raw_memory, &rollout_summary_file);
         body.push_str(raw_memory.trim());
         body.push_str("\n\n");
     }
@@ -163,6 +159,26 @@ fn raw_memories_format_error(err: std::fmt::Error) -> std::io::Error {
 
 fn rollout_summary_format_error(err: std::fmt::Error) -> std::io::Error {
     std::io::Error::other(format!("format rollout summary: {err}"))
+}
+
+fn replace_rollout_summary_file_in_raw_memory(
+    raw_memory: &str,
+    rollout_summary_file: &str,
+) -> String {
+    const ROLLOUT_SUMMARY_PREFIX: &str = "rollout_summary_file: ";
+
+    let replacement = format!("rollout_summary_file: {rollout_summary_file}");
+    raw_memory
+        .split('\n')
+        .map(|line| {
+            if line.starts_with(ROLLOUT_SUMMARY_PREFIX) {
+                replacement.as_str()
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn rollout_summary_file_stem(memory: &Stage1Output) -> String {
