@@ -171,7 +171,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-    let _ = initial_mock.single_request();
+    let initial_request = initial_mock.single_request();
 
     let resumed_mock = mount_sse_once(
         &server,
@@ -217,7 +217,10 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
         "model_visible_layout_resume_with_personality_change",
         format_labeled_requests_snapshot(
             "First post-resume turn where resumed config model differs from rollout and personality changes.",
-            &[("First Request After Resume", &resumed_request),]
+            &[
+                ("Last Request Before Resume", &initial_request),
+                ("First Request After Resume", &resumed_request),
+            ]
         )
     );
 
@@ -260,7 +263,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-    let _ = initial_mock.single_request();
+    let initial_request = initial_mock.single_request();
 
     let resumed_mock = mount_sse_once(
         &server,
@@ -310,7 +313,10 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
         "model_visible_layout_resume_override_matches_rollout_model",
         format_labeled_requests_snapshot(
             "First post-resume turn where pre-turn override sets model to rollout model; no model-switch update should appear.",
-            &[("First Request After Resume + Override", &resumed_request),]
+            &[
+                ("Last Request Before Resume", &initial_request),
+                ("First Request After Resume + Override", &resumed_request),
+            ]
         )
     );
 
