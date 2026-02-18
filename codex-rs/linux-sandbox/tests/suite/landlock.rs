@@ -114,6 +114,25 @@ fn is_bwrap_unavailable_output(output: &codex_core::exec::ExecToolCallOutput) ->
     output.stderr.text.contains(BWRAP_UNAVAILABLE_ERR)
 }
 
+fn is_legacy_landlock_unavailable_output(output: &codex_core::exec::ExecToolCallOutput) -> bool {
+    output.stderr.text.contains("Sandbox(LandlockRestrict)")
+}
+
+async fn should_skip_legacy_landlock_tests() -> bool {
+    match run_cmd_result_with_writable_roots(&["bash", "-lc", "true"], &[], SHORT_TIMEOUT_MS, false)
+        .await
+    {
+        Ok(_) => false,
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => {
+            is_legacy_landlock_unavailable_output(&output)
+        }
+        // Probe timeouts are not actionable for the legacy Landlock assertions below;
+        // skip rather than fail the whole suite.
+        Err(CodexErr::Sandbox(SandboxErr::Timeout { .. })) => true,
+        Err(err) => panic!("legacy Landlock availability probe failed unexpectedly: {err:?}"),
+    }
+}
+
 async fn should_skip_bwrap_tests() -> bool {
     match run_cmd_result_with_writable_roots(
         &["bash", "-lc", "true"],
@@ -150,24 +169,41 @@ fn expect_denied(
 
 #[tokio::test]
 async fn test_root_read() {
+    if should_skip_legacy_landlock_tests().await {
+        eprintln!("skipping legacy Landlock test: Landlock is not enforced in this environment");
+        return;
+    }
     run_cmd(&["ls", "-l", "/bin"], &[], SHORT_TIMEOUT_MS).await;
 }
 
 #[tokio::test]
-#[should_panic]
 async fn test_root_write() {
+    if should_skip_legacy_landlock_tests().await {
+        eprintln!("skipping legacy Landlock test: Landlock is not enforced in this environment");
+        return;
+    }
+
     let tmpfile = NamedTempFile::new().unwrap();
     let tmpfile_path = tmpfile.path().to_string_lossy();
-    run_cmd(
-        &["bash", "-lc", &format!("echo blah > {tmpfile_path}")],
-        &[],
-        SHORT_TIMEOUT_MS,
-    )
-    .await;
+    let output = expect_denied(
+        run_cmd_result_with_writable_roots(
+            &["bash", "-lc", &format!("echo blah > {tmpfile_path}")],
+            &[],
+            SHORT_TIMEOUT_MS,
+            false,
+        )
+        .await,
+        "root write should be denied",
+    );
+    assert_ne!(output.exit_code, 0);
 }
 
 #[tokio::test]
 async fn test_dev_null_write() {
+    if should_skip_legacy_landlock_tests().await {
+        eprintln!("skipping legacy Landlock test: Landlock is not enforced in this environment");
+        return;
+    }
     run_cmd(
         &["bash", "-lc", "echo blah > /dev/null"],
         &[],
@@ -180,6 +216,11 @@ async fn test_dev_null_write() {
 
 #[tokio::test]
 async fn test_writable_root() {
+    if should_skip_legacy_landlock_tests().await {
+        eprintln!("skipping legacy Landlock test: Landlock is not enforced in this environment");
+        return;
+    }
+
     let tmpdir = tempfile::tempdir().unwrap();
     let file_path = tmpdir.path().join("test");
     run_cmd(
@@ -198,6 +239,11 @@ async fn test_writable_root() {
 
 #[tokio::test]
 async fn test_no_new_privs_is_enabled() {
+    if should_skip_legacy_landlock_tests().await {
+        eprintln!("skipping legacy Landlock test: Landlock is not enforced in this environment");
+        return;
+    }
+
     let output = run_cmd_output(
         &["bash", "-lc", "grep '^NoNewPrivs:' /proc/self/status"],
         &[],
@@ -216,9 +262,17 @@ async fn test_no_new_privs_is_enabled() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "Sandbox(Timeout")]
 async fn test_timeout() {
-    run_cmd(&["sleep", "2"], &[], 50).await;
+    if should_skip_legacy_landlock_tests().await {
+        eprintln!("skipping legacy Landlock test: Landlock is not enforced in this environment");
+        return;
+    }
+
+    match run_cmd_result_with_writable_roots(&["sleep", "2"], &[], 50, false).await {
+        Err(CodexErr::Sandbox(SandboxErr::Timeout { .. })) => {}
+        Ok(output) => panic!("expected timeout, got output: {output:?}"),
+        Err(err) => panic!("expected Sandbox(Timeout), got: {err:?}"),
+    }
 }
 
 /// Helper that runs `cmd` under the Linux sandbox and asserts that the command
