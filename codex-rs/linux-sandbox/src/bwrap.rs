@@ -138,8 +138,8 @@ fn create_bwrap_flags(
 /// 2. `--bind <root> <root>` re-enables writes for allowed roots.
 /// 3. `--ro-bind <subpath> <subpath>` re-applies read-only protections under
 ///    those writable roots so protected subpaths win.
-/// 4. `--dev-bind /dev/null /dev/null` preserves the common sink even under a
-///    read-only root.
+/// 4. `--dev /dev` mounts a minimal writable `/dev` with standard device nodes
+///    (including `/dev/urandom`) even under a read-only root.
 fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<Vec<String>> {
     if !sandbox_policy.has_full_disk_read_access() {
         return Err(CodexErr::UnsupportedOperation(
@@ -197,10 +197,9 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
         }
     }
 
-    // Ensure `/dev/null` remains usable regardless of the root bind.
-    args.push("--dev-bind".to_string());
-    args.push("/dev/null".to_string());
-    args.push("/dev/null".to_string());
+    // Ensure standard device nodes (including `/dev/urandom`) are available.
+    args.push("--dev".to_string());
+    args.push("/dev".to_string());
 
     Ok(args)
 }
@@ -361,6 +360,39 @@ mod tests {
                 "/".to_string(),
                 "--unshare-pid".to_string(),
                 "--unshare-net".to_string(),
+                "--proc".to_string(),
+                "/proc".to_string(),
+                "--".to_string(),
+                "/bin/true".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn read_only_policy_mounts_dev_tree() {
+        let command = vec!["/bin/true".to_string()];
+        let args = create_bwrap_command_args(
+            command,
+            &SandboxPolicy::new_read_only_policy(),
+            Path::new("/"),
+            BwrapOptions {
+                mount_proc: true,
+                network_mode: BwrapNetworkMode::FullAccess,
+            },
+        )
+        .expect("create bwrap args");
+
+        assert_eq!(
+            args,
+            vec![
+                "--new-session".to_string(),
+                "--die-with-parent".to_string(),
+                "--ro-bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
+                "--dev".to_string(),
+                "/dev".to_string(),
+                "--unshare-pid".to_string(),
                 "--proc".to_string(),
                 "/proc".to_string(),
                 "--".to_string(),
