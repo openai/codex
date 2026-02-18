@@ -2,6 +2,7 @@ use crate::PlatformSleepInhibitor;
 use std::os::unix::process::CommandExt;
 use std::process::Child;
 use std::process::Command;
+use std::process::Stdio;
 use tracing::warn;
 
 const ASSERTION_REASON: &str = "Codex is running an active turn";
@@ -169,6 +170,7 @@ impl Drop for LinuxSleepInhibitor {
 }
 
 fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
+    let parent_pid = unsafe { libc::getpid() };
     let mut command = match backend {
         LinuxBackend::SystemdInhibit => {
             let mut command = Command::new("systemd-inhibit");
@@ -198,11 +200,18 @@ fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
             command
         }
     };
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
 
     unsafe {
         command.pre_exec(|| {
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
                 return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != parent_pid {
+                libc::raise(libc::SIGTERM);
             }
             Ok(())
         });
