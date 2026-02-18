@@ -301,15 +301,6 @@ async fn run_compact_task_inner(
     let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
-    let incoming_user_items = match incoming_items.as_ref() {
-        Some(items) => items
-            .iter()
-            .filter(|item| should_keep_compacted_history_item(item))
-            .cloned()
-            .collect(),
-        None => Vec::new(),
-    };
-
     let initial_context = match turn_context_reinjection {
         TurnContextReinjection::ReinjectAboveLastRealUser => {
             sess.build_initial_context(turn_context.as_ref()).await
@@ -318,7 +309,6 @@ async fn run_compact_task_inner(
     };
     let compacted_history = build_compacted_history_with_limit(
         &user_messages,
-        &incoming_user_items,
         &summary_text,
         COMPACT_USER_MESSAGE_MAX_TOKENS,
     );
@@ -327,9 +317,12 @@ async fn run_compact_task_inner(
         &initial_context,
         turn_context_reinjection,
     );
-    // Reattach the stripped model-switch update only after successful compaction so the model
-    // still sees the switch instructions on the next real sampling request.
-    if let Some(model_switch_item) = stripped_model_switch_item {
+    // Reattach stripped model-switch updates only for compaction paths that do not carry
+    // incoming turn items. Pre-turn compaction appends turn context and user input after
+    // compaction in run_turn.
+    if incoming_items.is_none()
+        && let Some(model_switch_item) = stripped_model_switch_item
+    {
         new_history.push(model_switch_item);
     }
     let ghost_snapshots: Vec<ResponseItem> = history_items
@@ -465,7 +458,7 @@ fn is_user_shell_command_record(item: &ResponseItem) -> bool {
 ///
 /// This intentionally keeps compaction-generated summary messages because they
 /// parse as `TurnItem::UserMessage`.
-fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
+pub(crate) fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } => {
             if role == "developer" {
@@ -503,17 +496,11 @@ pub(crate) fn build_compacted_history(
     user_messages: &[String],
     summary_text: &str,
 ) -> Vec<ResponseItem> {
-    build_compacted_history_with_limit(
-        user_messages,
-        &[],
-        summary_text,
-        COMPACT_USER_MESSAGE_MAX_TOKENS,
-    )
+    build_compacted_history_with_limit(user_messages, summary_text, COMPACT_USER_MESSAGE_MAX_TOKENS)
 }
 
 fn build_compacted_history_with_limit(
     user_messages: &[String],
-    incoming_user_items: &[ResponseItem],
     summary_text: &str,
     max_tokens: usize,
 ) -> Vec<ResponseItem> {
@@ -549,8 +536,6 @@ fn build_compacted_history_with_limit(
             phase: None,
         });
     }
-
-    history.extend(incoming_user_items.iter().cloned());
 
     let summary_text = if summary_text.is_empty() {
         "(no summary available)".to_string()
@@ -920,7 +905,6 @@ do things
         let big = "word ".repeat(200);
         let history = super::build_compacted_history_with_limit(
             std::slice::from_ref(&big),
-            &[],
             "SUMMARY",
             max_tokens,
         );
@@ -976,28 +960,9 @@ do things
     }
 
     #[test]
-    fn build_compacted_history_preserves_incoming_user_item_structure() {
-        let preserved_user_item = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![
-                ContentItem::InputImage {
-                    image_url: "data:image/png;base64,AAAA".to_string(),
-                },
-                ContentItem::InputText {
-                    text: "latest user with image".to_string(),
-                },
-            ],
-            end_turn: None,
-            phase: None,
-        };
-
-        let history = super::build_compacted_history_with_limit(
-            &["older user".to_string()],
-            std::slice::from_ref(&preserved_user_item),
-            "SUMMARY",
-            128,
-        );
+    fn build_compacted_history_preserves_user_message_structure() {
+        let history =
+            super::build_compacted_history_with_limit(&["older user".to_string()], "SUMMARY", 128);
 
         let expected = vec![
             ResponseItem::Message {
@@ -1009,7 +974,6 @@ do things
                 end_turn: None,
                 phase: None,
             },
-            preserved_user_item,
             ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),

@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/compact.rs
+assertion_line: 3138
 expression: "format_labeled_requests_snapshot(\"Pre-turn auto-compaction with a context override includes incoming user content in the compact request and preserves it after compaction.\",\n&[(\"Local Compaction Request\", &requests[2]),\n(\"Local Post-Compaction History Layout\", &requests[3]),])"
 ---
 Scenario: Pre-turn auto-compaction with a context override includes incoming user content in the compact request and preserves it after compaction.
@@ -18,9 +19,10 @@ Scenario: Pre-turn auto-compaction with a context override includes incoming use
 
 ## Local Post-Compaction History Layout
 00:message/user:USER_ONE
-01:message/user:USER_TWO
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user:<AGENTS_MD>
-04:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-05:message/user:<image> | <input_image:image_url> | </image> | USER_THREE
-06:message/user:<COMPACTION_SUMMARY>\nPRE_TURN_SUMMARY
+01:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/user:<AGENTS_MD>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+04:message/user:USER_TWO
+05:message/user:<COMPACTION_SUMMARY>\nPRE_TURN_SUMMARY
+06:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+07:message/user:<image> | <input_image:image_url> | </image> | USER_THREE

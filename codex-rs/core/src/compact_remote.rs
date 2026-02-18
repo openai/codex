@@ -7,6 +7,7 @@ use crate::compact::AutoCompactCallsite;
 use crate::compact::TurnContextReinjection;
 use crate::compact::extract_latest_model_switch_update_from_items;
 use crate::compact::extract_trailing_model_switch_update_for_compaction_request;
+use crate::compact::should_keep_compacted_history_item;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_item_token_count;
@@ -122,7 +123,7 @@ async fn run_remote_compact_task_inner_impl(
         &base_instructions,
         incoming_items.as_deref(),
     );
-    if let Some(incoming_items) = incoming_items {
+    if let Some(incoming_items) = incoming_items.as_ref() {
         history.record_items(incoming_items.iter(), turn_context.truncation_policy);
     }
     if !history.raw_items().iter().any(is_user_turn_boundary) {
@@ -182,9 +183,52 @@ async fn run_remote_compact_task_inner_impl(
     new_history = sess
         .process_compacted_history(turn_context, new_history, turn_context_reinjection)
         .await;
-    // Reattach the stripped model-switch update only after successful compaction so the model
-    // still sees the switch instructions on the next real sampling request.
-    if let Some(model_switch_item) = stripped_model_switch_item {
+    if let Some(incoming_items) = incoming_items.as_ref() {
+        let incoming_history_items: Vec<ResponseItem> = incoming_items
+            .iter()
+            .filter(|item| should_keep_compacted_history_item(item))
+            .cloned()
+            .collect();
+        for incoming_item in incoming_history_items {
+            if let Some(index) =
+                new_history
+                    .iter()
+                    .rposition(|candidate| match (candidate, &incoming_item) {
+                        (
+                            ResponseItem::Message {
+                                role: candidate_role,
+                                content: candidate_content,
+                                ..
+                            },
+                            ResponseItem::Message {
+                                role: incoming_role,
+                                content: incoming_content,
+                                ..
+                            },
+                        ) => {
+                            candidate_role == incoming_role && candidate_content == incoming_content
+                        }
+                        (
+                            ResponseItem::Compaction {
+                                encrypted_content: candidate_content,
+                            },
+                            ResponseItem::Compaction {
+                                encrypted_content: incoming_content,
+                            },
+                        ) => candidate_content == incoming_content,
+                        _ => candidate == &incoming_item,
+                    })
+            {
+                new_history.remove(index);
+            }
+        }
+    }
+    // Reattach stripped model-switch updates only for compaction paths that do not carry
+    // incoming turn items. Pre-turn compaction appends turn context and user input after
+    // compaction in run_turn.
+    if incoming_items.is_none()
+        && let Some(model_switch_item) = stripped_model_switch_item
+    {
         new_history.push(model_switch_item);
     }
 

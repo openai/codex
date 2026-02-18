@@ -4735,18 +4735,11 @@ async fn persist_pre_turn_items_for_compaction_outcome(
     response_item: ResponseItem,
 ) {
     match outcome {
-        PreTurnCompactionOutcome::CompactedWithIncomingItems => {
-            // Incoming turn items were already part of pre-turn compaction input, and the
-            // user prompt is already persisted in history after compaction. Emit lifecycle events
-            // only so UI/consumers still observe a normal user turn item transition.
-            let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
-            sess.emit_turn_item_started(turn_context.as_ref(), &turn_item)
-                .await;
-            sess.emit_turn_item_completed(turn_context.as_ref(), turn_item)
-                .await;
-            sess.ensure_rollout_materialized().await;
-        }
-        PreTurnCompactionOutcome::NotNeeded => {
+        PreTurnCompactionOutcome::CompactedWithIncomingItems
+        | PreTurnCompactionOutcome::NotNeeded => {
+            // Pre-turn compaction includes incoming items only for the compaction model's request.
+            // We always persist canonical pre-turn updates and the current user item after the
+            // compaction summary so model-visible layout is stable regardless of compaction mode.
             if !pre_turn_context_items.is_empty() {
                 sess.record_conversation_items(turn_context, pre_turn_context_items)
                     .await;
@@ -6150,7 +6143,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compacted_with_incoming_items_emits_lifecycle_without_history_writes() {
+    async fn compacted_with_incoming_items_persists_context_and_prompt() {
         let (session, turn_context) = make_session_and_context().await;
         let session = Arc::new(session);
         let turn_context = Arc::new(turn_context);
@@ -6175,12 +6168,13 @@ mod tests {
             PreTurnCompactionOutcome::CompactedWithIncomingItems,
             &stale_pre_turn_context_items,
             &input,
-            response_item,
+            response_item.clone(),
         )
         .await;
 
         let actual = session.clone_history().await.raw_items().to_vec();
-        assert_eq!(actual, Vec::<ResponseItem>::new());
+        let expected = vec![stale_pre_turn_context_items[0].clone(), response_item];
+        assert_eq!(actual, expected);
     }
 
     #[tokio::test]

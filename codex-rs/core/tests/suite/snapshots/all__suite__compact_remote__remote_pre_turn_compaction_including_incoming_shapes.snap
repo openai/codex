@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/compact_remote.rs
+assertion_line: 1390
 expression: "format_labeled_requests_snapshot(\"Remote pre-turn auto-compaction with a context override includes incoming user content in the compact request and preserves it after compaction.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[2]),])"
 ---
 Scenario: Remote pre-turn auto-compaction with a context override includes incoming user content in the compact request and preserves it after compaction.
@@ -21,5 +22,6 @@ Scenario: Remote pre-turn auto-compaction with a context override includes incom
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>
 03:message/user:<AGENTS_MD>
 04:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-05:message/user:USER_THREE
-06:message/user:<COMPACTION_SUMMARY>\nREMOTE_PRE_TURN_SUMMARY
+05:message/user:<COMPACTION_SUMMARY>\nREMOTE_PRE_TURN_SUMMARY
+06:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+07:message/user:USER_THREE
