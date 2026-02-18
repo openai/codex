@@ -36,6 +36,12 @@ struct Counters {
 /// Runs memory phase 2 (aka consolidation) in strict order. The method represents the linear
 /// flow of the consolidation phase.
 pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
+    let phase_two_e2e_timer = session
+        .services
+        .otel_manager
+        .start_timer(metrics::MEMORY_PHASE_TWO_E2E_MS, &[])
+        .ok();
+
     let Some(db) = session.services.state_db.as_deref() else {
         // This should not happen.
         return;
@@ -117,7 +123,13 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     };
 
     // 6. Spawn the agent handler.
-    agent::handle(session, claim, new_watermark, thread_id);
+    agent::handle(
+        session,
+        claim,
+        new_watermark,
+        thread_id,
+        phase_two_e2e_timer,
+    );
 
     // 7. Metrics and logs.
     let counters = Counters {
@@ -264,6 +276,7 @@ mod agent {
         claim: Claim,
         new_watermark: i64,
         thread_id: ThreadId,
+        phase_two_e2e_timer: Option<codex_otel::Timer>,
     ) {
         let Some(db) = session.services.state_db.clone() else {
             return;
@@ -271,6 +284,7 @@ mod agent {
         let session = session.clone();
 
         tokio::spawn(async move {
+            let _phase_two_e2e_timer = phase_two_e2e_timer;
             let agent_control = session.services.agent_control.clone();
 
             // TODO(jif) we might have a very small race here.
