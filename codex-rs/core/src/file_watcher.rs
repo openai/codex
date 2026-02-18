@@ -223,55 +223,51 @@ impl FileWatcher {
     }
 
     fn register_skills_root(&self, root: PathBuf) {
-        let should_watch = {
-            let mut state = match self.state.write() {
-                Ok(state) => state,
-                Err(err) => err.into_inner(),
-            };
-            let count = state
-                .skills_root_ref_counts
-                .entry(root.clone())
-                .or_insert(0);
-            *count += 1;
-            *count == 1
-        };
-        if should_watch {
+        let mut state = self.state.write().unwrap_or_else(|err| err.into_inner());
+        let count = state
+            .skills_root_ref_counts
+            .entry(root.clone())
+            .or_insert(0);
+        *count += 1;
+        if *count == 1 {
             self.watch_path(root, RecursiveMode::Recursive);
         }
     }
 
     fn unregister_roots(&self, roots: &[PathBuf]) {
-        let mut roots_to_unwatch = Vec::new();
+        let mut state = self.state.write().unwrap_or_else(|err| err.into_inner());
+        let mut inner_guard: Option<std::sync::MutexGuard<'_, FileWatcherInner>> = None;
+
         for root in roots {
-            let mut state = match self.state.write() {
-                Ok(state) => state,
-                Err(err) => err.into_inner(),
-            };
+            let mut should_unwatch = false;
             if let Some(count) = state.skills_root_ref_counts.get_mut(root) {
                 if *count > 1 {
                     *count -= 1;
                 } else {
                     state.skills_root_ref_counts.remove(root);
-                    roots_to_unwatch.push(root.clone());
+                    should_unwatch = true;
                 }
             }
-        }
-        if roots_to_unwatch.is_empty() {
-            return;
-        }
-        let Some(inner) = &self.inner else {
-            return;
-        };
-        let mut guard = match inner.lock() {
-            Ok(guard) => guard,
-            Err(err) => err.into_inner(),
-        };
-        for path in roots_to_unwatch {
-            if guard.watched_paths.remove(&path).is_none() {
+
+            if !should_unwatch {
                 continue;
             }
-            if let Err(err) = guard.watcher.unwatch(&path) {
-                warn!("failed to unwatch {}: {err}", path.display());
+            let Some(inner) = &self.inner else {
+                continue;
+            };
+            if inner_guard.is_none() {
+                let guard = inner.lock().unwrap_or_else(|err| err.into_inner());
+                inner_guard = Some(guard);
+            }
+
+            let Some(guard) = inner_guard.as_mut() else {
+                continue;
+            };
+            if guard.watched_paths.remove(root).is_none() {
+                continue;
+            }
+            if let Err(err) = guard.watcher.unwatch(root) {
+                warn!("failed to unwatch {}: {err}", root.display());
             }
         }
     }
@@ -284,10 +280,7 @@ impl FileWatcher {
             return;
         }
         let watch_path = path;
-        let mut guard = match inner.lock() {
-            Ok(guard) => guard,
-            Err(err) => err.into_inner(),
-        };
+        let mut guard = inner.lock().unwrap_or_else(|err| err.into_inner());
         if let Some(existing) = guard.watched_paths.get(&watch_path) {
             if *existing == RecursiveMode::Recursive || *existing == mode {
                 return;
@@ -489,6 +482,56 @@ mod tests {
 
         let state = watcher.state.read().expect("state lock");
         assert_eq!(state.skills_root_ref_counts.len(), 0);
+    }
+
+    #[test]
+    fn unregister_holds_state_lock_until_unwatch_finishes() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let root = temp_dir.path().join("skills");
+        std::fs::create_dir(&root).expect("create root");
+
+        let watcher = Arc::new(FileWatcher::new(temp_dir.path().to_path_buf()).expect("watcher"));
+        watcher.register_skills_root(root.clone());
+
+        let inner = watcher.inner.as_ref().expect("watcher inner");
+        let inner_guard = inner.lock().expect("inner lock");
+
+        let unregister_watcher = Arc::clone(&watcher);
+        let unregister_root = root.clone();
+        let unregister_thread = std::thread::spawn(move || {
+            unregister_watcher.unregister_roots(&[unregister_root]);
+        });
+
+        let state_lock_observed = (0..100).any(|_| {
+            let locked = watcher.state.try_write().is_err();
+            if !locked {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            locked
+        });
+        assert_eq!(state_lock_observed, true);
+
+        let register_watcher = Arc::clone(&watcher);
+        let register_root = root.clone();
+        let register_thread = std::thread::spawn(move || {
+            register_watcher.register_skills_root(register_root);
+        });
+
+        drop(inner_guard);
+
+        unregister_thread.join().expect("unregister join");
+        register_thread.join().expect("register join");
+
+        let state = watcher.state.read().expect("state lock");
+        assert_eq!(state.skills_root_ref_counts.get(&root), Some(&1));
+        drop(state);
+
+        let inner = watcher.inner.as_ref().expect("watcher inner");
+        let inner = inner.lock().expect("inner lock");
+        assert_eq!(
+            inner.watched_paths.get(&root),
+            Some(&RecursiveMode::Recursive)
+        );
     }
 
     #[tokio::test]
