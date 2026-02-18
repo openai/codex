@@ -1156,19 +1156,16 @@ impl Session {
 
         let auth = auth.as_ref();
         let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
-        let originator = crate::default_client::originator().value;
-        let terminal_type = terminal::user_agent();
-        let model_slug = session_configuration.collaboration_mode.model();
         let otel_manager = OtelManager::new(
             conversation_id,
-            model_slug,
-            model_slug,
+            session_configuration.collaboration_mode.model(),
+            session_configuration.collaboration_mode.model(),
             auth.and_then(CodexAuth::get_account_id),
             auth.and_then(CodexAuth::get_account_email),
             auth_mode,
-            originator.clone(),
+            crate::default_client::originator().value,
             config.otel.log_user_prompt,
-            terminal_type.clone(),
+            terminal::user_agent(),
             session_configuration.session_source.clone(),
         );
         let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
