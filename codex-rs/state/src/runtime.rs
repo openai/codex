@@ -389,7 +389,7 @@ FROM threads
                 .push_bind(entry.line);
         });
         builder.build().execute(&mut *tx).await?;
-        self.prune_logs_after_insert(entries, &mut *tx).await?;
+        self.prune_logs_after_insert(entries, &mut tx).await?;
         tx.commit().await?;
         Ok(())
     }
