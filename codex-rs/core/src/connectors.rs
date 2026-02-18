@@ -454,6 +454,9 @@ mod tests {
             logo_url_dark: None,
             distribution_channel: None,
             install_url: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             is_accessible: false,
             is_enabled: true,
         }
