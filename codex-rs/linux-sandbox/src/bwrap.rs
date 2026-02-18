@@ -319,8 +319,8 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::protocol::AbsolutePathBuf;
     use codex_core::protocol::SandboxPolicy;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     #[test]
