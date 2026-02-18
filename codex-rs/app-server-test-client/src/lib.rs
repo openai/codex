@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs;
 use std::fs::OpenOptions;
+use std::io;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
@@ -143,8 +144,26 @@ struct Cli {
     #[arg(long, value_name = "json-or-@file", global = true)]
     dynamic_tools: Option<String>,
 
+    /// Attach a skill input item to V2 turn/start requests.
+    ///
+    /// Must be paired with --skill-path.
+    #[arg(long, value_name = "skill-name", global = true)]
+    skill_name: Option<String>,
+
+    /// Path to the SKILL.md file for --skill-name.
+    ///
+    /// Must be paired with --skill-name.
+    #[arg(long, value_name = "path-to-skill-md", global = true)]
+    skill_path: Option<PathBuf>,
+
     #[command(subcommand)]
     command: CliCommand,
+}
+
+#[derive(Clone, Debug)]
+struct SkillSelection {
+    name: String,
+    path: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -241,25 +260,36 @@ pub fn run() -> Result<()> {
         url,
         config_overrides,
         dynamic_tools,
+        skill_name,
+        skill_path,
         command,
     } = Cli::parse();
 
     let dynamic_tools = parse_dynamic_tools_arg(&dynamic_tools)?;
+    let skill_selection = parse_skill_selection(skill_name, skill_path)?;
 
     match command {
         CliCommand::Serve { listen, kill } => {
             ensure_dynamic_tools_unused(&dynamic_tools, "serve")?;
+            ensure_skill_unused(&skill_selection, "serve")?;
             let codex_bin = codex_bin.unwrap_or_else(|| PathBuf::from("codex"));
             serve(&codex_bin, &config_overrides, &listen, kill)
         }
         CliCommand::SendMessage { user_message } => {
             ensure_dynamic_tools_unused(&dynamic_tools, "send-message")?;
+            ensure_skill_unused(&skill_selection, "send-message")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
             send_message(&endpoint, &config_overrides, user_message)
         }
         CliCommand::SendMessageV2 { user_message } => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            send_message_v2_endpoint(&endpoint, &config_overrides, user_message, &dynamic_tools)
+            send_message_v2_endpoint(
+                &endpoint,
+                &config_overrides,
+                user_message,
+                &dynamic_tools,
+                skill_selection.as_ref(),
+            )
         }
         CliCommand::ResumeMessageV2 {
             thread_id,
@@ -272,24 +302,43 @@ pub fn run() -> Result<()> {
                 thread_id,
                 user_message,
                 &dynamic_tools,
+                skill_selection.as_ref(),
             )
         }
         CliCommand::ThreadResume { thread_id } => {
             ensure_dynamic_tools_unused(&dynamic_tools, "thread-resume")?;
+            ensure_skill_unused(&skill_selection, "thread-resume")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
             thread_resume_follow(&endpoint, &config_overrides, thread_id)
         }
         CliCommand::TriggerCmdApproval { user_message } => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            trigger_cmd_approval(&endpoint, &config_overrides, user_message, &dynamic_tools)
+            trigger_cmd_approval(
+                &endpoint,
+                &config_overrides,
+                user_message,
+                &dynamic_tools,
+                skill_selection.as_ref(),
+            )
         }
         CliCommand::TriggerPatchApproval { user_message } => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            trigger_patch_approval(&endpoint, &config_overrides, user_message, &dynamic_tools)
+            trigger_patch_approval(
+                &endpoint,
+                &config_overrides,
+                user_message,
+                &dynamic_tools,
+                skill_selection.as_ref(),
+            )
         }
         CliCommand::NoTriggerCmdApproval => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            no_trigger_cmd_approval(&endpoint, &config_overrides, &dynamic_tools)
+            no_trigger_cmd_approval(
+                &endpoint,
+                &config_overrides,
+                &dynamic_tools,
+                skill_selection.as_ref(),
+            )
         }
         CliCommand::SendFollowUpV2 {
             first_message,
@@ -302,6 +351,7 @@ pub fn run() -> Result<()> {
                 first_message,
                 follow_up_message,
                 &dynamic_tools,
+                skill_selection.as_ref(),
             )
         }
         CliCommand::TriggerZshForkMultiCmdApproval {
@@ -321,21 +371,25 @@ pub fn run() -> Result<()> {
         }
         CliCommand::TestLogin => {
             ensure_dynamic_tools_unused(&dynamic_tools, "test-login")?;
+            ensure_skill_unused(&skill_selection, "test-login")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
             test_login(&endpoint, &config_overrides)
         }
         CliCommand::GetAccountRateLimits => {
             ensure_dynamic_tools_unused(&dynamic_tools, "get-account-rate-limits")?;
+            ensure_skill_unused(&skill_selection, "get-account-rate-limits")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
             get_account_rate_limits(&endpoint, &config_overrides)
         }
         CliCommand::ModelList => {
             ensure_dynamic_tools_unused(&dynamic_tools, "model-list")?;
+            ensure_skill_unused(&skill_selection, "model-list")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
             model_list(&endpoint, &config_overrides)
         }
         CliCommand::ThreadList { limit } => {
             ensure_dynamic_tools_unused(&dynamic_tools, "thread-list")?;
+            ensure_skill_unused(&skill_selection, "thread-list")?;
             let endpoint = resolve_endpoint(codex_bin, url)?;
             thread_list(&endpoint, &config_overrides, limit)
         }
@@ -505,7 +559,13 @@ pub fn send_message_v2(
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
     let endpoint = Endpoint::SpawnCodex(codex_bin.to_path_buf());
-    send_message_v2_endpoint(&endpoint, config_overrides, user_message, dynamic_tools)
+    send_message_v2_endpoint(
+        &endpoint,
+        config_overrides,
+        user_message,
+        dynamic_tools,
+        None,
+    )
 }
 
 fn send_message_v2_endpoint(
@@ -513,6 +573,7 @@ fn send_message_v2_endpoint(
     config_overrides: &[String],
     user_message: String,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
+    skill_selection: Option<&SkillSelection>,
 ) -> Result<()> {
     send_message_v2_with_policies(
         endpoint,
@@ -521,6 +582,7 @@ fn send_message_v2_endpoint(
         None,
         None,
         dynamic_tools,
+        skill_selection,
     )
 }
 
@@ -625,6 +687,7 @@ fn resume_message_v2(
     thread_id: String,
     user_message: String,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
+    skill_selection: Option<&SkillSelection>,
 ) -> Result<()> {
     ensure_dynamic_tools_unused(dynamic_tools, "resume-message-v2")?;
 
@@ -641,10 +704,7 @@ fn resume_message_v2(
 
     let turn_response = client.turn_start(TurnStartParams {
         thread_id: resume_response.thread.id.clone(),
-        input: vec![V2UserInput::Text {
-            text: user_message,
-            text_elements: Vec::new(),
-        }],
+        input: build_v2_input(user_message, skill_selection),
         ..Default::default()
     })?;
     println!("< turn/start response: {turn_response:?}");
@@ -679,6 +739,7 @@ fn trigger_cmd_approval(
     config_overrides: &[String],
     user_message: Option<String>,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
+    skill_selection: Option<&SkillSelection>,
 ) -> Result<()> {
     let default_prompt =
         "Run `touch /tmp/should-trigger-approval` so I can confirm the file exists.";
@@ -692,6 +753,7 @@ fn trigger_cmd_approval(
             access: ReadOnlyAccess::FullAccess,
         }),
         dynamic_tools,
+        skill_selection,
     )
 }
 
@@ -700,6 +762,7 @@ fn trigger_patch_approval(
     config_overrides: &[String],
     user_message: Option<String>,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
+    skill_selection: Option<&SkillSelection>,
 ) -> Result<()> {
     let default_prompt =
         "Create a file named APPROVAL_DEMO.txt containing a short hello message using apply_patch.";
@@ -713,6 +776,7 @@ fn trigger_patch_approval(
             access: ReadOnlyAccess::FullAccess,
         }),
         dynamic_tools,
+        skill_selection,
     )
 }
 
@@ -720,6 +784,7 @@ fn no_trigger_cmd_approval(
     endpoint: &Endpoint,
     config_overrides: &[String],
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
+    skill_selection: Option<&SkillSelection>,
 ) -> Result<()> {
     let prompt = "Run `touch should_not_trigger_approval.txt`";
     send_message_v2_with_policies(
@@ -729,6 +794,7 @@ fn no_trigger_cmd_approval(
         None,
         None,
         dynamic_tools,
+        skill_selection,
     )
 }
 
@@ -739,6 +805,7 @@ fn send_message_v2_with_policies(
     approval_policy: Option<AskForApproval>,
     sandbox_policy: Option<SandboxPolicy>,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
+    skill_selection: Option<&SkillSelection>,
 ) -> Result<()> {
     let mut client = CodexClient::connect(endpoint, config_overrides)?;
 
@@ -752,11 +819,7 @@ fn send_message_v2_with_policies(
     println!("< thread/start response: {thread_response:?}");
     let mut turn_params = TurnStartParams {
         thread_id: thread_response.thread.id.clone(),
-        input: vec![V2UserInput::Text {
-            text: user_message,
-            // Test client sends plain text without UI element ranges.
-            text_elements: Vec::new(),
-        }],
+        input: build_v2_input(user_message, skill_selection),
         ..Default::default()
     };
     turn_params.approval_policy = approval_policy;
@@ -776,6 +839,7 @@ fn send_follow_up_v2(
     first_message: String,
     follow_up_message: String,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
+    skill_selection: Option<&SkillSelection>,
 ) -> Result<()> {
     let mut client = CodexClient::connect(endpoint, config_overrides)?;
 
@@ -790,11 +854,7 @@ fn send_follow_up_v2(
 
     let first_turn_params = TurnStartParams {
         thread_id: thread_response.thread.id.clone(),
-        input: vec![V2UserInput::Text {
-            text: first_message,
-            // Test client sends plain text without UI element ranges.
-            text_elements: Vec::new(),
-        }],
+        input: build_v2_input(first_message, skill_selection),
         ..Default::default()
     };
     let first_turn_response = client.turn_start(first_turn_params)?;
@@ -803,11 +863,7 @@ fn send_follow_up_v2(
 
     let follow_up_params = TurnStartParams {
         thread_id: thread_response.thread.id.clone(),
-        input: vec![V2UserInput::Text {
-            text: follow_up_message,
-            // Test client sends plain text without UI element ranges.
-            text_elements: Vec::new(),
-        }],
+        input: build_v2_input(follow_up_message, skill_selection),
         ..Default::default()
     };
     let follow_up_response = client.turn_start(follow_up_params)?;
@@ -901,6 +957,47 @@ fn ensure_dynamic_tools_unused(
         );
     }
     Ok(())
+}
+
+fn ensure_skill_unused(skill_selection: &Option<SkillSelection>, command: &str) -> Result<()> {
+    if skill_selection.is_some() {
+        bail!(
+            "skill input is only supported for v2 turn/start commands; remove --skill-name/--skill-path for {command}"
+        );
+    }
+    Ok(())
+}
+
+fn parse_skill_selection(
+    skill_name: Option<String>,
+    skill_path: Option<PathBuf>,
+) -> Result<Option<SkillSelection>> {
+    match (skill_name, skill_path) {
+        (None, None) => Ok(None),
+        (Some(name), Some(path)) => Ok(Some(SkillSelection { name, path })),
+        (Some(_), None) => bail!("--skill-name requires --skill-path"),
+        (None, Some(_)) => bail!("--skill-path requires --skill-name"),
+    }
+}
+
+fn build_v2_input(
+    user_message: String,
+    skill_selection: Option<&SkillSelection>,
+) -> Vec<V2UserInput> {
+    let mut input = vec![V2UserInput::Text {
+        text: user_message,
+        // Test client sends plain text without UI element ranges.
+        text_elements: Vec::new(),
+    }];
+
+    if let Some(skill_selection) = skill_selection {
+        input.push(V2UserInput::Skill {
+            name: skill_selection.name.clone(),
+            path: skill_selection.path.clone(),
+        });
+    }
+
+    input
 }
 
 fn parse_dynamic_tools_arg(dynamic_tools: &Option<String>) -> Result<Option<Vec<DynamicToolSpec>>> {
@@ -1528,13 +1625,11 @@ impl CodexClient {
             }
             CommandApprovalBehavior::AbortOn(_) => CommandExecutionApprovalDecision::Accept,
         };
-        let response = CommandExecutionRequestApprovalResponse {
-            decision: decision.clone(),
-        };
+        let response = CommandExecutionRequestApprovalResponse { decision };
         self.send_server_request_response(request_id, &response)?;
         println!(
             "< commandExecution decision for approval #{} on item {item_id}: {:?}",
-            self.command_approval_count, decision
+            self.command_approval_count, response.decision
         );
         Ok(())
     }
@@ -1562,12 +1657,22 @@ impl CodexClient {
             println!("< grant root: {}", grant_root.display());
         }
 
-        let response = FileChangeRequestApprovalResponse {
-            decision: FileChangeApprovalDecision::Accept,
-        };
+        let decision = self.file_change_approval_decision()?;
+        let response = FileChangeRequestApprovalResponse { decision };
         self.send_server_request_response(request_id, &response)?;
-        println!("< approved fileChange request for item {item_id}");
+        println!(
+            "< responded to fileChange request for item {item_id}: {:?}",
+            response.decision
+        );
         Ok(())
+    }
+
+    fn file_change_approval_decision(&self) -> Result<FileChangeApprovalDecision> {
+        if prompt_for_yes_no("Approve file-change request? [y/n] ")? {
+            Ok(FileChangeApprovalDecision::Accept)
+        } else {
+            Ok(FileChangeApprovalDecision::Decline)
+        }
     }
 
     fn send_server_request_response<T>(&mut self, request_id: RequestId, response: &T) -> Result<()>
@@ -1641,6 +1746,28 @@ impl CodexClient {
 fn print_multiline_with_prefix(prefix: &str, payload: &str) {
     for line in payload.lines() {
         println!("{prefix}{line}");
+    }
+}
+
+fn prompt_for_yes_no(prompt: &str) -> Result<bool> {
+    loop {
+        print!("{prompt}");
+        io::stdout()
+            .flush()
+            .context("failed to flush approval prompt")?;
+
+        let mut line = String::new();
+        io::stdin()
+            .read_line(&mut line)
+            .context("failed to read approval input")?;
+        let input = line.trim().to_ascii_lowercase();
+        if matches!(input.as_str(), "y" | "yes") {
+            return Ok(true);
+        }
+        if matches!(input.as_str(), "n" | "no") {
+            return Ok(false);
+        }
+        println!("please answer y or n");
     }
 }
 
