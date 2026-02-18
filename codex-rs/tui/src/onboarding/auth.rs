@@ -897,9 +897,10 @@ mod tests {
             for x in area.left()..area.right() {
                 let sym = buf[(x, y)].symbol();
                 if let Some(rest) = sym.strip_prefix(open.as_str())
-                    && let Some(ch) = rest.strip_suffix(close) {
-                        chars.push_str(ch);
-                    }
+                    && let Some(ch) = rest.strip_suffix(close)
+                {
+                    chars.push_str(ch);
+                }
             }
         }
         chars
