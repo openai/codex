@@ -366,19 +366,6 @@ impl HistoryCell for UserHistoryCell {
         lines
     }
 
-    fn desired_height(&self, width: u16) -> u16 {
-        self.display_lines(width)
-            .len()
-            .try_into()
-            .unwrap_or(u16::MAX)
-    }
-
-    fn desired_transcript_height(&self, width: u16) -> u16 {
-        self.display_lines(width)
-            .len()
-            .try_into()
-            .unwrap_or(u16::MAX)
-    }
 }
 
 #[derive(Debug)]
