@@ -612,6 +612,8 @@ pub(crate) struct ChatWidget {
     session_network_proxy: Option<codex_core::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     status_line_invalid_items_warned: Arc<AtomicBool>,
+    // Most recent memory startup progress message (without prefix).
+    memory_progress_status: Option<String>,
     // Cached git branch name for the status line (None if unknown).
     status_line_branch: Option<String>,
     // CWD used to resolve the cached branch; change resets branch state.
@@ -2133,9 +2135,26 @@ impl ChatWidget {
 
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
+        if let Some(progress) = Self::memory_progress_from_background_event(&message) {
+            self.memory_progress_status = Some(progress);
+            self.refresh_status_line();
+        }
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(message);
+    }
+
+    fn memory_progress_from_background_event(message: &str) -> Option<String> {
+        let (prefix, progress) = message.split_once(':')?;
+        if !prefix.trim().eq_ignore_ascii_case("memory startup") {
+            return None;
+        }
+        let progress = progress.trim();
+        if progress.is_empty() {
+            None
+        } else {
+            Some(progress.to_string())
+        }
     }
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
@@ -2681,6 +2700,7 @@ impl ChatWidget {
             current_cwd,
             session_network_proxy: None,
             status_line_invalid_items_warned,
+            memory_progress_status: None,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -2848,6 +2868,7 @@ impl ChatWidget {
             current_cwd,
             session_network_proxy: None,
             status_line_invalid_items_warned,
+            memory_progress_status: None,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -3004,6 +3025,7 @@ impl ChatWidget {
             current_cwd,
             session_network_proxy: None,
             status_line_invalid_items_warned,
+            memory_progress_status: None,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -4511,6 +4533,7 @@ impl ChatWidget {
                 format_tokens_compact(self.status_line_total_usage().output_tokens)
             )),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
+            StatusLineItem::MemoryProgress => self.memory_progress_status.clone(),
         }
     }
 

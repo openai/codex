@@ -1659,6 +1659,7 @@ async fn make_chatwidget_manual(
         current_cwd: None,
         session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        memory_progress_status: None,
         status_line_branch: None,
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
@@ -6911,6 +6912,40 @@ async fn status_line_branch_refreshes_after_interrupt() {
     });
 
     assert!(chat.status_line_branch_pending);
+}
+
+#[tokio::test]
+async fn status_line_memory_progress_updates_from_background_events() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_status_line = Some(vec!["memory-progress".to_string()]);
+
+    chat.refresh_status_line();
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::MemoryProgress),
+        None
+    );
+
+    chat.handle_codex_event(Event {
+        id: "bg-1".into(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: "memory startup: phase 1 running".to_string(),
+        }),
+    });
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::MemoryProgress),
+        Some("phase 1 running".to_string())
+    );
+
+    chat.handle_codex_event(Event {
+        id: "bg-2".into(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: "Waiting for `vim`".to_string(),
+        }),
+    });
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::MemoryProgress),
+        Some("phase 1 running".to_string())
+    );
 }
 
 #[tokio::test]

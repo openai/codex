@@ -6,6 +6,7 @@ use crate::memories::memory_root;
 use crate::memories::metrics;
 use crate::memories::phase_two;
 use crate::memories::prompts::build_consolidation_prompt;
+use crate::memories::start::emit_memory_progress;
 use crate::memories::storage::rebuild_raw_memories_file_from_memories;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
 use codex_config::Constrained;
@@ -35,9 +36,18 @@ struct Counters {
 
 /// Runs memory phase 2 (aka consolidation) in strict order. The method represents the linear
 /// flow of the consolidation phase.
-pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
+pub(super) async fn run(
+    session: &Arc<Session>,
+    config: Arc<Config>,
+    progress_sub_id: &Option<String>,
+) {
     let Some(db) = session.services.state_db.as_deref() else {
-        // This should not happen.
+        emit_memory_progress(
+            session.as_ref(),
+            progress_sub_id,
+            "phase 2 skipped (state db unavailable)",
+        )
+        .await;
         return;
     };
     let root = memory_root(&config.codex_home);
@@ -52,6 +62,12 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
                 1,
                 &[("status", e)],
             );
+            let progress = match e {
+                "skipped_not_dirty" => "phase 2 up to date",
+                "skipped_running" => "phase 2 already running",
+                _ => "phase 2 failed to claim global job",
+            };
+            emit_memory_progress(session.as_ref(), progress_sub_id, progress).await;
             return;
         }
     };
@@ -61,6 +77,12 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         // If we can't get the config, we can't consolidate.
         tracing::error!("failed to get agent config");
         job::failed(session, db, &claim, "failed_sandbox_policy").await;
+        emit_memory_progress(
+            session.as_ref(),
+            progress_sub_id,
+            "phase 2 failed (sandbox policy rejected)",
+        )
+        .await;
         return;
     };
 
@@ -70,6 +92,12 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         Err(err) => {
             tracing::error!("failed to list stage1 outputs from global: {}", err);
             job::failed(session, db, &claim, "failed_load_stage1_outputs").await;
+            emit_memory_progress(
+                session.as_ref(),
+                progress_sub_id,
+                "phase 2 failed (could not load stage-1 outputs)",
+            )
+            .await;
             return;
         }
     };
@@ -83,6 +111,12 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     {
         tracing::error!("failed syncing local memory artifacts for global consolidation: {err}");
         job::failed(session, db, &claim, "failed_sync_artifacts").await;
+        emit_memory_progress(
+            session.as_ref(),
+            progress_sub_id,
+            "phase 2 failed (could not sync local artifacts)",
+        )
+        .await;
         return;
     }
     // [`raw_memories.md`]
@@ -91,11 +125,23 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     {
         tracing::error!("failed syncing local memory artifacts for global consolidation: {err}");
         job::failed(session, db, &claim, "failed_rebuild_raw_memories").await;
+        emit_memory_progress(
+            session.as_ref(),
+            progress_sub_id,
+            "phase 2 failed (could not rebuild raw memories)",
+        )
+        .await;
         return;
     }
     if raw_memories.is_empty() {
         // We check only after sync of the file system.
         job::succeed(session, db, &claim, new_watermark, "succeeded_no_input").await;
+        emit_memory_progress(
+            session.as_ref(),
+            progress_sub_id,
+            "phase 2 complete (no stage-1 outputs)",
+        )
+        .await;
         return;
     }
 
@@ -112,12 +158,25 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         Err(err) => {
             tracing::error!("failed to spawn global memory consolidation agent: {err}");
             job::failed(session, db, &claim, "failed_spawn_agent").await;
+            emit_memory_progress(
+                session.as_ref(),
+                progress_sub_id,
+                "phase 2 failed (could not spawn consolidation agent)",
+            )
+            .await;
             return;
         }
     };
+    emit_memory_progress(session.as_ref(), progress_sub_id, "phase 2 running").await;
 
     // 6. Spawn the agent handler.
-    agent::handle(session, claim, new_watermark, thread_id);
+    agent::handle(
+        session,
+        claim,
+        new_watermark,
+        thread_id,
+        progress_sub_id.clone(),
+    );
 
     // 7. Metrics and logs.
     let counters = Counters {
@@ -264,8 +323,18 @@ mod agent {
         claim: Claim,
         new_watermark: i64,
         thread_id: ThreadId,
+        progress_sub_id: Option<String>,
     ) {
         let Some(db) = session.services.state_db.clone() else {
+            let session = Arc::clone(session);
+            tokio::spawn(async move {
+                emit_memory_progress(
+                    session.as_ref(),
+                    &progress_sub_id,
+                    "phase 2 failed (state db unavailable)",
+                )
+                .await;
+            });
             return;
         };
         let session = session.clone();
@@ -279,6 +348,12 @@ mod agent {
                 Err(err) => {
                     tracing::error!("agent_control.subscribe_status failed: {err:?}");
                     job::failed(&session, &db, &claim, "failed_subscribe_status").await;
+                    emit_memory_progress(
+                        session.as_ref(),
+                        &progress_sub_id,
+                        "phase 2 failed (status subscription unavailable)",
+                    )
+                    .await;
                     return;
                 }
             };
@@ -298,6 +373,13 @@ mod agent {
             } else {
                 job::failed(&session, &db, &claim, "failed_agent").await;
             }
+            let progress = match &final_status {
+                AgentStatus::Completed(_) => "phase 2 complete",
+                AgentStatus::Errored(_) | AgentStatus::NotFound => "phase 2 failed",
+                AgentStatus::Shutdown => "phase 2 cancelled",
+                AgentStatus::PendingInit | AgentStatus::Running => "phase 2 failed",
+            };
+            emit_memory_progress(session.as_ref(), &progress_sub_id, progress).await;
 
             // Fire and forget close of the agent.
             if !matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
