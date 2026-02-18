@@ -10,12 +10,13 @@ Scenario: Remote mid-turn compaction after an earlier summary compaction: the ol
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>
 03:message/user:<AGENTS_MD>
 04:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-05:message/user:<COMPACTION_SUMMARY>\nREMOTE_LATEST_SUMMARY
-06:message/user:USER_TWO
+05:message/user:USER_TWO
+06:message/user:<COMPACTION_SUMMARY>\nREMOTE_LATEST_SUMMARY
 
 ## Remote Compaction Request
 00:message/user:USER_ONE
-01:message/developer:<PERMISSIONS_INSTRUCTIONS>
-02:message/user:<AGENTS_MD>
-03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-04:message/user:<COMPACTION_SUMMARY>\nREMOTE_OLDER_SUMMARY
+01:message/user:<COMPACTION_SUMMARY>\nREMOTE_OLDER_SUMMARY
+02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+03:message/user:<AGENTS_MD>
+04:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+05:message/user:USER_TWO
