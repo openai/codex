@@ -616,14 +616,18 @@ impl UnifiedExecProcessManager {
             .skills_for_cwd(&context.turn.cwd, false)
             .await;
         let command_actions = parse_command(&request.command);
-        let effective_sandbox_policy =
-            resolve_skill_sandbox_extension_for_command(&skills_outcome, &cwd, &command_actions)
-                .map_or_else(
-                    || context.turn.sandbox_policy.clone(),
-                    |skill_sandbox_policy| {
-                        extend_sandbox_policy(&context.turn.sandbox_policy, &skill_sandbox_policy)
-                    },
-                );
+        let effective_sandbox_policy = resolve_skill_sandbox_extension_for_command(
+            &skills_outcome,
+            &request.command,
+            &cwd,
+            &command_actions,
+        )
+        .map_or_else(
+            || context.turn.sandbox_policy.clone(),
+            |skill_sandbox_policy| {
+                extend_sandbox_policy(&context.turn.sandbox_policy, &skill_sandbox_policy)
+            },
+        );
         let exec_approval_requirement = context
             .session
             .services

@@ -308,6 +308,7 @@ impl ShellHandler {
         let command_actions = parse_command(&exec_params.command);
         let effective_sandbox_policy = resolve_skill_sandbox_extension_for_command(
             &skills_outcome,
+            &exec_params.command,
             &exec_params.cwd,
             &command_actions,
         )

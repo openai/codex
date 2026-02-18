@@ -33,6 +33,7 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::DynamicToolSpec;
+use codex_app_server_protocol::ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -1046,6 +1047,7 @@ struct CodexClient {
 
 #[derive(Debug, Clone, Copy)]
 enum CommandApprovalBehavior {
+    Prompt,
     AlwaysAccept,
     AbortOn(usize),
 }
@@ -1096,7 +1098,7 @@ impl CodexClient {
                 stdout: BufReader::new(stdout),
             },
             pending_notifications: VecDeque::new(),
-            command_approval_behavior: CommandApprovalBehavior::AlwaysAccept,
+            command_approval_behavior: CommandApprovalBehavior::Prompt,
             command_approval_count: 0,
             command_approval_item_ids: Vec::new(),
             command_execution_statuses: Vec::new(),
@@ -1117,7 +1119,7 @@ impl CodexClient {
                 socket: Box::new(socket),
             },
             pending_notifications: VecDeque::new(),
-            command_approval_behavior: CommandApprovalBehavior::AlwaysAccept,
+            command_approval_behavior: CommandApprovalBehavior::Prompt,
             command_approval_count: 0,
             command_approval_item_ids: Vec::new(),
             command_execution_statuses: Vec::new(),
@@ -1619,6 +1621,9 @@ impl CodexClient {
         }
 
         let decision = match self.command_approval_behavior {
+            CommandApprovalBehavior::Prompt => {
+                self.command_approval_decision(proposed_execpolicy_amendment)?
+            }
             CommandApprovalBehavior::AlwaysAccept => CommandExecutionApprovalDecision::Accept,
             CommandApprovalBehavior::AbortOn(index) if self.command_approval_count == index => {
                 CommandExecutionApprovalDecision::Cancel
@@ -1665,6 +1670,21 @@ impl CodexClient {
             response.decision
         );
         Ok(())
+    }
+
+    fn command_approval_decision(
+        &self,
+        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+    ) -> Result<CommandExecutionApprovalDecision> {
+        if let Some(execpolicy_amendment) = proposed_execpolicy_amendment {
+            return prompt_for_command_approval_with_amendment(execpolicy_amendment);
+        }
+
+        if prompt_for_yes_no("Approve command execution request? [y/n] ")? {
+            Ok(CommandExecutionApprovalDecision::Accept)
+        } else {
+            Ok(CommandExecutionApprovalDecision::Decline)
+        }
     }
 
     fn file_change_approval_decision(&self) -> Result<FileChangeApprovalDecision> {
@@ -1768,6 +1788,37 @@ fn prompt_for_yes_no(prompt: &str) -> Result<bool> {
             return Ok(false);
         }
         println!("please answer y or n");
+    }
+}
+
+fn prompt_for_command_approval_with_amendment(
+    execpolicy_amendment: ExecPolicyAmendment,
+) -> Result<CommandExecutionApprovalDecision> {
+    loop {
+        print!("Approve command execution request? [y/n/a] (a=always allow) ");
+        io::stdout()
+            .flush()
+            .context("failed to flush approval prompt")?;
+
+        let mut line = String::new();
+        io::stdin()
+            .read_line(&mut line)
+            .context("failed to read approval input")?;
+        let input = line.trim().to_ascii_lowercase();
+        if matches!(input.as_str(), "y" | "yes") {
+            return Ok(CommandExecutionApprovalDecision::Accept);
+        }
+        if matches!(input.as_str(), "n" | "no") {
+            return Ok(CommandExecutionApprovalDecision::Decline);
+        }
+        if matches!(input.as_str(), "a" | "always" | "always allow") {
+            return Ok(
+                CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                    execpolicy_amendment: execpolicy_amendment.clone(),
+                },
+            );
+        }
+        println!("please answer y, n, or a");
     }
 }
 

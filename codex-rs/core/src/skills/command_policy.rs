@@ -14,26 +14,29 @@ use crate::skills::SkillLoadOutcome;
 /// skill for a command invocation.
 ///
 /// Assumptions:
-/// 1. `command_cwd` reflects the effective command target location.
-/// 2. If `command_cwd` is contained by multiple skill directories, the first
-///    enabled skill in `skills_outcome.skills` wins.
-/// 3. If `command_cwd` does not match, each command action path is checked.
+/// 1. `command` contains the executable and arguments for the invocation.
+/// 2. `command_cwd` reflects the effective command target location.
+/// 3. Only commands executed via `zsh` are eligible.
+/// 4. Only executable paths under `<skill>/scripts` are eligible.
 ///
-/// Returns `None` when no enabled skill with permissions matches
-/// `command_cwd` or command action paths.
+/// Returns `None` when command shell is not `zsh`, or when no enabled skill
+/// with permissions matches an eligible command action executable.
 pub(crate) fn resolve_skill_sandbox_extension_for_command(
     skills_outcome: &SkillLoadOutcome,
+    command: &[String],
     command_cwd: &Path,
     command_actions: &[ParsedCommand],
 ) -> Option<SandboxPolicy> {
-    let command_cwd = normalize_candidate_path(command_cwd)?;
-    if let Some(permissions) = match_skill_for_candidate(skills_outcome, command_cwd.as_path()) {
-        return Some(permissions.sandbox_policy.get().clone());
+    let command_executable_name = command
+        .first()
+        .and_then(|program| Path::new(program).file_name())
+        .and_then(|name| name.to_str());
+    if command_executable_name != Some("zsh") {
+        return None;
     }
 
     for command_action in command_actions {
-        let Some(action_candidate) =
-            command_action_candidate_path(command_action, command_cwd.as_path())
+        let Some(action_candidate) = command_action_candidate_path(command_action, command_cwd)
         else {
             continue;
         };
@@ -50,11 +53,18 @@ fn command_action_candidate_path(
     command_cwd: &Path,
 ) -> Option<PathBuf> {
     let action_path = match command_action {
-        ParsedCommand::Read { path, .. } => Some(path.as_path()),
-        ParsedCommand::ListFiles { path, .. } | ParsedCommand::Search { path, .. } => {
-            path.as_deref().map(Path::new)
+        ParsedCommand::Unknown { cmd } => {
+            let tokens = shlex::split(cmd)?;
+            let executable = tokens.first()?;
+            let executable_path = PathBuf::from(executable);
+            if !executable_path.is_absolute() && !executable.contains('/') {
+                return None;
+            }
+            Some(executable_path)
         }
-        ParsedCommand::Unknown { .. } => None,
+        ParsedCommand::Read { .. }
+        | ParsedCommand::ListFiles { .. }
+        | ParsedCommand::Search { .. } => None,
     }?;
     let action_path = if action_path.is_absolute() {
         action_path.to_path_buf()
@@ -93,12 +103,13 @@ fn match_skill_for_candidate<'a>(
         let Some(skill_dir) = skill.path.parent() else {
             continue;
         };
+        let skill_scripts_dir = skill_dir.join("scripts");
         // Normalize before comparing so path containment checks are stable.
-        let Some(skill_dir) = normalize_candidate_path(skill_dir) else {
+        let Some(skill_scripts_dir) = normalize_candidate_path(&skill_scripts_dir) else {
             continue;
         };
-        // The command cwd must be inside the skill directory.
-        if !candidate.starts_with(&skill_dir) {
+        // The executable must live inside the skill's scripts directory.
+        if !candidate.starts_with(&skill_scripts_dir) {
             continue;
         }
         return Some(permissions);
@@ -176,13 +187,15 @@ mod tests {
     }
 
     #[test]
-    fn resolves_skill_policy_when_cwd_is_inside_skill_directory() {
+    fn resolves_policy_for_zsh_executable_inside_skill_scripts_directory() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let skill_dir = tempdir.path().join("skills/demo");
         let scripts_dir = skill_dir.join("scripts");
         std::fs::create_dir_all(&scripts_dir).expect("create scripts");
+        std::fs::write(scripts_dir.join("run.sh"), "#!/bin/sh\necho ok\n").expect("write script");
         let skill_path = skill_dir.join("SKILL.md");
         std::fs::write(&skill_path, "skill").expect("write SKILL.md");
+        let cwd = tempdir.path().to_path_buf();
 
         let write_root = AbsolutePathBuf::try_from(skill_dir.join("output")).expect("absolute");
         let skill_policy = SandboxPolicy::WorkspaceWrite {
@@ -196,18 +209,25 @@ mod tests {
             canonical(&skill_path),
             skill_policy.clone(),
         )]);
+        let command = vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "skills/demo/scripts/run.sh".to_string(),
+        ];
+        let command_actions = vec![ParsedCommand::Unknown {
+            cmd: "skills/demo/scripts/run.sh".to_string(),
+        }];
 
-        let resolved = resolve_skill_sandbox_extension_for_command(&outcome, &scripts_dir, &[]);
+        let resolved =
+            resolve_skill_sandbox_extension_for_command(&outcome, &command, &cwd, &command_actions);
 
         assert_eq!(resolved, Some(skill_policy));
     }
 
     #[test]
-    fn does_not_resolve_policy_when_neither_cwd_nor_command_action_paths_match() {
+    fn does_not_resolve_policy_when_command_is_not_zsh() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let skill_dir = tempdir.path().join("skills/demo");
-        let outside_dir = tempdir.path().join("outside");
-        std::fs::create_dir_all(&outside_dir).expect("create outside");
         let scripts_dir = skill_dir.join("scripts");
         std::fs::create_dir_all(&scripts_dir).expect("create scripts");
         std::fs::write(scripts_dir.join("run.sh"), "#!/bin/sh\necho ok\n").expect("write script");
@@ -226,23 +246,33 @@ mod tests {
             canonical(&skill_path),
             skill_policy.clone(),
         )]);
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "skills/demo/scripts/run.sh".to_string(),
+        ];
+        let command_actions = vec![ParsedCommand::Unknown {
+            cmd: "skills/demo/scripts/run.sh".to_string(),
+        }];
 
-        let resolved = resolve_skill_sandbox_extension_for_command(&outcome, &outside_dir, &[]);
+        let resolved = resolve_skill_sandbox_extension_for_command(
+            &outcome,
+            &command,
+            tempdir.path(),
+            &command_actions,
+        );
 
         assert_eq!(resolved, None);
     }
 
     #[test]
-    fn resolves_policy_when_command_action_path_is_inside_skill_directory() {
+    fn does_not_resolve_policy_for_paths_outside_skill_scripts_directory() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let skill_dir = tempdir.path().join("skills/demo");
-        let outside_dir = tempdir.path().join("outside");
-        std::fs::create_dir_all(&outside_dir).expect("create outside");
-        let scripts_dir = skill_dir.join("scripts");
-        std::fs::create_dir_all(&scripts_dir).expect("create scripts");
+        std::fs::create_dir_all(&skill_dir).expect("create skill");
+        std::fs::write(skill_dir.join("run.sh"), "#!/bin/sh\necho ok\n").expect("write script");
         let skill_path = skill_dir.join("SKILL.md");
         std::fs::write(&skill_path, "skill").expect("write SKILL.md");
-        let skill_path = canonical(&skill_path);
 
         let skill_policy = SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::Restricted {
@@ -253,27 +283,34 @@ mod tests {
             },
         };
         let outcome = outcome_with_skills(vec![skill_with_policy(
-            skill_path.clone(),
+            canonical(&skill_path),
             skill_policy.clone(),
         )]);
-
-        let command_actions = vec![ParsedCommand::Read {
-            cmd: format!("cat {}", skill_path.display()),
-            name: "SKILL.md".to_string(),
-            path: skill_path,
+        let command = vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "skills/demo/run.sh".to_string(),
+        ];
+        let command_actions = vec![ParsedCommand::Unknown {
+            cmd: "skills/demo/run.sh".to_string(),
         }];
-        let resolved =
-            resolve_skill_sandbox_extension_for_command(&outcome, &outside_dir, &command_actions);
+        let resolved = resolve_skill_sandbox_extension_for_command(
+            &outcome,
+            &command,
+            tempdir.path(),
+            &command_actions,
+        );
 
-        assert_eq!(resolved, Some(skill_policy));
+        assert_eq!(resolved, None);
     }
 
     #[test]
     fn ignores_disabled_skill_when_resolving_command_policy() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let skill_dir = tempdir.path().join("skills/demo");
-        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
-        std::fs::write(skill_dir.join("tool.sh"), "#!/bin/sh\necho ok\n").expect("write script");
+        let scripts_dir = skill_dir.join("scripts");
+        std::fs::create_dir_all(&scripts_dir).expect("create skill dir");
+        std::fs::write(scripts_dir.join("tool.sh"), "#!/bin/sh\necho ok\n").expect("write script");
         let skill_path = skill_dir.join("SKILL.md");
         std::fs::write(&skill_path, "skill").expect("write SKILL.md");
         let skill_path = canonical(&skill_path);
@@ -283,22 +320,41 @@ mod tests {
             SandboxPolicy::new_workspace_write_policy(),
         )]);
         outcome.disabled_paths.insert(skill_path);
+        let command = vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "skills/demo/scripts/tool.sh".to_string(),
+        ];
+        let command_actions = vec![ParsedCommand::Unknown {
+            cmd: "skills/demo/scripts/tool.sh".to_string(),
+        }];
 
-        let resolved = resolve_skill_sandbox_extension_for_command(&outcome, &skill_dir, &[]);
+        let resolved = resolve_skill_sandbox_extension_for_command(
+            &outcome,
+            &command,
+            tempdir.path(),
+            &command_actions,
+        );
 
         assert_eq!(resolved, None);
     }
 
     #[test]
-    fn resolves_first_matching_skill_directory_for_nested_match() {
+    fn resolves_nested_skill_scripts_path() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let parent_skill_dir = tempdir.path().join("skills/parent");
         let nested_skill_dir = parent_skill_dir.join("nested");
-        std::fs::create_dir_all(nested_skill_dir.join("scripts")).expect("create scripts");
+        std::fs::create_dir_all(parent_skill_dir.join("scripts")).expect("create parent scripts");
+        std::fs::create_dir_all(nested_skill_dir.join("scripts")).expect("create nested scripts");
+        std::fs::write(
+            parent_skill_dir.join("scripts/run.sh"),
+            "#!/bin/sh\necho parent\n",
+        )
+        .expect("write script");
 
         std::fs::write(
             nested_skill_dir.join("scripts/run.sh"),
-            "#!/bin/sh\necho ok\n",
+            "#!/bin/sh\necho nested\n",
         )
         .expect("write script");
 
@@ -328,10 +384,53 @@ mod tests {
             skill_with_policy(canonical(&parent_skill_path), parent_policy.clone()),
             skill_with_policy(canonical(&nested_skill_path), nested_policy.clone()),
         ]);
+        let command = vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "skills/parent/nested/scripts/run.sh".to_string(),
+        ];
+        let command_actions = vec![ParsedCommand::Unknown {
+            cmd: "skills/parent/nested/scripts/run.sh".to_string(),
+        }];
 
-        let resolved =
-            resolve_skill_sandbox_extension_for_command(&outcome, &nested_skill_dir, &[]);
+        let resolved = resolve_skill_sandbox_extension_for_command(
+            &outcome,
+            &command,
+            tempdir.path(),
+            &command_actions,
+        );
 
-        assert_eq!(resolved, Some(parent_policy));
+        assert_eq!(resolved, Some(nested_policy));
+    }
+
+    #[test]
+    fn ignores_non_path_unknown_command_actions() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = tempdir.path().join("skills/demo");
+        std::fs::create_dir_all(skill_dir.join("scripts")).expect("create scripts");
+        let skill_path = skill_dir.join("SKILL.md");
+        std::fs::write(&skill_path, "skill").expect("write SKILL.md");
+
+        let outcome = outcome_with_skills(vec![skill_with_policy(
+            canonical(&skill_path),
+            SandboxPolicy::new_workspace_write_policy(),
+        )]);
+        let command = vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "echo hi".to_string(),
+        ];
+        let command_actions = vec![ParsedCommand::Unknown {
+            cmd: "echo hi".to_string(),
+        }];
+
+        let resolved = resolve_skill_sandbox_extension_for_command(
+            &outcome,
+            &command,
+            skill_dir.join("scripts").as_path(),
+            &command_actions,
+        );
+
+        assert_eq!(resolved, None);
     }
 }
