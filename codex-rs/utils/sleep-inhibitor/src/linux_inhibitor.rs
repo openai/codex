@@ -104,6 +104,24 @@ impl PlatformSleepInhibitor for LinuxSleepInhibitor {
                                 "Failed to query Linux sleep inhibitor backend status after spawn"
                             );
                         }
+                        if let Err(kill_error) = child.kill()
+                            && !child_exited(&kill_error)
+                        {
+                            warn!(
+                                ?backend,
+                                reason = %kill_error,
+                                "Failed to stop Linux sleep inhibitor backend after status probe failure"
+                            );
+                        }
+                        if let Err(wait_error) = child.wait()
+                            && !child_exited(&wait_error)
+                        {
+                            warn!(
+                                ?backend,
+                                reason = %wait_error,
+                                "Failed to reap Linux sleep inhibitor backend after status probe failure"
+                            );
+                        }
                     }
                 },
                 Err(error) => {
