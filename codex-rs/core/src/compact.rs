@@ -53,14 +53,6 @@ pub(crate) enum CompactCallsite {
     MidTurnContinuation,
 }
 
-// Canonical context reinjection policy for compacted replacement history:
-// - `MidTurnContinuation` and `PreSamplingModelSwitch`: reinsert canonical initial context above
-//   the last real user message because those paths do not persist/reseed canonical context in a
-//   later post-compaction step.
-// - `ManualCompact`: do not reinsert during compaction; `/compact` reseeds on the next user turn.
-// - `PreTurn*`: do not reinsert into replacement history; `run_turn` persists canonical context
-//   directly above the incoming user message after compaction.
-
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
     provider.is_openai()
 }
