@@ -181,6 +181,7 @@ use codex_core::auth::login_with_chatgpt_auth_tokens;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigService;
+use codex_core::config::NetworkProxyAuditMetadata;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
@@ -1718,7 +1719,7 @@ impl CodexMessageProcessor {
                     None,
                     None,
                     managed_network_requirements_enabled,
-                    codex_core::config::NetworkProxyAuditMetadata::default(),
+                    NetworkProxyAuditMetadata::default(),
                 )
                 .await
             {
