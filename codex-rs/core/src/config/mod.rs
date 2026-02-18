@@ -336,11 +336,12 @@ pub struct Config {
 
     /// Optional absolute path to the Node runtime used by `js_repl`.
     pub js_repl_node_path: Option<PathBuf>,
-    /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
-    pub zsh_path: Option<PathBuf>,
 
     /// Ordered list of directories to search for Node modules in `js_repl`.
     pub js_repl_node_module_dirs: Vec<PathBuf>,
+
+    /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
+    pub zsh_path: Option<PathBuf>,
 
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
@@ -980,11 +981,12 @@ pub struct ConfigToml {
 
     /// Optional absolute path to the Node runtime used by `js_repl`.
     pub js_repl_node_path: Option<AbsolutePathBuf>,
-    /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
-    pub zsh_path: Option<AbsolutePathBuf>,
 
     /// Ordered list of directories to search for Node modules in `js_repl`.
     pub js_repl_node_module_dirs: Option<Vec<AbsolutePathBuf>>,
+
+    /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
+    pub zsh_path: Option<AbsolutePathBuf>,
 
     /// Profile to use from the `profiles` map.
     pub profile: Option<String>,
