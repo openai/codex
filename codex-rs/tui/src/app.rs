@@ -290,7 +290,25 @@ impl ThreadEventStore {
             _ => {}
         }
 
+        if !event.id.is_empty() && self.is_turn_terminal_event(&event) {
+            self.remove_request_user_input_for_turn_id(&event.id);
+        }
+
         self.push_legacy_event(event);
+    }
+
+    fn is_turn_terminal_event(&self, event: &Event) -> bool {
+        match &event.msg {
+            EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => true,
+            EventMsg::Error(err) => err.affects_turn_status(),
+            _ => false,
+        }
+    }
+
+    fn remove_request_user_input_for_turn_id(&mut self, turn_id: &str) {
+        self.buffer.retain(|candidate| {
+            !(candidate.id == turn_id && matches!(candidate.msg, EventMsg::RequestUserInput(_)))
+        });
     }
 
     fn push_legacy_event(&mut self, event: Event) {
@@ -2907,15 +2925,21 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::protocol::AskForApproval;
+    use codex_core::protocol::ErrorEvent;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_core::protocol::SessionSource;
     use codex_core::protocol::ThreadRolledBackEvent;
+    use codex_core::protocol::TurnAbortReason;
+    use codex_core::protocol::TurnAbortedEvent;
+    use codex_core::protocol::TurnCompleteEvent;
     use codex_core::protocol::UserMessageEvent;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
+    use codex_protocol::request_user_input::RequestUserInputEvent;
+    use codex_protocol::request_user_input::RequestUserInputQuestion;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
     use crossterm::event::KeyModifiers;
@@ -2945,6 +2969,101 @@ mod tests {
             vec![base_cwd.join("rel")]
         );
         Ok(())
+    }
+
+    fn event_for_turn(turn_id: &str, msg: EventMsg) -> Event {
+        Event {
+            id: turn_id.to_string(),
+            msg,
+        }
+    }
+
+    fn request_user_input_for_turn(turn_id: &str) -> Event {
+        event_for_turn(
+            turn_id,
+            EventMsg::RequestUserInput(RequestUserInputEvent {
+                call_id: "call-1".to_string(),
+                turn_id: turn_id.to_string(),
+                questions: vec![RequestUserInputQuestion {
+                    id: "q1".to_string(),
+                    header: "Question".to_string(),
+                    question: "Pick one".to_string(),
+                    is_other: false,
+                    is_secret: false,
+                    options: None,
+                }],
+            }),
+        )
+    }
+
+    fn turn_complete_for_turn(turn_id: &str) -> Event {
+        event_for_turn(
+            turn_id,
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn_id.to_string(),
+                last_agent_message: None,
+            }),
+        )
+    }
+
+    fn turn_aborted_for_turn(turn_id: &str) -> Event {
+        event_for_turn(
+            turn_id,
+            EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some(turn_id.to_string()),
+                reason: TurnAbortReason::Interrupted,
+            }),
+        )
+    }
+
+    fn turn_error_for_turn(turn_id: &str) -> Event {
+        event_for_turn(
+            turn_id,
+            EventMsg::Error(ErrorEvent {
+                message: "error".to_string(),
+                codex_error_info: None,
+            }),
+        )
+    }
+
+    fn request_user_input_events(snapshot: &ThreadEventSnapshot) -> usize {
+        snapshot
+            .events
+            .iter()
+            .filter(|event| matches!(event.msg, EventMsg::RequestUserInput(_)))
+            .count()
+    }
+
+    #[test]
+    fn thread_event_store_keeps_pending_request_user_input_events_for_replay() {
+        let mut store = ThreadEventStore::new(16);
+        store.push_event(request_user_input_for_turn("turn-1"));
+
+        let snapshot = store.snapshot();
+        assert_eq!(request_user_input_events(&snapshot), 1);
+    }
+
+    #[test]
+    fn thread_event_store_prunes_request_user_input_after_turn_complete() {
+        let mut store = ThreadEventStore::new(16);
+        store.push_event(request_user_input_for_turn("turn-1"));
+        store.push_event(turn_complete_for_turn("turn-1"));
+
+        let snapshot = store.snapshot();
+        assert_eq!(request_user_input_events(&snapshot), 0);
+    }
+
+    #[test]
+    fn thread_event_store_prunes_request_user_input_after_turn_abort_or_error() {
+        let mut aborted = ThreadEventStore::new(16);
+        aborted.push_event(request_user_input_for_turn("turn-1"));
+        aborted.push_event(turn_aborted_for_turn("turn-1"));
+        assert_eq!(request_user_input_events(&aborted.snapshot()), 0);
+
+        let mut errored = ThreadEventStore::new(16);
+        errored.push_event(request_user_input_for_turn("turn-2"));
+        errored.push_event(turn_error_for_turn("turn-2"));
+        assert_eq!(request_user_input_events(&errored.snapshot()), 0);
     }
 
     #[test]
