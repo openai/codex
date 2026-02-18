@@ -690,7 +690,7 @@
               "$ref": "#/definitions/CatalogJsonSourceToml"
             }
           ],
-          "description": "Optional full catalog overlay applied on top of bundled and fetched model metadata. This can be either a literal `ModelsResponse` object or a path to a JSON file containing one."
+          "description": "Optional full catalog overlay applied on top of bundled and fetched model metadata. Accepts: - a path to a JSON file containing `ModelsResponse`, - a JSON string containing a serialized `ModelsResponse`, or - a TOML inline `ModelsResponse` object."
         },
         "overrides": {
           "additionalProperties": {
