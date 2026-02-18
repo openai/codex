@@ -187,18 +187,19 @@ impl ResponsesStreamEvent {
     /// 2. top-level `headers` for websocket metadata events (for example
     ///    `codex.response.metadata`).
     pub fn response_model(&self) -> Option<String> {
-        self.response
+        let response_headers_model = self
+            .response
             .as_ref()
-            .and_then(|response| {
-                response
-                    .get("headers")
-                    .and_then(header_openai_model_value_from_json)
-            })
-            .or_else(|| {
-                self.headers
-                    .as_ref()
-                    .and_then(header_openai_model_value_from_json)
-            })
+            .and_then(|response| response.get("headers"))
+            .and_then(header_openai_model_value_from_json);
+
+        match response_headers_model {
+            Some(model) => Some(model),
+            None => self
+                .headers
+                .as_ref()
+                .and_then(header_openai_model_value_from_json),
+        }
     }
 }
 
