@@ -4,6 +4,7 @@ use std::iter::once;
 use std::os::windows::ffi::OsStrExt;
 use tracing::warn;
 use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::System::Power::POWER_REQUEST_TYPE;
 use windows_sys::Win32::System::Power::PowerClearRequest;
 use windows_sys::Win32::System::Power::PowerCreateRequest;
@@ -68,7 +69,7 @@ impl PowerRequest {
             },
         };
         let handle = unsafe { PowerCreateRequest(&context) };
-        if handle == 0 {
+        if handle == 0 || handle == INVALID_HANDLE_VALUE {
             let error = std::io::Error::last_os_error();
             return Err(format!("PowerCreateRequest failed: {error}"));
         }

@@ -1,7 +1,11 @@
 //! Cross-platform helper for preventing idle sleep while a turn is running.
 //!
-//! On macOS this uses native IOKit power assertions instead of spawning
-//! `caffeinate`, so assertion lifecycle is tied directly to Rust object lifetime.
+//! Platform-specific behavior:
+//! - macOS: Uses native IOKit power assertions instead of spawning `caffeinate`.
+//! - Linux: Spawns `systemd-inhibit` or `gnome-session-inhibit` while active.
+//! - Windows: Uses `PowerCreateRequest` + `PowerSetRequest` with
+//!   `PowerRequestExecutionRequired`.
+//! - Other platforms: No-op backend.
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod dummy;
