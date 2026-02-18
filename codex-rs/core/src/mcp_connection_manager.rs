@@ -1006,6 +1006,21 @@ impl From<anyhow::Error> for StartupOutcomeError {
     }
 }
 
+fn elicitation_capability_for_server(server_name: &str) -> Option<ElicitationCapability> {
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+        // indicates this should be an empty object.
+        Some(ElicitationCapability {
+            form: Some(FormElicitationCapability {
+                schema_validation: None,
+            }),
+            url: None,
+        })
+    } else {
+        None
+    }
+}
+
 async fn start_server_task(
     server_name: String,
     client: Arc<RmcpClient>,
@@ -1015,6 +1030,8 @@ async fn start_server_task(
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
 ) -> Result<ManagedClient, StartupOutcomeError> {
+    let elicitation = elicitation_capability_for_server(&server_name);
+
     let params = InitializeRequestParams {
         meta: None,
         capabilities: ClientCapabilities {
@@ -1022,14 +1039,7 @@ async fn start_server_task(
             extensions: None,
             roots: None,
             sampling: None,
-            // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-            // indicates this should be an empty object.
-            elicitation: Some(ElicitationCapability {
-                form: Some(FormElicitationCapability {
-                    schema_validation: None,
-                }),
-                url: None,
-            }),
+            elicitation,
             tasks: None,
         },
         client_info: Implementation {
@@ -1539,6 +1549,22 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             assert!(cache_guard.is_none());
         });
+    }
+
+    #[test]
+    fn elicitation_capability_enabled_only_for_codex_apps() {
+        let codex_apps_capability = elicitation_capability_for_server(CODEX_APPS_MCP_SERVER_NAME);
+        assert!(matches!(
+            codex_apps_capability,
+            Some(ElicitationCapability {
+                form: Some(FormElicitationCapability {
+                    schema_validation: None
+                }),
+                url: None,
+            })
+        ));
+
+        assert!(elicitation_capability_for_server("custom_mcp").is_none());
     }
 
     #[test]
