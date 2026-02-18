@@ -1,7 +1,6 @@
 #![allow(clippy::expect_used)]
 
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -28,7 +27,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 
-const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
+const PRETURN_CONTEXT_DIFF_CWD: &str = "PRETURN_CONTEXT_DIFF_CWD";
 
 fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
@@ -83,6 +82,8 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             config.personality = Some(Personality::Pragmatic);
         });
     let test = builder.build(&server).await?;
+    let preturn_context_diff_cwd = test.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
+    fs::create_dir_all(&preturn_context_diff_cwd)?;
 
     test.codex
         .submit(Op::UserTurn {
@@ -113,7 +114,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: PathBuf::from(PRETURN_CONTEXT_DIFF_CWD),
+            cwd: preturn_context_diff_cwd,
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
