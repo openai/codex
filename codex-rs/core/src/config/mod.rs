@@ -1285,8 +1285,10 @@ pub struct GhostSnapshotToml {
 #[schemars(deny_unknown_fields)]
 pub struct ModelInfoConfigToml {
     /// Optional full catalog overlay applied on top of bundled and fetched model metadata.
-    /// This can be either a literal `ModelsResponse` object or a path to a JSON file
-    /// containing one.
+    /// Accepts:
+    /// - a path to a JSON file containing `ModelsResponse`,
+    /// - a JSON string containing a serialized `ModelsResponse`, or
+    /// - a TOML inline `ModelsResponse` object.
     pub catalog_json: Option<CatalogJsonSourceToml>,
     /// Per-model metadata overrides keyed by model slug.
     #[serde(default)]
