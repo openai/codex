@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ModelRerouteReason;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
@@ -53,6 +54,17 @@ async fn openai_model_header_mismatch_emits_warning_event_and_warning_item() -> 
             personality: None,
         })
         .await?;
+
+    let reroute = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ModelReroute(_))
+    })
+    .await;
+    let EventMsg::ModelReroute(reroute) = reroute else {
+        panic!("expected model reroute event");
+    };
+    assert_eq!(reroute.from_model, REQUESTED_MODEL);
+    assert_eq!(reroute.to_model, SERVER_MODEL);
+    assert_eq!(reroute.reason, ModelRerouteReason::HighRiskCyberActivity);
 
     let warning = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Warning(_))).await;
     let EventMsg::Warning(warning) = warning else {
@@ -109,7 +121,9 @@ async fn response_model_field_mismatch_emits_warning_when_header_matches_request
             "type": "response.created",
             "response": {
                 "id": "resp-1",
-                "model": SERVER_MODEL,
+                "headers": {
+                    "OpenAI-Model": SERVER_MODEL
+                }
             }
         }),
         core_test_support::responses::ev_completed("resp-1"),
@@ -138,6 +152,17 @@ async fn response_model_field_mismatch_emits_warning_when_header_matches_request
         })
         .await?;
 
+    let reroute = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ModelReroute(_))
+    })
+    .await;
+    let EventMsg::ModelReroute(reroute) = reroute else {
+        panic!("expected model reroute event");
+    };
+    assert_eq!(reroute.from_model, REQUESTED_MODEL);
+    assert_eq!(reroute.to_model, SERVER_MODEL);
+    assert_eq!(reroute.reason, ModelRerouteReason::HighRiskCyberActivity);
+
     let warning = wait_for_event(&test.codex, |event| {
         matches!(
             event,
@@ -151,7 +176,8 @@ async fn response_model_field_mismatch_emits_warning_when_header_matches_request
     let EventMsg::Warning(warning) = warning else {
         panic!("expected warning event");
     };
-    assert!(warning.message.contains("gpt-5.2 as a fallback"));
+    assert!(warning.message.contains(REQUESTED_MODEL));
+    assert!(warning.message.contains(SERVER_MODEL));
 
     let _ = wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -223,6 +249,61 @@ async fn openai_model_header_mismatch_only_emits_one_warning_per_turn() -> Resul
     }
 
     assert_eq!(warning_count, 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_model_header_casing_only_mismatch_does_not_warn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let requested_header = REQUESTED_MODEL.to_ascii_uppercase();
+    let response = sse_response(sse_completed("resp-1"))
+        .insert_header("OpenAI-Model", requested_header.as_str());
+    let _mock = mount_response_once(&server, response).await;
+
+    let mut builder = test_codex().with_model(REQUESTED_MODEL);
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "trigger casing check".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: REQUESTED_MODEL.to_string(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let mut reroute_count = 0;
+    let mut warning_count = 0;
+    loop {
+        let event = wait_for_event(&test.codex, |_| true).await;
+        match event {
+            EventMsg::ModelReroute(_) => reroute_count += 1,
+            EventMsg::Warning(warning)
+                if warning
+                    .message
+                    .contains("flagged for potentially high-risk cyber activity") =>
+            {
+                warning_count += 1;
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(reroute_count, 0);
+    assert_eq!(warning_count, 0);
 
     Ok(())
 }

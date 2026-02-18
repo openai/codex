@@ -2472,6 +2472,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     // Trigger an exec approval request with a short, single-line command
     let ev = ExecApprovalRequestEvent {
         call_id: "call-short".into(),
+        approval_id: Some("call-short".into()),
         turn_id: "turn-short".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -2517,6 +2518,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     // Multiline command: modal should show full command, history records decision only
     let ev_multi = ExecApprovalRequestEvent {
         call_id: "call-multi".into(),
+        approval_id: Some("call-multi".into()),
         turn_id: "turn-multi".into(),
         command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -2570,6 +2572,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let long = format!("echo {}", "a".repeat(200));
     let ev_long = ExecApprovalRequestEvent {
         call_id: "call-long".into(),
+        approval_id: Some("call-long".into()),
         turn_id: "turn-long".into(),
         command: vec!["bash".into(), "-lc".into(), long],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -2749,7 +2752,7 @@ fn active_blob(chat: &ChatWidget) -> String {
 fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
     let models = chat
         .models_manager
-        .try_list_models(&chat.config)
+        .try_list_models()
         .expect("models lock available");
     models
         .iter()
@@ -3736,7 +3739,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
 }
 
 #[tokio::test]
-async fn experimental_mode_plan_applies_on_startup() {
+async fn experimental_mode_plan_is_ignored_on_startup() {
     let codex_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -3780,7 +3783,7 @@ async fn experimental_mode_plan_applies_on_startup() {
     };
 
     let chat = ChatWidget::new(init, thread_manager);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_model(), resolved_model);
 }
 
@@ -4424,6 +4427,9 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                 logo_url: None,
                 logo_url_dark: None,
                 distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
@@ -4457,6 +4463,9 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                     logo_url: None,
                     logo_url_dark: None,
                     distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
                     install_url: Some("https://example.test/notion".to_string()),
                     is_accessible: true,
                     is_enabled: true,
@@ -4468,6 +4477,9 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                     logo_url: None,
                     logo_url_dark: None,
                     distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
                     install_url: Some("https://example.test/linear".to_string()),
                     is_accessible: true,
                     is_enabled: true,
@@ -4504,6 +4516,9 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             install_url: Some("https://example.test/notion".to_string()),
             is_accessible: true,
             is_enabled: true,
@@ -4515,6 +4530,9 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             install_url: Some("https://example.test/linear".to_string()),
             is_accessible: false,
             is_enabled: true,
@@ -4536,6 +4554,9 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
                 logo_url: None,
                 logo_url_dark: None,
                 distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
@@ -4572,6 +4593,9 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             install_url: Some("https://example.test/notion".to_string()),
             is_accessible: true,
             is_enabled: true,
@@ -4583,6 +4607,9 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             install_url: Some("https://example.test/linear".to_string()),
             is_accessible: false,
             is_enabled: true,
@@ -4606,6 +4633,9 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
                     logo_url: None,
                     logo_url_dark: None,
                     distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
                     install_url: Some("https://example.test/notion".to_string()),
                     is_accessible: true,
                     is_enabled: true,
@@ -4617,6 +4647,9 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
                     logo_url: None,
                     logo_url_dark: None,
                     distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
                     install_url: Some("https://example.test/hidden-openai".to_string()),
                     is_accessible: true,
                     is_enabled: true,
@@ -4657,6 +4690,9 @@ async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
                 logo_url: None,
                 logo_url_dark: None,
                 distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: false,
@@ -4704,6 +4740,9 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
                 logo_url: None,
                 logo_url_dark: None,
                 distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
@@ -4738,6 +4777,9 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
                 logo_url: None,
                 logo_url_dark: None,
                 distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
@@ -4756,6 +4798,9 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
                 logo_url: None,
                 logo_url_dark: None,
                 distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
                 is_enabled: true,
@@ -4797,6 +4842,9 @@ async fn apps_popup_for_not_installed_app_uses_install_only_selected_description
                 logo_url: None,
                 logo_url_dark: None,
                 distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
                 install_url: Some("https://example.test/linear".to_string()),
                 is_accessible: false,
                 is_enabled: true,
@@ -5639,6 +5687,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
     // Inject an exec approval request to display the approval modal.
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd".into(),
+        approval_id: Some("call-approve-cmd".into()),
         turn_id: "turn-approve-cmd".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -5698,6 +5747,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
 
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd-noreason".into(),
+        approval_id: Some("call-approve-cmd-noreason".into()),
         turn_id: "turn-approve-cmd-noreason".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -5746,6 +5796,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
     let command = vec!["bash".into(), "-lc".into(), script];
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd-multiline-trunc".into(),
+        approval_id: Some("call-approve-cmd-multiline-trunc".into()),
         turn_id: "turn-approve-cmd-multiline-trunc".into(),
         command: command.clone(),
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -6104,6 +6155,7 @@ async fn status_widget_and_approval_modal_snapshot() {
     // Now show an approval modal (e.g. exec approval).
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-exec".into(),
+        approval_id: Some("call-approve-exec".into()),
         turn_id: "turn-approve-exec".into(),
         command: vec!["echo".into(), "hello world".into()],
         cwd: PathBuf::from("/tmp"),

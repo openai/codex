@@ -5,7 +5,6 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
-use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ItemCompletedEvent;
@@ -1708,7 +1707,6 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::RemoteModels);
         });
     let test = builder.build(&server).await.expect("build test codex");
 
@@ -1831,7 +1829,6 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::RemoteModels);
         });
     let initial = initial_builder
         .build(&server)
@@ -1885,7 +1882,6 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::RemoteModels);
         });
     let resumed = resumed_builder
         .resume(&server, home, rollout_path)
@@ -3042,6 +3038,131 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // TODO(ccunningham): Update once pre-turn compaction context-overflow handling includes incoming
 // user input and emits richer oversized-input messaging.
+async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let previous_model = "gpt-5.1-codex-max";
+    let next_model = "gpt-5.2-codex";
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "BEFORE_SWITCH_REPLY"),
+                ev_completed_with_tokens("r1", 500),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "PRETURN_SWITCH_SUMMARY"),
+                ev_completed_with_tokens("r2", 100),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "AFTER_SWITCH_REPLY"),
+                ev_completed_with_tokens("r3", 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config
+                .features
+                .enable(codex_core::features::Feature::RemoteModels);
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .build(&server)
+        .await
+        .expect("build codex");
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "BEFORE_SWITCH_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: previous_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "AFTER_SWITCH_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: next_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit second user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected first turn, pre-turn compact, and post-compact follow-up requests"
+    );
+
+    let compact_body = requests[1].body_json().to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "pre-turn compaction request should include summarization prompt"
+    );
+    assert!(
+        !compact_body.contains("<model_switch>"),
+        "pre-turn compaction request should strip incoming model-switch update item"
+    );
+
+    let follow_up_body = requests[2].body_json().to_string();
+    assert!(
+        follow_up_body.contains("<model_switch>"),
+        "post-compaction follow-up should include model-switch update item"
+    );
+
+    insta::assert_snapshot!(
+        "pre_turn_compaction_strips_incoming_model_switch_shapes",
+        format_labeled_requests_snapshot(
+            "Pre-turn compaction during model switch (without pre-sampling model-switch compaction): current behavior strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.",
+            &[
+                ("Initial Request (Previous Model)", &requests[0]),
+                ("Local Compaction Request", &requests[1]),
+                ("Local Post-Compaction History Layout", &requests[2]),
+            ]
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     skip_if_no_network!();
 

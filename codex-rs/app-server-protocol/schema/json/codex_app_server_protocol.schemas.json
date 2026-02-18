@@ -755,9 +755,9 @@
             },
             "method": {
               "enum": [
-                "skills/remote/read"
+                "skills/remote/list"
               ],
-              "title": "Skills/remote/readRequestMethod",
+              "title": "Skills/remote/listRequestMethod",
               "type": "string"
             },
             "params": {
@@ -769,7 +769,7 @@
             "method",
             "params"
           ],
-          "title": "Skills/remote/readRequest",
+          "title": "Skills/remote/listRequest",
           "type": "object"
         },
         {
@@ -779,9 +779,9 @@
             },
             "method": {
               "enum": [
-                "skills/remote/write"
+                "skills/remote/export"
               ],
-              "title": "Skills/remote/writeRequestMethod",
+              "title": "Skills/remote/exportRequestMethod",
               "type": "string"
             },
             "params": {
@@ -793,7 +793,7 @@
             "method",
             "params"
           ],
-          "title": "Skills/remote/writeRequest",
+          "title": "Skills/remote/exportRequest",
           "type": "object"
         },
         {
@@ -2051,6 +2051,13 @@
     "CommandExecutionRequestApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "approvalId": {
+          "description": "Unique identifier for this specific approval callback.\n\nFor regular shell/unified_exec approvals, this is null.\n\nFor zsh-exec-bridge subcommand approvals, multiple callbacks can belong to one parent `itemId`, so `approvalId` is a distinct opaque callback id (a UUID) used to disambiguate routing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "command": {
           "description": "The command to be executed.",
           "type": [
@@ -2484,6 +2491,35 @@
             "type"
           ],
           "title": "WarningEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Model routing changed from the requested model to a different model.",
+          "properties": {
+            "from_model": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/definitions/v2/ModelRerouteReason"
+            },
+            "to_model": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "model_reroute"
+              ],
+              "title": "ModelRerouteEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from_model",
+            "reason",
+            "to_model",
+            "type"
+          ],
+          "title": "ModelRerouteEventMsg",
           "type": "object"
         },
         {
@@ -3436,8 +3472,15 @@
         },
         {
           "properties": {
+            "approval_id": {
+              "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "call_id": {
-              "description": "Identifier for the associated exec call, if available.",
+              "description": "Identifier for the associated command execution item.",
               "type": "string"
             },
             "command": {
@@ -4910,6 +4953,13 @@
     "ExecCommandApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "approvalId": {
+          "description": "Identifier for this specific approval callback.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "callId": {
           "description": "Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent] and [codex_core::protocol::ExecCommandEndEvent].",
           "type": "string"
@@ -6263,6 +6313,12 @@
       "enum": [
         "plan",
         "default"
+      ],
+      "type": "string"
+    },
+    "ModelRerouteReason": {
+      "enum": [
+        "high_risk_cyber_activity"
       ],
       "type": "string"
     },
@@ -8032,6 +8088,46 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/archived"
+              ],
+              "title": "Thread/archivedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadArchivedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/archivedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/unarchived"
+              ],
+              "title": "Thread/unarchivedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadUnarchivedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/unarchivedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/name/updated"
               ],
               "title": "Thread/name/updatedNotificationMethod",
@@ -8489,6 +8585,26 @@
             "params"
           ],
           "title": "Thread/compactedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "model/rerouted"
+              ],
+              "title": "Model/reroutedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ModelReroutedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Model/reroutedNotification",
           "type": "object"
         },
         {
@@ -10216,6 +10332,48 @@
         },
         "type": "object"
       },
+      "AppBranding": {
+        "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
+        "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "developer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isDiscoverableApp": {
+            "type": "boolean"
+          },
+          "privacyPolicy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "termsOfService": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "isDiscoverableApp"
+        ],
+        "type": "object"
+      },
       "AppConfig": {
         "properties": {
           "disabled_reason": {
@@ -10245,6 +10403,26 @@
       "AppInfo": {
         "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
         "properties": {
+          "appMetadata": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branding": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppBranding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "description": {
             "type": [
               "string",
@@ -10274,6 +10452,15 @@
             "default": true,
             "description": "Whether this app is enabled in config.toml. Example: ```toml [apps.bad_app] enabled = false ```",
             "type": "boolean"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "logoUrl": {
             "type": [
@@ -10312,6 +10499,130 @@
           "data"
         ],
         "title": "AppListUpdatedNotification",
+        "type": "object"
+      },
+      "AppMetadata": {
+        "properties": {
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "developer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firstPartyRequiresInstall": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "firstPartyType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "screenshots": {
+            "items": {
+              "$ref": "#/definitions/v2/AppScreenshot"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "seoDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "showInComposerWhenUnlinked": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "subCategories": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "versionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "versionNotes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "AppReview": {
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "AppScreenshot": {
+        "properties": {
+          "fileId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "userPrompt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "userPrompt"
+        ],
         "type": "object"
       },
       "AppsConfig": {
@@ -12114,6 +12425,15 @@
         },
         "type": "object"
       },
+      "HazelnutScope": {
+        "enum": [
+          "example",
+          "workspace-shared",
+          "all-shared",
+          "personal"
+        ],
+        "type": "string"
+      },
       "InputModality": {
         "description": "Canonical user-input modality tags advertised by a model.",
         "oneOf": [
@@ -12750,6 +13070,41 @@
         "title": "ModelListResponse",
         "type": "object"
       },
+      "ModelRerouteReason": {
+        "enum": [
+          "highRiskCyberActivity"
+        ],
+        "type": "string"
+      },
+      "ModelReroutedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "fromModel": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/definitions/v2/ModelRerouteReason"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "toModel": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fromModel",
+          "reason",
+          "threadId",
+          "toModel",
+          "turnId"
+        ],
+        "title": "ModelReroutedNotification",
+        "type": "object"
+      },
       "NetworkAccess": {
         "enum": [
           "restricted",
@@ -12964,6 +13319,15 @@
           "enterprise",
           "edu",
           "unknown"
+        ],
+        "type": "string"
+      },
+      "ProductSurface": {
+        "enum": [
+          "chatgpt",
+          "codex",
+          "api",
+          "atlas"
         ],
         "type": "string"
       },
@@ -14498,6 +14862,28 @@
       },
       "SkillsRemoteReadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "hazelnutScope": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/HazelnutScope"
+              }
+            ],
+            "default": "example"
+          },
+          "productSurface": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/ProductSurface"
+              }
+            ],
+            "default": "codex"
+          }
+        },
         "title": "SkillsRemoteReadParams",
         "type": "object"
       },
@@ -14522,14 +14908,10 @@
         "properties": {
           "hazelnutId": {
             "type": "string"
-          },
-          "isPreload": {
-            "type": "boolean"
           }
         },
         "required": [
-          "hazelnutId",
-          "isPreload"
+          "hazelnutId"
         ],
         "title": "SkillsRemoteWriteParams",
         "type": "object"
@@ -14540,16 +14922,12 @@
           "id": {
             "type": "string"
           },
-          "name": {
-            "type": "string"
-          },
           "path": {
             "type": "string"
           }
         },
         "required": [
           "id",
-          "name",
           "path"
         ],
         "title": "SkillsRemoteWriteResponse",
@@ -14790,6 +15168,19 @@
         "title": "ThreadArchiveResponse",
         "type": "object"
       },
+      "ThreadArchivedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadArchivedNotification",
+        "type": "object"
+      },
       "ThreadCompactStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -14959,6 +15350,17 @@
             "properties": {
               "id": {
                 "type": "string"
+              },
+              "phase": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/MessagePhase"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
               },
               "text": {
                 "type": "string"
@@ -15996,6 +16398,19 @@
           "thread"
         ],
         "title": "ThreadUnarchiveResponse",
+        "type": "object"
+      },
+      "ThreadUnarchivedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadUnarchivedNotification",
         "type": "object"
       },
       "TokenUsageBreakdown": {

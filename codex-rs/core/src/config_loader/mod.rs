@@ -688,7 +688,7 @@ async fn project_trust_context(
 ///
 /// This ensures that multiple config layers can be merged together correctly
 /// even if they were loaded from different directories.
-fn resolve_relative_paths_in_config_toml(
+pub(crate) fn resolve_relative_paths_in_config_toml(
     value_from_config_toml: TomlValue,
     base_dir: &Path,
 ) -> io::Result<TomlValue> {
