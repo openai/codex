@@ -1188,7 +1188,7 @@ fn escaped_pipes_render_in_table_cells() {
 }
 
 #[test]
-fn table_with_emoji_cells_uses_pipe_fallback_for_stable_alignment() {
+fn table_with_emoji_cells_renders_boxed_table() {
     let md = "| Task | State |\n|---|---|\n| Unit tests | ✅ |\n| Release notes | 📝 |\n";
     let text = crate::markdown_render::render_markdown_text_with_width(md, Some(80));
     let lines: Vec<String> = text
@@ -1197,12 +1197,12 @@ fn table_with_emoji_cells_uses_pipe_fallback_for_stable_alignment() {
         .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
         .collect();
     assert!(
-        lines.first().is_some_and(|line| line.starts_with('|')),
-        "expected pipe-table fallback for emoji content: {lines:?}"
+        lines.iter().any(|line| line.contains('┌')),
+        "expected boxed table for emoji content: {lines:?}"
     );
     assert!(
-        !lines.iter().any(|line| line.contains('┌')),
-        "did not expect box-drawing table for emoji content: {lines:?}"
+        !lines.iter().any(|line| line.starts_with("|:---")),
+        "did not expect pipe-delimiter fallback for emoji content: {lines:?}"
     );
 }
 

@@ -868,21 +868,6 @@ where
             Self::normalize_row(row, column_count);
         }
 
-        if Self::table_contains_width_unstable_symbols(&header, &rows) {
-            return RenderedTableLines {
-                table_lines: self.render_table_pipe_fallback(
-                    &header,
-                    &rows,
-                    &table_state.alignments,
-                ),
-                table_lines_prewrapped: false,
-                spillover_lines: spillover_rows
-                    .into_iter()
-                    .flat_map(|spillover| spillover.lines)
-                    .collect(),
-            };
-        }
-
         let available_width = self.available_table_width(column_count);
         let widths =
             self.compute_column_widths(&header, &rows, &table_state.alignments, available_width);
@@ -1279,35 +1264,6 @@ where
             wrapped.push(Line::default());
         }
         wrapped
-    }
-
-    fn table_contains_width_unstable_symbols(
-        header: &[TableCell],
-        rows: &[Vec<TableCell>],
-    ) -> bool {
-        header
-            .iter()
-            .any(Self::cell_contains_width_unstable_symbols)
-            || rows
-                .iter()
-                .flatten()
-                .any(Self::cell_contains_width_unstable_symbols)
-    }
-
-    fn cell_contains_width_unstable_symbols(cell: &TableCell) -> bool {
-        cell.lines
-            .iter()
-            .flat_map(|line| line.spans.iter())
-            .flat_map(|span| span.content.chars())
-            .any(Self::is_width_unstable_symbol)
-    }
-
-    /// Symbols that frequently render with platform-dependent width in
-    /// terminals (emoji and variation-selector sequences).
-    fn is_width_unstable_symbol(ch: char) -> bool {
-        matches!(ch, '\u{200D}' | '\u{20E3}' | '\u{FE0E}' | '\u{FE0F}')
-            || ('\u{2600}'..='\u{27BF}').contains(&ch)
-            || ('\u{1F300}'..='\u{1FAFF}').contains(&ch)
     }
 
     /// Detect rows that are artifacts of pulldown-cmark's lenient table parsing.
