@@ -1561,7 +1561,17 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
     )
     .await;
 
-    let compact_mock = responses::mount_compact_response_once(
+    let include_attempt_mock = responses::mount_compact_response_once(
+        harness.server(),
+        ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": {
+                "code": "context_length_exceeded",
+                "message": "Your input exceeds the context window of this model. Please adjust your input and try again."
+            }
+        })),
+    )
+    .await;
+    let fallback_attempt_mock = responses::mount_compact_response_once(
         harness.server(),
         ResponseTemplate::new(400).set_body_json(serde_json::json!({
             "error": {
@@ -1607,7 +1617,6 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
     .await;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    assert_eq!(compact_mock.requests().len(), 1);
     let requests = responses_mock.requests();
     assert_eq!(
         requests.len(),
@@ -1619,15 +1628,45 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
         "expected turn to stop after compaction failure"
     );
 
-    let include_attempt_request = compact_mock.single_request();
+    let mut compact_requests = include_attempt_mock.requests();
+    compact_requests.extend(fallback_attempt_mock.requests());
+    assert_eq!(
+        compact_requests.len(),
+        2,
+        "expected include-incoming and fallback compact attempts"
+    );
+    let include_attempt_request = compact_requests
+        .iter()
+        .find(|request| request.body_contains_text("USER_TWO"))
+        .cloned()
+        .expect("expected one compact attempt containing incoming user message");
+    let fallback_attempt_request = compact_requests
+        .iter()
+        .find(|request| !request.body_contains_text("USER_TWO"))
+        .cloned()
+        .expect("expected one fallback compact attempt excluding incoming user message");
+    assert!(
+        include_attempt_request.body_contains_text("USER_TWO"),
+        "include-incoming pre-turn remote compaction attempt should include incoming user message"
+    );
+    assert!(
+        !fallback_attempt_request.body_contains_text("USER_TWO"),
+        "fallback pre-turn remote compaction attempt should exclude incoming user message"
+    );
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_context_window_exceeded_shapes",
         format_labeled_requests_snapshot(
-            "Remote pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.",
-            &[(
-                "Remote Compaction Request (Incoming User Excluded)",
-                &include_attempt_request
-            ),]
+            "Remote pre-turn auto-compaction context-window failure: initial compaction includes incoming user content, fallback compaction excludes incoming user content, and the turn errors.",
+            &[
+                (
+                    "Remote Compaction Request (Incoming User Included)",
+                    &include_attempt_request
+                ),
+                (
+                    "Remote Compaction Request (Fallback Incoming User Excluded)",
+                    &fallback_attempt_request
+                ),
+            ]
         )
     );
     assert!(

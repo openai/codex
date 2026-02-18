@@ -5,7 +5,6 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
-use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ItemCompletedEvent;
@@ -3316,7 +3315,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     ]);
     let mut responses = vec![first_turn];
     responses.extend(
-        (0..6).map(|_| {
+        (0..12).map(|_| {
             sse_failed(
                 "compact-failed",
                 "context_length_exceeded",
@@ -3373,7 +3372,6 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
         requests.len() >= 2,
         "expected first turn and at least one compaction request"
     );
-
     insta::assert_snapshot!(
         "pre_turn_compaction_context_window_exceeded_shapes",
         format_labeled_requests_snapshot(

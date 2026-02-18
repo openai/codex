@@ -4718,9 +4718,7 @@ enum PreTurnCompactionOutcome {
     CompactedWithIncomingItems,
     /// Pre-turn compaction succeeded without incoming turn items
     /// (incoming user message should be appended after the compaction summary).
-    /// This compaction strategy is currently out of distribution for our compaction model,
-    /// but is planned to be trained on in the future.
-    #[cfg(test)]
+    /// This compaction strategy is currently out of distribution for our compaction model.
     CompactedWithoutIncomingItems,
 }
 
@@ -4752,10 +4750,6 @@ async fn persist_pre_turn_items_for_compaction_outcome(
             sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), input, response_item)
                 .await;
         }
-        // TODO(ccunningham): Followup PR will use compacting excluding incoming items as a fallback
-        // (even though it is out of distribution for current models).
-        // Also future models may prefer compacting pre-turn history without incoming turn items.
-        #[cfg(test)]
         PreTurnCompactionOutcome::CompactedWithoutIncomingItems => {
             // Reseed canonical initial context above the incoming user message.
             let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
@@ -4769,7 +4763,10 @@ async fn persist_pre_turn_items_for_compaction_outcome(
     }
 }
 
-/// Runs pre-turn auto-compaction with incoming turn context + user message included.
+/// Runs pre-turn auto-compaction with incoming turn context + user message included first.
+///
+/// If the include-incoming compaction attempt fails with `ContextWindowExceeded`, this function
+/// retries once with a history-only compaction strategy that excludes incoming turn items.
 ///
 /// On failure this function emits any user-visible error event itself and returns `Err(())` as a
 /// sentinel so callers can stop the turn without duplicating error messaging logic.
@@ -4802,43 +4799,125 @@ async fn run_pre_turn_auto_compaction_if_needed(
     )
     .await;
 
-    if let Err(err) = compact_result {
-        if !pre_turn_context_items.is_empty() {
-            // Preserve model-visible settings updates even when pre-turn compaction fails
-            // before we can persist turn input.
-            sess.record_conversation_items(turn_context, pre_turn_context_items)
-                .await;
+    match compact_result {
+        Ok(()) => {}
+        Err(CodexErr::ContextWindowExceeded) => {
+            let fallback_result = run_auto_compact(
+                sess,
+                turn_context,
+                AutoCompactCallsite::PreTurnExcludingIncomingUserMessage,
+                TurnContextReinjection::Skip,
+                None,
+            )
+            .await;
+            match fallback_result {
+                Ok(()) => {
+                    let has_user_turn_boundary_after_compaction = sess
+                        .clone_history()
+                        .await
+                        .raw_items()
+                        .iter()
+                        .any(crate::context_manager::is_user_turn_boundary);
+                    if !has_user_turn_boundary_after_compaction {
+                        if !pre_turn_context_items.is_empty() {
+                            // Preserve model-visible settings updates even when pre-turn
+                            // compaction cannot proceed before we can persist turn input.
+                            sess.record_conversation_items(turn_context, pre_turn_context_items)
+                                .await;
+                        }
+                        let message = format!(
+                            "Incoming user message and/or turn context is too large to fit in context window. Please reduce the size of your message and try again. (incoming_items_tokens_estimate={incoming_items_tokens_estimate})"
+                        );
+                        let event = EventMsg::Error(
+                            CodexErr::ContextWindowExceeded.to_error_event(Some(message)),
+                        );
+                        sess.send_event(turn_context, event).await;
+                        return Err(());
+                    }
+                    return Ok(PreTurnCompactionOutcome::CompactedWithoutIncomingItems);
+                }
+                Err(err) => {
+                    if !pre_turn_context_items.is_empty() {
+                        // Preserve model-visible settings updates even when pre-turn compaction
+                        // fails before we can persist turn input.
+                        sess.record_conversation_items(turn_context, pre_turn_context_items)
+                            .await;
+                    }
+                    if matches!(err, CodexErr::Interrupted) {
+                        return Err(());
+                    }
+                    let event = match err {
+                        CodexErr::ContextWindowExceeded => {
+                            error!(
+                                turn_id = %turn_context.sub_id,
+                                auto_compact_callsite = ?AutoCompactCallsite::PreTurnExcludingIncomingUserMessage,
+                                incoming_items_tokens_estimate,
+                                auto_compact_limit,
+                                reason = "pre-turn compaction exceeded context window after fallback",
+                                "incoming user/context is too large for pre-turn auto-compaction flow"
+                            );
+                            let message = format!(
+                                "Incoming user message and/or turn context is too large to fit in context window. Please reduce the size of your message and try again. (incoming_items_tokens_estimate={incoming_items_tokens_estimate})"
+                            );
+                            EventMsg::Error(
+                                CodexErr::ContextWindowExceeded.to_error_event(Some(message)),
+                            )
+                        }
+                        other => {
+                            let compact_error_prefix =
+                                if should_use_remote_compact_task(&turn_context.provider) {
+                                    "Error running remote compact task"
+                                } else {
+                                    "Error running local compact task"
+                                };
+                            EventMsg::Error(
+                                other.to_error_event(Some(compact_error_prefix.to_string())),
+                            )
+                        }
+                    };
+                    sess.send_event(turn_context, event).await;
+                    return Err(());
+                }
+            }
         }
-        if matches!(err, CodexErr::Interrupted) {
+        Err(err) => {
+            if !pre_turn_context_items.is_empty() {
+                // Preserve model-visible settings updates even when pre-turn compaction fails
+                // before we can persist turn input.
+                sess.record_conversation_items(turn_context, pre_turn_context_items)
+                    .await;
+            }
+            if matches!(err, CodexErr::Interrupted) {
+                return Err(());
+            }
+            let event = match err {
+                CodexErr::ContextWindowExceeded => {
+                    error!(
+                        turn_id = %turn_context.sub_id,
+                        auto_compact_callsite = ?AutoCompactCallsite::PreTurnIncludingIncomingUserMessage,
+                        incoming_items_tokens_estimate,
+                        auto_compact_limit,
+                        reason = "pre-turn compaction exceeded context window",
+                        "incoming user/context is too large for pre-turn auto-compaction flow"
+                    );
+                    let message = format!(
+                        "Incoming user message and/or turn context is too large to fit in context window. Please reduce the size of your message and try again. (incoming_items_tokens_estimate={incoming_items_tokens_estimate})"
+                    );
+                    EventMsg::Error(CodexErr::ContextWindowExceeded.to_error_event(Some(message)))
+                }
+                other => {
+                    let compact_error_prefix =
+                        if should_use_remote_compact_task(&turn_context.provider) {
+                            "Error running remote compact task"
+                        } else {
+                            "Error running local compact task"
+                        };
+                    EventMsg::Error(other.to_error_event(Some(compact_error_prefix.to_string())))
+                }
+            };
+            sess.send_event(turn_context, event).await;
             return Err(());
         }
-        let event = match err {
-            CodexErr::ContextWindowExceeded => {
-                error!(
-                    turn_id = %turn_context.sub_id,
-                    auto_compact_callsite = ?AutoCompactCallsite::PreTurnIncludingIncomingUserMessage,
-                    incoming_items_tokens_estimate,
-                    auto_compact_limit,
-                    reason = "pre-turn compaction exceeded context window",
-                    "incoming user/context is too large for pre-turn auto-compaction flow"
-                );
-                let message = format!(
-                    "Incoming user message and/or turn context is too large to fit in context window. Please reduce the size of your message and try again. (incoming_items_tokens_estimate={incoming_items_tokens_estimate})"
-                );
-                EventMsg::Error(CodexErr::ContextWindowExceeded.to_error_event(Some(message)))
-            }
-            other => {
-                let compact_error_prefix = if should_use_remote_compact_task(&turn_context.provider)
-                {
-                    "Error running remote compact task"
-                } else {
-                    "Error running local compact task"
-                };
-                EventMsg::Error(other.to_error_event(Some(compact_error_prefix.to_string())))
-            }
-        };
-        sess.send_event(turn_context, event).await;
-        return Err(());
     }
 
     // If compaction no-oped because there was no user-turn boundary even after including incoming

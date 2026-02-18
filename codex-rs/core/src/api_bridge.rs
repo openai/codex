@@ -55,6 +55,17 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                 }
 
                 if status == http::StatusCode::BAD_REQUEST {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body_text)
+                        && matches!(
+                            value
+                                .get("error")
+                                .and_then(|error| error.get("code"))
+                                .and_then(serde_json::Value::as_str),
+                            Some("context_length_exceeded")
+                        )
+                    {
+                        return CodexErr::ContextWindowExceeded;
+                    }
                     if body_text
                         .contains("The image data you provided does not represent a valid image")
                     {
@@ -128,6 +139,24 @@ mod tests {
     fn map_api_error_maps_server_overloaded() {
         let err = map_api_error(ApiError::ServerOverloaded);
         assert!(matches!(err, CodexErr::ServerOverloaded));
+    }
+
+    #[test]
+    fn map_api_error_maps_context_length_exceeded_from_400_body() {
+        let body = serde_json::json!({
+            "error": {
+                "code": "context_length_exceeded",
+                "message": "Your input exceeds the context window of this model."
+            }
+        })
+        .to_string();
+        let err = map_api_error(ApiError::Transport(TransportError::Http {
+            status: http::StatusCode::BAD_REQUEST,
+            url: Some("http://localhost/v1/responses/compact".to_string()),
+            headers: Some(HeaderMap::new()),
+            body: Some(body),
+        }));
+        assert!(matches!(err, CodexErr::ContextWindowExceeded));
     }
 
     #[test]
