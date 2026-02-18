@@ -381,6 +381,52 @@ pub struct AnalyticsConfig {
 pub enum AppDisabledReason {
     Unknown,
     User,
+    AdminPolicy,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum AppToolApproval {
+    Auto,
+    Prompt,
+    Approve,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct AppsDefaultConfig {
+    #[serde(default)]
+    pub disable_destructive: bool,
+    #[serde(default)]
+    pub disable_open_world: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct AppToolsDefaultConfig {
+    pub approval: Option<AppToolApproval>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct AppToolConfig {
+    pub enabled: Option<bool>,
+    pub disabled_reason: Option<AppDisabledReason>,
+    pub approval: Option<AppToolApproval>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct AppToolsConfig {
+    #[serde(default, rename = "_default")]
+    pub default: Option<AppToolsDefaultConfig>,
+    #[serde(default, flatten)]
+    pub tools: HashMap<String, AppToolConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -390,14 +436,18 @@ pub struct AppConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     pub disabled_reason: Option<AppDisabledReason>,
+    pub disable_destructive: Option<bool>,
+    pub disable_open_world: Option<bool>,
+    pub tools: Option<AppToolsConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct AppsConfig {
+    #[serde(default, rename = "_default")]
+    pub default: Option<AppsDefaultConfig>,
     #[serde(default, flatten)]
-    #[schemars(with = "HashMap<String, AppConfig>")]
     pub apps: HashMap<String, AppConfig>,
 }
 

@@ -846,11 +846,15 @@ personality = true
         assert_eq!(
             read.config.apps,
             Some(AppsConfig {
+                default: None,
                 apps: std::collections::HashMap::from([(
                     "app1".to_string(),
                     AppConfig {
                         enabled: false,
                         disabled_reason: Some(AppDisabledReason::User),
+                        disable_destructive: None,
+                        disable_open_world: None,
+                        tools: None,
                     },
                 )]),
             })

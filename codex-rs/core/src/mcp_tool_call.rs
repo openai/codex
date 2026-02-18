@@ -7,6 +7,8 @@ use crate::analytics_client::AppInvocation;
 use crate::analytics_client::build_track_events_context;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::config::types::AppToolApproval;
+use crate::connectors;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
@@ -64,9 +66,48 @@ pub(crate) async fn handle_mcp_tool_call(
         arguments: arguments_value.clone(),
     };
 
-    if let Some(decision) =
-        maybe_request_mcp_tool_approval(sess.as_ref(), turn_context, &call_id, &server, &tool_name)
-            .await
+    let metadata = lookup_mcp_tool_metadata(sess.as_ref(), &server, &tool_name).await;
+    let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
+        connectors::app_tool_policy(
+            &turn_context.config,
+            metadata
+                .as_ref()
+                .and_then(|metadata| metadata.connector_id.as_deref()),
+            &tool_name,
+            metadata
+                .as_ref()
+                .and_then(|metadata| metadata.annotations.as_ref()),
+        )
+    } else {
+        connectors::AppToolPolicy::default()
+    };
+
+    if server == CODEX_APPS_MCP_SERVER_NAME && !app_tool_policy.enabled {
+        let result = notify_mcp_tool_call_skip(
+            sess.as_ref(),
+            turn_context,
+            &call_id,
+            invocation,
+            "MCP tool call blocked by app configuration".to_string(),
+        )
+        .await;
+        let status = if result.is_ok() { "ok" } else { "error" };
+        turn_context
+            .otel_manager
+            .counter("codex.mcp.call", 1, &[("status", status)]);
+        return ResponseInputItem::McpToolCallOutput { call_id, result };
+    }
+
+    if let Some(decision) = maybe_request_mcp_tool_approval(
+        sess.as_ref(),
+        turn_context,
+        &call_id,
+        &server,
+        &tool_name,
+        metadata.as_ref(),
+        app_tool_policy.approval,
+    )
+    .await
     {
         let result = match decision {
             McpToolApprovalDecision::Accept | McpToolApprovalDecision::AcceptAndRemember => {
@@ -267,7 +308,7 @@ enum McpToolApprovalDecision {
 }
 
 struct McpToolApprovalMetadata {
-    annotations: ToolAnnotations,
+    annotations: Option<ToolAnnotations>,
     connector_id: Option<String>,
     connector_name: Option<String>,
     tool_title: Option<String>,
@@ -292,26 +333,36 @@ async fn maybe_request_mcp_tool_approval(
     call_id: &str,
     server: &str,
     tool_name: &str,
+    metadata: Option<&McpToolApprovalMetadata>,
+    approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
-    if is_full_access_mode(turn_context) {
-        return None;
-    }
     if server != CODEX_APPS_MCP_SERVER_NAME {
         return None;
     }
-
-    let metadata = lookup_mcp_tool_metadata(sess, server, tool_name).await?;
-    if !requires_mcp_tool_approval(&metadata.annotations) {
+    if approval_mode == AppToolApproval::Approve {
         return None;
     }
-    let approval_key = metadata
-        .connector_id
-        .as_deref()
-        .map(|connector_id| McpToolApprovalKey {
-            server: server.to_string(),
-            connector_id: connector_id.to_string(),
-            tool_name: tool_name.to_string(),
-        });
+    let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
+    if approval_mode == AppToolApproval::Auto {
+        if is_full_access_mode(turn_context) {
+            return None;
+        }
+        if !annotations.is_some_and(requires_mcp_tool_approval) {
+            return None;
+        }
+    }
+
+    let approval_key = if approval_mode == AppToolApproval::Auto {
+        metadata
+            .and_then(|metadata| metadata.connector_id.as_deref())
+            .map(|connector_id| McpToolApprovalKey {
+                server: server.to_string(),
+                connector_id: connector_id.to_string(),
+                tool_name: tool_name.to_string(),
+            })
+    } else {
+        None
+    };
     if let Some(key) = approval_key.as_ref()
         && mcp_tool_approval_is_remembered(sess, key).await
     {
@@ -322,10 +373,10 @@ async fn maybe_request_mcp_tool_approval(
     let question = build_mcp_tool_approval_question(
         question_id.clone(),
         tool_name,
-        metadata.tool_title.as_deref(),
-        metadata.connector_name.as_deref(),
-        &metadata.annotations,
-        approval_key.is_some(),
+        metadata.and_then(|metadata| metadata.tool_title.as_deref()),
+        metadata.and_then(|metadata| metadata.connector_name.as_deref()),
+        annotations,
+        approval_mode == AppToolApproval::Auto && approval_key.is_some(),
     );
     let args = RequestUserInputArgs {
         questions: vec![question],
@@ -333,8 +384,12 @@ async fn maybe_request_mcp_tool_approval(
     let response = sess
         .request_user_input(turn_context, call_id.to_string(), args)
         .await;
-    let decision = parse_mcp_tool_approval_response(response, &question_id);
-    if matches!(decision, McpToolApprovalDecision::AcceptAndRemember)
+    let decision = normalize_approval_decision_for_mode(
+        parse_mcp_tool_approval_response(response, &question_id),
+        approval_mode,
+    );
+    if approval_mode == AppToolApproval::Auto
+        && matches!(decision, McpToolApprovalDecision::AcceptAndRemember)
         && let Some(key) = approval_key
     {
         remember_mcp_tool_approval(sess, key).await;
@@ -365,15 +420,12 @@ async fn lookup_mcp_tool_metadata(
 
     tools.into_values().find_map(|tool_info| {
         if tool_info.server_name == server && tool_info.tool_name == tool_name {
-            tool_info
-                .tool
-                .annotations
-                .map(|annotations| McpToolApprovalMetadata {
-                    annotations,
-                    connector_id: tool_info.connector_id,
-                    connector_name: tool_info.connector_name,
-                    tool_title: tool_info.tool.title,
-                })
+            Some(McpToolApprovalMetadata {
+                annotations: tool_info.tool.annotations,
+                connector_id: tool_info.connector_id,
+                connector_name: tool_info.connector_name,
+                tool_title: tool_info.tool.title,
+            })
         } else {
             None
         }
@@ -410,11 +462,12 @@ fn build_mcp_tool_approval_question(
     tool_name: &str,
     tool_title: Option<&str>,
     connector_name: Option<&str>,
-    annotations: &ToolAnnotations,
+    annotations: Option<&ToolAnnotations>,
     allow_remember_option: bool,
 ) -> RequestUserInputQuestion {
-    let destructive = annotations.destructive_hint == Some(true);
-    let open_world = annotations.open_world_hint == Some(true);
+    let destructive =
+        annotations.and_then(|annotations| annotations.destructive_hint) == Some(true);
+    let open_world = annotations.and_then(|annotations| annotations.open_world_hint) == Some(true);
     let reason = match (destructive, open_world) {
         (true, true) => "may modify data and access external systems",
         (true, false) => "may modify or delete data",
@@ -495,6 +548,19 @@ fn parse_mcp_tool_approval_response(
     }
 }
 
+fn normalize_approval_decision_for_mode(
+    decision: McpToolApprovalDecision,
+    approval_mode: AppToolApproval,
+) -> McpToolApprovalDecision {
+    if approval_mode == AppToolApproval::Prompt
+        && decision == McpToolApprovalDecision::AcceptAndRemember
+    {
+        McpToolApprovalDecision::Accept
+    } else {
+        decision
+    }
+}
+
 async fn mcp_tool_approval_is_remembered(sess: &Session, key: &McpToolApprovalKey) -> bool {
     let store = sess.services.tool_approvals.lock().await;
     matches!(store.get(key), Some(ReviewDecision::ApprovedForSession))
@@ -568,6 +634,17 @@ mod tests {
     fn approval_not_required_when_read_only_true() {
         let annotations = annotations(Some(true), Some(true), Some(true));
         assert_eq!(requires_mcp_tool_approval(&annotations), false);
+    }
+
+    #[test]
+    fn prompt_mode_does_not_allow_session_remember() {
+        assert_eq!(
+            normalize_approval_decision_for_mode(
+                McpToolApprovalDecision::AcceptAndRemember,
+                AppToolApproval::Prompt,
+            ),
+            McpToolApprovalDecision::Accept
+        );
     }
 
     #[test]

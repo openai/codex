@@ -430,6 +430,7 @@ impl From<MemoriesToml> for MemoriesConfig {
 pub enum AppDisabledReason {
     Unknown,
     User,
+    AdminPolicy,
 }
 
 impl fmt::Display for AppDisabledReason {
@@ -437,8 +438,70 @@ impl fmt::Display for AppDisabledReason {
         match self {
             AppDisabledReason::Unknown => write!(f, "unknown"),
             AppDisabledReason::User => write!(f, "user"),
+            AppDisabledReason::AdminPolicy => write!(f, "admin_policy"),
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AppToolApproval {
+    #[default]
+    Auto,
+    Prompt,
+    Approve,
+}
+
+/// Default settings that apply to all apps.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppsDefaultConfig {
+    /// Disable tools with `destructive_hint = true` by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_destructive: bool,
+
+    /// Disable tools with `open_world_hint = true` by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_open_world: bool,
+}
+
+/// Default settings that apply to all tools within a single app.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppToolsDefaultConfig {
+    /// Approval mode for tools in this app unless a tool override exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<AppToolApproval>,
+}
+
+/// Per-tool settings for a single app tool.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppToolConfig {
+    /// Whether this tool is enabled. `Some(true)` explicitly allows this tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+
+    /// Reason this tool was disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<AppDisabledReason>,
+
+    /// Approval mode for this tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<AppToolApproval>,
+}
+
+/// Tool settings for a single app.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppToolsConfig {
+    /// Defaults for all tools in this app.
+    #[serde(default, rename = "_default", skip_serializing_if = "Option::is_none")]
+    pub default: Option<AppToolsDefaultConfig>,
+
+    /// Per-tool overrides keyed by tool name (for example `repos/list`).
+    #[serde(default, flatten)]
+    pub tools: HashMap<String, AppToolConfig>,
 }
 
 /// Config values for a single app/connector.
@@ -452,12 +515,28 @@ pub struct AppConfig {
     /// Reason this app was disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<AppDisabledReason>,
+
+    /// Disable tools with `destructive_hint = true` for this app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_destructive: Option<bool>,
+
+    /// Disable tools with `open_world_hint = true` for this app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_open_world: Option<bool>,
+
+    /// Per-tool settings for this app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<AppToolsConfig>,
 }
 
 /// App/connector settings loaded from `config.toml`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AppsConfigToml {
+    /// Default settings for all apps.
+    #[serde(default, rename = "_default", skip_serializing_if = "Option::is_none")]
+    pub default: Option<AppsDefaultConfig>,
+
     /// Per-app settings keyed by app ID (for example `[apps.google_drive]`).
     #[serde(default, flatten)]
     pub apps: HashMap<String, AppConfig>,

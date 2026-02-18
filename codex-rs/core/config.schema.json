@@ -79,6 +79,14 @@
       "additionalProperties": false,
       "description": "Config values for a single app/connector.",
       "properties": {
+        "disable_destructive": {
+          "description": "Disable tools with `destructive_hint = true` for this app.",
+          "type": "boolean"
+        },
+        "disable_open_world": {
+          "description": "Disable tools with `open_world_hint = true` for this app.",
+          "type": "boolean"
+        },
         "disabled_reason": {
           "allOf": [
             {
@@ -91,6 +99,14 @@
           "default": true,
           "description": "When `false`, Codex does not surface this app.",
           "type": "boolean"
+        },
+        "tools": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolsConfig"
+            }
+          ],
+          "description": "Per-tool settings for this app."
         }
       },
       "type": "object"
@@ -98,15 +114,108 @@
     "AppDisabledReason": {
       "enum": [
         "unknown",
-        "user"
+        "user",
+        "admin_policy"
       ],
       "type": "string"
+    },
+    "AppToolApproval": {
+      "enum": [
+        "auto",
+        "prompt",
+        "approve"
+      ],
+      "type": "string"
+    },
+    "AppToolConfig": {
+      "additionalProperties": false,
+      "description": "Per-tool settings for a single app tool.",
+      "properties": {
+        "approval": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "description": "Approval mode for this tool."
+        },
+        "disabled_reason": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppDisabledReason"
+            }
+          ],
+          "description": "Reason this tool was disabled."
+        },
+        "enabled": {
+          "description": "Whether this tool is enabled. `Some(true)` explicitly allows this tool.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AppToolsConfig": {
+      "additionalProperties": {
+        "$ref": "#/definitions/AppToolConfig"
+      },
+      "description": "Tool settings for a single app.",
+      "properties": {
+        "_default": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolsDefaultConfig"
+            }
+          ],
+          "description": "Defaults for all tools in this app."
+        }
+      },
+      "type": "object"
+    },
+    "AppToolsDefaultConfig": {
+      "additionalProperties": false,
+      "description": "Default settings that apply to all tools within a single app.",
+      "properties": {
+        "approval": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "description": "Approval mode for tools in this app unless a tool override exists."
+        }
+      },
+      "type": "object"
     },
     "AppsConfigToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AppConfig"
       },
       "description": "App/connector settings loaded from `config.toml`.",
+      "properties": {
+        "_default": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppsDefaultConfig"
+            }
+          ],
+          "description": "Default settings for all apps."
+        }
+      },
+      "type": "object"
+    },
+    "AppsDefaultConfig": {
+      "additionalProperties": false,
+      "description": "Default settings that apply to all apps.",
+      "properties": {
+        "disable_destructive": {
+          "description": "Disable tools with `destructive_hint = true` by default.",
+          "type": "boolean"
+        },
+        "disable_open_world": {
+          "description": "Disable tools with `open_world_hint = true` by default.",
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "AskForApproval": {
