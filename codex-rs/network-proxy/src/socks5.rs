@@ -495,7 +495,7 @@ mod tests {
     use crate::config::NetworkMode;
     use crate::config::NetworkProxyConfig;
     use crate::config::NetworkProxySettings;
-    use crate::network_policy::test_support::BLOCK_DECISION_EVENT_NAME;
+    use crate::network_policy::test_support::POLICY_DECISION_EVENT_NAME;
     use crate::network_policy::test_support::capture_events;
     use crate::network_policy::test_support::find_event_by_name;
     use crate::runtime::ConfigReloader;
@@ -559,8 +559,8 @@ mod tests {
         .await;
         assert!(result.is_err(), "proxy-disabled request should be denied");
 
-        let event = find_event_by_name(&events, BLOCK_DECISION_EVENT_NAME)
-            .expect("expected block decision event");
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision event");
         assert_eq!(event.field("network.policy.scope"), Some("non_domain"));
         assert_eq!(event.field("network.policy.decision"), Some("deny"));
         assert_eq!(event.field("network.policy.source"), Some("proxy_state"));
@@ -596,8 +596,8 @@ mod tests {
             capture_events(|| async { inspect_socks5_udp(request, state, None).await }).await;
         assert!(result.is_err(), "limited-mode UDP request should be denied");
 
-        let event = find_event_by_name(&events, BLOCK_DECISION_EVENT_NAME)
-            .expect("expected block decision event");
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision event");
         assert_eq!(event.field("network.policy.scope"), Some("non_domain"));
         assert_eq!(event.field("network.policy.decision"), Some("deny"));
         assert_eq!(event.field("network.policy.source"), Some("mode_guard"));

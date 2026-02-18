@@ -10,8 +10,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 const AUDIT_TARGET: &str = "codex_otel.network_proxy";
-const DOMAIN_POLICY_DECISION_EVENT_NAME: &str = "codex.network_proxy.domain_policy_decision";
-const BLOCK_DECISION_EVENT_NAME: &str = "codex.network_proxy.block_decision";
+const POLICY_DECISION_EVENT_NAME: &str = "codex.network_proxy.policy_decision";
 const POLICY_SCOPE_DOMAIN: &str = "domain";
 const POLICY_SCOPE_NON_DOMAIN: &str = "non_domain";
 const POLICY_DECISION_ALLOW: &str = "allow";
@@ -185,12 +184,26 @@ pub(crate) fn emit_block_decision_audit_event(
     state: &NetworkProxyState,
     args: BlockDecisionAuditEventArgs<'_>,
 ) {
+    emit_non_domain_policy_decision_audit_event(state, args, POLICY_DECISION_DENY);
+}
+
+pub(crate) fn emit_allow_decision_audit_event(
+    state: &NetworkProxyState,
+    args: BlockDecisionAuditEventArgs<'_>,
+) {
+    emit_non_domain_policy_decision_audit_event(state, args, POLICY_DECISION_ALLOW);
+}
+
+fn emit_non_domain_policy_decision_audit_event(
+    state: &NetworkProxyState,
+    args: BlockDecisionAuditEventArgs<'_>,
+    decision: &'static str,
+) {
     emit_policy_audit_event(
         state,
         PolicyAuditEventArgs {
-            event_name: BLOCK_DECISION_EVENT_NAME,
             scope: POLICY_SCOPE_NON_DOMAIN,
-            decision: POLICY_DECISION_DENY,
+            decision,
             source: args.source.as_str(),
             reason: args.reason,
             protocol: args.protocol,
@@ -204,7 +217,6 @@ pub(crate) fn emit_block_decision_audit_event(
 }
 
 struct PolicyAuditEventArgs<'a> {
-    event_name: &'static str,
     scope: &'static str,
     decision: &'a str,
     source: &'a str,
@@ -222,7 +234,7 @@ fn emit_policy_audit_event(state: &NetworkProxyState, args: PolicyAuditEventArgs
     tracing::event!(
         target: AUDIT_TARGET,
         tracing::Level::INFO,
-        event.name = args.event_name,
+        event.name = POLICY_DECISION_EVENT_NAME,
         event.timestamp = %audit_timestamp(),
         conversation.id = metadata.conversation_id.as_deref(),
         app.version = metadata.app_version.as_deref(),
@@ -328,7 +340,6 @@ pub(crate) async fn evaluate_host_policy(
     emit_policy_audit_event(
         state,
         PolicyAuditEventArgs {
-            event_name: DOMAIN_POLICY_DECISION_EVENT_NAME,
             scope: POLICY_SCOPE_DOMAIN,
             decision: policy_decision,
             source: source.as_str(),
@@ -360,7 +371,7 @@ fn map_decider_decision(decision: NetworkDecision) -> NetworkDecision {
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    pub(crate) const BLOCK_DECISION_EVENT_NAME: &str = super::BLOCK_DECISION_EVENT_NAME;
+    pub(crate) const POLICY_DECISION_EVENT_NAME: &str = super::POLICY_DECISION_EVENT_NAME;
 
     use std::collections::BTreeMap;
     use std::fmt;
@@ -537,6 +548,10 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
+    const LEGACY_DOMAIN_POLICY_DECISION_EVENT_NAME: &str =
+        "codex.network_proxy.domain_policy_decision";
+    const LEGACY_BLOCK_DECISION_EVENT_NAME: &str = "codex.network_proxy.block_decision";
+
     #[derive(Clone)]
     struct StaticReloader {
         state: ConfigState,
@@ -623,8 +638,8 @@ mod tests {
         assert_eq!(decision, NetworkDecision::Allow);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-        let event = find_event_by_name(&events, DOMAIN_POLICY_DECISION_EVENT_NAME)
-            .expect("expected domain policy decision audit event");
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision audit event");
         assert_eq!(event.target, AUDIT_TARGET);
         assert!(event.target.starts_with("codex_otel."));
         assert_eq!(
@@ -647,6 +662,14 @@ mod tests {
             .field("event.timestamp")
             .expect("event timestamp should be present");
         assert!(is_rfc3339_utc_millis(timestamp));
+        assert_eq!(
+            find_event_by_name(&events, LEGACY_DOMAIN_POLICY_DECISION_EVENT_NAME),
+            None
+        );
+        assert_eq!(
+            find_event_by_name(&events, LEGACY_BLOCK_DECISION_EVENT_NAME),
+            None
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -680,8 +703,8 @@ mod tests {
             }
         );
 
-        let event = find_event_by_name(&events, DOMAIN_POLICY_DECISION_EVENT_NAME)
-            .expect("expected domain policy decision audit event");
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision audit event");
         assert_eq!(event.field("network.policy.decision"), Some("deny"));
         assert_eq!(
             event.field("network.policy.source"),
@@ -724,8 +747,8 @@ mod tests {
             }
         );
 
-        let event = find_event_by_name(&events, DOMAIN_POLICY_DECISION_EVENT_NAME)
-            .expect("expected domain policy decision audit event");
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision audit event");
         assert_eq!(event.field("network.policy.decision"), Some("ask"));
         assert_eq!(event.field("network.policy.source"), Some("decider"));
         assert_eq!(
@@ -759,8 +782,8 @@ mod tests {
         })
         .await;
 
-        let event = find_event_by_name(&events, DOMAIN_POLICY_DECISION_EVENT_NAME)
-            .expect("expected domain policy decision audit event");
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision audit event");
         assert_eq!(event.field("conversation.id"), Some("conversation-1"));
         assert_eq!(event.field("app.version"), Some("1.2.3"));
         assert_eq!(event.field("user.account_id"), Some("acct-1"));

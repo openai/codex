@@ -134,12 +134,12 @@ the decider can auto-allow network requests originating from that command.
 When `codex-network-proxy` is embedded in managed Codex runtime, policy decisions emit structured
 OTEL-compatible events with `target=codex_otel.network_proxy`.
 
-Event names:
+Event name:
 
-- `codex.network_proxy.domain_policy_decision`
-  - emitted once for each domain-policy evaluation (`evaluate_host_policy`).
-- `codex.network_proxy.block_decision`
-  - emitted for non-domain denies (mode-guard and proxy-state checks, including unix-socket guard paths).
+- `codex.network_proxy.policy_decision`
+  - emitted for each policy decision (`domain` and `non_domain`).
+  - `network.policy.scope = "domain"` for host-policy evaluations (`evaluate_host_policy`).
+  - `network.policy.scope = "non_domain"` for mode-guard/proxy-state checks (including unix-socket guard paths and unix-socket allow decisions).
 
 Common fields:
 

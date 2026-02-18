@@ -8,6 +8,7 @@ use crate::network_policy::NetworkPolicyDecision;
 use crate::network_policy::NetworkPolicyRequest;
 use crate::network_policy::NetworkPolicyRequestArgs;
 use crate::network_policy::NetworkProtocol;
+use crate::network_policy::emit_allow_decision_audit_event;
 use crate::network_policy::emit_block_decision_audit_event;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
@@ -480,6 +481,18 @@ async fn http_plain_proxy(
 
         return match app_state.is_unix_socket_allowed(&socket_path).await {
             Ok(true) => {
+                emit_http_allow_decision_audit_event(
+                    &app_state,
+                    BlockDecisionAuditEventArgs {
+                        source: NetworkDecisionSource::ProxyState,
+                        reason: "allow",
+                        protocol: NetworkProtocol::Http,
+                        server_address: "unix-socket",
+                        server_port: 0,
+                        method: Some(req.method().as_str()),
+                        client_addr: client.as_deref(),
+                    },
+                );
                 let client = client.as_deref().unwrap_or_default();
                 info!("unix socket allowed (client={client}, path={socket_path})");
                 match proxy_via_unix_socket(req, &socket_path).await {
@@ -861,6 +874,11 @@ fn emit_http_block_decision_audit_event(
     emit_block_decision_audit_event(app_state, args);
 }
 
+    args: BlockDecisionAuditEventArgs<'_>,
+) {
+    emit_allow_decision_audit_event(app_state, args);
+}
+
 #[derive(Serialize)]
 struct BlockedResponse<'a> {
     status: &'static str,
@@ -884,7 +902,7 @@ mod tests {
 
     use crate::config::NetworkMode;
     use crate::config::NetworkProxySettings;
-    use crate::network_policy::test_support::BLOCK_DECISION_EVENT_NAME;
+    use crate::network_policy::test_support::POLICY_DECISION_EVENT_NAME;
     use crate::network_policy::test_support::capture_events;
     use crate::network_policy::test_support::find_event_by_name;
     use crate::reasons::REASON_NOT_ALLOWED;
@@ -994,8 +1012,8 @@ mod tests {
             "blocked-by-method-policy"
         );
 
-        let event = find_event_by_name(&events, BLOCK_DECISION_EVENT_NAME)
-            .expect("expected block decision event");
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision event");
         assert_eq!(event.field("network.policy.scope"), Some("non_domain"));
         assert_eq!(event.field("network.policy.source"), Some("mode_guard"));
         assert_eq!(
@@ -1024,8 +1042,8 @@ mod tests {
         let (response, events) =
             capture_events(|| async { http_plain_proxy(None, req).await.unwrap() }).await;
 
-        let event = find_event_by_name(&events, BLOCK_DECISION_EVENT_NAME)
-            .expect("expected block decision event");
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision event");
         assert_eq!(event.field("network.policy.scope"), Some("non_domain"));
         assert_eq!(event.field("network.policy.source"), Some("proxy_state"));
         assert_eq!(event.field("server.address"), Some("unix-socket"));
@@ -1044,6 +1062,37 @@ mod tests {
                 Some(REASON_UNIX_SOCKET_UNSUPPORTED)
             );
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn http_plain_proxy_emits_policy_decision_for_unix_socket_allow() {
+        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
+            allow_unix_sockets: vec!["/tmp/test.sock".to_string()],
+            ..NetworkProxySettings::default()
+        }));
+
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com")
+            .header("x-unix-socket", "/tmp/test.sock")
+            .body(Body::empty())
+            .expect("request should build");
+        req.extensions_mut().insert(state);
+
+        let (response, events) =
+            capture_events(|| async { http_plain_proxy(None, req).await.unwrap() }).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision event");
+        assert_eq!(event.field("network.policy.scope"), Some("non_domain"));
+        assert_eq!(event.field("network.policy.decision"), Some("allow"));
+        assert_eq!(event.field("network.policy.source"), Some("proxy_state"));
+        assert_eq!(event.field("network.policy.reason"), Some("allow"));
+        assert_eq!(event.field("server.address"), Some("unix-socket"));
+        assert_eq!(event.field("server.port"), Some("0"));
+        assert_eq!(event.field("http.request.method"), Some("GET"));
     }
 
     #[test]
