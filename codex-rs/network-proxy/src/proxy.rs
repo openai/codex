@@ -1,7 +1,6 @@
 use crate::admin;
 use crate::config;
 use crate::http_proxy;
-use crate::metadata::proxy_username_for_attempt_id;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::runtime::BlockedRequestObserver;
 use crate::runtime::unix_socket_permissions_supported;
@@ -338,12 +337,8 @@ fn apply_proxy_env_overrides(
     socks_addr: SocketAddr,
     socks_enabled: bool,
     allow_local_binding: bool,
-    network_attempt_id: Option<&str>,
 ) {
-    let http_proxy_url = network_attempt_id
-        .map(proxy_username_for_attempt_id)
-        .map(|username| format!("http://{username}@{http_addr}"))
-        .unwrap_or_else(|| format!("http://{http_addr}"));
+    let http_proxy_url = format!("http://{http_addr}");
     let socks_proxy_url = format!("socks5h://{socks_addr}");
     env.insert(
         ALLOW_LOCAL_BINDING_ENV_KEY.to_string(),
@@ -390,9 +385,7 @@ fn apply_proxy_env_overrides(
     // Keep HTTP_PROXY/HTTPS_PROXY as HTTP endpoints. A lot of clients break if
     // those vars contain SOCKS URLs. We only switch ALL_PROXY here.
     //
-    // For attempt-scoped runs, point ALL_PROXY at the HTTP proxy URL so the
-    // attempt metadata survives in proxy credentials for correlation.
-    if socks_enabled && network_attempt_id.is_none() {
+    if socks_enabled {
         set_env_keys(env, ALL_PROXY_ENV_KEYS, &socks_proxy_url);
         set_env_keys(env, FTP_PROXY_ENV_KEYS, &socks_proxy_url);
     } else {
@@ -427,14 +420,6 @@ impl NetworkProxy {
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
-        self.apply_to_env_for_attempt(env, None);
-    }
-
-    pub fn apply_to_env_for_attempt(
-        &self,
-        env: &mut HashMap<String, String>,
-        network_attempt_id: Option<&str>,
-    ) {
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
         apply_proxy_env_overrides(
@@ -443,7 +428,6 @@ impl NetworkProxy {
             self.socks_addr,
             self.socks_enabled,
             self.allow_local_binding,
-            network_attempt_id,
         );
     }
 
@@ -751,7 +735,6 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
-            None,
         );
 
         assert_eq!(
@@ -802,7 +785,6 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             false,
             true,
-            None,
         );
 
         assert_eq!(
@@ -813,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_proxy_env_overrides_embeds_attempt_id_in_http_proxy_url() {
+    fn apply_proxy_env_overrides_uses_plain_http_proxy_url() {
         let mut env = HashMap::new();
         apply_proxy_env_overrides(
             &mut env,
@@ -821,28 +803,27 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
-            Some("attempt-123"),
         );
 
         assert_eq!(
             env.get("HTTP_PROXY"),
-            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+            Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(
             env.get("HTTPS_PROXY"),
-            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+            Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(
             env.get("WS_PROXY"),
-            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+            Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(
             env.get("WSS_PROXY"),
-            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+            Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(
             env.get("ALL_PROXY"),
-            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+            Some(&"socks5h://127.0.0.1:8081".to_string())
         );
         #[cfg(target_os = "macos")]
         assert_eq!(
@@ -867,7 +848,6 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
-            None,
         );
 
         assert_eq!(

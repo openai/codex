@@ -75,8 +75,6 @@ pub struct BlockedRequest {
     pub mode: Option<NetworkMode>,
     pub protocol: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub attempt_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub decision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -92,7 +90,6 @@ pub struct BlockedRequestArgs {
     pub method: Option<String>,
     pub mode: Option<NetworkMode>,
     pub protocol: String,
-    pub attempt_id: Option<String>,
     pub decision: Option<String>,
     pub source: Option<String>,
     pub port: Option<u16>,
@@ -107,7 +104,6 @@ impl BlockedRequest {
             method,
             mode,
             protocol,
-            attempt_id,
             decision,
             source,
             port,
@@ -119,7 +115,6 @@ impl BlockedRequest {
             method,
             mode,
             protocol,
-            attempt_id,
             decision,
             source,
             port,
@@ -365,7 +360,6 @@ impl NetworkProxyState {
         let source = entry.source.clone();
         let protocol = entry.protocol.clone();
         let port = entry.port;
-        let attempt_id = entry.attempt_id.clone();
         guard.blocked.push_back(entry);
         guard.blocked_total = guard.blocked_total.saturating_add(1);
         let total = guard.blocked_total;
@@ -373,7 +367,7 @@ impl NetworkProxyState {
             guard.blocked.pop_front();
         }
         debug!(
-            "recorded blocked request telemetry (total={}, host={}, reason={}, decision={:?}, source={:?}, protocol={}, port={:?}, attempt_id={:?}, buffered={})",
+            "recorded blocked request telemetry (total={}, host={}, reason={}, decision={:?}, source={:?}, protocol={}, port={:?}, buffered={})",
             total,
             host,
             reason,
@@ -381,7 +375,6 @@ impl NetworkProxyState {
             source,
             protocol,
             port,
-            attempt_id,
             guard.blocked.len()
         );
         debug!("{violation_line}");
@@ -700,7 +693,6 @@ mod tests {
                 method: Some("GET".to_string()),
                 mode: None,
                 protocol: "http".to_string(),
-                attempt_id: None,
                 decision: Some("ask".to_string()),
                 source: Some("decider".to_string()),
                 port: Some(80),
@@ -741,7 +733,6 @@ mod tests {
                     method: Some("GET".to_string()),
                     mode: None,
                     protocol: "http".to_string(),
-                    attempt_id: None,
                     decision: Some("ask".to_string()),
                     source: Some("decider".to_string()),
                     port: Some(80),
@@ -764,7 +755,6 @@ mod tests {
             method: Some("GET".to_string()),
             mode: Some(NetworkMode::Full),
             protocol: "http".to_string(),
-            attempt_id: Some("attempt-1".to_string()),
             decision: Some("ask".to_string()),
             source: Some("decider".to_string()),
             port: Some(80),
@@ -773,7 +763,7 @@ mod tests {
 
         assert_eq!(
             blocked_request_violation_log_line(&entry),
-            r#"CODEX_NETWORK_POLICY_VIOLATION {"host":"google.com","reason":"not_allowed","client":"127.0.0.1","method":"GET","mode":"full","protocol":"http","attempt_id":"attempt-1","decision":"ask","source":"decider","port":80,"timestamp":1735689600}"#
+            r#"CODEX_NETWORK_POLICY_VIOLATION {"host":"google.com","reason":"not_allowed","client":"127.0.0.1","method":"GET","mode":"full","protocol":"http","decision":"ask","source":"decider","port":80,"timestamp":1735689600}"#
         );
     }
 

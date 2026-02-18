@@ -20,7 +20,6 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
-use crate::tools::network_approval::deferred_rejection_message;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
@@ -43,7 +42,6 @@ use crate::unified_exec::WARNING_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::spawn_exit_watcher;
-use crate::unified_exec::async_watcher::spawn_network_denial_watcher;
 use crate::unified_exec::async_watcher::start_streaming_output;
 use crate::unified_exec::clamp_yield_time;
 use crate::unified_exec::generate_chunk_id;
@@ -139,18 +137,18 @@ impl UnifiedExecProcessManager {
             store.remove(process_id)
         };
         if let Some(entry) = removed {
-            Self::unregister_network_attempt_for_entry(&entry).await;
+            Self::unregister_network_approval_for_entry(&entry).await;
         }
     }
 
-    async fn unregister_network_attempt_for_entry(entry: &ProcessEntry) {
-        if let Some(attempt_id) = entry.network_attempt_id.as_deref()
+    async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
+        if let Some(registration_id) = entry.network_approval_registration_id.as_deref()
             && let Some(session) = entry.session.upgrade()
         {
             session
                 .services
                 .network_approval
-                .unregister_attempt(attempt_id)
+                .unregister_call(registration_id)
                 .await;
         }
     }
@@ -247,17 +245,6 @@ impl UnifiedExecProcessManager {
             .await;
 
             self.release_process_id(&request.process_id).await;
-            if let Some(deferred) = deferred_network_approval.as_ref()
-                && let Some(message) =
-                    deferred_rejection_message(context.session.as_ref(), deferred).await
-            {
-                finish_deferred_network_approval(
-                    context.session.as_ref(),
-                    deferred_network_approval.take(),
-                )
-                .await;
-                return Err(UnifiedExecError::create_process(message));
-            }
             finish_deferred_network_approval(
                 context.session.as_ref(),
                 deferred_network_approval.take(),
@@ -265,27 +252,13 @@ impl UnifiedExecProcessManager {
             .await;
             process.check_for_sandbox_denial_with_text(&text).await?;
         } else {
-            if let Some(deferred) = deferred_network_approval.as_ref()
-                && let Some(message) =
-                    deferred_rejection_message(context.session.as_ref(), deferred).await
-            {
-                process.terminate();
-                finish_deferred_network_approval(
-                    context.session.as_ref(),
-                    deferred_network_approval.take(),
-                )
-                .await;
-                self.release_process_id(&request.process_id).await;
-                return Err(UnifiedExecError::create_process(message));
-            }
-
             // Long‑lived command: persist the process so write_stdin can reuse
             // it, and register a background watcher that will emit
             // ExecCommandEnd when the PTY eventually exits (even if no further
             // tool calls are made).
-            let network_attempt_id = deferred_network_approval
+            let network_approval_registration_id = deferred_network_approval
                 .as_ref()
-                .map(|deferred| deferred.attempt_id().to_string());
+                .map(|deferred| deferred.registration_id().to_string());
             self.store_process(
                 Arc::clone(&process),
                 context,
@@ -294,7 +267,7 @@ impl UnifiedExecProcessManager {
                 start,
                 process_id,
                 request.tty,
-                network_attempt_id,
+                network_approval_registration_id,
                 Arc::clone(&transcript),
             )
             .await;
@@ -440,7 +413,7 @@ impl UnifiedExecProcessManager {
             }
         };
         if let ProcessStatus::Exited { entry, .. } = &status {
-            Self::unregister_network_attempt_for_entry(entry).await;
+            Self::unregister_network_approval_for_entry(entry).await;
         }
         status
     }
@@ -499,17 +472,16 @@ impl UnifiedExecProcessManager {
         started_at: Instant,
         process_id: String,
         tty: bool,
-        network_attempt_id: Option<String>,
+        network_approval_registration_id: Option<String>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     ) {
-        let network_attempt_id_for_watcher = network_attempt_id.clone();
         let entry = ProcessEntry {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id: process_id.clone(),
             command: command.to_vec(),
             tty,
-            network_attempt_id,
+            network_approval_registration_id,
             session: Arc::downgrade(&context.session),
             last_used: started_at,
         };
@@ -522,7 +494,7 @@ impl UnifiedExecProcessManager {
         // prune_processes_if_needed runs while holding process_store; do async
         // network-approval cleanup only after dropping that lock.
         if let Some(pruned_entry) = pruned_entry {
-            Self::unregister_network_attempt_for_entry(&pruned_entry).await;
+            Self::unregister_network_approval_for_entry(&pruned_entry).await;
             pruned_entry.process.terminate();
         }
 
@@ -547,17 +519,6 @@ impl UnifiedExecProcessManager {
             transcript,
             started_at,
         );
-
-        if context.turn.config.managed_network_requirements_enabled()
-            && let Some(network_attempt_id) = network_attempt_id_for_watcher
-        {
-            spawn_network_denial_watcher(
-                Arc::clone(&process),
-                Arc::clone(&context.session),
-                process_id,
-                network_attempt_id,
-            );
-        }
     }
 
     pub(crate) async fn open_session_with_exec_env(
@@ -634,7 +595,6 @@ impl UnifiedExecProcessManager {
             turn: context.turn.as_ref(),
             call_id: context.call_id.clone(),
             tool_name: "exec_command".to_string(),
-            network_attempt_id: None,
         };
         orchestrator
             .run(
@@ -789,7 +749,7 @@ impl UnifiedExecProcessManager {
         };
 
         for entry in entries {
-            Self::unregister_network_attempt_for_entry(&entry).await;
+            Self::unregister_network_approval_for_entry(&entry).await;
             entry.process.terminate();
         }
     }

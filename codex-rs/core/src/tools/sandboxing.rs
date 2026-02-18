@@ -255,7 +255,6 @@ pub(crate) struct ToolCtx<'a> {
     pub turn: &'a TurnContext,
     pub call_id: String,
     pub tool_name: String,
-    pub network_attempt_id: Option<String>,
 }
 
 #[derive(Debug)]
