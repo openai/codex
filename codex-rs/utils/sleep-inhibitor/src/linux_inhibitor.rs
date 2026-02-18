@@ -1,4 +1,5 @@
 use crate::PlatformSleepInhibitor;
+use std::os::unix::process::CommandExt;
 use std::process::Child;
 use std::process::Command;
 use tracing::warn;
@@ -168,9 +169,10 @@ impl Drop for LinuxSleepInhibitor {
 }
 
 fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
-    match backend {
-        LinuxBackend::SystemdInhibit => Command::new("systemd-inhibit")
-            .args([
+    let mut command = match backend {
+        LinuxBackend::SystemdInhibit => {
+            let mut command = Command::new("systemd-inhibit");
+            command.args([
                 "--what=idle",
                 "--mode=block",
                 "--who",
@@ -180,19 +182,33 @@ fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
                 "--",
                 "sleep",
                 BLOCKER_SLEEP_SECONDS,
-            ])
-            .spawn(),
-        LinuxBackend::GnomeSessionInhibit => Command::new("gnome-session-inhibit")
-            .args([
+            ]);
+            command
+        }
+        LinuxBackend::GnomeSessionInhibit => {
+            let mut command = Command::new("gnome-session-inhibit");
+            command.args([
                 "--inhibit",
                 "idle",
                 "--reason",
                 ASSERTION_REASON,
                 "sleep",
                 BLOCKER_SLEEP_SECONDS,
-            ])
-            .spawn(),
+            ]);
+            command
+        }
+    };
+
+    unsafe {
+        command.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
     }
+
+    command.spawn()
 }
 
 fn child_exited(error: &std::io::Error) -> bool {
