@@ -1828,6 +1828,11 @@ impl Session {
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
+        self.services
+            .mcp_connection_manager
+            .read()
+            .await
+            .set_approval_policy(session_configuration.approval_policy.value());
 
         if sandbox_policy_changed {
             let sandbox_state = SandboxState {
