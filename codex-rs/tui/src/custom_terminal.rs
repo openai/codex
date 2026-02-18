@@ -63,8 +63,8 @@ fn display_width(s: &str) -> usize {
     let mut visible = String::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(ch) = chars.next() {
-        if ch == '\x1B' {
-            if chars.clone().next() == Some(']') {
+        if ch == '\x1B'
+            && chars.clone().next() == Some(']') {
                 // Consume the ']' and everything up to and including BEL.
                 chars.next(); // skip ']'
                 for c in chars.by_ref() {
@@ -74,7 +74,6 @@ fn display_width(s: &str) -> usize {
                 }
                 continue;
             }
-        }
         visible.push(ch);
     }
     visible.width()
