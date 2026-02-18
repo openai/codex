@@ -435,6 +435,17 @@ impl ReadOnlyAccess {
         matches!(self, ReadOnlyAccess::FullAccess)
     }
 
+    /// Returns true if platform defaults should be included for restricted read access.
+    pub fn include_platform_defaults(&self) -> bool {
+        matches!(
+            self,
+            ReadOnlyAccess::Restricted {
+                include_platform_defaults: true,
+                ..
+            }
+        )
+    }
+
     /// Returns the readable roots for restricted read access.
     ///
     /// For [`ReadOnlyAccess::FullAccess`], returns an empty list because
@@ -442,53 +453,12 @@ impl ReadOnlyAccess {
     pub fn get_readable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
         let mut roots: Vec<AbsolutePathBuf> = match self {
             ReadOnlyAccess::FullAccess => return Vec::new(),
-            ReadOnlyAccess::Restricted {
-                include_platform_defaults,
-                readable_roots,
-            } => {
+            ReadOnlyAccess::Restricted { readable_roots, .. } => {
                 let mut roots = readable_roots.clone();
-                if *include_platform_defaults {
-                    #[cfg(target_os = "macos")]
-                    for platform_path in [
-                        "/bin", "/dev", "/etc", "/Library", "/private", "/sbin", "/System", "/tmp",
-                        "/usr",
-                    ] {
-                        #[allow(clippy::expect_used)]
-                        roots.push(
-                            AbsolutePathBuf::from_absolute_path(platform_path)
-                                .expect("platform defaults should be absolute"),
-                        );
-                    }
-
-                    #[cfg(target_os = "linux")]
-                    for platform_path in ["/bin", "/dev", "/etc", "/lib", "/lib64", "/tmp", "/usr"]
-                    {
-                        #[allow(clippy::expect_used)]
-                        roots.push(
-                            AbsolutePathBuf::from_absolute_path(platform_path)
-                                .expect("platform defaults should be absolute"),
-                        );
-                    }
-
-                    #[cfg(target_os = "windows")]
-                    for platform_path in [
-                        r"C:\Windows",
-                        r"C:\Program Files",
-                        r"C:\Program Files (x86)",
-                        r"C:\ProgramData",
-                    ] {
-                        #[allow(clippy::expect_used)]
-                        roots.push(
-                            AbsolutePathBuf::from_absolute_path(platform_path)
-                                .expect("platform defaults should be absolute"),
-                        );
-                    }
-
-                    match AbsolutePathBuf::from_absolute_path(cwd) {
-                        Ok(cwd_root) => roots.push(cwd_root),
-                        Err(err) => {
-                            error!("Ignoring invalid cwd {cwd:?} for sandbox readable root: {err}");
-                        }
+                match AbsolutePathBuf::from_absolute_path(cwd) {
+                    Ok(cwd_root) => roots.push(cwd_root),
+                    Err(err) => {
+                        error!("Ignoring invalid cwd {cwd:?} for sandbox readable root: {err}");
                     }
                 }
                 roots
@@ -650,6 +620,20 @@ impl SandboxPolicy {
             SandboxPolicy::ExternalSandbox { network_access } => network_access.is_enabled(),
             SandboxPolicy::ReadOnly { .. } => false,
             SandboxPolicy::WorkspaceWrite { network_access, .. } => *network_access,
+        }
+    }
+
+    /// Returns true if platform defaults should be included for restricted read access.
+    pub fn include_platform_defaults(&self) -> bool {
+        if self.has_full_disk_read_access() {
+            return false;
+        }
+        match self {
+            SandboxPolicy::ReadOnly { access } => access.include_platform_defaults(),
+            SandboxPolicy::WorkspaceWrite {
+                read_only_access, ..
+            } => read_only_access.include_platform_defaults(),
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => false,
         }
     }
 

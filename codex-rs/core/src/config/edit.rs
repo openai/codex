@@ -56,12 +56,6 @@ pub enum ConfigEdit {
 }
 
 pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
-    if items.is_empty() {
-        return ConfigEdit::ClearPath {
-            segments: vec!["tui".to_string(), "status_line".to_string()],
-        };
-    }
-
     let mut array = toml_edit::Array::new();
     for item in items {
         array.push(item.clone());
