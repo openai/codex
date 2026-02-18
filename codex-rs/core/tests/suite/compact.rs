@@ -818,9 +818,14 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         let body = requests_payloads.clone()[i].body_json();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
         let input = normalize_inputs(input);
-        assert_eq!(input.len(), 2);
-        let user_message_received = input[0]["content"][0]["text"].as_str().unwrap();
-        let summary_message = input[1]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(input.len(), 3);
+        let environment_context = input[0]["content"][0]["text"].as_str().unwrap();
+        let user_message_received = input[1]["content"][0]["text"].as_str().unwrap();
+        let summary_message = input[2]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            environment_context.contains("<environment_context>"),
+            "compaction request at index {i} should retain canonical environment context"
+        );
         assert_eq!(user_message_received, user_message);
         assert_eq!(
             summary_message, expected_summary,
