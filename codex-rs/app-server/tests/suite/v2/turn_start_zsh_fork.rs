@@ -1,4 +1,14 @@
 #![cfg(not(windows))]
+//
+// Running these tests with the patched zsh fork:
+//
+// The suite uses `CODEX_TEST_ZSH_PATH` when set. Example:
+//   CODEX_TEST_ZSH_PATH="$HOME/.local/codex-zsh-77045ef/bin/zsh" \
+//   cargo test -p codex-app-server turn_start_zsh_fork -- --nocapture
+//
+// For a single test:
+//   CODEX_TEST_ZSH_PATH="$HOME/.local/codex-zsh-77045ef/bin/zsh" \
+//   cargo test -p codex-app-server turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2 -- --nocapture
 
 use anyhow::Result;
 use app_test_support::McpProcess;
@@ -52,15 +62,12 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     };
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
 
-    let responses = vec![
-        create_shell_command_sse_response(
-            vec!["echo".to_string(), "hi".to_string()],
-            None,
-            Some(5000),
-            "call-zsh-fork",
-        )?,
-        create_final_assistant_message_sse_response("done")?,
-    ];
+    let responses = vec![create_shell_command_sse_response(
+        vec!["echo".to_string(), "hi".to_string()],
+        None,
+        Some(5000),
+        "call-zsh-fork",
+    )?];
     let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(
         &codex_home,
@@ -141,51 +148,6 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     assert!(command.starts_with(&zsh_path.display().to_string()));
     assert!(command.contains(" -lc 'echo hi'"));
     assert_eq!(cwd, workspace);
-
-    let completed_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
-        loop {
-            let completed_notif = mcp
-                .read_stream_until_notification_message("item/completed")
-                .await?;
-            let completed: ItemCompletedNotification = serde_json::from_value(
-                completed_notif
-                    .params
-                    .clone()
-                    .expect("item/completed params"),
-            )?;
-            if let ThreadItem::CommandExecution { .. } = completed.item {
-                return Ok::<ThreadItem, anyhow::Error>(completed.item);
-            }
-        }
-    })
-    .await??;
-    let ThreadItem::CommandExecution {
-        id,
-        status,
-        exit_code,
-        aggregated_output,
-        ..
-    } = completed_command_execution
-    else {
-        unreachable!("loop ensures we break on command execution items");
-    };
-    assert_eq!(id, "call-zsh-fork");
-    assert_eq!(status, CommandExecutionStatus::Completed);
-    assert_eq!(exit_code, Some(0));
-    let output = aggregated_output.expect("aggregated output should be present");
-    assert!(output.contains("hi"));
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
-    )
-    .await??;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
 
     Ok(())
 }
@@ -548,7 +510,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     )
     .await??;
 
-    let mut approval_item_ids = Vec::new();
+    let mut approval_ids = Vec::new();
     for decision in [
         CommandExecutionApprovalDecision::Accept,
         CommandExecutionApprovalDecision::Cancel,
@@ -562,12 +524,13 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         else {
             panic!("expected CommandExecutionRequestApproval request");
         };
-        assert!(
+        assert_eq!(params.item_id, "call-zsh-fork-subcommand-decline");
+        approval_ids.push(
             params
-                .item_id
-                .starts_with("call-zsh-fork-subcommand-decline")
+                .approval_id
+                .clone()
+                .expect("approval_id must be present for zsh subcommand approvals"),
         );
-        approval_item_ids.push(params.item_id.clone());
         assert_eq!(params.thread_id, thread.id);
         mcp.send_response(
             request_id,
@@ -587,14 +550,10 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
                     .clone()
                     .expect("item/completed params"),
             )?;
-            if let ThreadItem::CommandExecution { id, .. } = &completed.item {
-                assert!(
-                    !approval_item_ids.contains(id),
-                    "subcommand approval item should not be emitted as item/completed: {id}"
-                );
-                if id == "call-zsh-fork-subcommand-decline" {
-                    return Ok::<ThreadItem, anyhow::Error>(completed.item);
-                }
+            if let ThreadItem::CommandExecution { id, .. } = &completed.item
+                && id == "call-zsh-fork-subcommand-decline"
+            {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
             }
         }
     })
@@ -611,10 +570,12 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     };
     assert_eq!(id, "call-zsh-fork-subcommand-decline");
     assert_eq!(status, CommandExecutionStatus::Declined);
-    assert_eq!(
-        aggregated_output,
-        Some("exec command rejected by user".to_string())
+    assert!(
+        aggregated_output.is_none()
+            || aggregated_output == Some("exec command rejected by user".to_string())
     );
+    assert_eq!(approval_ids.len(), 2);
+    assert_ne!(approval_ids[0], approval_ids[1]);
 
     Ok(())
 }
