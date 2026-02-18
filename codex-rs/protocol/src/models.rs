@@ -255,6 +255,19 @@ impl DeveloperInstructions {
                     None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
                 }
             }
+            AskForApproval::Reject {
+                sandbox_approval,
+                rules,
+                mcp_elicitations,
+            } => {
+                format!(
+                    "Approval policy is `reject`.\n\
+                     - `sandbox_approval`: {sandbox_approval}\n\
+                     - `rules`: {rules}\n\
+                     - `mcp_elicitations`: {mcp_elicitations}\n\
+                     When a category is `true`, requests in that category are auto-rejected instead of prompting the user."
+                )
+            }
         };
 
         DeveloperInstructions::new(text)

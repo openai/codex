@@ -10,6 +10,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
@@ -529,6 +530,77 @@ impl From<V1TextElement> for CoreTextElement {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum AskForApprovalProtocolV1 {
+    /// Under this policy, only "known safe" commands—those matching
+    /// `is_safe_command()` and performing read-only file operations—are
+    /// auto-approved. Everything else will ask the user to approve.
+    #[serde(rename = "untrusted")]
+    UnlessTrusted,
+
+    /// DEPRECATED: *All* commands are auto-approved, but they are expected to
+    /// run inside a sandbox where network access is disabled and writes are
+    /// confined to a specific set of paths. If the command fails, it will be
+    /// escalated to the user to approve execution without a sandbox.
+    /// Prefer `on-request` for interactive runs or `never` for non-interactive
+    /// runs.
+    OnFailure,
+
+    /// The model decides when to ask the user for approval.
+    OnRequest,
+
+    /// Fine-grained rejection controls for approval prompts.
+    Reject {
+        sandbox_approval: bool,
+        rules: bool,
+        mcp_elicitations: bool,
+    },
+
+    /// Never ask the user to approve commands. Failures are immediately returned
+    /// to the model, and never escalated to the user for approval.
+    Never,
+}
+
+impl AskForApprovalProtocolV1 {
+    pub fn to_core(self) -> CoreAskForApproval {
+        match self {
+            AskForApprovalProtocolV1::UnlessTrusted => CoreAskForApproval::UnlessTrusted,
+            AskForApprovalProtocolV1::OnFailure => CoreAskForApproval::OnFailure,
+            AskForApprovalProtocolV1::OnRequest => CoreAskForApproval::OnRequest,
+            AskForApprovalProtocolV1::Reject {
+                sandbox_approval,
+                rules,
+                mcp_elicitations,
+            } => CoreAskForApproval::Reject {
+                sandbox_approval,
+                rules,
+                mcp_elicitations,
+            },
+            AskForApprovalProtocolV1::Never => CoreAskForApproval::Never,
+        }
+    }
+}
+
+impl From<CoreAskForApproval> for AskForApprovalProtocolV1 {
+    fn from(value: CoreAskForApproval) -> Self {
+        match value {
+            CoreAskForApproval::UnlessTrusted => AskForApprovalProtocolV1::UnlessTrusted,
+            CoreAskForApproval::OnFailure => AskForApprovalProtocolV1::OnFailure,
+            CoreAskForApproval::OnRequest => AskForApprovalProtocolV1::OnRequest,
+            CoreAskForApproval::Reject {
+                sandbox_approval,
+                rules,
+                mcp_elicitations,
+            } => AskForApprovalProtocolV1::Reject {
+                sandbox_approval,
+                rules,
+                mcp_elicitations,
+            },
+            CoreAskForApproval::Never => AskForApprovalProtocolV1::Never,
+        }
+    }
+}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 /// Deprecated in favor of AccountLoginCompletedNotification.
