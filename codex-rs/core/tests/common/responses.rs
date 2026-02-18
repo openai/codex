@@ -866,7 +866,8 @@ pub async fn mount_compact_json_once(server: &MockServer, body: serde_json::Valu
 }
 
 /// Mount a `/responses/compact` mock that mirrors the default remote compaction shape:
-/// keep model-visible user history from the request and append one summary user message.
+/// keep user+developer messages from the request, drop assistant/tool artifacts, and append one
+/// summary user message.
 pub async fn mount_compact_user_history_with_summary_once(
     server: &MockServer,
     summary_text: &str,
@@ -910,11 +911,14 @@ pub async fn mount_compact_user_history_with_summary_sequence(
                 .cloned()
                 .unwrap_or_default()
                 .into_iter()
-                // Match current remote compaction behavior: output keeps user messages and
-                // omits non-user history entries (assistant/tool/developer).
+                // Match current remote compaction behavior: keep user/developer messages and
+                // omit assistant/tool history entries.
                 .filter(|item| {
                     item.get("type").and_then(Value::as_str) == Some("message")
-                        && item.get("role").and_then(Value::as_str) == Some("user")
+                        && matches!(
+                            item.get("role").and_then(Value::as_str),
+                            Some("user") | Some("developer")
+                        )
                 })
                 .collect::<Vec<Value>>();
             // Append the synthetic summary message as the newest user item.

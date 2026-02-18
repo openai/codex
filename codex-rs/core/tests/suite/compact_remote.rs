@@ -216,15 +216,9 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     )
     .await;
 
-    let compacted_history = vec![
-        responses::user_message_item("REMOTE_COMPACTED_SUMMARY"),
-        ResponseItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
-    ];
-    let compact_mock = responses::mount_compact_json_once(
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
         harness.server(),
-        serde_json::json!({ "output": compacted_history.clone() }),
+        "REMOTE_COMPACTED_SUMMARY",
     )
     .await;
 
@@ -249,7 +243,6 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     let follow_up_request = responses_mock.single_request();
     let follow_up_body = follow_up_request.body_json().to_string();
     assert!(follow_up_body.contains("REMOTE_COMPACTED_SUMMARY"));
-    assert!(follow_up_body.contains("ENCRYPTED_COMPACTION_SUMMARY"));
 
     Ok(())
 }
@@ -318,9 +311,11 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let compact_mock =
-        responses::mount_compact_json_once(harness.server(), serde_json::json!({ "output": [] }))
-            .await;
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
+        harness.server(),
+        "REMOTE_COMPACT_SUMMARY",
+    )
+    .await;
 
     codex.submit(Op::Compact).await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -436,9 +431,11 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let compact_mock =
-        responses::mount_compact_json_once(harness.server(), serde_json::json!({ "output": [] }))
-            .await;
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
+        harness.server(),
+        "REMOTE_AUTO_COMPACT_SUMMARY",
+    )
+    .await;
 
     codex
         .submit(Op::UserInput {
@@ -667,9 +664,9 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
     })
     .await;
 
-    let baseline_compact_mock = responses::mount_compact_json_once(
+    let baseline_compact_mock = responses::mount_compact_user_history_with_summary_once(
         baseline_harness.server(),
-        serde_json::json!({ "output": [] }),
+        "REMOTE_BASELINE_SUMMARY",
     )
     .await;
 
@@ -766,9 +763,9 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
     })
     .await;
 
-    let override_compact_mock = responses::mount_compact_json_once(
+    let override_compact_mock = responses::mount_compact_user_history_with_summary_once(
         override_harness.server(),
-        serde_json::json!({ "output": [] }),
+        "REMOTE_OVERRIDE_SUMMARY",
     )
     .await;
 
@@ -814,15 +811,9 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
     )
     .await;
 
-    let compacted_history = vec![
-        responses::user_message_item("REMOTE_COMPACTED_SUMMARY"),
-        ResponseItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
-    ];
-    let compact_mock = responses::mount_compact_json_once(
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
         harness.server(),
-        serde_json::json!({ "output": compacted_history.clone() }),
+        "REMOTE_COMPACTED_SUMMARY",
     )
     .await;
 
