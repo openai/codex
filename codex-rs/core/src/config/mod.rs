@@ -100,6 +100,7 @@ pub mod types;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
+pub use codex_network_proxy::NetworkProxyAuditMetadata;
 
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
