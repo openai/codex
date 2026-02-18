@@ -15,7 +15,7 @@
               "$ref": "#/definitions/AbsolutePathBuf"
             }
           ],
-          "description": "Path to a role-specific config layer."
+          "description": "Path to a role-specific config layer. Relative paths are resolved relative to the `config.toml` that defines them."
         },
         "description": {
           "description": "Human-facing role documentation used in spawn tool guidance.",
