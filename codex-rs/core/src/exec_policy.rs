@@ -19,6 +19,7 @@ use codex_execpolicy::RuleMatch;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::RejectConfig;
 use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
 use tokio::fs;
@@ -32,6 +33,10 @@ use shlex::try_join as shlex_try_join;
 
 const PROMPT_CONFLICT_REASON: &str =
     "approval required by policy, but AskForApproval is set to Never";
+const REJECT_SANDBOX_APPROVAL_REASON: &str =
+    "approval required by policy, but AskForApproval::Reject.sandbox_approval is set";
+const REJECT_RULES_APPROVAL_REASON: &str =
+    "approval required by policy rule, but AskForApproval::Reject.rules is set";
 const RULES_DIR_NAME: &str = "rules";
 const RULE_EXTENSION: &str = "rules";
 const DEFAULT_POLICY_FILE: &str = "default.rules";
@@ -88,6 +93,33 @@ fn is_policy_match(rule_match: &RuleMatch) -> bool {
     match rule_match {
         RuleMatch::PrefixRuleMatch { .. } => true,
         RuleMatch::HeuristicsRuleMatch { .. } => false,
+    }
+}
+
+fn prompt_is_from_policy_rule(evaluation: &Evaluation) -> bool {
+    evaluation
+        .matched_rules
+        .iter()
+        .any(|rule_match| is_policy_match(rule_match) && rule_match.decision() == Decision::Prompt)
+}
+
+fn prompt_is_rejected_by_policy(
+    approval_policy: AskForApproval,
+    prompt_is_rule: bool,
+) -> Option<&'static str> {
+    match approval_policy {
+        AskForApproval::Never => Some(PROMPT_CONFLICT_REASON),
+        AskForApproval::Reject(reject_config)
+            if prompt_is_rule && reject_config.rejects_rules_approval() =>
+        {
+            Some(REJECT_RULES_APPROVAL_REASON)
+        }
+        AskForApproval::Reject(reject_config)
+            if !prompt_is_rule && reject_config.rejects_sandbox_approval() =>
+        {
+            Some(REJECT_SANDBOX_APPROVAL_REASON)
+        }
+        _ => None,
     }
 }
 
@@ -196,9 +228,11 @@ impl ExecPolicyManager {
                 reason: derive_forbidden_reason(command, &evaluation),
             },
             Decision::Prompt => {
-                if matches!(approval_policy, AskForApproval::Never) {
+                let prompt_is_rule = prompt_is_from_policy_rule(&evaluation);
+                if let Some(reason) = prompt_is_rejected_by_policy(approval_policy, prompt_is_rule)
+                {
                     ExecApprovalRequirement::Forbidden {
-                        reason: PROMPT_CONFLICT_REASON.to_string(),
+                        reason: reason.to_string(),
                     }
                 } else {
                     ExecApprovalRequirement::NeedsApproval {
@@ -465,6 +499,20 @@ pub fn render_decision_for_unmatched_command(
                 }
             }
         }
+        AskForApproval::Reject(_) => match sandbox_policy {
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                // Mirror on-request behavior for unmatched commands; prompt-vs-reject is handled
+                // by `prompt_is_rejected_by_policy`.
+                Decision::Allow
+            }
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => {
+                if sandbox_permissions.requires_escalated_permissions() {
+                    Decision::Prompt
+                } else {
+                    Decision::Allow
+                }
+            }
+        },
     }
 }
 
@@ -1193,6 +1241,52 @@ prefix_rule(
             requirement,
             ExecApprovalRequirement::Forbidden {
                 reason: PROMPT_CONFLICT_REASON.to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn unmatched_reject_policy_still_prompts_for_restricted_sandbox_escalation() {
+        let command = vec!["madeup-cmd".to_string()];
+
+        assert_eq!(
+            Decision::Prompt,
+            render_decision_for_unmatched_command(
+                AskForApproval::Reject(RejectConfig {
+                    sandbox_approval: false,
+                    rules: false,
+                    mcp_elicitations: false,
+                }),
+                &SandboxPolicy::new_read_only_policy(),
+                &command,
+                SandboxPermissions::RequireEscalated,
+                false,
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_approval_requirement_rejects_unmatched_prompt_when_sandbox_rejection_enabled() {
+        let command = vec!["madeup-cmd".to_string()];
+
+        let requirement = ExecPolicyManager::default()
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::Reject(RejectConfig {
+                    sandbox_approval: true,
+                    rules: false,
+                    mcp_elicitations: false,
+                }),
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Forbidden {
+                reason: REJECT_SANDBOX_APPROVAL_REASON.to_string(),
             }
         );
     }

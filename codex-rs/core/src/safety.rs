@@ -38,7 +38,10 @@ pub fn assess_patch_safety(
     }
 
     match policy {
-        AskForApproval::OnFailure | AskForApproval::Never | AskForApproval::OnRequest => {
+        AskForApproval::OnFailure
+        | AskForApproval::Never
+        | AskForApproval::OnRequest
+        | AskForApproval::Reject(_) => {
             // Continue to see if this can be auto-approved.
         }
         // TODO(ragona): I'm not sure this is actually correct? I believe in this case
@@ -52,7 +55,10 @@ pub fn assess_patch_safety(
     // possible that paths in the patch are hard links to files outside the
     // writable roots, so we should still run `apply_patch` in a sandbox in that case.
     if is_write_patch_constrained_to_writable_paths(action, sandbox_policy, cwd)
-        || policy == AskForApproval::OnFailure
+        || matches!(
+            policy,
+            AskForApproval::OnFailure | AskForApproval::Reject(_)
+        )
     {
         if matches!(
             sandbox_policy,
@@ -75,7 +81,12 @@ pub fn assess_patch_safety(
                 None => SafetyCheck::AskUser,
             }
         }
-    } else if policy == AskForApproval::Never {
+    } else if matches!(policy, AskForApproval::Never)
+        || matches!(
+            policy,
+            AskForApproval::Reject(reject_config) if reject_config.sandbox_approval
+        )
+    {
         SafetyCheck::Reject {
             reason: "writing outside of the project; rejected by user approval settings"
                 .to_string(),
