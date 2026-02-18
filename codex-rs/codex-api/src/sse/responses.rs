@@ -970,7 +970,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_sse_emits_server_model_from_response_payload() {
+    async fn process_sse_ignores_response_model_field_in_payload() {
         let events = run_sse(vec![
             json!({
                 "type": "response.created",
@@ -1030,38 +1030,6 @@ mod tests {
         assert_matches!(&events[1], ResponseEvent::Created);
         assert_matches!(
             &events[2],
-            ResponseEvent::Completed {
-                response_id,
-                token_usage: None,
-                can_append: false
-            } if response_id == "resp-1"
-        );
-    }
-
-    #[tokio::test]
-    async fn process_sse_emits_server_model_again_when_response_model_changes() {
-        let events = run_sse(vec![
-            json!({
-                "type": "response.created",
-                "response": {
-                    "id": "resp-1",
-                    "model": "gpt-5.2-codex"
-                }
-            }),
-            json!({
-                "type": "response.completed",
-                "response": {
-                    "id": "resp-1",
-                    "model": "gpt-5.3-codex"
-                }
-            }),
-        ])
-        .await;
-
-        assert_eq!(events.len(), 2);
-        assert_matches!(&events[0], ResponseEvent::Created);
-        assert_matches!(
-            &events[1],
             ResponseEvent::Completed {
                 response_id,
                 token_usage: None,
