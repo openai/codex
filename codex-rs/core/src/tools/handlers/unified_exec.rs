@@ -214,8 +214,14 @@ impl ToolHandler for UnifiedExecHandler {
                                 .to_string(),
                         ));
                     };
-                    let normalized = normalize_additional_permissions(additional_permissions, &cwd)
-                        .map_err(FunctionCallError::RespondToModel)?;
+                    let normalized =
+                        match normalize_additional_permissions(additional_permissions, &cwd) {
+                            Ok(normalized) => normalized,
+                            Err(err) => {
+                                manager.release_process_id(&process_id).await;
+                                return Err(FunctionCallError::RespondToModel(err));
+                            }
+                        };
                     if normalized.is_empty() {
                         manager.release_process_id(&process_id).await;
                         return Err(FunctionCallError::RespondToModel(
