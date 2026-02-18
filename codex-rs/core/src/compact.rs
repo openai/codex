@@ -282,6 +282,13 @@ async fn run_compact_task_inner(
         COMPACT_USER_MESSAGE_MAX_TOKENS,
     );
     let mut new_history = process_compacted_history(compacted_history);
+    if matches!(
+        auto_compact_callsite,
+        Some(AutoCompactCallsite::MidTurnContinuation)
+    ) {
+        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+        insert_initial_context_before_last_real_user(&mut new_history, initial_context);
+    }
     // Reattach stripped model-switch updates into replacement history so post-compaction
     // sampling keeps model-switch guidance regardless of compaction callsite.
     if let Some(model_switch_item) = stripped_model_switch_item {
@@ -357,6 +364,23 @@ pub(crate) fn process_compacted_history(
     compacted_history.retain(should_keep_compacted_history_item);
 
     compacted_history
+}
+
+pub(crate) fn insert_initial_context_before_last_real_user(
+    compacted_history: &mut Vec<ResponseItem>,
+    initial_context: Vec<ResponseItem>,
+) {
+    if initial_context.is_empty() {
+        return;
+    }
+    if let Some(last_real_user_index) = compacted_history.iter().rposition(|item| {
+        matches!(
+            crate::event_mapping::parse_turn_item(item),
+            Some(TurnItem::UserMessage(user_message)) if !is_summary_message(&user_message.message())
+        )
+    }) {
+        compacted_history.splice(last_real_user_index..last_real_user_index, initial_context);
+    }
 }
 
 #[cfg(test)]

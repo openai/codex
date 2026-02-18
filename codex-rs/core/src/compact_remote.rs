@@ -6,6 +6,7 @@ use crate::codex::TurnContext;
 use crate::compact::AutoCompactCallsite;
 use crate::compact::extract_latest_model_switch_update_from_items;
 use crate::compact::extract_trailing_model_switch_update_for_compaction_request;
+use crate::compact::insert_initial_context_before_last_real_user;
 use crate::compact::process_compacted_history;
 use crate::compact::should_keep_compacted_history_item;
 use crate::context_manager::ContextManager;
@@ -167,6 +168,10 @@ async fn run_remote_compact_task_inner_impl(
         })
         .await?;
     new_history = process_compacted_history(new_history);
+    if auto_compact_callsite == AutoCompactCallsite::MidTurnContinuation {
+        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+        insert_initial_context_before_last_real_user(&mut new_history, initial_context);
+    }
     if let Some(incoming_items) = incoming_items.as_ref() {
         let incoming_history_items: Vec<ResponseItem> = incoming_items
             .iter()
