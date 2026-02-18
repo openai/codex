@@ -151,7 +151,7 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
             .get("message")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .or_else(|| parsed.get("error").map(|value| value.to_string()))
+            .or_else(|| parsed.get("error").map(std::string::ToString::to_string))
             .map(RealtimeEvent::Error),
         _ => {
             debug!("received unsupported realtime event type: {message_type}, data: {payload}");

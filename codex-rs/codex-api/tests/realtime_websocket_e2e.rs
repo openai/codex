@@ -26,12 +26,24 @@ where
     Handler: FnOnce(RealtimeWsStream) -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("local addr").to_string();
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) => panic!("failed to bind test websocket listener: {err}"),
+    };
+    let addr = match listener.local_addr() {
+        Ok(addr) => addr.to_string(),
+        Err(err) => panic!("failed to read local websocket listener address: {err}"),
+    };
 
     let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("accept");
-        let ws = accept_async(stream).await.expect("accept ws");
+        let (stream, _) = match listener.accept().await {
+            Ok(stream) => stream,
+            Err(err) => panic!("failed to accept test websocket connection: {err}"),
+        };
+        let ws = match accept_async(stream).await {
+            Ok(ws) => ws,
+            Err(err) => panic!("failed to complete websocket handshake: {err}"),
+        };
         handler(ws).await;
     });
 
