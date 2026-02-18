@@ -76,16 +76,6 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
         is_markdown: bool,
     }
 
-    fn strip_blockquote_prefix(line: &str) -> &str {
-        let mut rest = line.trim_start();
-        loop {
-            let Some(stripped) = rest.strip_prefix('>') else {
-                return rest;
-            };
-            rest = stripped.strip_prefix(' ').unwrap_or(stripped).trim_start();
-        }
-    }
-
     fn parse_open_fence(line: &str) -> Option<Fence> {
         let without_newline = line.strip_suffix('\n').unwrap_or(line);
         let leading_ws = without_newline
@@ -96,24 +86,12 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
         if leading_ws > 3 {
             return None;
         }
-        let trimmed = strip_blockquote_prefix(&without_newline[leading_ws..]);
-        let marker = *trimmed.as_bytes().first()?;
-        if marker != b'`' && marker != b'~' {
-            return None;
-        }
-        let len = trimmed
-            .as_bytes()
-            .iter()
-            .take_while(|byte| **byte == marker)
-            .count();
-        if len < 3 {
-            return None;
-        }
-        let rest = trimmed[len..].trim();
-        let info = rest.split_whitespace().next().unwrap_or_default();
-        let is_markdown = info.eq_ignore_ascii_case("md") || info.eq_ignore_ascii_case("markdown");
+        let trimmed = &without_newline[leading_ws..];
+        let fence_scan_text = table_detect::strip_blockquote_prefix(trimmed);
+        let (marker, len) = table_detect::parse_fence_marker(fence_scan_text)?;
+        let is_markdown = table_detect::is_markdown_fence_info(fence_scan_text, len);
         Some(Fence {
-            marker,
+            marker: marker as u8,
             len,
             is_markdown,
         })
@@ -129,25 +107,21 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
         if leading_ws > 3 {
             return false;
         }
-        let trimmed = strip_blockquote_prefix(&without_newline[leading_ws..]);
-        if !trimmed.as_bytes().starts_with(&[fence.marker]) {
-            return false;
+        let trimmed = &without_newline[leading_ws..];
+        let fence_scan_text = table_detect::strip_blockquote_prefix(trimmed);
+        if let Some((marker, len)) = table_detect::parse_fence_marker(fence_scan_text) {
+            marker as u8 == fence.marker
+                && len >= fence.len
+                && fence_scan_text[len..].trim().is_empty()
+        } else {
+            false
         }
-        let len = trimmed
-            .as_bytes()
-            .iter()
-            .take_while(|byte| **byte == fence.marker)
-            .count();
-        if len < fence.len {
-            return false;
-        }
-        trimmed[len..].trim().is_empty()
     }
 
     fn markdown_fence_contains_table(content: &str) -> bool {
         let mut previous_non_empty: Option<&str> = None;
         for line in content.lines() {
-            let trimmed = strip_blockquote_prefix(line).trim();
+            let trimmed = table_detect::strip_blockquote_prefix(line).trim();
             if trimmed.is_empty() {
                 continue;
             }
