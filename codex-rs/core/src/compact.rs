@@ -378,7 +378,7 @@ pub(crate) fn process_compacted_history(
 /// - prefer the last real (non-summary) user message;
 /// - otherwise fall back to the last summary user message.
 ///
-/// If no user anchor exists, this is a no-op.
+/// If no user anchor exists, append initial context at the end.
 pub(crate) fn insert_initial_context_before_last_user_anchor(
     compacted_history: &mut Vec<ResponseItem>,
     initial_context: Vec<ResponseItem>,
@@ -396,6 +396,8 @@ pub(crate) fn insert_initial_context_before_last_user_anchor(
         });
     if let Some(index) = insertion_index {
         compacted_history.splice(index..index, initial_context);
+    } else {
+        compacted_history.extend(initial_context);
     }
 }
 
@@ -1327,6 +1329,52 @@ keep me updated
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: format!("{SUMMARY_PREFIX}\nlatest summary"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        assert_eq!(compacted_history, expected);
+    }
+
+    #[test]
+    fn insert_initial_context_before_last_user_anchor_appends_when_no_user_anchor_exists() {
+        let mut compacted_history = vec![ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "assistant only".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+        let initial_context = vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "fresh permissions".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        insert_initial_context_before_last_user_anchor(&mut compacted_history, initial_context);
+
+        let expected = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "assistant only".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "fresh permissions".to_string(),
                 }],
                 end_turn: None,
                 phase: None,
