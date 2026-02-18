@@ -4284,17 +4284,25 @@ pub(crate) async fn run_turn(
         return None;
     }
 
-    let Ok(pre_turn_compaction_outcome) = run_pre_turn_auto_compaction_if_needed(
+    let pre_turn_compaction_outcome = match run_pre_turn_auto_compaction_if_needed(
         &sess,
         &turn_context,
         auto_compact_limit,
         &incoming_turn_items,
-        &pre_turn_context_items,
     )
     .await
-    else {
-        // Error messaging is emitted inside run_pre_turn_auto_compaction_if_needed.
-        return None;
+    {
+        Ok(outcome) => outcome,
+        Err(()) => {
+            if !pre_turn_context_items.is_empty() {
+                // Preserve model-visible settings updates even when pre-turn compaction fails
+                // before turn input persistence can run.
+                sess.record_conversation_items(&turn_context, &pre_turn_context_items)
+                    .await;
+            }
+            // Error messaging is emitted inside run_pre_turn_auto_compaction_if_needed.
+            return None;
+        }
     };
     persist_pre_turn_items_for_compaction_outcome(
         &sess,
@@ -4766,7 +4774,6 @@ async fn run_pre_turn_auto_compaction_if_needed(
     turn_context: &Arc<TurnContext>,
     auto_compact_limit: i64,
     incoming_turn_items: &[ResponseItem],
-    pre_turn_context_items: &[ResponseItem],
 ) -> Result<PreTurnCompactionOutcome, ()> {
     let total_usage_tokens = sess.get_total_token_usage().await;
     let incoming_items_tokens_estimate = incoming_turn_items
@@ -4790,12 +4797,6 @@ async fn run_pre_turn_auto_compaction_if_needed(
     .await;
 
     if let Err(err) = compact_result {
-        if !pre_turn_context_items.is_empty() {
-            // Preserve model-visible settings updates even when pre-turn compaction fails
-            // before we can persist turn input.
-            sess.record_conversation_items(turn_context, pre_turn_context_items)
-                .await;
-        }
         if matches!(err, CodexErr::Interrupted) {
             return Err(());
         }
@@ -6245,7 +6246,6 @@ mod tests {
             &turn_context,
             10,
             &incoming_turn_items,
-            &[],
         )
         .await
         .expect("pre-turn compaction no-op should not fail");
