@@ -35,7 +35,9 @@ pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_pref
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AutoCompactCallsite {
+pub(crate) enum CompactCallsite {
+    /// Manual `/compact` task.
+    ManualCompact,
     /// Pre-turn auto-compaction where the incoming turn context + user message are included in
     /// the compaction request.
     PreTurnIncludingIncomingUserMessage,
@@ -94,7 +96,7 @@ pub(crate) fn extract_latest_model_switch_update_from_items(
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    auto_compact_callsite: AutoCompactCallsite,
+    auto_compact_callsite: CompactCallsite,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
@@ -108,7 +110,7 @@ pub(crate) async fn run_inline_auto_compact_task(
         sess,
         turn_context,
         input,
-        Some(auto_compact_callsite),
+        auto_compact_callsite,
         incoming_items,
     )
     .await?;
@@ -126,14 +128,21 @@ pub(crate) async fn run_compact_task(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
-    run_compact_task_inner(sess, turn_context, input, None, None).await
+    run_compact_task_inner(
+        sess,
+        turn_context,
+        input,
+        CompactCallsite::ManualCompact,
+        None,
+    )
+    .await
 }
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-    auto_compact_callsite: Option<AutoCompactCallsite>,
+    auto_compact_callsite: CompactCallsite,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
@@ -285,14 +294,22 @@ async fn run_compact_task_inner(
         COMPACT_USER_MESSAGE_MAX_TOKENS,
     );
     let mut new_history = process_compacted_history(compacted_history);
-    if matches!(
-        auto_compact_callsite,
-        Some(
-            AutoCompactCallsite::MidTurnContinuation | AutoCompactCallsite::PreSamplingModelSwitch
-        )
-    ) {
-        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
-        insert_initial_context_before_last_real_user(&mut new_history, initial_context);
+    match auto_compact_callsite {
+        CompactCallsite::MidTurnContinuation | CompactCallsite::PreSamplingModelSwitch => {
+            // Mid-turn and pre-sampling model-switch compaction continue the in-flight turn and
+            // therefore must keep canonical context anchored above the latest real user turn.
+            let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+            insert_initial_context_before_last_real_user(&mut new_history, initial_context);
+        }
+        CompactCallsite::ManualCompact => {
+            // Manual `/compact` intentionally rewrites transcript history without reseeding turn
+            // context here; the task marks initial context unseeded for the next user turn.
+        }
+        CompactCallsite::PreTurnIncludingIncomingUserMessage
+        | CompactCallsite::PreTurnExcludingIncomingUserMessage => {
+            // Pre-turn compaction persists canonical context directly above the incoming user
+            // message in `run_turn`, not inside compacted replacement history.
+        }
     }
     // Reattach stripped model-switch updates into replacement history so post-compaction
     // sampling keeps model-switch guidance regardless of compaction callsite.

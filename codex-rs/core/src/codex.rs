@@ -19,7 +19,7 @@ use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
-use crate::compact::AutoCompactCallsite;
+use crate::compact::CompactCallsite;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
@@ -4517,7 +4517,7 @@ pub(crate) async fn run_turn(
                     if let Err(err) = run_auto_compact(
                         &sess,
                         &turn_context,
-                        AutoCompactCallsite::MidTurnContinuation,
+                        CompactCallsite::MidTurnContinuation,
                         None,
                     )
                     .await
@@ -4670,7 +4670,7 @@ async fn maybe_run_previous_model_inline_compact(
         sess,
         // We use previous turn context here because we compact with the previous model
         &previous_turn_context,
-        AutoCompactCallsite::PreSamplingModelSwitch,
+        CompactCallsite::PreSamplingModelSwitch,
         None,
     )
     .await
@@ -4784,7 +4784,7 @@ async fn run_pre_turn_auto_compaction_if_needed(
     let compact_result = run_auto_compact(
         sess,
         turn_context,
-        AutoCompactCallsite::PreTurnIncludingIncomingUserMessage,
+        CompactCallsite::PreTurnIncludingIncomingUserMessage,
         Some(incoming_turn_items.to_vec()),
     )
     .await;
@@ -4803,7 +4803,7 @@ async fn run_pre_turn_auto_compaction_if_needed(
             CodexErr::ContextWindowExceeded => {
                 error!(
                     turn_id = %turn_context.sub_id,
-                    auto_compact_callsite = ?AutoCompactCallsite::PreTurnIncludingIncomingUserMessage,
+                    auto_compact_callsite = ?CompactCallsite::PreTurnIncludingIncomingUserMessage,
                     incoming_items_tokens_estimate,
                     auto_compact_limit,
                     reason = "pre-turn compaction exceeded context window",
@@ -4859,7 +4859,7 @@ fn is_projected_submission_over_auto_compact_limit(
 async fn run_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    auto_compact_callsite: AutoCompactCallsite,
+    auto_compact_callsite: CompactCallsite,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     let result = if should_use_remote_compact_task(&turn_context.provider) {

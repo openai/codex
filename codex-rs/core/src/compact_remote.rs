@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::compact::AutoCompactCallsite;
+use crate::compact::CompactCallsite;
 use crate::compact::extract_latest_model_switch_update_from_items;
 use crate::compact::extract_trailing_model_switch_update_for_compaction_request;
 use crate::compact::insert_initial_context_before_last_real_user;
@@ -32,7 +32,7 @@ use tracing::info;
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    auto_compact_callsite: AutoCompactCallsite,
+    auto_compact_callsite: CompactCallsite,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     run_remote_compact_task_inner(&sess, &turn_context, auto_compact_callsite, incoming_items)
@@ -51,19 +51,13 @@ pub(crate) async fn run_remote_compact_task(
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_compact_task_inner(
-        &sess,
-        &turn_context,
-        AutoCompactCallsite::PreTurnExcludingIncomingUserMessage,
-        None,
-    )
-    .await
+    run_remote_compact_task_inner(&sess, &turn_context, CompactCallsite::ManualCompact, None).await
 }
 
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    auto_compact_callsite: AutoCompactCallsite,
+    auto_compact_callsite: CompactCallsite,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     if let Err(err) = run_remote_compact_task_inner_impl(
@@ -88,7 +82,7 @@ async fn run_remote_compact_task_inner(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    auto_compact_callsite: AutoCompactCallsite,
+    auto_compact_callsite: CompactCallsite,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
@@ -168,12 +162,22 @@ async fn run_remote_compact_task_inner_impl(
         })
         .await?;
     new_history = process_compacted_history(new_history);
-    if matches!(
-        auto_compact_callsite,
-        AutoCompactCallsite::MidTurnContinuation | AutoCompactCallsite::PreSamplingModelSwitch
-    ) {
-        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
-        insert_initial_context_before_last_real_user(&mut new_history, initial_context);
+    match auto_compact_callsite {
+        CompactCallsite::MidTurnContinuation | CompactCallsite::PreSamplingModelSwitch => {
+            // Mid-turn and pre-sampling model-switch compaction continue the in-flight turn and
+            // therefore must keep canonical context anchored above the latest real user turn.
+            let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+            insert_initial_context_before_last_real_user(&mut new_history, initial_context);
+        }
+        CompactCallsite::ManualCompact => {
+            // Manual `/compact` intentionally rewrites transcript history without reseeding turn
+            // context here; the task marks initial context unseeded for the next user turn.
+        }
+        CompactCallsite::PreTurnIncludingIncomingUserMessage
+        | CompactCallsite::PreTurnExcludingIncomingUserMessage => {
+            // Pre-turn compaction persists canonical context directly above the incoming user
+            // message in `run_turn`, not inside compacted replacement history.
+        }
     }
     if let Some(incoming_items) = incoming_items.as_ref() {
         let incoming_history_items: Vec<ResponseItem> = incoming_items
@@ -271,7 +275,7 @@ fn remove_incoming_echoes_from_compacted_history(
 
 fn log_remote_compact_failure(
     turn_context: &TurnContext,
-    auto_compact_callsite: AutoCompactCallsite,
+    auto_compact_callsite: CompactCallsite,
     log_data: &CompactRequestLogData,
     total_usage_breakdown: TotalTokenUsageBreakdown,
     err: &CodexErr,
