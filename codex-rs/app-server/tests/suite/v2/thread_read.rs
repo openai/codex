@@ -7,7 +7,6 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
-use codex_app_server_protocol::ThreadIdleFlag;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
@@ -188,7 +187,7 @@ async fn thread_read_loaded_thread_returns_precomputed_path_before_materializati
     assert_eq!(read.path, Some(thread_path));
     assert!(read.preview.is_empty());
     assert_eq!(read.turns.len(), 0);
-    assert_eq!(read.status, ThreadStatus::Idle { idle_flags: vec![] });
+    assert_eq!(read.status, ThreadStatus::Idle);
 
     Ok(())
 }
@@ -306,12 +305,7 @@ async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Resul
     .await??;
     let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
 
-    assert_eq!(
-        thread.status,
-        ThreadStatus::Idle {
-            idle_flags: vec![ThreadIdleFlag::SystemError],
-        },
-    );
+    assert_eq!(thread.status, ThreadStatus::SystemError,);
 
     Ok(())
 }

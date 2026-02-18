@@ -259,12 +259,12 @@ When `nextCursor` is `null`, you’ve reached the final page.
 `thread/status/changed` is emitted whenever a loaded thread's status changes:
 
 - Includes `threadId` and the new `status`.
-- Status can be `notLoaded`, `idle` (with `idleFlags`), or `active` (with `activeFlags`).
+- Status can be `notLoaded`, `idle`, `systemError`, or `active` (with `activeFlags`; `active` implies running).
 
 ```json
 { "method": "thread/status/changed", "params": {
     "threadId": "thr_123",
-    "status": { "type": "active", "activeFlags": ["running"] }
+    "status": { "type": "active", "activeFlags": [] }
 } }
 ```
 

@@ -15160,7 +15160,6 @@
       },
       "ThreadActiveFlag": {
         "enum": [
-          "running",
           "waitingOnApproval",
           "waitingOnUserInput"
         ],
@@ -15331,12 +15330,6 @@
         "type": "object"
       },
       "ThreadId": {
-        "type": "string"
-      },
-      "ThreadIdleFlag": {
-        "enum": [
-          "systemError"
-        ],
         "type": "string"
       },
       "ThreadItem": {
@@ -16362,12 +16355,6 @@
           },
           {
             "properties": {
-              "idleFlags": {
-                "items": {
-                  "$ref": "#/definitions/v2/ThreadIdleFlag"
-                },
-                "type": "array"
-              },
               "type": {
                 "enum": [
                   "idle"
@@ -16377,10 +16364,25 @@
               }
             },
             "required": [
-              "idleFlags",
               "type"
             ],
             "title": "IdleThreadStatus",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "systemError"
+                ],
+                "title": "SystemErrorThreadStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "SystemErrorThreadStatus",
             "type": "object"
           },
           {

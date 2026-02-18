@@ -13,7 +13,6 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
-use codex_app_server_protocol::ThreadIdleFlag;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
@@ -270,12 +269,7 @@ async fn thread_list_reports_system_error_idle_flag_after_failed_turn() -> Resul
         .iter()
         .find(|candidate| candidate.id == thread.id)
         .expect("expected started thread to be listed");
-    assert_eq!(
-        listed.status,
-        ThreadStatus::Idle {
-            idle_flags: vec![ThreadIdleFlag::SystemError],
-        },
-    );
+    assert_eq!(listed.status, ThreadStatus::SystemError,);
 
     Ok(())
 }

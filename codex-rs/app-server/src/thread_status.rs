@@ -6,7 +6,6 @@ use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadActiveFlag;
-use codex_app_server_protocol::ThreadIdleFlag;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use std::collections::HashMap;
@@ -320,9 +319,6 @@ fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
     }
 
     let mut active_flags = Vec::new();
-    if runtime.running {
-        active_flags.push(ThreadActiveFlag::Running);
-    }
     if runtime.pending_permission_requests > 0 {
         active_flags.push(ThreadActiveFlag::WaitingOnApproval);
     }
@@ -330,16 +326,15 @@ fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
         active_flags.push(ThreadActiveFlag::WaitingOnUserInput);
     }
 
-    if !active_flags.is_empty() {
+    if runtime.running || !active_flags.is_empty() {
         return ThreadStatus::Active { active_flags };
     }
 
-    let mut idle_flags = Vec::new();
     if runtime.has_system_error {
-        idle_flags.push(ThreadIdleFlag::SystemError);
+        return ThreadStatus::SystemError;
     }
 
-    ThreadStatus::Idle { idle_flags }
+    ThreadStatus::Idle
 }
 
 #[cfg(test)]
@@ -381,7 +376,7 @@ mod tests {
                 .loaded_status_for_thread(NON_INTERACTIVE_THREAD_ID)
                 .await,
             ThreadStatus::Active {
-                active_flags: vec![ThreadActiveFlag::Running],
+                active_flags: vec![],
             },
         );
     }
@@ -402,7 +397,7 @@ mod tests {
                 .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
                 .await,
             ThreadStatus::Active {
-                active_flags: vec![ThreadActiveFlag::Running],
+                active_flags: vec![],
             },
         );
 
@@ -414,10 +409,7 @@ mod tests {
                 .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
                 .await,
             ThreadStatus::Active {
-                active_flags: vec![
-                    ThreadActiveFlag::Running,
-                    ThreadActiveFlag::WaitingOnApproval,
-                ],
+                active_flags: vec![ThreadActiveFlag::WaitingOnApproval],
             },
         );
 
@@ -430,7 +422,6 @@ mod tests {
                 .await,
             ThreadStatus::Active {
                 active_flags: vec![
-                    ThreadActiveFlag::Running,
                     ThreadActiveFlag::WaitingOnApproval,
                     ThreadActiveFlag::WaitingOnUserInput,
                 ],
@@ -442,10 +433,7 @@ mod tests {
             &manager,
             INTERACTIVE_THREAD_ID,
             ThreadStatus::Active {
-                active_flags: vec![
-                    ThreadActiveFlag::Running,
-                    ThreadActiveFlag::WaitingOnUserInput,
-                ],
+                active_flags: vec![ThreadActiveFlag::WaitingOnUserInput],
             },
         )
         .await;
@@ -455,7 +443,7 @@ mod tests {
             &manager,
             INTERACTIVE_THREAD_ID,
             ThreadStatus::Active {
-                active_flags: vec![ThreadActiveFlag::Running],
+                active_flags: vec![],
             },
         )
         .await;
@@ -467,7 +455,7 @@ mod tests {
             manager
                 .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
                 .await,
-            ThreadStatus::Idle { idle_flags: vec![] },
+            ThreadStatus::Idle,
         );
     }
 
@@ -488,9 +476,7 @@ mod tests {
             manager
                 .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
                 .await,
-            ThreadStatus::Idle {
-                idle_flags: vec![ThreadIdleFlag::SystemError],
-            },
+            ThreadStatus::SystemError,
         );
 
         manager.note_turn_started(INTERACTIVE_THREAD_ID).await;
@@ -499,7 +485,7 @@ mod tests {
                 .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
                 .await,
             ThreadStatus::Active {
-                active_flags: vec![ThreadActiveFlag::Running],
+                active_flags: vec![],
             },
         );
     }
@@ -546,7 +532,7 @@ mod tests {
         assert_eq!(
             statuses.get(INTERACTIVE_THREAD_ID),
             Some(&ThreadStatus::Active {
-                active_flags: vec![ThreadActiveFlag::Running],
+                active_flags: vec![],
             }),
         );
         assert_eq!(
@@ -572,7 +558,7 @@ mod tests {
             recv_status_changed_notification(&mut outgoing_rx).await,
             ThreadStatusChangedNotification {
                 thread_id: INTERACTIVE_THREAD_ID.to_string(),
-                status: ThreadStatus::Idle { idle_flags: vec![] },
+                status: ThreadStatus::Idle,
             },
         );
 
@@ -582,7 +568,7 @@ mod tests {
             ThreadStatusChangedNotification {
                 thread_id: INTERACTIVE_THREAD_ID.to_string(),
                 status: ThreadStatus::Active {
-                    active_flags: vec![ThreadActiveFlag::Running],
+                    active_flags: vec![],
                 },
             },
         );

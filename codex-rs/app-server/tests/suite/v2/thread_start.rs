@@ -60,7 +60,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         thread.created_at > 0,
         "created_at should be a positive UNIX timestamp"
     );
-    assert_eq!(thread.status, ThreadStatus::Idle { idle_flags: vec![] });
+    assert_eq!(thread.status, ThreadStatus::Idle);
     let thread_path = thread.path.clone().expect("thread path should be present");
     assert!(thread_path.is_absolute(), "thread path should be absolute");
     assert!(

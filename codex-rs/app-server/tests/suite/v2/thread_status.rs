@@ -9,7 +9,6 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadActiveFlag;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
@@ -83,10 +82,15 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
                     continue;
                 }
                 match notification.status {
-                    ThreadStatus::Active { active_flags } => {
-                        saw_active_running |= active_flags.contains(&ThreadActiveFlag::Running);
+                    ThreadStatus::Active { .. } => {
+                        saw_active_running = true;
                     }
-                    ThreadStatus::Idle { .. } => {
+                    ThreadStatus::Idle => {
+                        if saw_active_running {
+                            saw_idle_after_turn = true;
+                        }
+                    }
+                    ThreadStatus::SystemError => {
                         if saw_active_running {
                             saw_idle_after_turn = true;
                         }
