@@ -14,6 +14,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -294,6 +295,9 @@ mod agent {
             .await;
 
             if matches!(final_status, AgentStatus::Completed(_)) {
+                if let Some(token_usage) = agent_control.get_last_token_usage(thread_id).await {
+                    emit_token_usage_metrics(&session, &token_usage);
+                }
                 job::succeed(&session, &db, &claim, new_watermark, "succeeded").await;
             } else {
                 job::failed(&session, &db, &claim, "failed_agent").await;
@@ -388,5 +392,34 @@ fn emit_metrics(session: &Arc<Session>, counters: Counters) {
         metrics::MEMORY_PHASE_TWO_JOBS,
         1,
         &[("status", "agent_spawned")],
+    );
+}
+
+fn emit_token_usage_metrics(session: &Arc<Session>, token_usage: &TokenUsage) {
+    let otel = session.services.otel_manager.clone();
+    otel.histogram(
+        metrics::MEMORY_PHASE_TWO_TOKEN_USAGE,
+        token_usage.total_tokens.max(0),
+        &[("token_type", "total")],
+    );
+    otel.histogram(
+        metrics::MEMORY_PHASE_TWO_TOKEN_USAGE,
+        token_usage.input_tokens.max(0),
+        &[("token_type", "input")],
+    );
+    otel.histogram(
+        metrics::MEMORY_PHASE_TWO_TOKEN_USAGE,
+        token_usage.cached_input(),
+        &[("token_type", "cached_input")],
+    );
+    otel.histogram(
+        metrics::MEMORY_PHASE_TWO_TOKEN_USAGE,
+        token_usage.output_tokens.max(0),
+        &[("token_type", "output")],
+    );
+    otel.histogram(
+        metrics::MEMORY_PHASE_TWO_TOKEN_USAGE,
+        token_usage.reasoning_output_tokens.max(0),
+        &[("token_type", "reasoning_output")],
     );
 }
