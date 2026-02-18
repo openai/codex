@@ -142,8 +142,8 @@ fn assert_pre_sampling_switch_compaction_requests(
         "follow-up request after successful model-switch compaction should include model-switch update item"
     );
     assert!(
-        !body_contains_text(&follow_up_body, "<environment_context>"),
-        "follow-up request should not reinsert canonical environment context after pre-sampling compaction"
+        body_contains_text(&follow_up_body, "<environment_context>"),
+        "follow-up request should include canonical environment context from previous-turn context reinjection"
     );
 }
 

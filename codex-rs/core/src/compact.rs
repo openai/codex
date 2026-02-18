@@ -44,6 +44,9 @@ pub(crate) enum AutoCompactCallsite {
     /// default pre-turn flow and retained for future model-specific strategies.
     #[allow(dead_code)]
     PreTurnExcludingIncomingUserMessage,
+    /// Pre-sampling compaction triggered by model switch to a smaller context window.
+    /// This compacts prior-turn history only and should reinsert previous-turn canonical context.
+    PreSamplingModelSwitch,
     /// Mid-turn compaction between assistant responses in a follow-up loop.
     MidTurnContinuation,
 }
@@ -284,7 +287,9 @@ async fn run_compact_task_inner(
     let mut new_history = process_compacted_history(compacted_history);
     if matches!(
         auto_compact_callsite,
-        Some(AutoCompactCallsite::MidTurnContinuation)
+        Some(
+            AutoCompactCallsite::MidTurnContinuation | AutoCompactCallsite::PreSamplingModelSwitch
+        )
     ) {
         let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
         insert_initial_context_before_last_real_user(&mut new_history, initial_context);

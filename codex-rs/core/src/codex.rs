@@ -4670,7 +4670,7 @@ async fn maybe_run_previous_model_inline_compact(
         sess,
         // We use previous turn context here because we compact with the previous model
         &previous_turn_context,
-        AutoCompactCallsite::PreTurnExcludingIncomingUserMessage,
+        AutoCompactCallsite::PreSamplingModelSwitch,
         None,
     )
     .await

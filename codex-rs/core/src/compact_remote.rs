@@ -168,7 +168,10 @@ async fn run_remote_compact_task_inner_impl(
         })
         .await?;
     new_history = process_compacted_history(new_history);
-    if auto_compact_callsite == AutoCompactCallsite::MidTurnContinuation {
+    if matches!(
+        auto_compact_callsite,
+        AutoCompactCallsite::MidTurnContinuation | AutoCompactCallsite::PreSamplingModelSwitch
+    ) {
         let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
         insert_initial_context_before_last_real_user(&mut new_history, initial_context);
     }
