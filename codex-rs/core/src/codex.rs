@@ -4538,6 +4538,9 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
+                        if matches!(err, CodexErr::Interrupted) {
+                            return None;
+                        }
                         let event = EventMsg::Error(
                             err.to_error_event(Some("Error running auto compact task".to_string())),
                         );
