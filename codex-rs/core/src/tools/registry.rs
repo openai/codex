@@ -6,6 +6,7 @@ use std::time::Instant;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
+use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
 use crate::tools::context::ToolInvocation;
@@ -173,6 +174,7 @@ impl ToolRegistry {
             Ok((preview, success)) => (preview.clone(), *success),
             Err(err) => (err.to_string(), false),
         };
+        emit_metric_for_tool_read(&invocation, success).await;
         let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
             invocation: &invocation,
             output_preview,

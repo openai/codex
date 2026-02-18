@@ -343,7 +343,8 @@ impl NetworkApprovalService {
         let approval_decision = session
             .request_command_approval(
                 turn_context.as_ref(),
-                approval_id,
+                owner_call.call_id.clone(),
+                Some(approval_id),
                 owner_call.command.clone(),
                 owner_call.cwd.clone(),
                 Some(format!(
