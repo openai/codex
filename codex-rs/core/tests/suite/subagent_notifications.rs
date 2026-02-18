@@ -141,7 +141,7 @@ async fn subagent_notification_is_included_without_wait() -> Result<()> {
     .await;
     test.submit_turn(TURN_2_NO_WAIT_PROMPT).await?;
 
-    assert_eq!(has_subagent_notification(&turn2.single_request()), true);
+    assert!(has_subagent_notification(&turn2.single_request()));
 
     Ok(())
 }
@@ -187,7 +187,7 @@ async fn subagent_notification_is_deduped_after_matching_wait() -> Result<()> {
     .await;
     test.submit_turn(TURN_3_PROMPT).await?;
 
-    assert_eq!(has_subagent_notification(&turn3.single_request()), false);
+    assert!(!has_subagent_notification(&turn3.single_request()));
 
     Ok(())
 }
@@ -234,7 +234,7 @@ async fn subagent_notification_is_deduped_when_wait_finishes_child_in_flight() -
     .await;
     test.submit_turn(TURN_3_PROMPT).await?;
 
-    assert_eq!(has_subagent_notification(&turn3.single_request()), false);
+    assert!(!has_subagent_notification(&turn3.single_request()));
 
     Ok(())
 }
@@ -281,7 +281,7 @@ async fn subagent_notification_is_kept_after_non_matching_wait() -> Result<()> {
     .await;
     test.submit_turn(TURN_3_PROMPT).await?;
 
-    assert_eq!(has_subagent_notification(&turn3.single_request()), true);
+    assert!(has_subagent_notification(&turn3.single_request()));
 
     Ok(())
 }
