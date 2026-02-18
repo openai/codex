@@ -527,16 +527,18 @@ impl StreamingAgentTailCell {
 }
 
 impl HistoryCell for StreamingAgentTailCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        word_wrap_lines(
-            &self.lines,
-            RtOptions::new(width as usize)
-                .initial_indent(if self.is_first_line {
-                    "• ".dim().into()
-                } else {
-                    "  ".into()
-                })
-                .subsequent_indent("  ".into()),
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        // Tail lines are already rendered at the controller's current stream width.
+        // Re-wrapping them here can split table borders and produce malformed
+        // in-flight table rows.
+        prefix_lines(
+            self.lines.clone(),
+            if self.is_first_line {
+                "• ".dim()
+            } else {
+                "  ".into()
+            },
+            "  ".into(),
         )
     }
 
@@ -4194,6 +4196,31 @@ mod tests {
             rendered.iter().any(|l| l.contains('┌')),
             "expected box-drawing table: {rendered:?}"
         );
+    }
+
+    #[test]
+    fn streaming_agent_tail_cell_does_not_rewrap_table_rows() {
+        let source = "\
+| # | Type | Example | Details | Score |\n\
+| --- | --- | --- | --- | --- |\n\
+| 5 | URL link | Rust (https://www.rust-lang.org) | external | 93 |\n\
+| 6 | GitHub link | Repo (https://github.com/openai) | external | 89 |\n";
+        let mut rendered_lines = Vec::new();
+        crate::markdown::append_markdown_agent(source, Some(120), &mut rendered_lines);
+        let cell = StreamingAgentTailCell::new(rendered_lines, true);
+        let lines = render_lines(&cell.display_lines(72));
+
+        // Ensure wrapped spillover lines were not introduced by a second wrap pass.
+        for line in &lines {
+            let content = line.chars().skip(2).collect::<String>();
+            let trimmed = content.trim();
+            if trimmed.starts_with('│') {
+                assert!(
+                    trimmed.ends_with('│'),
+                    "table row should preserve right border while streaming: {line:?}",
+                );
+            }
+        }
     }
 
     /// Simulate the consolidation backward-walk logic from `App::handle_event`
