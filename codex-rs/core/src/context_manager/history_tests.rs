@@ -1225,3 +1225,93 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
 }
+
+#[test]
+fn image_data_url_does_not_dominate_token_estimate() {
+    // A large base64 data URL (~100KB) should not count as ~25k tokens.
+    // Instead, it should be treated as a fixed-cost image token estimate.
+    let large_base64 = "data:image/png;base64,".to_string() + &"A".repeat(100_000);
+    let image_item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "Here is the screenshot".to_string(),
+            },
+            ContentItem::InputImage {
+                image_url: large_base64.clone(),
+            },
+        ],
+        end_turn: None,
+        phase: None,
+    };
+
+    let text_only_item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "Here is the screenshot".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    };
+
+    let image_bytes = estimate_response_item_model_visible_bytes(&image_item);
+    let text_bytes = estimate_response_item_model_visible_bytes(&text_only_item);
+
+    // The image estimate should NOT be close to the raw 100KB base64 length.
+    // Without the fix, image_bytes would be ~100,200. With the fix, it should
+    // be roughly text_bytes + IMAGE_BYTES_ESTIMATE.
+    assert!(
+        image_bytes < 1_000,
+        "Image estimate {image_bytes} should be much less than the base64 payload size"
+    );
+    // But it should be larger than the text-only version (accounts for the image).
+    assert!(
+        image_bytes > text_bytes,
+        "Image estimate {image_bytes} should exceed text-only estimate {text_bytes}"
+    );
+}
+
+#[test]
+fn function_call_output_with_image_does_not_overcount() {
+    let large_base64 = "data:image/png;base64,".to_string() + &"A".repeat(50_000);
+    let output = FunctionCallOutputPayload::from_content_items(vec![
+        FunctionCallOutputContentItem::InputText {
+            text: "Screenshot captured".to_string(),
+        },
+        FunctionCallOutputContentItem::InputImage {
+            image_url: large_base64,
+        },
+    ]);
+    let item = ResponseItem::FunctionCallOutput {
+        call_id: "call_abc".to_string(),
+        output,
+    };
+
+    let bytes = estimate_response_item_model_visible_bytes(&item);
+    assert!(
+        bytes < 1_000,
+        "FunctionCallOutput with image estimated at {bytes} bytes, expected < 1000"
+    );
+}
+
+#[test]
+fn text_only_items_unchanged() {
+    // Ensure text-only items still use the full serialized length.
+    let item = ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "Hello world, this is a response.".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    };
+
+    let bytes = estimate_response_item_model_visible_bytes(&item);
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+
+    // For text-only items, the estimate should equal the raw serialized length.
+    assert_eq!(bytes, raw_len);
+}

@@ -410,10 +410,82 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
         | ResponseItem::Compaction {
             encrypted_content: content,
         } => i64::try_from(estimate_reasoning_length(content.len())).unwrap_or(i64::MAX),
-        item => serde_json::to_string(item)
-            .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
-            .unwrap_or_default(),
+        item => {
+            let image_byte_adjustment = estimate_image_data_url_bytes(item);
+            let raw = serde_json::to_string(item)
+                .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
+                .unwrap_or_default();
+            if image_byte_adjustment > 0 {
+                // Subtract the base64 data URL bytes and add a fixed per-image cost.
+                // OpenAI charges ~85 tokens for low-detail images; we use 170 bytes
+                // (~85 tokens at ~2 bytes/token) as a conservative per-image estimate.
+                let image_count = count_images(item);
+                let fixed_image_cost = image_count * IMAGE_BYTES_ESTIMATE;
+                (raw - image_byte_adjustment + fixed_image_cost).max(0)
+            } else {
+                raw
+            }
+        }
     }
+}
+
+/// Approximate byte cost per image for token estimation.
+/// OpenAI charges ~85 tokens for a low-detail image; at ~2 bytes per token
+/// this translates to ~170 bytes. We use this as a conservative floor so
+/// images don't dominate context estimates.
+const IMAGE_BYTES_ESTIMATE: i64 = 170;
+
+/// Returns the total number of base64 data URL bytes embedded in image content
+/// items of a `ResponseItem`. This is the "excess" that should be subtracted
+/// from the raw serialized length, since the model processes images natively
+/// rather than reading their base64 encoding.
+fn estimate_image_data_url_bytes(item: &ResponseItem) -> i64 {
+    let mut total: i64 = 0;
+    match item {
+        ResponseItem::Message { content, .. } => {
+            for c in content {
+                if let ContentItem::InputImage { image_url } = c {
+                    total += i64::try_from(image_url.len()).unwrap_or(0);
+                }
+            }
+        }
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            if let FunctionCallOutputBody::ContentItems(items) = &output.body {
+                for c in items {
+                    if let FunctionCallOutputContentItem::InputImage { image_url } = c {
+                        total += i64::try_from(image_url.len()).unwrap_or(0);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    total
+}
+
+/// Counts the number of image content items in a `ResponseItem`.
+fn count_images(item: &ResponseItem) -> i64 {
+    let mut count: i64 = 0;
+    match item {
+        ResponseItem::Message { content, .. } => {
+            for c in content {
+                if matches!(c, ContentItem::InputImage { .. }) {
+                    count += 1;
+                }
+            }
+        }
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            if let FunctionCallOutputBody::ContentItems(items) = &output.body {
+                for c in items {
+                    if matches!(c, FunctionCallOutputContentItem::InputImage { .. }) {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    count
 }
 
 fn is_model_generated_item(item: &ResponseItem) -> bool {
