@@ -109,38 +109,15 @@
       "description": "App/connector settings loaded from `config.toml`.",
       "type": "object"
     },
-    "AskForApproval": {
-      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
-      "oneOf": [
-        {
-          "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
-          "enum": [
-            "untrusted"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "DEPRECATED: *All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox. Prefer `OnRequest` for interactive runs or `Never` for non-interactive runs.",
-          "enum": [
-            "on-failure"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "The model decides when to ask the user for approval.",
-          "enum": [
-            "on-request"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Never ask the user to approve commands. Failures are immediately returned to the model, and never escalated to the user for approval.",
-          "enum": [
-            "never"
-          ],
-          "type": "string"
-        }
-      ]
+    "AskForApprovalToml": {
+      "description": "Version of [AskForApproval] that is deserializable from config.toml.",
+      "enum": [
+        "untrusted",
+        "on-failure",
+        "on-request",
+        "never"
+      ],
+      "type": "string"
     },
     "AuthCredentialsStoreMode": {
       "description": "Determine where Codex should store CLI auth credentials.",
@@ -183,7 +160,7 @@
           "$ref": "#/definitions/AnalyticsConfigToml"
         },
         "approval_policy": {
-          "$ref": "#/definitions/AskForApproval"
+          "$ref": "#/definitions/AskForApprovalToml"
         },
         "chatgpt_base_url": {
           "type": "string"
@@ -1280,7 +1257,7 @@
     "approval_policy": {
       "allOf": [
         {
-          "$ref": "#/definitions/AskForApproval"
+          "$ref": "#/definitions/AskForApprovalToml"
         }
       ],
       "description": "Default approval policy for executing commands."

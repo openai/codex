@@ -255,6 +255,28 @@ impl DeveloperInstructions {
                     None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
                 }
             }
+            AskForApproval::Reject(reject_config) => {
+                let command_prefixes = format_allow_prefixes(exec_policy.get_allowed_prefixes());
+                let on_request_instructions = match command_prefixes {
+                    Some(prefixes) => {
+                        format!(
+                            "{APPROVAL_POLICY_ON_REQUEST_RULE}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
+                        )
+                    }
+                    None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
+                };
+                let sandbox_approval = reject_config.sandbox_approval;
+                let rules = reject_config.rules;
+                let mcp_elicitations = reject_config.mcp_elicitations;
+                format!(
+                    "{on_request_instructions}\n\n\
+                     Approval policy is `reject`.\n\
+                     - `sandbox_approval`: {sandbox_approval}\n\
+                     - `rules`: {rules}\n\
+                     - `mcp_elicitations`: {mcp_elicitations}\n\
+                     When a category is `true`, requests in that category are auto-rejected instead of prompting the user."
+                )
+            }
         };
 
         DeveloperInstructions::new(text)
