@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
@@ -116,6 +117,70 @@ pub(crate) fn compile_permission_profile(
         windows_sandbox_mode: None,
         macos_seatbelt_profile_extensions,
     })
+}
+
+pub(crate) fn exec_policy_prefixes_for_skill_scripts(
+    skill_dir: &Path,
+    permission_profile: Option<&Permissions>,
+) -> Vec<Vec<String>> {
+    let Some(permission_profile) = permission_profile else {
+        return Vec::new();
+    };
+    match permission_profile.sandbox_policy.get() {
+        SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => {}
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+            return Vec::new();
+        }
+    }
+
+    let scripts_dir = skill_dir.join("scripts");
+    let mut pending_dirs = vec![scripts_dir];
+    let mut script_files = Vec::new();
+    while let Some(dir) = pending_dirs.pop() {
+        let read_dir = match std::fs::read_dir(&dir) {
+            Ok(read_dir) => read_dir,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                warn!("failed to read scripts dir {}: {error}", dir.display());
+                continue;
+            }
+        };
+
+        for entry in read_dir {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    warn!("failed to read scripts entry in {}: {error}", dir.display());
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => {
+                    warn!(
+                        "failed to read scripts entry type for {}: {error}",
+                        path.display()
+                    );
+                    continue;
+                }
+            };
+            if file_type.is_dir() {
+                pending_dirs.push(path);
+                continue;
+            }
+            if file_type.is_file() {
+                script_files.push(path);
+            }
+        }
+    }
+
+    script_files.sort();
+    script_files.dedup();
+    script_files
+        .into_iter()
+        .map(|path| vec![path.to_string_lossy().into_owned()])
+        .collect()
 }
 
 fn normalize_permission_paths(
@@ -289,6 +354,7 @@ mod tests {
     use super::SkillManifestMacOsPermissions;
     use super::SkillManifestPermissions;
     use super::compile_permission_profile;
+    use super::exec_policy_prefixes_for_skill_scripts;
     use crate::config::Constrained;
     use crate::config::Permissions;
     use crate::config::types::ShellEnvironmentPolicy;
@@ -368,6 +434,49 @@ mod tests {
         let profile = compile_permission_profile(&skill_dir, None);
 
         assert_eq!(profile, None);
+    }
+
+    #[test]
+    fn exec_policy_prefixes_for_skill_scripts_returns_empty_without_permission_profile() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = tempdir.path().join("skill");
+        fs::create_dir_all(skill_dir.join("scripts")).expect("scripts dir");
+        fs::write(
+            skill_dir.join("scripts").join("run.sh"),
+            "#!/bin/sh\necho hi\n",
+        )
+        .expect("script file");
+
+        let prefixes = exec_policy_prefixes_for_skill_scripts(&skill_dir, None);
+
+        assert_eq!(prefixes, Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn exec_policy_prefixes_for_skill_scripts_has_one_rule_per_script_file() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = tempdir.path().join("skill");
+        let scripts_dir = skill_dir.join("scripts");
+        fs::create_dir_all(scripts_dir.join("nested")).expect("scripts dirs");
+        let root_script = scripts_dir.join("run.sh");
+        let nested_script = scripts_dir.join("nested").join("build.py");
+        fs::write(&root_script, "#!/bin/sh\necho hi\n").expect("root script");
+        fs::write(&nested_script, "#!/usr/bin/env python3\nprint('ok')\n").expect("nested script");
+
+        let permission_profile =
+            compile_permission_profile(&skill_dir, Some(SkillManifestPermissions::default()))
+                .expect("permission profile");
+
+        let prefixes =
+            exec_policy_prefixes_for_skill_scripts(&skill_dir, Some(&permission_profile));
+
+        assert_eq!(
+            prefixes,
+            vec![
+                vec![nested_script.to_string_lossy().into_owned()],
+                vec![root_script.to_string_lossy().into_owned()],
+            ]
+        );
     }
 
     #[test]

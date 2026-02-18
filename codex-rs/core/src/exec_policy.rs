@@ -9,6 +9,8 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::is_dangerous_command::command_might_be_dangerous;
 use crate::is_safe_command::is_known_safe_command;
+use crate::skills::SkillMetadata;
+use crate::skills::permissions::exec_policy_prefixes_for_skill_scripts;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -156,6 +158,38 @@ impl ExecPolicyManager {
 
     pub(crate) fn current(&self) -> Arc<Policy> {
         self.policy.load_full()
+    }
+
+    pub(crate) fn add_skill_script_allow_rules<'a, I>(&self, skills: I)
+    where
+        I: IntoIterator<Item = &'a SkillMetadata>,
+    {
+        let mut prefixes = Vec::new();
+        for skill in skills {
+            let Some(skill_dir) = skill.path.parent() else {
+                continue;
+            };
+            prefixes.extend(exec_policy_prefixes_for_skill_scripts(
+                skill_dir,
+                skill.permissions.as_ref(),
+            ));
+        }
+        if prefixes.is_empty() {
+            return;
+        }
+
+        prefixes.sort();
+        prefixes.dedup();
+        let mut updated_policy = self.current().as_ref().clone();
+        for prefix in prefixes {
+            if let Err(error) = updated_policy.add_prefix_rule(&prefix, Decision::Allow) {
+                tracing::warn!(
+                    ?prefix,
+                    "failed to add skill script execpolicy rule: {error}"
+                );
+            }
+        }
+        self.policy.store(Arc::new(updated_policy));
     }
 
     pub(crate) async fn create_exec_approval_requirement_for_command(
@@ -688,9 +722,13 @@ mod tests {
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
     use crate::config_loader::ConfigRequirementsToml;
+    use crate::skills::SkillMetadata;
+    use crate::skills::permissions::SkillManifestPermissions;
+    use crate::skills::permissions::compile_permission_profile;
     use codex_app_server_protocol::ConfigLayerSource;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SkillScope;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -1386,6 +1424,45 @@ prefix_rule(
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn add_skill_script_allow_rules_includes_script_files_for_permissioned_skills() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let skill_dir = temp_dir.path().join("skill");
+        let scripts_dir = skill_dir.join("scripts");
+        fs::create_dir_all(&scripts_dir).expect("create scripts dir");
+        let script_path = scripts_dir.join("run.sh");
+        fs::write(&script_path, "#!/bin/sh\necho hi\n").expect("write script");
+        let permission_profile =
+            compile_permission_profile(&skill_dir, Some(SkillManifestPermissions::default()))
+                .expect("permission profile");
+        let skill = SkillMetadata {
+            name: "test-skill".to_string(),
+            description: "skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            permissions: Some(permission_profile),
+            path: skill_dir.join("SKILL.md"),
+            scope: SkillScope::User,
+        };
+        let manager = ExecPolicyManager::default();
+
+        manager.add_skill_script_allow_rules([&skill]);
+        let command = [script_path.to_string_lossy().into_owned()];
+        let evaluation = manager.current().check(&command, &|_| Decision::Forbidden);
+
+        assert_eq!(evaluation.decision, Decision::Allow);
+        assert_eq!(
+            evaluation.matched_rules,
+            vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: vec![script_path.to_string_lossy().into_owned()],
+                decision: Decision::Allow,
+                justification: None,
+            }]
+        );
     }
 
     #[tokio::test]

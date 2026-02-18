@@ -326,6 +326,11 @@ impl Codex {
         let exec_policy = ExecPolicyManager::load(&config.config_layer_stack)
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
+        exec_policy.add_skill_script_allow_rules(
+            loaded_skills
+                .skills_with_enabled()
+                .filter_map(|(skill, enabled)| enabled.then_some(skill)),
+        );
 
         let config = Arc::new(config);
         let _ = models_manager
