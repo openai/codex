@@ -29,5 +29,4 @@ mod thread_unarchive;
 mod turn_interrupt;
 mod turn_start;
 mod turn_steer;
-#[cfg(not(target_os = "windows"))]
 mod windows_sandbox_setup;
