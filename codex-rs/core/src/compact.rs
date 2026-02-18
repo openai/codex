@@ -308,17 +308,7 @@ async fn run_compact_task_inner(
                 // TODO(ccunningham): Truncate user shell-command records before preserving them
                 // in incoming compaction items so they cannot cause repeated context-window
                 // overflows across pre-turn compaction attempts.
-                (should_keep_compacted_history_item(item)
-                    || matches!(
-                        item,
-                        ResponseItem::Message { role, content, .. }
-                            if role == "user"
-                                && matches!(
-                                    content.as_slice(),
-                                    [ContentItem::InputText { text }]
-                                        if is_user_shell_command_text(text)
-                                )
-                    ))
+                (should_keep_compacted_history_item(item) || is_user_shell_command_record(item))
                     && !is_summary_user_message_item(item)
             })
             .cloned()
@@ -449,13 +439,28 @@ pub(crate) fn process_compacted_history(
 }
 
 fn is_real_user_message(item: &ResponseItem) -> bool {
-    should_keep_compacted_history_item(item) && !is_summary_user_message_item(item)
+    matches!(
+        crate::event_mapping::parse_turn_item(item),
+        Some(TurnItem::UserMessage(user_message)) if !is_summary_message(&user_message.message())
+    )
 }
 
 fn is_summary_user_message_item(item: &ResponseItem) -> bool {
     matches!(
         crate::event_mapping::parse_turn_item(item),
         Some(TurnItem::UserMessage(user_message)) if is_summary_message(&user_message.message())
+    )
+}
+
+fn is_user_shell_command_record(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::Message { role, content, .. }
+            if role == "user"
+                && matches!(
+                    content.as_slice(),
+                    [ContentItem::InputText { text }] if is_user_shell_command_text(text)
+                )
     )
 }
 
@@ -480,6 +485,9 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
             }
             if role != "user" {
                 return true;
+            }
+            if is_user_shell_command_record(item) {
+                return false;
             }
 
             matches!(
