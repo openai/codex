@@ -149,6 +149,20 @@ pub(crate) fn line_contains_url_like(line: &Line<'_>) -> bool {
     text_contains_url_like(&text)
 }
 
+/// Returns `true` if `line` contains both a URL-like token and at least one
+/// substantive non-URL token.
+///
+/// Decorative marker tokens (for example list prefixes like `-`, `1.`, `|`,
+/// `│`) are ignored for the non-URL side of this check.
+pub(crate) fn line_has_mixed_url_and_non_url_tokens(line: &Line<'_>) -> bool {
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    text_has_mixed_url_and_non_url_tokens(&text)
+}
+
 /// Returns `true` if any whitespace-delimited token in `text` looks like a URL.
 ///
 /// Recognized patterns:
@@ -164,6 +178,27 @@ pub(crate) fn text_contains_url_like(text: &str) -> bool {
     text.split_ascii_whitespace().any(is_url_like_token)
 }
 
+/// Returns `true` if `text` contains at least one URL-like token and at least
+/// one substantive non-URL token.
+fn text_has_mixed_url_and_non_url_tokens(text: &str) -> bool {
+    let mut saw_url = false;
+    let mut saw_non_url = false;
+
+    for raw_token in text.split_ascii_whitespace() {
+        if is_url_like_token(raw_token) {
+            saw_url = true;
+        } else if is_substantive_non_url_token(raw_token) {
+            saw_non_url = true;
+        }
+
+        if saw_url && saw_non_url {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Decides whether a single whitespace-delimited token is URL-like.
 ///
 /// Strips surrounding punctuation, then checks for an absolute URL
@@ -171,6 +206,42 @@ pub(crate) fn text_contains_url_like(text: &str) -> bool {
 fn is_url_like_token(raw_token: &str) -> bool {
     let token = trim_url_token(raw_token);
     !token.is_empty() && (is_absolute_url_like(token) || is_bare_url_like(token))
+}
+
+fn is_substantive_non_url_token(raw_token: &str) -> bool {
+    let token = trim_url_token(raw_token);
+    if token.is_empty() || is_decorative_marker_token(raw_token, token) {
+        return false;
+    }
+
+    token.chars().any(char::is_alphanumeric)
+}
+
+fn is_decorative_marker_token(raw_token: &str, token: &str) -> bool {
+    let raw = raw_token.trim();
+    matches!(
+        raw,
+        "-" | "*"
+            | "+"
+            | "•"
+            | "◦"
+            | "▪"
+            | ">"
+            | "|"
+            | "│"
+            | "┆"
+            | "└"
+            | "├"
+            | "┌"
+            | "┐"
+            | "┘"
+            | "┼"
+    ) || is_ordered_list_marker(raw, token)
+}
+
+fn is_ordered_list_marker(raw_token: &str, token: &str) -> bool {
+    token.chars().all(|c| c.is_ascii_digit())
+        && (raw_token.ends_with('.') || raw_token.ends_with(')'))
 }
 
 fn trim_url_token(token: &str) -> &str {
@@ -1088,6 +1159,24 @@ them."#
         ]);
 
         assert!(line_contains_url_like(&line));
+    }
+
+    #[test]
+    fn line_has_mixed_url_and_non_url_tokens_detects_prose_plus_url() {
+        let line = Line::from("see https://example.com/path for details");
+        assert!(line_has_mixed_url_and_non_url_tokens(&line));
+    }
+
+    #[test]
+    fn line_has_mixed_url_and_non_url_tokens_ignores_pipe_prefix() {
+        let line = Line::from(vec!["  │ ".into(), "https://example.com/path".into()]);
+        assert!(!line_has_mixed_url_and_non_url_tokens(&line));
+    }
+
+    #[test]
+    fn line_has_mixed_url_and_non_url_tokens_ignores_ordered_list_marker() {
+        let line = Line::from("1. https://example.com/path");
+        assert!(!line_has_mixed_url_and_non_url_tokens(&line));
     }
 
     #[test]
