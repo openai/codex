@@ -1721,18 +1721,20 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_reinject
     .await?;
     let codex = harness.test().codex.clone();
 
-    let responses_mock = responses::mount_sse_sequence(
+    let initial_turn_request_mock = responses::mount_sse_once(
         harness.server(),
-        vec![
-            responses::sse(vec![
-                responses::ev_function_call("call-remote-summary-only", DUMMY_FUNCTION_NAME, "{}"),
-                responses::ev_completed_with_tokens("r1", 500),
-            ]),
-            responses::sse(vec![
-                responses::ev_assistant_message("m2", "REMOTE_SUMMARY_ONLY_FINAL_REPLY"),
-                responses::ev_completed_with_tokens("r2", 80),
-            ]),
-        ],
+        responses::sse(vec![
+            responses::ev_function_call("call-remote-summary-only", DUMMY_FUNCTION_NAME, "{}"),
+            responses::ev_completed_with_tokens("r1", 500),
+        ]),
+    )
+    .await;
+    let post_compact_turn_request_mock = responses::mount_sse_once(
+        harness.server(),
+        responses::sse(vec![
+            responses::ev_assistant_message("m2", "REMOTE_SUMMARY_ONLY_FINAL_REPLY"),
+            responses::ev_completed_with_tokens("r2", 80),
+        ]),
     )
     .await;
 
@@ -1757,21 +1759,29 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_reinject
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     assert_eq!(compact_mock.requests().len(), 1);
-    let requests = responses_mock.requests();
     assert_eq!(
-        requests.len(),
-        2,
-        "expected initial and post-compact requests"
+        initial_turn_request_mock.requests().len(),
+        1,
+        "expected initial turn request"
+    );
+    assert_eq!(
+        post_compact_turn_request_mock.requests().len(),
+        1,
+        "expected post-compaction request"
     );
 
     let compact_request = compact_mock.single_request();
+    let post_compact_turn_request = post_compact_turn_request_mock.single_request();
     insta::assert_snapshot!(
         "remote_mid_turn_compaction_summary_only_reinjects_context_shapes",
         format_labeled_requests_snapshot(
             "Remote mid-turn compaction where compact output has only summary user content: continuation layout reinjects canonical context before that summary.",
             &[
                 ("Remote Compaction Request", &compact_request),
-                ("Remote Post-Compaction History Layout", &requests[1]),
+                (
+                    "Remote Post-Compaction History Layout",
+                    &post_compact_turn_request
+                ),
             ]
         )
     );
