@@ -203,7 +203,7 @@ async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename(
         short_hash.chars().all(|ch| ch.is_ascii_alphanumeric()),
         "short hash should use only alphanumeric chars"
     );
-    assert!(slug.len() <= 20, "slug should be capped at 20 chars");
+    assert!(slug.len() <= 60, "slug should be capped at 60 chars");
     assert!(
         slug.chars()
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_'),
