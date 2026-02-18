@@ -1,23 +1,35 @@
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecToolCallOutput;
-use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandOutputDeltaEvent;
-use crate::protocol::ExecOutputStream;
-use crate::protocol::ReviewDecision;
 use crate::tools::sandboxing::ToolError;
-use anyhow::Context as _;
-use codex_protocol::approvals::ExecPolicyAmendment;
 use serde::Deserialize;
 use serde::Serialize;
-use std::io::Read;
-use std::io::Write;
 use std::path::PathBuf;
-use std::time::Instant;
-use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+#[cfg(unix)]
+use crate::protocol::EventMsg;
+#[cfg(unix)]
+use crate::protocol::ExecCommandOutputDeltaEvent;
+#[cfg(unix)]
+use crate::protocol::ExecOutputStream;
+#[cfg(unix)]
+use crate::protocol::ReviewDecision;
+#[cfg(unix)]
+use anyhow::Context as _;
+#[cfg(unix)]
+use codex_protocol::approvals::ExecPolicyAmendment;
+#[cfg(unix)]
+use codex_utils_pty::process_group::kill_child_process_group;
+#[cfg(unix)]
+use std::io::Read;
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::time::Instant;
+#[cfg(unix)]
+use tokio::io::AsyncReadExt;
 #[cfg(unix)]
 use tokio::net::UnixListener;
 #[cfg(unix)]
@@ -126,160 +138,171 @@ impl ZshExecBridge {
         }
 
         #[cfg(unix)]
-        let listener = {
-            let _ = std::fs::remove_file(&wrapper_socket_path);
-            UnixListener::bind(&wrapper_socket_path).map_err(|err| {
+        {
+            let listener = {
+                let _ = std::fs::remove_file(&wrapper_socket_path);
+                UnixListener::bind(&wrapper_socket_path).map_err(|err| {
+                    ToolError::Rejected(format!(
+                        "bind wrapper socket at {}: {err}",
+                        wrapper_socket_path.display()
+                    ))
+                })?
+            };
+
+            let wrapper_path = std::env::current_exe().map_err(|err| {
+                ToolError::Rejected(format!("resolve current executable path: {err}"))
+            })?;
+
+            let mut cmd = tokio::process::Command::new(&command[0]);
+            if command.len() > 1 {
+                cmd.args(&command[1..]);
+            }
+            cmd.current_dir(&req.cwd);
+            cmd.stdin(std::process::Stdio::null());
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+            cmd.kill_on_drop(true);
+            cmd.env_clear();
+            cmd.envs(&req.env);
+            cmd.env(
+                ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR,
+                wrapper_socket_path.to_string_lossy().to_string(),
+            );
+            cmd.env(EXEC_WRAPPER_ENV_VAR, &wrapper_path);
+            cmd.env(ZSH_EXEC_WRAPPER_MODE_ENV_VAR, "1");
+
+            let mut child = cmd.spawn().map_err(|err| {
                 ToolError::Rejected(format!(
-                    "bind wrapper socket at {}: {err}",
-                    wrapper_socket_path.display()
+                    "failed to start zsh fork command {} with zsh_path {}: {err}",
+                    command[0],
+                    zsh_path.display()
                 ))
-            })?
-        };
+            })?;
 
-        let wrapper_path = std::env::current_exe().map_err(|err| {
-            ToolError::Rejected(format!("resolve current executable path: {err}"))
-        })?;
+            let (stream_tx, mut stream_rx) =
+                tokio::sync::mpsc::unbounded_channel::<(ExecOutputStream, Vec<u8>)>();
 
-        let mut cmd = tokio::process::Command::new(&command[0]);
-        if command.len() > 1 {
-            cmd.args(&command[1..]);
-        }
-        cmd.current_dir(&req.cwd);
-        cmd.stdin(std::process::Stdio::null());
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-        cmd.kill_on_drop(true);
-        cmd.env_clear();
-        cmd.envs(&req.env);
-        cmd.env(
-            ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR,
-            wrapper_socket_path.to_string_lossy().to_string(),
-        );
-        cmd.env(EXEC_WRAPPER_ENV_VAR, &wrapper_path);
-        cmd.env(ZSH_EXEC_WRAPPER_MODE_ENV_VAR, "1");
-
-        let mut child = cmd.spawn().map_err(|err| {
-            ToolError::Rejected(format!(
-                "failed to start zsh fork command {} with zsh_path {}: {err}",
-                command[0],
-                zsh_path.display()
-            ))
-        })?;
-
-        let (stream_tx, mut stream_rx) =
-            tokio::sync::mpsc::unbounded_channel::<(ExecOutputStream, Vec<u8>)>();
-
-        if let Some(mut out) = child.stdout.take() {
-            let tx = stream_tx.clone();
-            tokio::spawn(async move {
-                let mut buf = [0_u8; 8192];
-                loop {
-                    let read = match out.read(&mut buf).await {
-                        Ok(0) => break,
-                        Ok(n) => n,
-                        Err(err) => {
-                            tracing::warn!("zsh fork stdout read error: {err}");
-                            break;
-                        }
-                    };
-                    let _ = tx.send((ExecOutputStream::Stdout, buf[..read].to_vec()));
-                }
-            });
-        }
-
-        if let Some(mut err) = child.stderr.take() {
-            let tx = stream_tx.clone();
-            tokio::spawn(async move {
-                let mut buf = [0_u8; 8192];
-                loop {
-                    let read = match err.read(&mut buf).await {
-                        Ok(0) => break,
-                        Ok(n) => n,
-                        Err(err) => {
-                            tracing::warn!("zsh fork stderr read error: {err}");
-                            break;
-                        }
-                    };
-                    let _ = tx.send((ExecOutputStream::Stderr, buf[..read].to_vec()));
-                }
-            });
-        }
-        drop(stream_tx);
-
-        let mut stdout_bytes = Vec::new();
-        let mut stderr_bytes = Vec::new();
-        let mut child_exit = None;
-        let mut user_rejected = false;
-        let start = Instant::now();
-
-        let wait = child.wait();
-        tokio::pin!(wait);
-
-        #[cfg(unix)]
-        while child_exit.is_none() || !stream_rx.is_closed() {
-            tokio::select! {
-                result = &mut wait, if child_exit.is_none() => {
-                    child_exit = Some(result.map_err(|err| ToolError::Rejected(format!("wait for zsh fork command exit: {err}")))?);
-                }
-                stream = stream_rx.recv(), if !stream_rx.is_closed() => {
-                    if let Some((output_stream, chunk)) = stream {
-                        match output_stream {
-                            ExecOutputStream::Stdout => stdout_bytes.extend_from_slice(&chunk),
-                            ExecOutputStream::Stderr => stderr_bytes.extend_from_slice(&chunk),
-                        }
-                        session
-                            .send_event(
-                                turn,
-                                EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
-                                    call_id: call_id.to_string(),
-                                    stream: output_stream,
-                                    chunk,
-                                }),
-                            )
-                            .await;
+            if let Some(mut out) = child.stdout.take() {
+                let tx = stream_tx.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0_u8; 8192];
+                    loop {
+                        let read = match out.read(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(n) => n,
+                            Err(err) => {
+                                tracing::warn!("zsh fork stdout read error: {err}");
+                                break;
+                            }
+                        };
+                        let _ = tx.send((ExecOutputStream::Stdout, buf[..read].to_vec()));
                     }
-                }
-                accept_result = listener.accept(), if child_exit.is_none() => {
-                    let (stream, _) = accept_result.map_err(|err| {
-                        ToolError::Rejected(format!("failed to accept wrapper request: {err}"))
-                    })?;
-                    if self
-                        .handle_wrapper_request(stream, req.justification.clone(), session, turn, call_id)
-                        .await?
-                    {
-                        user_rejected = true;
+                });
+            }
+
+            if let Some(mut err) = child.stderr.take() {
+                let tx = stream_tx.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0_u8; 8192];
+                    loop {
+                        let read = match err.read(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(n) => n,
+                            Err(err) => {
+                                tracing::warn!("zsh fork stderr read error: {err}");
+                                break;
+                            }
+                        };
+                        let _ = tx.send((ExecOutputStream::Stderr, buf[..read].to_vec()));
+                    }
+                });
+            }
+            drop(stream_tx);
+
+            let mut stdout_bytes = Vec::new();
+            let mut stderr_bytes = Vec::new();
+            let mut child_exit = None;
+            let mut timed_out = false;
+            let mut stream_open = true;
+            let mut user_rejected = false;
+            let start = Instant::now();
+
+            let expiration = req.expiration.clone().wait();
+            tokio::pin!(expiration);
+
+            while child_exit.is_none() || stream_open {
+                tokio::select! {
+                    result = child.wait(), if child_exit.is_none() => {
+                        child_exit = Some(result.map_err(|err| ToolError::Rejected(format!("wait for zsh fork command exit: {err}")))?);
+                    }
+                    stream = stream_rx.recv(), if stream_open => {
+                        if let Some((output_stream, chunk)) = stream {
+                            match output_stream {
+                                ExecOutputStream::Stdout => stdout_bytes.extend_from_slice(&chunk),
+                                ExecOutputStream::Stderr => stderr_bytes.extend_from_slice(&chunk),
+                            }
+                            session
+                                .send_event(
+                                    turn,
+                                    EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                                        call_id: call_id.to_string(),
+                                        stream: output_stream,
+                                        chunk,
+                                    }),
+                                )
+                                .await;
+                        } else {
+                            stream_open = false;
+                        }
+                    }
+                    accept_result = listener.accept(), if child_exit.is_none() => {
+                        let (stream, _) = accept_result.map_err(|err| {
+                            ToolError::Rejected(format!("failed to accept wrapper request: {err}"))
+                        })?;
+                        if self
+                            .handle_wrapper_request(stream, req.justification.clone(), session, turn, call_id)
+                            .await?
+                        {
+                            user_rejected = true;
+                        }
+                    }
+                    _ = &mut expiration, if child_exit.is_none() => {
+                        timed_out = true;
+                        kill_child_process_group(&mut child).map_err(|err| {
+                            ToolError::Rejected(format!("kill zsh fork command process group: {err}"))
+                        })?;
+                        child.start_kill().map_err(|err| {
+                            ToolError::Rejected(format!("kill zsh fork command process: {err}"))
+                        })?;
                     }
                 }
             }
-        }
 
-        #[cfg(unix)]
-        {
             let _ = std::fs::remove_file(&wrapper_socket_path);
+
+            let status = child_exit.ok_or_else(|| {
+                ToolError::Rejected("zsh fork command did not return exit status".to_string())
+            })?;
+
+            if user_rejected {
+                return Err(ToolError::Rejected("rejected by user".to_string()));
+            }
+
+            let stdout_text = crate::text_encoding::bytes_to_string_smart(&stdout_bytes);
+            let stderr_text = crate::text_encoding::bytes_to_string_smart(&stderr_bytes);
+            let output = ExecToolCallOutput {
+                exit_code: status.code().unwrap_or(-1),
+                stdout: crate::exec::StreamOutput::new(stdout_text.clone()),
+                stderr: crate::exec::StreamOutput::new(stderr_text.clone()),
+                aggregated_output: crate::exec::StreamOutput::new(format!(
+                    "{stdout_text}{stderr_text}"
+                )),
+                duration: start.elapsed(),
+                timed_out,
+            };
+
+            Self::map_exec_result(req.sandbox, output)
         }
-
-        let status = child_exit.ok_or_else(|| {
-            ToolError::Rejected("zsh fork command did not return exit status".to_string())
-        })?;
-
-        if user_rejected {
-            return Err(ToolError::Rejected("rejected by user".to_string()));
-        }
-
-        let stdout_text = crate::text_encoding::bytes_to_string_smart(&stdout_bytes);
-        let stderr_text = crate::text_encoding::bytes_to_string_smart(&stderr_bytes);
-        let output = ExecToolCallOutput {
-            exit_code: status.code().unwrap_or(-1),
-            stdout: crate::exec::StreamOutput::new(stdout_text.clone()),
-            stderr: crate::exec::StreamOutput::new(stderr_text.clone()),
-            aggregated_output: crate::exec::StreamOutput::new(format!(
-                "{stdout_text}{stderr_text}"
-            )),
-            duration: start.elapsed(),
-            timed_out: false,
-        };
-
-        Self::map_exec_result(req.sandbox, output)
     }
 
     #[cfg(unix)]
@@ -460,9 +483,9 @@ fn run_exec_wrapper_mode() -> anyhow::Result<()> {
 
         if action == WrapperExecAction::Deny {
             if let Some(reason) = reason {
-                eprintln!("Execution denied: {reason}");
+                tracing::warn!("execution denied: {reason}");
             } else {
-                eprintln!("Execution denied");
+                tracing::warn!("execution denied");
             }
             std::process::exit(1);
         }
@@ -471,6 +494,9 @@ fn run_exec_wrapper_mode() -> anyhow::Result<()> {
         if argv.len() > 1 {
             command.args(&argv[1..]);
         }
+        command.env_remove(ZSH_EXEC_WRAPPER_MODE_ENV_VAR);
+        command.env_remove(ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR);
+        command.env_remove(EXEC_WRAPPER_ENV_VAR);
         let status = command.status().context("spawn wrapped executable")?;
         std::process::exit(status.code().unwrap_or(1));
     }
