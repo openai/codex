@@ -3482,12 +3482,34 @@ mod handlers {
             if let Some(previous_model) = sess.previous_model().await
                 && let Some(previous_context_item) = previous_context_item.as_ref()
                 && previous_model != previous_context_item.model
-                && !update_items
-                    .iter()
-                    .any(Session::is_model_switch_developer_message)
             {
-                // Apply resume/fork model hydration only to model-switch diffing so it does not
-                // suppress other updates (for example personality changes).
+                // Rebase model-switch diffing on resume/fork model hydration so model-switch
+                // updates reflect rollout history while other diffs (for example personality) still
+                // use the real previous turn context.
+                let model_switch_insert_index = update_items
+                    .iter()
+                    .position(Session::is_model_switch_developer_message)
+                    .or_else(|| {
+                        update_items.iter().position(|item| {
+                            let codex_protocol::models::ResponseItem::Message {
+                                role,
+                                content,
+                                ..
+                            } = item
+                            else {
+                                return false;
+                            };
+                            role == "developer"
+                                && content.iter().any(|content_item| {
+                                    matches!(
+                                        content_item,
+                                        codex_protocol::models::ContentItem::InputText { text } if text.starts_with("<personality_spec>")
+                                    )
+                                })
+                        })
+                    });
+                update_items.retain(|item| !Session::is_model_switch_developer_message(item));
+
                 let mut previous_context_item_for_model_switch = previous_context_item.clone();
                 previous_context_item_for_model_switch.model = previous_model;
                 if let Some(model_switch_item) =
@@ -3496,7 +3518,11 @@ mod handlers {
                         &current_context_item,
                     )
                 {
-                    update_items.push(model_switch_item);
+                    if let Some(index) = model_switch_insert_index {
+                        update_items.insert(index, model_switch_item);
+                    } else {
+                        update_items.push(model_switch_item);
+                    }
                 }
             }
             if !update_items.is_empty() {

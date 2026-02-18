@@ -472,3 +472,98 @@ async fn resume_model_hydration_does_not_suppress_personality_update() -> Result
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_override_matching_rollout_model_skips_model_switch_update() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model = Some("gpt-5.2".to_string());
+    });
+    let initial = builder.build(&server).await?;
+    let codex = Arc::clone(&initial.codex);
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let initial_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-initial"),
+            ev_assistant_message("msg-1", "Completed first turn"),
+            ev_completed("resp-initial"),
+        ]),
+    )
+    .await;
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "record initial rollout model".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    let _ = initial_mock.single_request();
+
+    let resumed_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-resume"),
+            ev_assistant_message("msg-2", "Resumed turn"),
+            ev_completed("resp-resume"),
+        ]),
+    )
+    .await;
+
+    let mut resume_builder = test_codex().with_config(|config| {
+        config.model = Some("gpt-5.2-codex".to_string());
+    });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    resumed
+        .codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: Some("gpt-5.2".to_string()),
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn after override to rollout model".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = resumed_mock.single_request();
+    let developer_texts = request.message_input_texts("developer");
+    let model_switch_count = developer_texts
+        .iter()
+        .filter(|text| text.contains("<model_switch>"))
+        .count();
+    assert_eq!(
+        model_switch_count, 0,
+        "did not expect model switch update when override matches rollout model"
+    );
+
+    Ok(())
+}
