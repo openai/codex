@@ -1,4 +1,8 @@
+use chrono::DateTime;
+use chrono::Utc;
+use codex_protocol::ThreadId;
 use codex_state::Stage1Output;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -7,37 +11,102 @@ use tracing::warn;
 use crate::memories::ensure_layout;
 use crate::memories::raw_memories_file;
 use crate::memories::rollout_summaries_dir;
+use crate::rollout::list::parse_timestamp_uuid_from_filename;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ResolvedRolloutSummary {
+    pub(super) thread_id: ThreadId,
+    pub(super) file_stem: String,
+    pub(super) file_name: String,
+}
+
+/// Resolves rollout summary filenames for retained stage-1 outputs.
+pub(super) fn resolve_rollout_summary_files(
+    memories: &[Stage1Output],
+    max_raw_memories_for_global: usize,
+) -> Vec<ResolvedRolloutSummary> {
+    let retained = retained_memories(memories, max_raw_memories_for_global);
+    let mut base_name_counts = HashMap::<String, usize>::new();
+    let mut resolved = Vec::with_capacity(retained.len());
+
+    for memory in retained {
+        let timestamp = if let Some(file_name) = memory
+            .rollout_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            && let Some((parsed_timestamp, _)) = parse_timestamp_uuid_from_filename(file_name)
+            && let Some(parsed) =
+                DateTime::<Utc>::from_timestamp(parsed_timestamp.unix_timestamp(), 0)
+        {
+            parsed.format("%Y-%m-%dT%H-%M-%S").to_string()
+        } else {
+            memory
+                .source_updated_at
+                .format("%Y-%m-%dT%H-%M-%S")
+                .to_string()
+        };
+        let slug = normalize_rollout_slug(memory.rollout_slug.as_deref());
+        let base_stem = format!("{timestamp}-{slug}");
+
+        let counter = base_name_counts.entry(base_stem.clone()).or_default();
+        *counter += 1;
+        let file_stem = if *counter == 1 {
+            base_stem
+        } else {
+            format!("{base_stem}-{counter}")
+        };
+        let file_name = format!("{file_stem}.md");
+
+        resolved.push(ResolvedRolloutSummary {
+            thread_id: memory.thread_id,
+            file_stem,
+            file_name,
+        });
+    }
+
+    resolved
+}
 
 /// Rebuild `raw_memories.md` from DB-backed stage-1 outputs.
 pub(super) async fn rebuild_raw_memories_file_from_memories(
     root: &Path,
     memories: &[Stage1Output],
-    max_raw_memories_for_global: usize,
+    resolved: &[ResolvedRolloutSummary],
 ) -> std::io::Result<()> {
     ensure_layout(root).await?;
-    rebuild_raw_memories_file(root, memories, max_raw_memories_for_global).await
+    rebuild_raw_memories_file(root, memories, resolved).await
 }
 
 /// Syncs canonical rollout summary files from DB-backed stage-1 output rows.
 pub(super) async fn sync_rollout_summaries_from_memories(
     root: &Path,
     memories: &[Stage1Output],
-    max_raw_memories_for_global: usize,
+    resolved: &[ResolvedRolloutSummary],
 ) -> std::io::Result<()> {
     ensure_layout(root).await?;
 
-    let retained = retained_memories(memories, max_raw_memories_for_global);
-    let keep = retained
+    let keep = resolved
         .iter()
-        .map(rollout_summary_file_stem)
+        .map(|item| item.file_stem.clone())
         .collect::<HashSet<_>>();
     prune_rollout_summaries(root, &keep).await?;
 
-    for memory in retained {
-        write_rollout_summary_for_thread(root, memory).await?;
+    let memory_by_thread = memories
+        .iter()
+        .map(|memory| (memory.thread_id.to_string(), memory))
+        .collect::<HashMap<_, _>>();
+
+    for item in resolved {
+        let Some(memory) = memory_by_thread.get(&item.thread_id.to_string()) else {
+            return Err(std::io::Error::other(format!(
+                "missing stage1 output for thread {} while syncing rollout summaries",
+                item.thread_id
+            )));
+        };
+        write_rollout_summary_for_thread(root, memory, &item.file_stem).await?;
     }
 
-    if retained.is_empty() {
+    if resolved.is_empty() {
         for file_name in ["MEMORY.md", "memory_summary.md"] {
             let path = root.join(file_name);
             if let Err(err) = tokio::fs::remove_file(path).await
@@ -61,18 +130,29 @@ pub(super) async fn sync_rollout_summaries_from_memories(
 async fn rebuild_raw_memories_file(
     root: &Path,
     memories: &[Stage1Output],
-    max_raw_memories_for_global: usize,
+    resolved: &[ResolvedRolloutSummary],
 ) -> std::io::Result<()> {
-    let retained = retained_memories(memories, max_raw_memories_for_global);
     let mut body = String::from("# Raw Memories\n\n");
 
-    if retained.is_empty() {
+    if resolved.is_empty() {
         body.push_str("No raw memories yet.\n");
         return tokio::fs::write(raw_memories_file(root), body).await;
     }
 
+    let memory_by_thread = memories
+        .iter()
+        .map(|memory| (memory.thread_id.to_string(), memory))
+        .collect::<HashMap<_, _>>();
+
     body.push_str("Merged stage-1 raw memories (latest first):\n\n");
-    for memory in retained {
+    for item in resolved {
+        let Some(memory) = memory_by_thread.get(&item.thread_id.to_string()) else {
+            return Err(std::io::Error::other(format!(
+                "missing stage1 output for thread {} while rebuilding raw memories",
+                item.thread_id
+            )));
+        };
+
         writeln!(body, "## Thread `{}`", memory.thread_id).map_err(raw_memories_format_error)?;
         writeln!(
             body,
@@ -81,6 +161,8 @@ async fn rebuild_raw_memories_file(
         )
         .map_err(raw_memories_format_error)?;
         writeln!(body, "cwd: {}", memory.cwd.display()).map_err(raw_memories_format_error)?;
+        writeln!(body, "rollout_summary_file_name: {}", item.file_name)
+            .map_err(raw_memories_format_error)?;
         writeln!(body).map_err(raw_memories_format_error)?;
         body.push_str(memory.raw_memory.trim());
         body.push_str("\n\n");
@@ -122,8 +204,8 @@ async fn prune_rollout_summaries(root: &Path, keep: &HashSet<String>) -> std::io
 async fn write_rollout_summary_for_thread(
     root: &Path,
     memory: &Stage1Output,
+    file_stem: &str,
 ) -> std::io::Result<()> {
-    let file_stem = rollout_summary_file_stem(memory);
     let path = rollout_summaries_dir(root).join(format!("{file_stem}.md"));
 
     let mut body = String::new();
@@ -157,41 +239,48 @@ fn rollout_summary_format_error(err: std::fmt::Error) -> std::io::Error {
     std::io::Error::other(format!("format rollout summary: {err}"))
 }
 
-fn rollout_summary_file_stem(memory: &Stage1Output) -> String {
-    const ROLLOUT_SLUG_MAX_LEN: usize = 20;
+fn normalize_rollout_slug(raw_slug: Option<&str>) -> String {
+    const ROLLOUT_SLUG_MAX_LEN: usize = 60;
 
-    let thread_id = memory.thread_id.to_string();
-    let Some(raw_slug) = memory.rollout_slug.as_deref() else {
-        return thread_id;
-    };
+    let mut normalized = String::with_capacity(ROLLOUT_SLUG_MAX_LEN);
+    for ch in raw_slug.unwrap_or_default().chars() {
+        let mapped = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_lowercase()
+        } else if ch == '_' || ch == '-' {
+            ch
+        } else {
+            '_'
+        };
 
-    let mut slug = String::with_capacity(ROLLOUT_SLUG_MAX_LEN);
-    for ch in raw_slug.chars() {
-        if slug.len() >= ROLLOUT_SLUG_MAX_LEN {
+        let mapped_is_sep = mapped == '_' || mapped == '-';
+        let prev_is_sep = normalized
+            .chars()
+            .last()
+            .is_some_and(|previous| previous == '_' || previous == '-');
+        if mapped_is_sep && prev_is_sep {
+            continue;
+        }
+
+        normalized.push(mapped);
+        if normalized.len() == ROLLOUT_SLUG_MAX_LEN {
             break;
         }
-
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch.to_ascii_lowercase());
-        } else {
-            slug.push('_');
-        }
     }
 
-    while slug.ends_with('_') {
-        slug.pop();
-    }
-
-    if slug.is_empty() {
-        thread_id
+    let trimmed = normalized
+        .trim_matches(|ch| ch == '_' || ch == '-')
+        .to_string();
+    if trimmed.is_empty() {
+        "unknown".to_string()
     } else {
-        format!("{thread_id}-{slug}")
+        trimmed
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::rollout_summary_file_stem;
+    use super::normalize_rollout_slug;
+    use super::resolve_rollout_summary_files;
     use chrono::TimeZone;
     use chrono::Utc;
     use codex_protocol::ThreadId;
@@ -199,43 +288,82 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
-    fn stage1_output_with_slug(rollout_slug: Option<&str>) -> Stage1Output {
+    fn stage1_output_with_slug_and_path(
+        rollout_slug: Option<&str>,
+        rollout_path: &str,
+    ) -> Stage1Output {
         Stage1Output {
             thread_id: ThreadId::new(),
             source_updated_at: Utc.timestamp_opt(123, 0).single().expect("timestamp"),
             raw_memory: "raw memory".to_string(),
             rollout_summary: "summary".to_string(),
             rollout_slug: rollout_slug.map(ToString::to_string),
+            rollout_summary_filename: None,
+            rollout_path: PathBuf::from(rollout_path),
             cwd: PathBuf::from("/tmp/workspace"),
             generated_at: Utc.timestamp_opt(124, 0).single().expect("timestamp"),
         }
     }
 
     #[test]
-    fn rollout_summary_file_stem_uses_thread_id_when_slug_missing() {
-        let memory = stage1_output_with_slug(None);
-        let thread_id = memory.thread_id.to_string();
-
-        assert_eq!(rollout_summary_file_stem(&memory), thread_id);
+    fn normalize_rollout_slug_applies_capping_and_separator_rules() {
+        let value = normalize_rollout_slug(Some(
+            "--Unsafe Slug//With---Spaces&&Symbols____________________01234567890123456789012345",
+        ));
+        assert_eq!(
+            value,
+            "unsafe_slug_with-spaces_symbols_01234567890123456789012345"
+        );
+        assert!(value.len() <= 60);
     }
 
     #[test]
-    fn rollout_summary_file_stem_sanitizes_and_truncates_slug() {
-        let memory =
-            stage1_output_with_slug(Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345"));
-        let thread_id = memory.thread_id.to_string();
+    fn normalize_rollout_slug_uses_unknown_for_empty_result() {
+        assert_eq!(normalize_rollout_slug(Some("!!!")), "unknown");
+        assert_eq!(normalize_rollout_slug(Some("")), "unknown");
+        assert_eq!(normalize_rollout_slug(None), "unknown");
+    }
 
+    #[test]
+    fn resolve_rollout_summary_files_uses_timestamp_and_suffixes_collisions() {
+        let first = stage1_output_with_slug_and_path(
+            Some("Unsafe Slug/With Spaces & Symbols"),
+            "sessions/2026/02/17/rollout-2026-02-17T19-22-07-00000000-0000-0000-0000-000000000001.jsonl",
+        );
+        let second = Stage1Output {
+            thread_id: ThreadId::new(),
+            source_updated_at: Utc.timestamp_opt(124, 0).single().expect("timestamp"),
+            raw_memory: "raw memory 2".to_string(),
+            rollout_summary: "summary 2".to_string(),
+            rollout_slug: Some("Unsafe Slug/With Spaces & Symbols".to_string()),
+            rollout_summary_filename: None,
+            rollout_path: PathBuf::from(
+                "sessions/2026/02/17/rollout-2026-02-17T19-22-07-00000000-0000-0000-0000-000000000002.jsonl",
+            ),
+            cwd: PathBuf::from("/tmp/workspace"),
+            generated_at: Utc.timestamp_opt(125, 0).single().expect("timestamp"),
+        };
+
+        let resolved = resolve_rollout_summary_files(&[first, second], 8);
+        assert_eq!(resolved.len(), 2);
         assert_eq!(
-            rollout_summary_file_stem(&memory),
-            format!("{thread_id}-unsafe_slug_with_spa")
+            resolved[0].file_name,
+            "2026-02-17T19-22-07-unsafe_slug_with_spaces_symbols.md"
+        );
+        assert_eq!(
+            resolved[1].file_name,
+            "2026-02-17T19-22-07-unsafe_slug_with_spaces_symbols-2.md"
         );
     }
 
     #[test]
-    fn rollout_summary_file_stem_uses_thread_id_when_slug_is_empty() {
-        let memory = stage1_output_with_slug(Some(""));
-        let thread_id = memory.thread_id.to_string();
+    fn resolve_rollout_summary_files_falls_back_to_source_updated_at_when_rollout_timestamp_is_missing()
+     {
+        let memory =
+            stage1_output_with_slug_and_path(Some("alpha"), "sessions/rollout-not-parseable.jsonl");
+        let resolved = resolve_rollout_summary_files(&[memory], 8);
 
-        assert_eq!(rollout_summary_file_stem(&memory), thread_id);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].file_name, "1970-01-01T00-02-03-alpha.md");
     }
 }

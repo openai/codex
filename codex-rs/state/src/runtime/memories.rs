@@ -197,7 +197,9 @@ SELECT
     so.raw_memory,
     so.rollout_summary,
     so.rollout_slug,
+    so.rollout_summary_filename,
     so.generated_at
+     , COALESCE(t.rollout_path, '') AS rollout_path
      , COALESCE(t.cwd, '') AS cwd
 FROM stage1_outputs AS so
 LEFT JOIN threads AS t
@@ -214,6 +216,98 @@ LIMIT ?
         rows.into_iter()
             .map(|row| Stage1OutputRow::try_from_row(&row).and_then(Stage1Output::try_from))
             .collect::<Result<Vec<_>, _>>()
+    }
+
+    /// Persists the current rollout summary filename mapping for retained rows.
+    ///
+    /// Query behavior:
+    /// - clears `rollout_summary_filename` for rows not in `rows`
+    /// - updates each retained row to its current emitted filename
+    pub async fn set_rollout_summary_filenames_for_global(
+        &self,
+        rows: &[(ThreadId, String)],
+    ) -> anyhow::Result<()> {
+        let rows = rows
+            .iter()
+            .map(|(thread_id, file_name)| (thread_id.to_string(), file_name.clone()))
+            .collect::<Vec<_>>();
+
+        let mut tx = self.pool.begin().await?;
+        if rows.is_empty() {
+            sqlx::query(
+                r#"
+UPDATE stage1_outputs
+SET rollout_summary_filename = NULL
+                "#,
+            )
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            return Ok(());
+        }
+
+        let mut clear_builder = QueryBuilder::<Sqlite>::new(
+            r#"
+UPDATE stage1_outputs
+SET rollout_summary_filename = NULL
+WHERE thread_id NOT IN (
+            "#,
+        );
+        let mut separated = clear_builder.separated(", ");
+        for (thread_id, _) in &rows {
+            separated.push_bind(thread_id.as_str());
+        }
+        separated.push_unseparated("\n)");
+        clear_builder.build().execute(&mut *tx).await?;
+
+        for (thread_id, file_name) in &rows {
+            sqlx::query(
+                r#"
+UPDATE stage1_outputs
+SET rollout_summary_filename = ?
+WHERE thread_id = ?
+                "#,
+            )
+            .bind(file_name)
+            .bind(thread_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Finds one stage-1 output row by rollout summary filename.
+    pub async fn get_stage1_output_by_rollout_summary_filename(
+        &self,
+        file_name: &str,
+    ) -> anyhow::Result<Option<Stage1Output>> {
+        let row = sqlx::query(
+            r#"
+SELECT
+    so.thread_id,
+    so.source_updated_at,
+    so.raw_memory,
+    so.rollout_summary,
+    so.rollout_slug,
+    so.rollout_summary_filename,
+    so.generated_at
+     , COALESCE(t.rollout_path, '') AS rollout_path
+     , COALESCE(t.cwd, '') AS cwd
+FROM stage1_outputs AS so
+LEFT JOIN threads AS t
+    ON t.id = so.thread_id
+WHERE so.rollout_summary_filename = ?
+LIMIT 1
+            "#,
+        )
+        .bind(file_name)
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+
+        row.map(|row| Stage1OutputRow::try_from_row(&row).and_then(Stage1Output::try_from))
+            .transpose()
     }
 
     /// Attempts to claim a stage-1 job for a thread at `source_updated_at`.
@@ -463,13 +557,15 @@ INSERT INTO stage1_outputs (
     raw_memory,
     rollout_summary,
     rollout_slug,
+    rollout_summary_filename,
     generated_at
-) VALUES (?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, NULL, ?)
 ON CONFLICT(thread_id) DO UPDATE SET
     source_updated_at = excluded.source_updated_at,
     raw_memory = excluded.raw_memory,
     rollout_summary = excluded.rollout_summary,
     rollout_slug = excluded.rollout_slug,
+    rollout_summary_filename = excluded.rollout_summary_filename,
     generated_at = excluded.generated_at
 WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
             "#,

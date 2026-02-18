@@ -7,6 +7,7 @@ use crate::memories::metrics;
 use crate::memories::phase_two;
 use crate::memories::prompts::build_consolidation_prompt;
 use crate::memories::storage::rebuild_raw_memories_file_from_memories;
+use crate::memories::storage::resolve_rollout_summary_files;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
 use codex_config::Constrained;
 use codex_protocol::ThreadId;
@@ -74,23 +75,41 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         }
     };
     let new_watermark = get_watermark(claim.watermark, &raw_memories);
+    let resolved = resolve_rollout_summary_files(&raw_memories, max_raw_memories);
 
     // 4. Update the file system by syncing the raw memories with the one extracted from DB at
     //    step 3
     // [`rollout_summaries/`]
-    if let Err(err) =
-        sync_rollout_summaries_from_memories(&root, &raw_memories, max_raw_memories).await
-    {
+    if let Err(err) = sync_rollout_summaries_from_memories(&root, &raw_memories, &resolved).await {
         tracing::error!("failed syncing local memory artifacts for global consolidation: {err}");
         job::failed(session, db, &claim, "failed_sync_artifacts").await;
         return;
     }
     // [`raw_memories.md`]
-    if let Err(err) =
-        rebuild_raw_memories_file_from_memories(&root, &raw_memories, max_raw_memories).await
+    if let Err(err) = rebuild_raw_memories_file_from_memories(&root, &raw_memories, &resolved).await
     {
         tracing::error!("failed syncing local memory artifacts for global consolidation: {err}");
         job::failed(session, db, &claim, "failed_rebuild_raw_memories").await;
+        return;
+    }
+    let filename_rows = resolved
+        .iter()
+        .map(|item| (item.thread_id, item.file_name.clone()))
+        .collect::<Vec<_>>();
+    if let Err(err) = db
+        .set_rollout_summary_filenames_for_global(filename_rows.as_slice())
+        .await
+    {
+        tracing::error!(
+            "failed persisting rollout summary filename mapping for global consolidation: {err}"
+        );
+        job::failed(
+            session,
+            db,
+            &claim,
+            "failed_persist_rollout_summary_filenames",
+        )
+        .await;
         return;
     }
     if raw_memories.is_empty() {

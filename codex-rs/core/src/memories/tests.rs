@@ -1,4 +1,5 @@
 use super::storage::rebuild_raw_memories_file_from_memories;
+use super::storage::resolve_rollout_summary_files;
 use super::storage::sync_rollout_summaries_from_memories;
 use crate::config::types::DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL;
 use crate::memories::ensure_layout;
@@ -69,10 +70,25 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
     let root = dir.path().join("memory");
     ensure_layout(&root).await.expect("ensure layout");
 
-    let keep_id = ThreadId::default().to_string();
-    let drop_id = ThreadId::default().to_string();
-    let keep_path = rollout_summaries_dir(&root).join(format!("{keep_id}.md"));
-    let drop_path = rollout_summaries_dir(&root).join(format!("{drop_id}.md"));
+    let keep_id = ThreadId::new();
+
+    let memories = vec![Stage1Output {
+        thread_id: keep_id,
+        source_updated_at: Utc.timestamp_opt(100, 0).single().expect("timestamp"),
+        raw_memory: "raw memory".to_string(),
+        rollout_summary: "short summary".to_string(),
+        rollout_slug: None,
+        rollout_summary_filename: None,
+        rollout_path: PathBuf::from(format!(
+            "sessions/2026/02/17/rollout-2026-02-17T19-22-07-{keep_id}.jsonl"
+        )),
+        cwd: PathBuf::from("/tmp/workspace"),
+        generated_at: Utc.timestamp_opt(101, 0).single().expect("timestamp"),
+    }];
+    let resolved =
+        resolve_rollout_summary_files(&memories, DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL);
+    let keep_path = rollout_summaries_dir(&root).join(&resolved[0].file_name);
+    let drop_path = rollout_summaries_dir(&root).join("obsolete-summary.md");
     tokio::fs::write(&keep_path, "keep")
         .await
         .expect("write keep");
@@ -80,30 +96,12 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         .await
         .expect("write drop");
 
-    let memories = vec![Stage1Output {
-        thread_id: ThreadId::try_from(keep_id.clone()).expect("thread id"),
-        source_updated_at: Utc.timestamp_opt(100, 0).single().expect("timestamp"),
-        raw_memory: "raw memory".to_string(),
-        rollout_summary: "short summary".to_string(),
-        rollout_slug: None,
-        cwd: PathBuf::from("/tmp/workspace"),
-        generated_at: Utc.timestamp_opt(101, 0).single().expect("timestamp"),
-    }];
-
-    sync_rollout_summaries_from_memories(
-        &root,
-        &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
-    )
-    .await
-    .expect("sync rollout summaries");
-    rebuild_raw_memories_file_from_memories(
-        &root,
-        &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
-    )
-    .await
-    .expect("rebuild raw memories");
+    sync_rollout_summaries_from_memories(&root, &memories, &resolved)
+        .await
+        .expect("sync rollout summaries");
+    rebuild_raw_memories_file_from_memories(&root, &memories, &resolved)
+        .await
+        .expect("rebuild raw memories");
 
     assert!(keep_path.is_file());
     assert!(!drop_path.exists());
@@ -112,12 +110,16 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         .await
         .expect("read raw memories");
     assert!(raw_memories.contains("raw memory"));
-    assert!(raw_memories.contains(&keep_id));
+    assert!(raw_memories.contains(&keep_id.to_string()));
     assert!(raw_memories.contains("cwd: /tmp/workspace"));
+    assert!(raw_memories.contains(&format!(
+        "rollout_summary_file_name: {}",
+        resolved[0].file_name
+    )));
 }
 
 #[tokio::test]
-async fn sync_rollout_summaries_uses_thread_id_and_sanitized_slug_filename() {
+async fn sync_rollout_summaries_uses_timestamp_and_sanitized_slug_filename() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path().join("memory");
     ensure_layout(&root).await.expect("ensure layout");
@@ -139,17 +141,19 @@ async fn sync_rollout_summaries_uses_thread_id_and_sanitized_slug_filename() {
         raw_memory: "raw memory".to_string(),
         rollout_summary: "short summary".to_string(),
         rollout_slug: Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345".to_string()),
+        rollout_summary_filename: None,
+        rollout_path: PathBuf::from(format!(
+            "sessions/2026/02/17/rollout-2026-02-17T19-22-07-{thread_id}.jsonl"
+        )),
         cwd: PathBuf::from("/tmp/workspace"),
         generated_at: Utc.timestamp_opt(201, 0).single().expect("timestamp"),
     }];
+    let resolved =
+        resolve_rollout_summary_files(&memories, DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL);
 
-    sync_rollout_summaries_from_memories(
-        &root,
-        &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
-    )
-    .await
-    .expect("sync rollout summaries");
+    sync_rollout_summaries_from_memories(&root, &memories, &resolved)
+        .await
+        .expect("sync rollout summaries");
 
     let mut dir = tokio::fs::read_dir(rollout_summaries_dir(&root))
         .await
@@ -162,17 +166,22 @@ async fn sync_rollout_summaries_uses_thread_id_and_sanitized_slug_filename() {
 
     assert_eq!(files.len(), 1);
     let file_name = &files[0];
+    assert_eq!(file_name, &resolved[0].file_name);
     let stem = file_name
         .strip_suffix(".md")
-        .expect("rollout summary file should end with .md");
+        .expect("summary should end with .md");
+    assert!(
+        stem.starts_with("2026-02-17T19-22-07-"),
+        "rollout summary filename should include rollout timestamp"
+    );
     let slug = stem
-        .strip_prefix(&format!("{thread_id}-"))
-        .expect("rollout summary filename should include thread id and slug");
-    assert!(slug.len() <= 20, "slug should be capped at 20 chars");
+        .strip_prefix("2026-02-17T19-22-07-")
+        .expect("summary stem should include timestamp prefix");
+    assert!(slug.len() <= 60, "slug should be capped at 60 chars");
     assert!(
         slug.chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_'),
-        "slug should be file-safe lowercase ascii with underscores"
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-'),
+        "slug should be file-safe lowercase ascii with underscores/hyphens"
     );
 
     let summary = tokio::fs::read_to_string(rollout_summaries_dir(&root).join(file_name))
@@ -220,13 +229,18 @@ mod phase2 {
     use tempfile::TempDir;
 
     fn stage1_output_with_source_updated_at(source_updated_at: i64) -> Stage1Output {
+        let thread_id = ThreadId::new();
         Stage1Output {
-            thread_id: ThreadId::new(),
+            thread_id,
             source_updated_at: chrono::DateTime::<Utc>::from_timestamp(source_updated_at, 0)
                 .expect("valid source_updated_at timestamp"),
             raw_memory: "raw memory".to_string(),
             rollout_summary: "rollout summary".to_string(),
             rollout_slug: None,
+            rollout_summary_filename: None,
+            rollout_path: PathBuf::from(format!(
+                "sessions/2026/02/17/rollout-2026-02-17T19-22-07-{thread_id}.jsonl"
+            )),
             cwd: PathBuf::from("/tmp/workspace"),
             generated_at: chrono::DateTime::<Utc>::from_timestamp(source_updated_at + 1, 0)
                 .expect("valid generated_at timestamp"),
@@ -281,7 +295,7 @@ mod phase2 {
                 thread_id,
                 self.config
                     .codex_home
-                    .join(format!("rollout-{thread_id}.jsonl")),
+                    .join(format!("rollout-2026-02-17T19-22-07-{thread_id}.jsonl")),
                 Utc::now(),
                 SessionSource::Cli,
             );
@@ -453,6 +467,55 @@ mod phase2 {
             }
             other => panic!("unexpected sandbox policy: {other:?}"),
         }
+
+        harness.shutdown_threads().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_persists_rollout_summary_filename_mapping_and_raw_memories_header() {
+        let harness = DispatchHarness::new().await;
+        harness.seed_stage1_output(100).await;
+
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
+
+        let outputs = harness
+            .state_db
+            .list_stage1_outputs_for_global(10)
+            .await
+            .expect("list stage1 outputs");
+        assert_eq!(outputs.len(), 1);
+        let file_name = outputs[0]
+            .rollout_summary_filename
+            .clone()
+            .expect("phase2 should persist rollout summary filename");
+        assert!(
+            file_name.starts_with("2026-02-17T19-22-07-"),
+            "filename should include rollout timestamp"
+        );
+
+        let lookup = harness
+            .state_db
+            .get_stage1_output_by_rollout_summary_filename(file_name.as_str())
+            .await
+            .expect("lookup stage1 output by rollout summary filename")
+            .expect("lookup should resolve persisted filename");
+        assert_eq!(lookup.thread_id, outputs[0].thread_id);
+        assert_eq!(lookup.rollout_summary_filename, Some(file_name.clone()));
+
+        let root = memory_root(&harness.config.codex_home);
+        let raw_memories = tokio::fs::read_to_string(raw_memories_file(&root))
+            .await
+            .expect("read raw memories");
+        assert!(
+            raw_memories.contains(&format!("rollout_summary_file_name: {file_name}")),
+            "raw_memories.md should include rollout summary filename header"
+        );
+        assert!(
+            tokio::fs::try_exists(rollout_summaries_dir(&root).join(&file_name))
+                .await
+                .expect("check rollout summary file"),
+            "rollout summary file should exist under resolved filename"
+        );
 
         harness.shutdown_threads().await;
     }

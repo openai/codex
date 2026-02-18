@@ -235,7 +235,6 @@ shows or why it matters>:
 
 The schema is below.
 ---
-rollout_summary_file: <file.md>
 description: brief description of the task and outcome
 keywords: k1, k2, k3, ... <searchable handles (tool names, error names, repo concepts, contracts)>
 ---
