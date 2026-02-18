@@ -343,6 +343,11 @@ impl ThreadHistoryBuilder {
             exit_code: Some(payload.exit_code),
             duration_ms: Some(duration_ms),
         };
+        // Command completions can arrive out of order. Unified exec may return
+        // while a PTY is still running, then emit ExecCommandEnd later from a
+        // background exit watcher when that process finally exits. By then, a
+        // newer user turn may already have started. Route by event turn_id so
+        // replay preserves the original turn association.
         self.upsert_item_in_turn_id(&payload.turn_id, item);
     }
 
