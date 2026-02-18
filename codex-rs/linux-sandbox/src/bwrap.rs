@@ -185,12 +185,15 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
         }
 
         if !subpath.exists() {
-            if let Some(first_missing) = find_first_non_existent_component(&subpath)
-                && is_within_allowed_write_paths(&first_missing, &allowed_write_paths)
+            // Keep this in the per-subpath loop: each protected subpath can have
+            // a different first missing component that must be blocked
+            // independently (for example, `/repo/.git` vs `/repo/.codex`).
+            if let Some(first_missing_component) = find_first_non_existent_component(&subpath)
+                && is_within_allowed_write_paths(&first_missing_component, &allowed_write_paths)
             {
                 args.push("--ro-bind".to_string());
                 args.push("/dev/null".to_string());
-                args.push(path_to_string(&first_missing));
+                args.push(path_to_string(&first_missing_component));
             }
             continue;
         }
