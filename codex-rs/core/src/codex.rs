@@ -1380,10 +1380,9 @@ impl Session {
         required_mcp_servers.sort();
         let cancel_token = sess.mcp_startup_cancellation_token().await;
 
-        sess.services
-            .mcp_connection_manager
-            .write()
-            .await
+        let mut mcp_connection_manager = sess.services.mcp_connection_manager.write().await;
+        mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
+        mcp_connection_manager
             .initialize(
                 &mcp_servers,
                 config.mcp_oauth_credentials_store_mode,
@@ -1393,6 +1392,7 @@ impl Session {
                 sandbox_state,
             )
             .await;
+        drop(mcp_connection_manager);
         if !required_mcp_servers.is_empty() {
             let failures = sess
                 .services
@@ -1828,6 +1828,11 @@ impl Session {
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
+        self.services
+            .mcp_connection_manager
+            .read()
+            .await
+            .set_approval_policy(&session_configuration.approval_policy);
 
         if sandbox_policy_changed {
             let sandbox_state = SandboxState {
