@@ -1723,8 +1723,7 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_reinjects_context()
--> Result<()> {
+async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_layout() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
@@ -1789,9 +1788,9 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_reinject
     let compact_request = compact_mock.single_request();
     let post_compact_turn_request = post_compact_turn_request_mock.single_request();
     insta::assert_snapshot!(
-        "remote_mid_turn_compaction_summary_only_reinjects_context_shapes",
+        "remote_mid_turn_compaction_summary_only_shapes",
         format_labeled_requests_snapshot(
-            "Remote mid-turn compaction where compact output has only summary user content: continuation layout reinjects canonical context before that summary.",
+            "Remote mid-turn compaction where compact output has only summary user content: continuation layout keeps the summary-only compact output without inserting extra context items.",
             &[
                 ("Remote Compaction Request", &compact_request),
                 (
@@ -1806,8 +1805,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_reinject
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjects_above_last_summary()
--> Result<()> {
+async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_layout() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
@@ -1896,7 +1894,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
         "older summary should round-trip from conversation history into the next compact request"
     );
     insta::assert_snapshot!(
-        "remote_mid_turn_compaction_multi_summary_reinjects_above_last_summary_shapes",
+        "remote_mid_turn_compaction_multi_summary_shapes",
         format_labeled_requests_snapshot(
             "Remote mid-turn compaction after an earlier summary compaction: the older summary remains in model-visible history and round-trips into the next compact request.",
             &[

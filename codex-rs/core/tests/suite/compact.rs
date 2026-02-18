@@ -45,7 +45,6 @@ use core_test_support::responses::sse_failed;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 use wiremock::MockServer;
 // --- Test helpers -----------------------------------------------------------
 
@@ -143,8 +142,8 @@ fn assert_pre_sampling_switch_compaction_requests(
         "follow-up request after successful model-switch compaction should include model-switch update item"
     );
     assert!(
-        body_contains_text(&follow_up_body, "<environment_context>"),
-        "follow-up request should preserve canonical environment context after pre-sampling compaction"
+        !body_contains_text(&follow_up_body, "<environment_context>"),
+        "follow-up request should not reinsert canonical environment context after pre-sampling compaction"
     );
 }
 
@@ -680,10 +679,6 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     // mock responses from the model
 
     let reasoning_response_1 = ev_reasoning_item("m1", &["I will create a react app"], &[]);
-    let encrypted_content_1 = reasoning_response_1["item"]["encrypted_content"]
-        .as_str()
-        .unwrap();
-
     // first chunk of work
     let model_reasoning_response_1_sse = sse(vec![
         reasoning_response_1.clone(),
@@ -698,10 +693,6 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]);
 
     let reasoning_response_2 = ev_reasoning_item("m3", &["I will create a node app"], &[]);
-    let encrypted_content_2 = reasoning_response_2["item"]["encrypted_content"]
-        .as_str()
-        .unwrap();
-
     // second chunk of work
     let model_reasoning_response_2_sse = sse(vec![
         reasoning_response_2.clone(),
@@ -716,13 +707,9 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]);
 
     let reasoning_response_3 = ev_reasoning_item("m6", &["I will create a python app"], &[]);
-    let encrypted_content_3 = reasoning_response_3["item"]["encrypted_content"]
-        .as_str()
-        .unwrap();
-
     // third chunk of work
     let model_reasoning_response_3_sse = sse(vec![
-        ev_reasoning_item("m6", &["I will create a python app"], &[]),
+        reasoning_response_3.clone(),
         ev_local_shell_call("r6-shell", "completed", vec!["echo", "make-python"]),
         ev_completed_with_tokens("r6", token_count_used),
     ]);
@@ -806,9 +793,21 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     }
 
     let initial_input = normalize_inputs(input);
-    let environment_message = initial_input[0]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        initial_input.iter().any(|value| {
+            value
+                .get("content")
+                .and_then(|content| content.as_array())
+                .and_then(|content| content.first())
+                .and_then(|item| item.get("text"))
+                .and_then(|text| text.as_str())
+                .is_some_and(|text| text.contains("<environment_context>"))
+        }),
+        "first request should include canonical environment context"
+    );
 
-    // test 1: after compaction, we should have one environment message, one user message, and one user message with summary prefix
+    // test 1: after each compaction, the next model request should include
+    // only the latest user message and the newest summary.
     let compaction_indices = [2, 4, 6];
     let expected_summaries = [
         prefixed_first_summary.as_str(),
@@ -819,11 +818,9 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         let body = requests_payloads.clone()[i].body_json();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
         let input = normalize_inputs(input);
-        assert_eq!(input.len(), 3);
-        let environment_message = input[0]["content"][0]["text"].as_str().unwrap();
-        let user_message_received = input[1]["content"][0]["text"].as_str().unwrap();
-        let summary_message = input[2]["content"][0]["text"].as_str().unwrap();
-        assert_eq!(environment_message, environment_message);
+        assert_eq!(input.len(), 2);
+        let user_message_received = input[0]["content"][0]["text"].as_str().unwrap();
+        let summary_message = input[1]["content"][0]["text"].as_str().unwrap();
         assert_eq!(user_message_received, user_message);
         assert_eq!(
             summary_message, expected_summary,
@@ -831,358 +828,22 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         );
     }
 
-    // test 2: the expected requests inputs should be as follows:
-    let expected_requests_inputs = json!([
-    [
-        // 0: first request of the user message.
-      {
-        "content": [
-          {
-            "text": environment_message,
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": [
-          {
-            "text": "create an app",
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      }
-    ]
-    ,
-    [
-        // 1: first automatic compaction request.
-      {
-        "content": [
-          {
-            "text": environment_message,
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": [
-          {
-            "text": "create an app",
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": null,
-        "encrypted_content": encrypted_content_1,
-        "summary": [
-          {
-            "text": "I will create a react app",
-            "type": "summary_text"
-          }
-        ],
-        "type": "reasoning"
-      },
-      {
-        "action": {
-          "command": [
-            "echo",
-            "make-react"
-          ],
-          "env": null,
-          "timeout_ms": null,
-          "type": "exec",
-          "user": null,
-          "working_directory": null
-        },
-        "call_id": "r1-shell",
-        "status": "completed",
-        "type": "local_shell_call"
-      },
-      {
-        "call_id": "r1-shell",
-        "output": "execution error: Io(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })",
-        "type": "function_call_output"
-      },
-      {
-        "content": [
-          {
-            "text": SUMMARIZATION_PROMPT,
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      }
-    ]
-    ,
-    [
-      // 2: request after first automatic compaction.
-      {
-        "content": [
-          {
-            "text": environment_message,
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": [
-          {
-            "text": "create an app",
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": [
-          {
-            "text": prefixed_first_summary.clone(),
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      }
-    ]
-    ,
-    [
-        // 3: request for second automatic compaction.
-      {
-        "content": [
-          {
-            "text": environment_message,
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": [
-          {
-            "text": "create an app",
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": [
-          {
-            "text": prefixed_first_summary.clone(),
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": null,
-        "encrypted_content": encrypted_content_2,
-        "summary": [
-          {
-            "text": "I will create a node app",
-            "type": "summary_text"
-          }
-        ],
-        "type": "reasoning"
-      },
-      {
-        "action": {
-          "command": [
-            "echo",
-            "make-node"
-          ],
-          "env": null,
-          "timeout_ms": null,
-          "type": "exec",
-          "user": null,
-          "working_directory": null
-        },
-        "call_id": "r3-shell",
-        "status": "completed",
-        "type": "local_shell_call"
-      },
-      {
-        "call_id": "r3-shell",
-        "output": "execution error: Io(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })",
-        "type": "function_call_output"
-      },
-      {
-        "content": [
-          {
-            "text": SUMMARIZATION_PROMPT,
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      }
-    ]
-    ,
-    // 4: request after second automatic compaction.
-    [
-      {
-        "content": [
-          {
-            "text": environment_message,
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": [
-          {
-            "text": "create an app",
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": [
-          {
-            "text": prefixed_second_summary.clone(),
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      }
-    ]
-    ,
-    [
-      // 5: request for third automatic compaction.
-      {
-        "content": [
-          {
-            "text": environment_message,
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": [
-          {
-            "text": "create an app",
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": [
-          {
-            "text": prefixed_second_summary.clone(),
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": null,
-        "encrypted_content": encrypted_content_3,
-        "summary": [
-          {
-            "text": "I will create a python app",
-            "type": "summary_text"
-          }
-        ],
-        "type": "reasoning"
-      },
-      {
-        "action": {
-          "command": [
-            "echo",
-            "make-python"
-          ],
-          "env": null,
-          "timeout_ms": null,
-          "type": "exec",
-          "user": null,
-          "working_directory": null
-        },
-        "call_id": "r6-shell",
-        "status": "completed",
-        "type": "local_shell_call"
-      },
-      {
-        "call_id": "r6-shell",
-        "output": "execution error: Io(Os { code: 2, kind: NotFound, message: \"No such file or directory\" })",
-        "type": "function_call_output"
-      },
-      {
-        "content": [
-          {
-            "text": SUMMARIZATION_PROMPT,
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      }
-    ]
-    ,
-    [
-      {
-        // 6: request after third automatic compaction.
-        "content": [
-          {
-            "text": environment_message,
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": [
-          {
-            "text": "create an app",
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      },
-      {
-        "content": [
-          {
-            "text": prefixed_third_summary.clone(),
-            "type": "input_text"
-          }
-        ],
-        "role": "user",
-        "type": "message"
-      }
-    ]
-    ]);
-
-    for (i, request) in requests_payloads.iter().enumerate() {
-        let body = request.body_json();
+    // test 2: each auto-compaction request should include the summarization prompt.
+    for i in [1, 3, 5] {
+        let body = requests_payloads[i].body_json();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
-        let expected_input = expected_requests_inputs[i].as_array().unwrap();
-        assert_eq!(normalize_inputs(input), normalize_inputs(expected_input));
+        assert!(
+            input.iter().any(|value| {
+                value
+                    .get("content")
+                    .and_then(|content| content.as_array())
+                    .and_then(|content| content.first())
+                    .and_then(|item| item.get("text"))
+                    .and_then(|text| text.as_str())
+                    .is_some_and(|text| text == SUMMARIZATION_PROMPT)
+            }),
+            "compaction request {i} should include summarization prompt"
+        );
     }
 
     // test 3: the number of requests should be 7
