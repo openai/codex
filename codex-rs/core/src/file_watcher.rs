@@ -223,7 +223,10 @@ impl FileWatcher {
     }
 
     fn register_skills_root(&self, root: PathBuf) {
-        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let count = state
             .skills_root_ref_counts
             .entry(root.clone())
@@ -235,7 +238,10 @@ impl FileWatcher {
     }
 
     fn unregister_roots(&self, roots: &[PathBuf]) {
-        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut inner_guard: Option<std::sync::MutexGuard<'_, FileWatcherInner>> = None;
 
         for root in roots {
@@ -256,7 +262,9 @@ impl FileWatcher {
                 continue;
             };
             if inner_guard.is_none() {
-                let guard = inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let guard = inner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 inner_guard = Some(guard);
             }
 
@@ -280,7 +288,9 @@ impl FileWatcher {
             return;
         }
         let watch_path = path;
-        let mut guard = inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut guard = inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(existing) = guard.watched_paths.get(&watch_path) {
             if *existing == RecursiveMode::Recursive || *existing == mode {
                 return;
