@@ -3372,6 +3372,8 @@ mod handlers {
     use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::mcp::RequestId as ProtocolRequestId;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
@@ -3486,29 +3488,22 @@ mod handlers {
                 // Rebase model-switch diffing on resume/fork model hydration so model-switch
                 // updates reflect rollout history while other diffs (for example personality) still
                 // use the real previous turn context.
+                update_items.retain(|item| !Session::is_model_switch_developer_message(item));
                 let model_switch_insert_index = update_items
                     .iter()
-                    .position(Session::is_model_switch_developer_message)
-                    .or_else(|| {
-                        update_items.iter().position(|item| {
-                            let codex_protocol::models::ResponseItem::Message {
-                                role,
-                                content,
-                                ..
-                            } = item
-                            else {
-                                return false;
-                            };
-                            role == "developer"
-                                && content.iter().any(|content_item| {
-                                    matches!(
-                                        content_item,
-                                        codex_protocol::models::ContentItem::InputText { text } if text.starts_with("<personality_spec>")
-                                    )
-                                })
-                        })
-                    });
-                update_items.retain(|item| !Session::is_model_switch_developer_message(item));
+                    .position(|item| {
+                        let ResponseItem::Message { role, content, .. } = item else {
+                            return false;
+                        };
+                        role == "developer"
+                            && content.iter().any(|content_item| {
+                                matches!(
+                                    content_item,
+                                    ContentItem::InputText { text } if text.starts_with("<personality_spec>")
+                                )
+                            })
+                    })
+                    .unwrap_or(update_items.len());
 
                 let mut previous_context_item_for_model_switch = previous_context_item.clone();
                 previous_context_item_for_model_switch.model = previous_model;
@@ -3518,11 +3513,7 @@ mod handlers {
                         &current_context_item,
                     )
                 {
-                    if let Some(index) = model_switch_insert_index {
-                        update_items.insert(index, model_switch_item);
-                    } else {
-                        update_items.push(model_switch_item);
-                    }
+                    update_items.insert(model_switch_insert_index, model_switch_item);
                 }
             }
             if !update_items.is_empty() {

@@ -15,11 +15,7 @@ fn build_environment_update_item(
     }
 
     let cwd = (prev.cwd != next.cwd).then_some(&next.cwd);
-    let network = if prev.network != next.network {
-        next.network.as_ref()
-    } else {
-        prev.network.as_ref()
-    };
+    let network = next.network.as_ref();
     let shell = if next.shell.is_empty() {
         "unknown"
     } else {
