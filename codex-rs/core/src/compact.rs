@@ -389,6 +389,11 @@ pub(crate) fn process_compacted_history(
     compacted_history
 }
 
+/// Inserts canonical initial context immediately before the latest user anchor in compacted
+/// replacement history:
+/// - prefer the last real (non-summary) user message;
+/// - otherwise fall back to the last summary user message.
+/// If no user anchor exists, this is a no-op.
 pub(crate) fn insert_initial_context_before_last_user_anchor(
     compacted_history: &mut Vec<ResponseItem>,
     initial_context: Vec<ResponseItem>,
