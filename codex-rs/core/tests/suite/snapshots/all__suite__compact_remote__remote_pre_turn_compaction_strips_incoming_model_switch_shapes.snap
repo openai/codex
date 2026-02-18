@@ -1,0 +1,28 @@
+---
+source: core/tests/suite/compact_remote.rs
+expression: "format_labeled_requests_snapshot(\"Remote pre-turn compaction during model switch currently excludes incoming user input, strips incoming <model_switch> from the compact request payload, and restores it in the post-compaction follow-up request.\",\n&[(\"Initial Request (Previous Model)\", &requests[0]),\n(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
+---
+Scenario: Remote pre-turn compaction during model switch currently excludes incoming user input, strips incoming <model_switch> from the compact request payload, and restores it in the post-compaction follow-up request.
+
+## Initial Request (Previous Model)
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/user:BEFORE_SWITCH_USER
+
+## Remote Compaction Request
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/user:BEFORE_SWITCH_USER
+04:message/assistant:BEFORE_SWITCH_REPLY
+
+## Remote Post-Compaction History Layout
+00:message/user:BEFORE_SWITCH_USER
+01:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/developer:<personality_spec> The user has requested a new communication st...
+03:message/user:<AGENTS_MD>
+04:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+05:message/user:<COMPACTION_SUMMARY>\nREMOTE_SWITCH_SUMMARY
+06:message/developer:<model_switch>\nThe user was previously using a different model....
+07:message/user:AFTER_SWITCH_USER

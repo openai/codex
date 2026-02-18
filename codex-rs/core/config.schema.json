@@ -292,6 +292,9 @@
             "shell_tool": {
               "type": "boolean"
             },
+            "shell_zsh_fork": {
+              "type": "boolean"
+            },
             "skill_env_var_dependency_prompt": {
               "type": "boolean"
             },
@@ -380,6 +383,14 @@
             }
           ],
           "default": null
+        },
+        "zsh_path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution."
         }
       },
       "type": "object"
@@ -499,14 +510,6 @@
         }
       },
       "type": "object"
-    },
-    "ModeKind": {
-      "description": "Initial collaboration mode to use when the TUI starts.",
-      "enum": [
-        "plan",
-        "default"
-      ],
-      "type": "string"
     },
     "ModelProviderInfo": {
       "additionalProperties": false,
@@ -1150,15 +1153,6 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
-        "experimental_mode": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ModeKind"
-            }
-          ],
-          "default": null,
-          "description": "Start the TUI in the specified collaboration mode (plan/default). Defaults to unset."
-        },
         "notification_method": {
           "allOf": [
             {
@@ -1430,6 +1424,9 @@
           "type": "boolean"
         },
         "shell_tool": {
+          "type": "boolean"
+        },
+        "shell_zsh_fork": {
           "type": "boolean"
         },
         "skill_env_var_dependency_prompt": {
@@ -1788,6 +1785,14 @@
     "windows_wsl_setup_acknowledged": {
       "description": "Tracks whether the Windows onboarding screen has been acknowledged.",
       "type": "boolean"
+    },
+    "zsh_path": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution."
     }
   },
   "title": "ConfigToml",

@@ -1,0 +1,19 @@
+---
+source: core/tests/suite/compact_remote.rs
+expression: "format_labeled_requests_snapshot(\"Remote mid-turn compaction where compact output has only summary user content: continuation layout reinjects canonical context before that summary.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
+---
+Scenario: Remote mid-turn compaction where compact output has only summary user content: continuation layout reinjects canonical context before that summary.
+
+## Remote Compaction Request
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/user:USER_ONE
+04:function_call/test_tool
+05:function_call_output:unsupported call: test_tool
+
+## Remote Post-Compaction History Layout
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/user:<COMPACTION_SUMMARY>\nREMOTE_SUMMARY_ONLY
