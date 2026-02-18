@@ -26,7 +26,7 @@ mod artifacts {
 /// Phase 1 (startup extraction).
 mod phase_one {
     /// Default model used for phase 1.
-    pub(super) const MODEL: &str = "gpt-5.3-codex-spark";
+    pub(super) const MODEL: &str = "gpt-5.1-codex-mini";
     /// Prompt used for phase 1.
     pub(super) const PROMPT: &str = include_str!("../../templates/memories/stage_one_system.md");
     /// Concurrency cap for startup memory extraction and consolidation scheduling.
