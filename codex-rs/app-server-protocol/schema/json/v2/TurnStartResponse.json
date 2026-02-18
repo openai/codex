@@ -353,7 +353,7 @@
     "MessagePhase": {
       "enum": [
         "commentary",
-        "final_answer"
+        "finalAnswer"
       ],
       "type": "string"
     },
