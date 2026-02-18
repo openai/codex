@@ -1749,6 +1749,9 @@ async fn make_chatwidget_manual(
 async fn current_stream_width_clamps_to_minimum_when_reserved_columns_exhaust_width() {
     let (chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
+    chat.last_rendered_width.set(None);
+    assert_eq!(chat.current_stream_width(2), None);
+
     chat.last_rendered_width.set(Some(2));
     assert_eq!(chat.current_stream_width(2), Some(1));
 

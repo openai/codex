@@ -136,7 +136,6 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use crossterm::terminal;
 use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -2347,18 +2346,15 @@ impl ChatWidget {
     }
 
     fn current_stream_width(&self, reserved_cols: usize) -> Option<usize> {
-        self.last_rendered_width
-            .get()
-            .or_else(|| terminal::size().ok().map(|(w, _)| usize::from(w)))
-            .and_then(|w| {
-                if w == 0 {
-                    None
-                } else {
-                    // Keep a 1-column minimum for active stream controllers so they can
-                    // continue accepting deltas on ultra-narrow layouts.
-                    Some(crate::width::usable_content_width(w, reserved_cols).unwrap_or(1))
-                }
-            })
+        self.last_rendered_width.get().and_then(|w| {
+            if w == 0 {
+                None
+            } else {
+                // Keep a 1-column minimum for active stream controllers so they can
+                // continue accepting deltas on ultra-narrow layouts.
+                Some(crate::width::usable_content_width(w, reserved_cols).unwrap_or(1))
+            }
+        })
     }
 
     pub(crate) fn on_terminal_resize(&mut self, width: u16) {
