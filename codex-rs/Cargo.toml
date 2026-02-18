@@ -62,7 +62,6 @@ members = [
     "codex-api",
     "state",
     "codex-experimental-api-macros",
-    "codex-model-patch-macros",
 ]
 resolver = "2"
 
@@ -96,7 +95,6 @@ codex-core = { path = "core" }
 codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
-codex-model-patch-macros = { path = "codex-model-patch-macros" }
 codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }

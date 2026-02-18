@@ -2033,15 +2033,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-model-patch-macros"
-version = "0.0.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
 name = "codex-network-proxy"
 version = "0.0.0"
 dependencies = [
@@ -2134,7 +2125,6 @@ dependencies = [
  "anyhow",
  "codex-execpolicy",
  "codex-git",
- "codex-model-patch-macros",
  "codex-utils-absolute-path",
  "codex-utils-image",
  "icu_decimal",

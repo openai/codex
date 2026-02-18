@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use codex_model_patch_macros::ModelPatch;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -214,14 +213,8 @@ const fn default_effective_context_window_percent() -> i64 {
 }
 
 /// Model metadata returned by the Codex backend `/models` endpoint.
-///
-/// `#[derive(ModelPatch)]` auto-generates `ModelInfoPatch`, which is used by `model_info.overrides`
-/// in config to apply per-field updates. All fields are patchable unless marked `#[model_patch(skip)]`.
-/// Patch updates are set-only.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema, ModelPatch)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelInfo {
-    // `slug` is identity, not mutable metadata; don't allow patch overrides
-    #[model_patch(skip)]
     pub slug: String,
     pub display_name: String,
     pub description: Option<String>,
@@ -264,7 +257,6 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing, skip_deserializing)]
     #[schemars(skip)]
     #[ts(skip)]
-    #[model_patch(skip)]
     pub used_fallback_model_metadata: bool,
 }
 
@@ -503,7 +495,6 @@ fn nearest_effort(target: ReasoningEffort, supported: &[ReasoningEffort]) -> Rea
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::collections::BTreeSet;
 
     fn test_model(spec: Option<ModelMessages>) -> ModelInfo {
         ModelInfo {
@@ -687,35 +678,5 @@ mod tests {
             Some(String::new())
         );
         assert_eq!(personality_variables.get_personality_message(None), None);
-    }
-
-    #[test]
-    fn model_info_patch_field_coverage_is_explicit() {
-        fn schema_fields<T: JsonSchema>() -> BTreeSet<String> {
-            let schema = schemars::schema_for!(T);
-            let object = schema
-                .schema
-                .object
-                .as_ref()
-                .expect("expected object schema");
-            object.properties.keys().cloned().collect()
-        }
-
-        let model_info_fields = schema_fields::<ModelInfo>();
-        let patch_fields = schema_fields::<ModelInfoPatch>();
-        let intentionally_non_patchable: BTreeSet<String> =
-            ["slug".to_string()].into_iter().collect();
-        let expected_patch_fields: BTreeSet<String> = model_info_fields
-            .difference(&intentionally_non_patchable)
-            .cloned()
-            .collect();
-
-        assert_eq!(patch_fields, expected_patch_fields);
-        for field in &intentionally_non_patchable {
-            assert!(
-                model_info_fields.contains(field),
-                "intentionally_non_patchable contains unknown field: {field}"
-            );
-        }
     }
 }
