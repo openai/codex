@@ -104,9 +104,7 @@ where
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         codex_linux_sandbox_exe,
         sandbox_cwd: sandbox_cwd.as_ref().to_path_buf(),
-        // This helper is used by elicitation tests; on Linux CI hosts where
-        // legacy Landlock is not enforced, prefer the bubblewrap path.
-        use_linux_sandbox_bwrap: cfg!(target_os = "linux"),
+        use_linux_sandbox_bwrap: false,
     };
     send_sandbox_state_update(sandbox_state, service).await
 }
