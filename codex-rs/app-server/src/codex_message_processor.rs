@@ -6072,7 +6072,10 @@ impl CodexMessageProcessor {
         params: WindowsSandboxSetupStartParams,
     ) {
         self.outgoing
-            .send_response(request_id.clone(), WindowsSandboxSetupStartResponse {})
+            .send_response(
+                request_id.clone(),
+                WindowsSandboxSetupStartResponse { started: true },
+            )
             .await;
 
         let mode = match params.mode {

@@ -44,7 +44,8 @@ async fn windows_sandbox_setup_start_emits_completion_notification() -> Result<(
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let _: WindowsSandboxSetupStartResponse = to_response(response)?;
+    let start_payload: WindowsSandboxSetupStartResponse = to_response(response)?;
+    assert!(start_payload.started);
 
     let notification = timeout(
         DEFAULT_READ_TIMEOUT,

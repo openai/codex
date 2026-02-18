@@ -17138,6 +17138,14 @@
       },
       "WindowsSandboxSetupStartResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "started": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "started"
+        ],
         "title": "WindowsSandboxSetupStartResponse",
         "type": "object"
       },
