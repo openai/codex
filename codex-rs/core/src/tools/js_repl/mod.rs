@@ -1296,6 +1296,7 @@ mod tests {
     use codex_protocol::openai_models::InputModality;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::path::Path;
     use tempfile::tempdir;
 
     #[test]
@@ -1587,6 +1588,22 @@ mod tests {
             Err(_) => return false,
         };
         found >= required
+    }
+
+    fn write_js_repl_test_package(base: &Path, name: &str, value: &str) -> anyhow::Result<()> {
+        let pkg_dir = base.join("node_modules").join(name);
+        fs::create_dir_all(&pkg_dir)?;
+        fs::write(
+            pkg_dir.join("package.json"),
+            format!(
+                "{{\n  \"name\": \"{name}\",\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"exports\": {{\n    \"import\": \"./index.js\"\n  }}\n}}\n"
+            ),
+        )?;
+        fs::write(
+            pkg_dir.join("index.js"),
+            format!("export const value = \"{value}\";\n"),
+        )?;
+        Ok(())
     }
 
     #[tokio::test]
@@ -2043,24 +2060,7 @@ console.log(out.output?.body?.text ?? "");
         }
 
         let env_base = tempdir()?;
-        let env_pkg_dir = env_base.path().join("node_modules").join("repl_probe");
-        fs::create_dir_all(&env_pkg_dir)?;
-        fs::write(
-            env_pkg_dir.join("package.json"),
-            r#"{
-  "name": "repl_probe",
-  "version": "1.0.0",
-  "type": "module",
-  "exports": {
-    "import": "./index.js"
-  }
-}
-"#,
-        )?;
-        fs::write(
-            env_pkg_dir.join("index.js"),
-            "export const value = \"env\";\n",
-        )?;
+        write_js_repl_test_package(env_base.path(), "repl_probe", "env")?;
 
         let config_base = tempdir()?;
         let cwd_dir = tempdir()?;
@@ -2094,6 +2094,135 @@ console.log(out.output?.body?.text ?? "");
             )
             .await?;
         assert!(result.output.contains("env"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_resolves_from_first_config_dir() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let first_base = tempdir()?;
+        let second_base = tempdir()?;
+        write_js_repl_test_package(first_base.path(), "repl_probe", "first")?;
+        write_js_repl_test_package(second_base.path(), "repl_probe", "second")?;
+
+        let cwd_dir = tempdir()?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            vec![
+                first_base.path().to_path_buf(),
+                second_base.path().to_path_buf(),
+            ],
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "const mod = await import(\"repl_probe\"); console.log(mod.value);"
+                        .to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("first"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_falls_back_to_cwd_node_modules() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let config_base = tempdir()?;
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_package(cwd_dir.path(), "repl_probe", "cwd")?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            vec![config_base.path().to_path_buf()],
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "const mod = await import(\"repl_probe\"); console.log(mod.value);"
+                        .to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("cwd"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_accepts_node_modules_dir_entries() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let base_dir = tempdir()?;
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_package(base_dir.path(), "repl_probe", "normalized")?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            vec![base_dir.path().join("node_modules")],
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "const mod = await import(\"repl_probe\"); console.log(mod.value);"
+                        .to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("normalized"));
         Ok(())
     }
 
