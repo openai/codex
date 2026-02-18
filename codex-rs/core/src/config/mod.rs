@@ -1801,27 +1801,29 @@ impl Config {
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
-        let network = match network_requirements {
-            Some(Sourced { value, source }) => {
-                let network = NetworkProxySpec::from_config_and_constraints(
-                    configured_network_proxy_config.clone(),
-                    Some(value),
+        let (network_requirements, network_requirements_source) = match network_requirements {
+            Some(Sourced { value, source }) => (Some(value), Some(source)),
+            None => (None, None),
+        };
+        let has_network_requirements = network_requirements.is_some();
+        let network = NetworkProxySpec::from_config_and_constraints(
+            configured_network_proxy_config,
+            network_requirements,
+        )
+        .map_err(|err| {
+            if let Some(source) = network_requirements_source.as_ref() {
+                std::io::Error::new(
+                    err.kind(),
+                    format!("failed to build managed network proxy from {source}: {err}"),
                 )
-                .map_err(|err| {
-                    std::io::Error::new(
-                        err.kind(),
-                        format!("failed to build managed network proxy from {source}: {err}"),
-                    )
-                })?;
-                Some(network)
+            } else {
+                err
             }
-            None => {
-                let network = NetworkProxySpec::from_config_and_constraints(
-                    configured_network_proxy_config,
-                    None,
-                )?;
-                network.enabled().then_some(network)
-            }
+        })?;
+        let network = if has_network_requirements {
+            Some(network)
+        } else {
+            network.enabled().then_some(network)
         };
 
         let config = Self {
