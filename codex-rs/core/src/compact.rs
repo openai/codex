@@ -18,7 +18,6 @@ use crate::protocol::WarningEvent;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
-use crate::user_shell_command::is_user_shell_command_text;
 use crate::util::backoff;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
@@ -452,14 +451,13 @@ fn is_summary_user_message_item(item: &ResponseItem) -> bool {
 /// - `developer` messages because remote output can include stale/duplicated
 ///   instruction content.
 /// - non-user-content `user` messages (session prefix/instruction wrappers),
-///   keeping real user messages plus user shell-command records.
+///   keeping only real user messages as parsed by `parse_turn_item`.
 ///
 /// This intentionally keeps `user`-role warnings and compaction-generated
-/// summary messages because they parse as `TurnItem::UserMessage`, and keeps
-/// `<user_shell_command>` user records for shell-execution continuity.
+/// summary messages because they parse as `TurnItem::UserMessage`.
 fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
-        ResponseItem::Message { role, content, .. } => {
+        ResponseItem::Message { role, .. } => {
             if role == "developer" {
                 return false;
             }
@@ -470,9 +468,6 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
             matches!(
                 crate::event_mapping::parse_turn_item(item),
                 Some(TurnItem::UserMessage(_))
-            ) || matches!(
-                content.as_slice(),
-                [ContentItem::InputText { text }] if is_user_shell_command_text(text)
             )
         }
         ResponseItem::Reasoning { .. }
@@ -1029,7 +1024,7 @@ do things
     }
 
     #[test]
-    fn real_user_message_includes_user_shell_command_records() {
+    fn real_user_message_excludes_user_shell_command_records() {
         let shell_command_user = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -1040,11 +1035,11 @@ do things
             phase: None,
         };
 
-        assert!(super::is_real_user_message(&shell_command_user));
+        assert!(!super::is_real_user_message(&shell_command_user));
     }
 
     #[test]
-    fn should_keep_compacted_history_item_drops_user_session_prefix_but_keeps_user_shell_command() {
+    fn should_keep_compacted_history_item_drops_user_session_prefix_and_user_shell_command() {
         let session_prefix = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -1066,7 +1061,7 @@ do things
         };
 
         assert!(!super::should_keep_compacted_history_item(&session_prefix));
-        assert!(super::should_keep_compacted_history_item(
+        assert!(!super::should_keep_compacted_history_item(
             &shell_command_user
         ));
     }
