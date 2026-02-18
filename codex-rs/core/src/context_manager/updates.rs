@@ -131,6 +131,8 @@ pub(crate) fn build_settings_update_items(
     if let Some(env_item) = build_environment_update_item(previous, next) {
         update_items.push(env_item);
     }
+    // TODO(ccunningham): Diff `user_instructions` and emit updates when AGENTS.md content changes
+    // (for example after cwd changes), so model-visible instructions stay aligned with cwd.
     if let Some(permissions_item) = build_permissions_update_item(previous, next) {
         update_items.push(permissions_item);
     }
