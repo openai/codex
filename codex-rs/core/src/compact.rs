@@ -305,22 +305,21 @@ async fn run_compact_task_inner(
         Some(items) => items
             .iter()
             .filter(|item| {
-                if is_real_user_message(item) {
-                    return true;
-                }
                 // TODO(ccunningham): Truncate user shell-command records before preserving them
                 // in incoming compaction items so they cannot cause repeated context-window
                 // overflows across pre-turn compaction attempts.
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "user"
-                            && matches!(
-                                content.as_slice(),
-                                [ContentItem::InputText { text }]
-                                    if is_user_shell_command_text(text)
-                            )
-                )
+                (should_keep_compacted_history_item(item)
+                    || matches!(
+                        item,
+                        ResponseItem::Message { role, content, .. }
+                            if role == "user"
+                                && matches!(
+                                    content.as_slice(),
+                                    [ContentItem::InputText { text }]
+                                        if is_user_shell_command_text(text)
+                                )
+                    ))
+                    && !is_summary_user_message_item(item)
             })
             .cloned()
             .collect(),
