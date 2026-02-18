@@ -2404,13 +2404,6 @@ impl Session {
         history.raw_items().to_vec()
     }
 
-    pub(crate) async fn process_compacted_history(
-        &self,
-        compacted_history: Vec<ResponseItem>,
-    ) -> Vec<ResponseItem> {
-        compact::process_compacted_history(compacted_history)
-    }
-
     /// Append ResponseItems to the in-memory conversation history only.
     pub(crate) async fn record_into_history(
         &self,
