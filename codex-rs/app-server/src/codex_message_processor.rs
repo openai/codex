@@ -10,7 +10,7 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
-use crate::thread_watch::ThreadWatchManager;
+use crate::thread_status::ThreadWatchManager;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;

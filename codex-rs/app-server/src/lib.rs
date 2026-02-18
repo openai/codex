@@ -62,7 +62,7 @@ mod message_processor;
 mod models;
 mod outgoing_message;
 mod thread_state;
-mod thread_watch;
+mod thread_status;
 mod transport;
 
 pub use crate::transport::AppServerTransport;
