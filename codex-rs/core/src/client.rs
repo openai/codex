@@ -212,6 +212,8 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
     ) -> Self {
+        let enable_responses_websockets =
+            enable_responses_websockets || enable_responses_websockets_v2;
         Self {
             state: Arc::new(ModelClientState {
                 auth_manager,
@@ -325,6 +327,9 @@ impl ModelClient {
             let subagent = match sub {
                 crate::protocol::SubAgentSource::Review => "review".to_string(),
                 crate::protocol::SubAgentSource::Compact => "compact".to_string(),
+                crate::protocol::SubAgentSource::MemoryConsolidation => {
+                    "memory_consolidation".to_string()
+                }
                 crate::protocol::SubAgentSource::ThreadSpawn { .. } => "collab_spawn".to_string(),
                 crate::protocol::SubAgentSource::Other(label) => label.clone(),
             };
@@ -346,9 +351,11 @@ impl ModelClient {
     ///
     /// This combines provider capability and feature gating; both must be true for websocket paths
     /// to be eligible.
-    fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
+    pub fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
         self.state.provider.supports_websockets
-            && (self.state.enable_responses_websockets || model_info.prefer_websockets)
+            && (self.state.enable_responses_websockets
+                || self.state.enable_responses_websockets_v2
+                || model_info.prefer_websockets)
     }
 
     fn responses_websockets_v2_enabled(&self) -> bool {
@@ -398,7 +405,12 @@ impl ModelClient {
         let headers = self.build_websocket_headers(turn_state.as_ref(), turn_metadata_header);
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(otel_manager);
         ApiWebSocketResponsesClient::new(api_provider, api_auth)
-            .connect(headers, turn_state, Some(websocket_telemetry))
+            .connect(
+                headers,
+                crate::default_client::default_headers(),
+                turn_state,
+                Some(websocket_telemetry),
+            )
             .await
     }
 
@@ -625,7 +637,6 @@ impl ModelClientSession {
         &mut self,
         otel_manager: &OtelManager,
         model_info: &ModelInfo,
-        turn_metadata_header: Option<&str>,
     ) -> std::result::Result<(), ApiError> {
         if !self.client.responses_websocket_enabled(model_info) || self.client.websockets_disabled()
         {
@@ -648,7 +659,7 @@ impl ModelClientSession {
                 client_setup.api_provider,
                 client_setup.api_auth,
                 Some(Arc::clone(&self.turn_state)),
-                turn_metadata_header,
+                None,
             )
             .await?;
         self.connection = Some(connection);

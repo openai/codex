@@ -19,7 +19,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-arc-swap = "1.8.0"
+arc-swap = "1.8.2"
 async-channel = { workspace = true }
 async-trait = { workspace = true }
 askama = { workspace = true }
@@ -49,6 +49,7 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
+codex-utils-sanitizer = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 dirs = { workspace = true }
@@ -67,7 +68,6 @@ notify = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }
-regex = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
 rmcp = { workspace = true, default-features = false, features = [
@@ -152,6 +152,7 @@ codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
+insta = { workspace = true }
 maplit = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }

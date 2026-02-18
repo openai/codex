@@ -93,10 +93,10 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// [experimental] Run Codex as an MCP server and manage MCP servers.
+    /// Manage external MCP servers for Codex.
     Mcp(McpCli),
 
-    /// [experimental] Run the Codex MCP server (stdio transport).
+    /// Start Codex as an MCP server (stdio).
     McpServer,
 
     /// [experimental] Run the app server or related tooling.
@@ -543,6 +543,9 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
+    if codex_core::maybe_run_zsh_exec_wrapper_mode()? {
+        return Ok(());
+    }
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         cli_main(codex_linux_sandbox_exe).await?;
         Ok(())

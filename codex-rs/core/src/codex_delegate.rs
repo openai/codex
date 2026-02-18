@@ -58,6 +58,7 @@ pub(crate) async fn run_codex_thread_interactive(
         SessionSource::SubAgent(SubAgentSource::Review),
         parent_session.services.agent_control.clone(),
         Vec::new(),
+        false,
     )
     .await?;
     let codex = Arc::new(codex);
@@ -310,30 +311,39 @@ async fn handle_exec_approval(
     event: ExecApprovalRequestEvent,
     cancel_token: &CancellationToken,
 ) {
+    let approval_id_for_op = event.effective_approval_id();
     let ExecApprovalRequestEvent {
         call_id,
+        approval_id,
         command,
         cwd,
         reason,
+        network_approval_context,
         proposed_execpolicy_amendment,
         ..
     } = event;
-    let approval_id = call_id.clone();
     // Race approval with cancellation and timeout to avoid hangs.
     let approval_fut = parent_session.request_command_approval(
         parent_ctx,
         call_id,
+        approval_id,
         command,
         cwd,
         reason,
+        network_approval_context,
         proposed_execpolicy_amendment,
     );
-    let decision =
-        await_approval_with_cancel(approval_fut, parent_session, &approval_id, cancel_token).await;
+    let decision = await_approval_with_cancel(
+        approval_fut,
+        parent_session,
+        &approval_id_for_op,
+        cancel_token,
+    )
+    .await;
 
     let _ = codex
         .submit(Op::ExecApproval {
-            id: approval_id,
+            id: approval_id_for_op,
             turn_id: Some(turn_id),
             decision,
         })

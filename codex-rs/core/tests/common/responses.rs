@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use base64::Engine;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -112,6 +114,14 @@ impl ResponsesRequest {
         self.0.body.clone()
     }
 
+    pub fn body_contains_text(&self, text: &str) -> bool {
+        let json_fragment = serde_json::to_string(text)
+            .expect("serialize text to JSON")
+            .trim_matches('"')
+            .to_string();
+        self.body_json().to_string().contains(&json_fragment)
+    }
+
     pub fn instructions_text(&self) -> String {
         self.body_json()["instructions"]
             .as_str()
@@ -128,6 +138,22 @@ impl ResponsesRequest {
             .flatten()
             .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
             .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
+            .collect()
+    }
+
+    /// Returns all `input_image` `image_url` spans from `message` inputs for the provided role.
+    pub fn message_input_image_urls(&self, role: &str) -> Vec<String> {
+        self.inputs_of_type("message")
+            .into_iter()
+            .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
+            .filter_map(|item| item.get("content").and_then(Value::as_array).cloned())
+            .flatten()
+            .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_image"))
+            .filter_map(|span| {
+                span.get("image_url")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
             .collect()
     }
 
@@ -480,6 +506,18 @@ pub fn ev_assistant_message(id: &str, text: &str) -> Value {
     })
 }
 
+pub fn user_message_item(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
 pub fn ev_message_item_added(id: &str, text: &str) -> Value {
     serde_json::json!({
         "type": "response.output_item.added",
@@ -818,15 +856,106 @@ where
 }
 
 pub async fn mount_compact_json_once(server: &MockServer, body: serde_json::Value) -> ResponseMock {
-    let (mock, response_mock) = compact_mock();
-    mock.respond_with(
+    mount_compact_response_once(
+        server,
         ResponseTemplate::new(200)
             .insert_header("content-type", "application/json")
-            .set_body_json(body.clone()),
+            .set_body_json(body),
     )
-    .up_to_n_times(1)
-    .mount(server)
-    .await;
+    .await
+}
+
+/// Mount a `/responses/compact` mock that mirrors the default remote compaction shape:
+/// keep user+developer messages from the request, drop assistant/tool artifacts, and append one
+/// summary user message.
+pub async fn mount_compact_user_history_with_summary_once(
+    server: &MockServer,
+    summary_text: &str,
+) -> ResponseMock {
+    mount_compact_user_history_with_summary_sequence(server, vec![summary_text.to_string()]).await
+}
+
+/// Same as [`mount_compact_user_history_with_summary_once`], but for multiple compact calls.
+/// Each incoming compact request receives the next summary text in order.
+pub async fn mount_compact_user_history_with_summary_sequence(
+    server: &MockServer,
+    summary_texts: Vec<String>,
+) -> ResponseMock {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    #[derive(Debug)]
+    struct UserHistorySummaryResponder {
+        num_calls: AtomicUsize,
+        summary_texts: Vec<String>,
+    }
+
+    impl Respond for UserHistorySummaryResponder {
+        fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+            let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
+            let Some(summary_text) = self.summary_texts.get(call_num) else {
+                panic!("no summary text for compact request {call_num}");
+            };
+            let body_bytes = decode_body_bytes(
+                &request.body,
+                request
+                    .headers
+                    .get("content-encoding")
+                    .and_then(|value| value.to_str().ok()),
+            );
+            let body_json: Value = serde_json::from_slice(&body_bytes)
+                .unwrap_or_else(|err| panic!("failed to parse compact request body: {err}"));
+            let mut output = body_json
+                .get("input")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                // Match current remote compaction behavior: keep user/developer messages and
+                // omit assistant/tool history entries.
+                .filter(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("message")
+                        && matches!(
+                            item.get("role").and_then(Value::as_str),
+                            Some("user") | Some("developer")
+                        )
+                })
+                .collect::<Vec<Value>>();
+            // Append the synthetic summary message as the newest user item.
+            output.push(serde_json::json!({
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": summary_text}],
+            }));
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(serde_json::json!({ "output": output }))
+        }
+    }
+
+    let num_calls = summary_texts.len();
+    let responder = UserHistorySummaryResponder {
+        num_calls: AtomicUsize::new(0),
+        summary_texts,
+    };
+    let (mock, response_mock) = compact_mock();
+    mock.respond_with(responder)
+        .up_to_n_times(num_calls as u64)
+        .expect(num_calls as u64)
+        .mount(server)
+        .await;
+    response_mock
+}
+
+pub async fn mount_compact_response_once(
+    server: &MockServer,
+    response: ResponseTemplate,
+) -> ResponseMock {
+    let (mock, response_mock) = compact_mock();
+    mock.respond_with(response)
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
     response_mock
 }
 

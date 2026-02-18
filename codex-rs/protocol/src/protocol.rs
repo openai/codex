@@ -4,6 +4,7 @@
 //! between user and agent.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt;
 use std::path::Path;
@@ -53,6 +54,8 @@ pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
+pub use crate::approvals::NetworkApprovalContext;
+pub use crate::approvals::NetworkApprovalProtocol;
 pub use crate::request_user_input::RequestUserInputEvent;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
@@ -259,6 +262,12 @@ pub enum Op {
     /// Request MCP servers to reinitialize and refresh cached tool lists.
     RefreshMcpServers { config: McpServerRefreshConfig },
 
+    /// Reload user config layer overrides for the active session.
+    ///
+    /// This updates runtime config-derived behavior (for example app
+    /// enable/disable state) without restarting the thread.
+    ReloadUserConfig,
+
     /// Request the list of available custom prompts.
     ListCustomPrompts,
 
@@ -276,18 +285,25 @@ pub enum Op {
     },
 
     /// Request the list of remote skills available via ChatGPT sharing.
-    ListRemoteSkills,
+    ListRemoteSkills {
+        hazelnut_scope: RemoteSkillHazelnutScope,
+        product_surface: RemoteSkillProductSurface,
+        enabled: Option<bool>,
+    },
 
     /// Download a remote skill by id into the local skills cache.
-    DownloadRemoteSkill {
-        hazelnut_id: String,
-        is_preload: bool,
-    },
+    DownloadRemoteSkill { hazelnut_id: String },
 
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
+
+    /// Drop all persisted memory artifacts and memory-tracking DB rows.
+    DropMemories,
+
+    /// Trigger a single pass of the startup memory pipeline.
+    UpdateMemories,
 
     /// Set a user-facing thread name in the persisted rollout metadata.
     /// This is a local-only operation handled by codex-core; it does not
@@ -349,10 +365,12 @@ pub enum AskForApproval {
     #[strum(serialize = "untrusted")]
     UnlessTrusted,
 
-    /// *All* commands are auto‑approved, but they are expected to run inside a
-    /// sandbox where network access is disabled and writes are confined to a
-    /// specific set of paths. If the command fails, it will be escalated to
-    /// the user to approve execution without a sandbox.
+    /// DEPRECATED: *All* commands are auto‑approved, but they are expected to
+    /// run inside a sandbox where network access is disabled and writes are
+    /// confined to a specific set of paths. If the command fails, it will be
+    /// escalated to the user to approve execution without a sandbox.
+    /// Prefer `OnRequest` for interactive runs or `Never` for non-interactive
+    /// runs.
     OnFailure,
 
     /// The model decides when to ask the user for approval.
@@ -382,6 +400,77 @@ impl NetworkAccess {
     }
 }
 
+fn default_include_platform_defaults() -> bool {
+    true
+}
+
+/// Determines how read-only file access is granted inside a restricted
+/// sandbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display, Default, JsonSchema, TS)]
+#[strum(serialize_all = "kebab-case")]
+#[serde(tag = "type", rename_all = "kebab-case")]
+#[ts(tag = "type")]
+pub enum ReadOnlyAccess {
+    /// Restrict reads to an explicit set of roots.
+    ///
+    /// When `include_platform_defaults` is `true`, platform defaults required
+    /// for basic execution are included in addition to `readable_roots`.
+    Restricted {
+        /// Include built-in platform read roots required for basic process
+        /// execution.
+        #[serde(default = "default_include_platform_defaults")]
+        include_platform_defaults: bool,
+        /// Additional absolute roots that should be readable.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        readable_roots: Vec<AbsolutePathBuf>,
+    },
+
+    /// Allow unrestricted file reads.
+    #[default]
+    FullAccess,
+}
+
+impl ReadOnlyAccess {
+    pub fn has_full_disk_read_access(&self) -> bool {
+        matches!(self, ReadOnlyAccess::FullAccess)
+    }
+
+    /// Returns true if platform defaults should be included for restricted read access.
+    pub fn include_platform_defaults(&self) -> bool {
+        matches!(
+            self,
+            ReadOnlyAccess::Restricted {
+                include_platform_defaults: true,
+                ..
+            }
+        )
+    }
+
+    /// Returns the readable roots for restricted read access.
+    ///
+    /// For [`ReadOnlyAccess::FullAccess`], returns an empty list because
+    /// callers should grant blanket read access instead.
+    pub fn get_readable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
+        let mut roots: Vec<AbsolutePathBuf> = match self {
+            ReadOnlyAccess::FullAccess => return Vec::new(),
+            ReadOnlyAccess::Restricted { readable_roots, .. } => {
+                let mut roots = readable_roots.clone();
+                match AbsolutePathBuf::from_absolute_path(cwd) {
+                    Ok(cwd_root) => roots.push(cwd_root),
+                    Err(err) => {
+                        error!("Ignoring invalid cwd {cwd:?} for sandbox readable root: {err}");
+                    }
+                }
+                roots
+            }
+        };
+
+        let mut seen = HashSet::new();
+        roots.retain(|root| seen.insert(root.to_path_buf()));
+        roots
+    }
+}
+
 /// Determines execution restrictions for model shell commands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display, JsonSchema, TS)]
 #[strum(serialize_all = "kebab-case")]
@@ -391,9 +480,16 @@ pub enum SandboxPolicy {
     #[serde(rename = "danger-full-access")]
     DangerFullAccess,
 
-    /// Read-only access to the entire file-system.
+    /// Read-only access configuration.
     #[serde(rename = "read-only")]
-    ReadOnly,
+    ReadOnly {
+        /// Read access granted while running under this policy.
+        #[serde(
+            default,
+            skip_serializing_if = "ReadOnlyAccess::has_full_disk_read_access"
+        )]
+        access: ReadOnlyAccess,
+    },
 
     /// Indicates the process is already in an external sandbox. Allows full
     /// disk access while honoring the provided network setting.
@@ -412,6 +508,13 @@ pub enum SandboxPolicy {
         /// writable from within the sandbox.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         writable_roots: Vec<AbsolutePathBuf>,
+
+        /// Read access granted while running under this policy.
+        #[serde(
+            default,
+            skip_serializing_if = "ReadOnlyAccess::has_full_disk_read_access"
+        )]
+        read_only_access: ReadOnlyAccess,
 
         /// When set to `true`, outbound network access is allowed. `false` by
         /// default.
@@ -473,7 +576,9 @@ impl FromStr for SandboxPolicy {
 impl SandboxPolicy {
     /// Returns a policy with read-only disk access and no network.
     pub fn new_read_only_policy() -> Self {
-        SandboxPolicy::ReadOnly
+        SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+        }
     }
 
     /// Returns a policy that can read the entire disk, but can only write to
@@ -482,22 +587,29 @@ impl SandboxPolicy {
     pub fn new_workspace_write_policy() -> Self {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
+            read_only_access: ReadOnlyAccess::FullAccess,
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
     }
 
-    /// Always returns `true`; restricting read access is not supported.
     pub fn has_full_disk_read_access(&self) -> bool {
-        true
+        match self {
+            SandboxPolicy::DangerFullAccess => true,
+            SandboxPolicy::ExternalSandbox { .. } => true,
+            SandboxPolicy::ReadOnly { access } => access.has_full_disk_read_access(),
+            SandboxPolicy::WorkspaceWrite {
+                read_only_access, ..
+            } => read_only_access.has_full_disk_read_access(),
+        }
     }
 
     pub fn has_full_disk_write_access(&self) -> bool {
         match self {
             SandboxPolicy::DangerFullAccess => true,
             SandboxPolicy::ExternalSandbox { .. } => true,
-            SandboxPolicy::ReadOnly => false,
+            SandboxPolicy::ReadOnly { .. } => false,
             SandboxPolicy::WorkspaceWrite { .. } => false,
         }
     }
@@ -506,9 +618,49 @@ impl SandboxPolicy {
         match self {
             SandboxPolicy::DangerFullAccess => true,
             SandboxPolicy::ExternalSandbox { network_access } => network_access.is_enabled(),
-            SandboxPolicy::ReadOnly => false,
+            SandboxPolicy::ReadOnly { .. } => false,
             SandboxPolicy::WorkspaceWrite { network_access, .. } => *network_access,
         }
+    }
+
+    /// Returns true if platform defaults should be included for restricted read access.
+    pub fn include_platform_defaults(&self) -> bool {
+        if self.has_full_disk_read_access() {
+            return false;
+        }
+        match self {
+            SandboxPolicy::ReadOnly { access } => access.include_platform_defaults(),
+            SandboxPolicy::WorkspaceWrite {
+                read_only_access, ..
+            } => read_only_access.include_platform_defaults(),
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => false,
+        }
+    }
+
+    /// Returns the list of readable roots (tailored to the current working
+    /// directory) when read access is restricted.
+    ///
+    /// For policies with full read access, this returns an empty list because
+    /// callers should grant blanket reads.
+    pub fn get_readable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
+        let mut roots = match self {
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => Vec::new(),
+            SandboxPolicy::ReadOnly { access } => access.get_readable_roots_with_cwd(cwd),
+            SandboxPolicy::WorkspaceWrite {
+                read_only_access, ..
+            } => {
+                let mut roots = read_only_access.get_readable_roots_with_cwd(cwd);
+                roots.extend(
+                    self.get_writable_roots_with_cwd(cwd)
+                        .into_iter()
+                        .map(|root| root.root),
+                );
+                roots
+            }
+        };
+        let mut seen = HashSet::new();
+        roots.retain(|root| seen.insert(root.to_path_buf()));
+        roots
     }
 
     /// Returns the list of writable roots (tailored to the current working
@@ -518,9 +670,10 @@ impl SandboxPolicy {
         match self {
             SandboxPolicy::DangerFullAccess => Vec::new(),
             SandboxPolicy::ExternalSandbox { .. } => Vec::new(),
-            SandboxPolicy::ReadOnly => Vec::new(),
+            SandboxPolicy::ReadOnly { .. } => Vec::new(),
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
+                read_only_access: _,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
                 network_access: _,
@@ -714,6 +867,9 @@ pub enum EventMsg {
     /// Warning issued while processing a submission. Unlike `Error`, this
     /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
+
+    /// Model routing changed from the requested model to a different model.
+    ModelReroute(ModelRerouteEvent),
 
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
@@ -978,10 +1134,7 @@ pub enum AgentStatus {
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
-    ModelCap {
-        model: String,
-        reset_after_seconds: Option<u64>,
-    },
+    ServerOverloaded,
     HttpConnectionFailed {
         http_status_code: Option<u16>,
     },
@@ -1003,6 +1156,27 @@ pub enum CodexErrorInfo {
     },
     ThreadRollbackFailed,
     Other,
+}
+
+impl CodexErrorInfo {
+    /// Whether this error should mark the current turn as failed when replaying history.
+    pub fn affects_turn_status(&self) -> bool {
+        match self {
+            Self::ThreadRollbackFailed => false,
+            Self::ContextWindowExceeded
+            | Self::UsageLimitExceeded
+            | Self::ServerOverloaded
+            | Self::HttpConnectionFailed { .. }
+            | Self::ResponseStreamConnectionFailed { .. }
+            | Self::InternalServerError
+            | Self::Unauthorized
+            | Self::BadRequest
+            | Self::SandboxError
+            | Self::ResponseStreamDisconnected { .. }
+            | Self::ResponseTooManyFailedAttempts { .. }
+            | Self::Other => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -1142,9 +1316,32 @@ pub struct ErrorEvent {
     pub codex_error_info: Option<CodexErrorInfo>,
 }
 
+impl ErrorEvent {
+    /// Whether this error should mark the current turn as failed when replaying history.
+    pub fn affects_turn_status(&self) -> bool {
+        self.codex_error_info
+            .as_ref()
+            .is_none_or(CodexErrorInfo::affects_turn_status)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WarningEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ModelRerouteReason {
+    HighRiskCyberActivity,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ModelRerouteEvent {
+    pub from_model: String,
+    pub to_model: String,
+    pub reason: ModelRerouteReason,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1208,6 +1405,9 @@ impl TokenUsageInfo {
         };
         if let Some(last) = last {
             info.append_last_usage(last);
+        }
+        if let Some(model_context_window) = model_context_window {
+            info.model_context_window = Some(model_context_window);
         }
         Some(info)
     }
@@ -1629,6 +1829,7 @@ pub enum SubAgentSource {
         parent_thread_id: ThreadId,
         depth: i32,
     },
+    MemoryConsolidation,
     Other(String),
 }
 
@@ -1650,6 +1851,7 @@ impl fmt::Display for SubAgentSource {
         match self {
             SubAgentSource::Review => f.write_str("review"),
             SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::MemoryConsolidation => f.write_str("memory_consolidation"),
             SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
@@ -1742,6 +1944,12 @@ impl From<CompactedItem> for ResponseItem {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct TurnContextNetworkItem {
+    pub allowed_domains: Vec<String>,
+    pub denied_domains: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1749,6 +1957,8 @@ pub struct TurnContextItem {
     pub cwd: PathBuf,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<TurnContextNetworkItem>,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
@@ -1893,6 +2103,14 @@ pub enum ExecCommandSource {
     UnifiedExecInteraction,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecCommandStatus {
+    Completed,
+    Failed,
+    Declined,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
@@ -1954,6 +2172,8 @@ pub struct ExecCommandEndEvent {
     pub duration: Duration,
     /// Formatted output from the command, as seen by the model.
     pub formatted_output: String,
+    /// Completion status for this command execution.
+    pub status: ExecCommandStatus,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2077,6 +2297,16 @@ pub struct PatchApplyEndEvent {
     /// The changes that were applied (mirrors PatchApplyBeginEvent::changes).
     #[serde(default)]
     pub changes: HashMap<PathBuf, FileChange>,
+    /// Completion status for this patch application.
+    pub status: PatchApplyStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchApplyStatus {
+    Completed,
+    Failed,
+    Declined,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2175,6 +2405,26 @@ pub struct RemoteSkillSummary {
     pub id: String,
     pub name: String,
     pub description: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case")]
+pub enum RemoteSkillHazelnutScope {
+    WorkspaceShared,
+    AllShared,
+    Personal,
+    Example,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum RemoteSkillProductSurface {
+    Chatgpt,
+    Codex,
+    Api,
+    Atlas,
 }
 
 /// Response payload for `Op::ListRemoteSkills`.
@@ -2566,6 +2816,38 @@ mod tests {
     }
 
     #[test]
+    fn workspace_write_restricted_read_access_includes_effective_writable_roots() {
+        let cwd = if cfg!(windows) {
+            Path::new(r"C:\workspace")
+        } else {
+            Path::new("/tmp/workspace")
+        };
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![],
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: false,
+        };
+
+        let readable_roots = policy.get_readable_roots_with_cwd(cwd);
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd);
+
+        for writable_root in writable_roots {
+            assert!(
+                readable_roots
+                    .iter()
+                    .any(|root| root.as_path() == writable_root.root.as_path()),
+                "expected writable root {} to also be readable",
+                writable_root.root.as_path().display()
+            );
+        }
+    }
+
+    #[test]
     fn item_started_event_from_web_search_emits_begin_event() {
         let event = ItemStartedEvent {
             thread_id: ThreadId::new(),
@@ -2597,6 +2879,24 @@ mod tests {
         };
 
         assert!(event.as_legacy_events(false).is_empty());
+    }
+
+    #[test]
+    fn rollback_failed_error_does_not_affect_turn_status() {
+        let event = ErrorEvent {
+            message: "rollback failed".into(),
+            codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+        };
+        assert!(!event.affects_turn_status());
+    }
+
+    #[test]
+    fn generic_error_affects_turn_status() {
+        let event = ErrorEvent {
+            message: "generic".into(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+        };
+        assert!(event.affects_turn_status());
     }
 
     #[test]
@@ -2715,6 +3015,53 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn turn_context_item_deserializes_without_network() -> Result<()> {
+        let item: TurnContextItem = serde_json::from_value(json!({
+            "cwd": "/tmp",
+            "approval_policy": "never",
+            "sandbox_policy": { "type": "danger-full-access" },
+            "model": "gpt-5",
+            "summary": "auto",
+        }))?;
+
+        assert_eq!(item.network, None);
+        Ok(())
+    }
+
+    #[test]
+    fn turn_context_item_serializes_network_when_present() -> Result<()> {
+        let item = TurnContextItem {
+            turn_id: None,
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            network: Some(TurnContextNetworkItem {
+                allowed_domains: vec!["api.example.com".to_string()],
+                denied_domains: vec!["blocked.example.com".to_string()],
+            }),
+            model: "gpt-5".to_string(),
+            personality: None,
+            collaboration_mode: None,
+            effort: None,
+            summary: ReasoningSummaryConfig::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        };
+
+        let value = serde_json::to_value(item)?;
+        assert_eq!(
+            value["network"],
+            json!({
+                "allowed_domains": ["api.example.com"],
+                "denied_domains": ["blocked.example.com"],
+            })
+        );
+        Ok(())
+    }
+
     /// Serialize Event to verify that its JSON representation has the expected
     /// amount of nesting.
     #[test]
@@ -2730,7 +3077,7 @@ mod tests {
                 model: "codex-mini-latest".to_string(),
                 model_provider_id: "openai".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,
@@ -2822,5 +3169,47 @@ mod tests {
         assert_eq!(value["msg"]["failed"][0]["error"], "bad");
         assert_eq!(value["msg"]["cancelled"][0], "c");
         Ok(())
+    }
+
+    #[test]
+    fn token_usage_info_new_or_append_updates_context_window_when_provided() {
+        let initial = Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
+            model_context_window: Some(258_400),
+        });
+        let last = Some(TokenUsage {
+            input_tokens: 10,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens: 10,
+        });
+
+        let info = TokenUsageInfo::new_or_append(&initial, &last, Some(128_000))
+            .expect("new_or_append should return info");
+
+        assert_eq!(info.model_context_window, Some(128_000));
+    }
+
+    #[test]
+    fn token_usage_info_new_or_append_preserves_context_window_when_not_provided() {
+        let initial = Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
+            model_context_window: Some(258_400),
+        });
+        let last = Some(TokenUsage {
+            input_tokens: 10,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens: 10,
+        });
+
+        let info = TokenUsageInfo::new_or_append(&initial, &last, None)
+            .expect("new_or_append should return info");
+
+        assert_eq!(info.model_context_window, Some(258_400));
     }
 }

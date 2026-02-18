@@ -86,9 +86,20 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
             .await;
 
         let result = match timeout(EXTERNAL_AUTH_REFRESH_TIMEOUT, rx).await {
-            Ok(result) => result.map_err(|err| {
-                std::io::Error::other(format!("auth refresh request canceled: {err}"))
-            })?,
+            Ok(result) => {
+                // Two failure scenarios:
+                // 1) `oneshot::Receiver` failed (sender dropped) => request canceled/channel closed.
+                // 2) client answered with JSON-RPC error payload => propagate code/message.
+                let result = result.map_err(|err| {
+                    std::io::Error::other(format!("auth refresh request canceled: {err}"))
+                })?;
+                result.map_err(|err| {
+                    std::io::Error::other(format!(
+                        "auth refresh request failed: code={} message={}",
+                        err.code, err.message
+                    ))
+                })?
+            }
             Err(_) => {
                 let _canceled = self.outgoing.cancel_request(&request_id).await;
                 return Err(std::io::Error::other(format!(
@@ -396,9 +407,19 @@ impl MessageProcessor {
         }
     }
 
-    pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
+    pub(crate) async fn try_attach_thread_listener(
+        &mut self,
+        thread_id: ThreadId,
+        connection_ids: Vec<ConnectionId>,
+    ) {
         self.codex_message_processor
-            .try_attach_thread_listener(thread_id)
+            .try_attach_thread_listener(thread_id, connection_ids)
+            .await;
+    }
+
+    pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
+        self.codex_message_processor
+            .connection_closed(connection_id)
             .await;
     }
 

@@ -1104,6 +1104,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![first_cwd.try_into()?],
+                read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -1870,7 +1871,7 @@ fn create_config_toml_with_sandbox(
     feature_flags: &BTreeMap<Feature, bool>,
     sandbox_mode: &str,
 ) -> std::io::Result<()> {
-    let mut features = BTreeMap::from([(Feature::RemoteModels, false)]);
+    let mut features = BTreeMap::new();
     for (feature, enabled) in feature_flags {
         features.insert(*feature, *enabled);
     }

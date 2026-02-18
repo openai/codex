@@ -238,7 +238,8 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
     /// Token threshold for automatic compaction. When omitted, core derives it
-    /// from `context_window` (90%).
+    /// from `context_window` (90%). When provided, core clamps it to 90% of the
+    /// context window when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact_token_limit: Option<i64>,
     /// Percentage of the context window considered usable for inputs, after
@@ -252,14 +253,25 @@ pub struct ModelInfo {
     /// When true, this model should use websocket transport even when websocket features are off.
     #[serde(default)]
     pub prefer_websockets: bool,
+    /// Internal-only marker set by core when a model slug resolved to fallback metadata.
+    #[serde(default, skip_serializing, skip_deserializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub used_fallback_model_metadata: bool,
 }
 
 impl ModelInfo {
     pub fn auto_compact_token_limit(&self) -> Option<i64> {
-        self.auto_compact_token_limit.or_else(|| {
-            self.context_window
-                .map(|context_window| (context_window * 9) / 10)
-        })
+        let context_limit = self
+            .context_window
+            .map(|context_window| (context_window * 9) / 10);
+        let config_limit = self.auto_compact_token_limit;
+        if let Some(context_limit) = context_limit {
+            return Some(
+                config_limit.map_or(context_limit, |limit| std::cmp::min(limit, context_limit)),
+            );
+        }
+        config_limit
     }
 
     pub fn supports_personality(&self) -> bool {
@@ -510,6 +522,7 @@ mod tests {
             experimental_supported_tools: vec![],
             input_modalities: default_input_modalities(),
             prefer_websockets: false,
+            used_fallback_model_metadata: false,
         }
     }
 

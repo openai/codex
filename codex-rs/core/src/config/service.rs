@@ -777,7 +777,7 @@ unified_exec = true
         service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
-                key_path: "features.remote_models".to_string(),
+                key_path: "features.personality".to_string(),
                 value: serde_json::json!(true),
                 merge_strategy: MergeStrategy::Replace,
                 expected_version: None,
@@ -797,7 +797,7 @@ hide_full_access_warning = true
 
 [features]
 unified_exec = true
-remote_models = true
+personality = true
 "#;
         assert_eq!(updated, expected);
         Ok(())
@@ -903,6 +903,16 @@ remote_models = true
             },
         );
         let layers = response.layers.expect("layers present");
+        // Local macOS machines can surface an MDM-managed config layer at the
+        // top of the stack; ignore it so this test stays focused on file/user/system ordering.
+        let layers = if matches!(
+            layers.first().map(|layer| &layer.name),
+            Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm)
+        ) {
+            &layers[1..]
+        } else {
+            layers.as_slice()
+        };
         assert_eq!(layers.len(), 3, "expected three layers");
         assert_eq!(
             layers.first().unwrap().name,
@@ -1117,6 +1127,16 @@ remote_models = true
             },
         );
         let layers = response.layers.expect("layers");
+        // Local macOS machines can surface an MDM-managed config layer at the
+        // top of the stack; ignore it so this test stays focused on file/session/user ordering.
+        let layers = if matches!(
+            layers.first().map(|layer| &layer.name),
+            Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm)
+        ) {
+            &layers[1..]
+        } else {
+            layers.as_slice()
+        };
         assert_eq!(
             layers.first().unwrap().name,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }

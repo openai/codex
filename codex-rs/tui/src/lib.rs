@@ -15,6 +15,7 @@ use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
 use codex_core::auth::AuthMode;
 use codex_core::auth::enforce_login_restrictions;
+use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -27,6 +28,7 @@ use codex_core::config_loader::format_config_error_with_source;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
+use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_core::protocol::AskForApproval;
 use codex_core::read_session_meta_line;
@@ -42,6 +44,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use cwd_prompt::CwdPromptAction;
+use cwd_prompt::CwdPromptOutcome;
 use cwd_prompt::CwdSelection;
 use std::fs::OpenOptions;
 use std::path::Path;
@@ -62,7 +65,6 @@ mod bottom_pane;
 mod chatwidget;
 mod cli;
 mod clipboard_paste;
-mod collab;
 mod collaboration_modes;
 mod color;
 pub mod custom_terminal;
@@ -84,6 +86,7 @@ mod markdown_render;
 mod markdown_stream;
 mod mention_codec;
 mod model_migration;
+mod multi_agents;
 mod notifications;
 pub mod onboarding;
 mod oss_selection;
@@ -288,9 +291,24 @@ pub async fn run_main(
         cloud_requirements.clone(),
     )
     .await;
+
+    #[allow(clippy::print_stderr)]
+    match check_execpolicy_for_warnings(&config.config_layer_stack).await {
+        Ok(None) => {}
+        Ok(Some(err)) | Err(err) => {
+            eprintln!(
+                "Error loading rules:\n{}",
+                format_exec_policy_error_with_source(&err)
+            );
+            std::process::exit(1);
+        }
+    }
+
     set_default_client_residency_requirement(config.enforce_residency.value());
 
-    if let Some(warning) = add_dir_warning_message(&cli.add_dir, config.sandbox_policy.get()) {
+    if let Some(warning) =
+        add_dir_warning_message(&cli.add_dir, config.permissions.sandbox_policy.get())
+    {
         #[allow(clippy::print_stderr)]
         {
             eprintln!("Error adding directories: {warning}");
@@ -655,8 +673,22 @@ async fn run_ratatui_app(
     };
     let fallback_cwd = match action_and_path_if_resume_or_fork {
         Some((action, path)) => {
-            resolve_cwd_for_resume_or_fork(&mut tui, &current_cwd, path, action, allow_prompt)
+            match resolve_cwd_for_resume_or_fork(&mut tui, &current_cwd, path, action, allow_prompt)
                 .await?
+            {
+                ResolveCwdOutcome::Continue(cwd) => cwd,
+                ResolveCwdOutcome::Exit => {
+                    restore();
+                    session_log::log_session_end();
+                    return Ok(AppExitInfo {
+                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        thread_id: None,
+                        thread_name: None,
+                        update_action: None,
+                        exit_reason: ExitReason::UserRequested,
+                    });
+                }
+            }
         }
         None => None,
     };
@@ -763,25 +795,35 @@ pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
     }
 }
 
+pub(crate) enum ResolveCwdOutcome {
+    Continue(Option<PathBuf>),
+    Exit,
+}
+
 pub(crate) async fn resolve_cwd_for_resume_or_fork(
     tui: &mut Tui,
     current_cwd: &Path,
     path: &Path,
     action: CwdPromptAction,
     allow_prompt: bool,
-) -> color_eyre::Result<Option<PathBuf>> {
+) -> color_eyre::Result<ResolveCwdOutcome> {
     let Some(history_cwd) = read_session_cwd(path).await else {
-        return Ok(None);
+        return Ok(ResolveCwdOutcome::Continue(None));
     };
     if allow_prompt && cwds_differ(current_cwd, &history_cwd) {
-        let selection =
+        let selection_outcome =
             cwd_prompt::run_cwd_selection_prompt(tui, action, current_cwd, &history_cwd).await?;
-        return Ok(Some(match selection {
-            CwdSelection::Current => current_cwd.to_path_buf(),
-            CwdSelection::Session => history_cwd,
-        }));
+        return Ok(match selection_outcome {
+            CwdPromptOutcome::Selection(CwdSelection::Current) => {
+                ResolveCwdOutcome::Continue(Some(current_cwd.to_path_buf()))
+            }
+            CwdPromptOutcome::Selection(CwdSelection::Session) => {
+                ResolveCwdOutcome::Continue(Some(history_cwd))
+            }
+            CwdPromptOutcome::Exit => ResolveCwdOutcome::Exit,
+        });
     }
-    Ok(Some(history_cwd))
+    Ok(ResolveCwdOutcome::Continue(Some(history_cwd)))
 }
 
 #[expect(
@@ -1004,8 +1046,9 @@ mod tests {
         TurnContextItem {
             turn_id: None,
             cwd,
-            approval_policy: config.approval_policy.value(),
-            sandbox_policy: config.sandbox_policy.get().clone(),
+            approval_policy: config.permissions.approval_policy.value(),
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            network: None,
             model,
             personality: None,
             collaboration_mode: None,
@@ -1123,7 +1166,7 @@ trust_level = "untrusted"
             .build()
             .await?;
         assert_eq!(
-            trusted_config.approval_policy.value(),
+            trusted_config.permissions.approval_policy.value(),
             AskForApproval::OnRequest
         );
 
@@ -1137,7 +1180,7 @@ trust_level = "untrusted"
             .build()
             .await?;
         assert_eq!(
-            untrusted_config.approval_policy.value(),
+            untrusted_config.permissions.approval_policy.value(),
             AskForApproval::UnlessTrusted
         );
         Ok(())

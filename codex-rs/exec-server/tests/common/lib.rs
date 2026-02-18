@@ -33,9 +33,6 @@ pub async fn create_transport<P>(
 where
     P: AsRef<Path>,
 {
-    let mcp_executable = codex_utils_cargo_bin::cargo_bin("codex-exec-mcp-server")?;
-    let execve_wrapper = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")?;
-
     // `bash` is a test resource rather than a binary target, so we must use
     // `find_resource!` to locate it instead of `cargo_bin()`.
     let bash = find_resource!("../suite/bash")?;
@@ -51,8 +48,24 @@ where
         .await?;
     assert!(status.success(), "dotslash fetch failed: {status:?}");
 
+    create_transport_with_shell_path(codex_home, dotslash_cache, bash).await
+}
+
+pub async fn create_transport_with_shell_path<P, Q, R>(
+    codex_home: P,
+    dotslash_cache: Q,
+    shell_path: R,
+) -> anyhow::Result<TokioChildProcess>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+    R: AsRef<Path>,
+{
+    let mcp_executable = codex_utils_cargo_bin::cargo_bin("codex-exec-mcp-server")?;
+    let execve_wrapper = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")?;
+
     let transport = TokioChildProcess::new(Command::new(&mcp_executable).configure(|cmd| {
-        cmd.arg("--bash").arg(bash);
+        cmd.arg("--bash").arg(shell_path.as_ref());
         cmd.arg("--execve").arg(&execve_wrapper);
         cmd.env("CODEX_HOME", codex_home.as_ref());
         cmd.env("DOTSLASH_CACHE", dotslash_cache.as_ref());
@@ -88,7 +101,7 @@ where
     S: Service<RoleClient> + ClientHandler,
 {
     let sandbox_state = SandboxState {
-        sandbox_policy: SandboxPolicy::ReadOnly,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
         codex_linux_sandbox_exe,
         sandbox_cwd: sandbox_cwd.as_ref().to_path_buf(),
         use_linux_sandbox_bwrap: false,
@@ -110,6 +123,7 @@ where
             // Note that sandbox_cwd will already be included as a writable root
             // when the sandbox policy is expanded.
             writable_roots: vec![],
+            read_only_access: Default::default(),
             network_access: false,
             // Disable writes to temp dir because this is a test, so
             // writable_folder is likely also under /tmp and we want to be
@@ -165,7 +179,11 @@ impl ClientHandler for InteractiveClient {
             .unwrap()
             .push(request.clone());
 
-        let accept = self.elicitations_to_accept.contains(&request.message);
+        let message = match &request {
+            CreateElicitationRequestParams::FormElicitationParams { message, .. }
+            | CreateElicitationRequestParams::UrlElicitationParams { message, .. } => message,
+        };
+        let accept = self.elicitations_to_accept.contains(message);
         async move {
             if accept {
                 Ok(CreateElicitationResult {

@@ -36,7 +36,6 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
         .with_model(model)
         // Keep tool expectations stable when the default web_search mode changes.
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config
                 .web_search_mode
                 .set(WebSearchMode::Cached)
@@ -75,9 +74,6 @@ async fn model_selects_expected_tools() {
         expected_default_tools(
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -94,9 +90,6 @@ async fn model_selects_expected_tools() {
         expected_default_tools(
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -113,9 +106,6 @@ async fn model_selects_expected_tools() {
         expected_default_tools(
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -132,9 +122,6 @@ async fn model_selects_expected_tools() {
         expected_default_tools(
             "shell",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "web_search",
@@ -150,9 +137,6 @@ async fn model_selects_expected_tools() {
         expected_default_tools(
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",

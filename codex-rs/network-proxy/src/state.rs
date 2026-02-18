@@ -70,6 +70,7 @@ pub fn build_config_state(
         mitm,
         constraints,
         blocked: std::collections::VecDeque::new(),
+        blocked_total: 0,
     })
 }
 

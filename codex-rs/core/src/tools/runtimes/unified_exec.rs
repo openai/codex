@@ -12,6 +12,8 @@ use crate::features::Feature;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::network_approval::NetworkApprovalMode;
+use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
@@ -39,6 +41,7 @@ pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
+    pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
@@ -107,9 +110,11 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     .request_command_approval(
                         turn,
                         call_id,
+                        None,
                         command,
                         cwd,
                         reason,
+                        ctx.network_approval_context.clone(),
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
@@ -145,6 +150,20 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
 }
 
 impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
+    fn network_approval_spec(
+        &self,
+        req: &UnifiedExecRequest,
+        _ctx: &ToolCtx<'_>,
+    ) -> Option<NetworkApprovalSpec> {
+        req.network.as_ref()?;
+        Some(NetworkApprovalSpec {
+            command: req.command.clone(),
+            cwd: req.cwd.clone(),
+            network: req.network.clone(),
+            mode: NetworkApprovalMode::Deferred,
+        })
+    }
+
     async fn run(
         &mut self,
         req: &UnifiedExecRequest,
@@ -153,8 +172,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
-        let command =
-            maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref(), &req.cwd);
+        let command = maybe_wrap_shell_lc_with_snapshot(
+            base_command,
+            session_shell.as_ref(),
+            &req.cwd,
+            &req.explicit_env_overrides,
+        );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
             && ctx.session.features().enabled(Feature::PowershellUtf8)
         {
@@ -165,7 +188,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 
         let mut env = req.env.clone();
         if let Some(network) = req.network.as_ref() {
-            network.apply_to_env(&mut env);
+            network.apply_to_env_for_attempt(&mut env, ctx.network_attempt_id.as_deref());
         }
         let spec = build_command_spec(
             &command,
@@ -186,6 +209,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 UnifiedExecError::SandboxDenied { output, .. } => {
                     ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output: Box::new(output),
+                        network_policy_decision: None,
                     }))
                 }
                 other => ToolError::Rejected(other.to_string()),

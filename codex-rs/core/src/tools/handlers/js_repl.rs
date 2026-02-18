@@ -1,22 +1,98 @@
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
+use crate::exec::ExecToolCallOutput;
+use crate::exec::StreamOutput;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
+use crate::protocol::ExecCommandSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::events::ToolEmitter;
+use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
+use crate::tools::events::ToolEventStage;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::js_repl::JS_REPL_PRAGMA_PREFIX;
 use crate::tools::js_repl::JsReplArgs;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputContentItem;
 
 pub struct JsReplHandler;
 pub struct JsReplResetHandler;
 
+fn join_outputs(stdout: &str, stderr: &str) -> String {
+    if stdout.is_empty() {
+        stderr.to_string()
+    } else if stderr.is_empty() {
+        stdout.to_string()
+    } else {
+        format!("{stdout}\n{stderr}")
+    }
+}
+
+fn build_js_repl_exec_output(
+    output: &str,
+    error: Option<&str>,
+    duration: Duration,
+) -> ExecToolCallOutput {
+    let stdout = output.to_string();
+    let stderr = error.unwrap_or("").to_string();
+    let aggregated_output = join_outputs(&stdout, &stderr);
+    ExecToolCallOutput {
+        exit_code: if error.is_some() { 1 } else { 0 },
+        stdout: StreamOutput::new(stdout),
+        stderr: StreamOutput::new(stderr),
+        aggregated_output: StreamOutput::new(aggregated_output),
+        duration,
+        timed_out: false,
+    }
+}
+
+async fn emit_js_repl_exec_begin(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    call_id: &str,
+) {
+    let emitter = ToolEmitter::shell(
+        vec!["js_repl".to_string()],
+        turn.cwd.clone(),
+        ExecCommandSource::Agent,
+        false,
+    );
+    let ctx = ToolEventCtx::new(session, turn, call_id, None);
+    emitter.emit(ctx, ToolEventStage::Begin).await;
+}
+
+async fn emit_js_repl_exec_end(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    call_id: &str,
+    output: &str,
+    error: Option<&str>,
+    duration: Duration,
+) {
+    let exec_output = build_js_repl_exec_output(output, error, duration);
+    let emitter = ToolEmitter::shell(
+        vec!["js_repl".to_string()],
+        turn.cwd.clone(),
+        ExecCommandSource::Agent,
+        false,
+    );
+    let ctx = ToolEventCtx::new(session, turn, call_id, None);
+    let stage = if error.is_some() {
+        ToolEventStage::Failure(ToolEventFailure::Output(exec_output))
+    } else {
+        ToolEventStage::Success(exec_output)
+    };
+    emitter.emit(ctx, stage).await;
+}
 #[async_trait]
 impl ToolHandler for JsReplHandler {
     fn kind(&self) -> ToolKind {
@@ -36,6 +112,7 @@ impl ToolHandler for JsReplHandler {
             turn,
             tracker,
             payload,
+            call_id,
             ..
         } = invocation;
 
@@ -55,12 +132,45 @@ impl ToolHandler for JsReplHandler {
             }
         };
         let manager = turn.js_repl.manager().await?;
+        let started_at = Instant::now();
+        emit_js_repl_exec_begin(session.as_ref(), turn.as_ref(), &call_id).await;
         let result = manager
             .execute(Arc::clone(&session), Arc::clone(&turn), tracker, args)
-            .await?;
+            .await;
+        let result = match result {
+            Ok(result) => result,
+            Err(err) => {
+                let message = err.to_string();
+                emit_js_repl_exec_end(
+                    session.as_ref(),
+                    turn.as_ref(),
+                    &call_id,
+                    "",
+                    Some(&message),
+                    started_at.elapsed(),
+                )
+                .await;
+                return Err(err);
+            }
+        };
+
+        let content = result.output;
+        let items = vec![FunctionCallOutputContentItem::InputText {
+            text: content.clone(),
+        }];
+
+        emit_js_repl_exec_end(
+            session.as_ref(),
+            turn.as_ref(),
+            &call_id,
+            &content,
+            None,
+            started_at.elapsed(),
+        )
+        .await;
 
         Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(result.output),
+            body: FunctionCallOutputBody::ContentItems(items),
             success: Some(true),
         })
     }
@@ -175,7 +285,12 @@ fn reject_json_or_quoted_source(code: &str) -> Result<(), FunctionCallError> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::parse_freeform_args;
+    use crate::codex::make_session_and_context_with_rx;
+    use crate::protocol::EventMsg;
+    use crate::protocol::ExecCommandSource;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -220,5 +335,44 @@ mod tests {
             err.to_string(),
             "js_repl is a freeform tool and expects raw JavaScript source. Resend plain JS only (optional first line `// codex-js-repl: ...`); do not send JSON (`{\"code\":...}`), quoted code, or markdown fences."
         );
+    }
+
+    #[tokio::test]
+    async fn emit_js_repl_exec_end_sends_event() {
+        let (session, turn, rx) = make_session_and_context_with_rx().await;
+        super::emit_js_repl_exec_end(
+            session.as_ref(),
+            turn.as_ref(),
+            "call-1",
+            "hello",
+            None,
+            Duration::from_millis(12),
+        )
+        .await;
+
+        let event = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let event = rx.recv().await.expect("event");
+                if let EventMsg::ExecCommandEnd(end) = event.msg {
+                    break end;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for exec end");
+
+        assert_eq!(event.call_id, "call-1");
+        assert_eq!(event.turn_id, turn.sub_id);
+        assert_eq!(event.command, vec!["js_repl".to_string()]);
+        assert_eq!(event.cwd, turn.cwd);
+        assert_eq!(event.source, ExecCommandSource::Agent);
+        assert_eq!(event.interaction_input, None);
+        assert_eq!(event.stdout, "hello");
+        assert_eq!(event.stderr, "");
+        assert!(event.aggregated_output.contains("hello"));
+        assert_eq!(event.exit_code, 0);
+        assert_eq!(event.duration, Duration::from_millis(12));
+        assert!(event.formatted_output.contains("hello"));
+        assert!(!event.parsed_cmd.is_empty());
     }
 }

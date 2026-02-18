@@ -163,6 +163,7 @@ impl Drop for WsStream {
 const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const X_MODELS_ETAG_HEADER: &str = "x-models-etag";
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
+const OPENAI_MODEL_HEADER: &str = "openai-model";
 
 pub struct ResponsesWebsocketConnection {
     stream: Arc<Mutex<Option<WsStream>>>,
@@ -170,6 +171,7 @@ pub struct ResponsesWebsocketConnection {
     idle_timeout: Duration,
     server_reasoning_included: bool,
     models_etag: Option<String>,
+    server_model: Option<String>,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
 }
 
@@ -179,6 +181,7 @@ impl ResponsesWebsocketConnection {
         idle_timeout: Duration,
         server_reasoning_included: bool,
         models_etag: Option<String>,
+        server_model: Option<String>,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Self {
         Self {
@@ -186,6 +189,7 @@ impl ResponsesWebsocketConnection {
             idle_timeout,
             server_reasoning_included,
             models_etag,
+            server_model,
             telemetry,
         }
     }
@@ -204,12 +208,16 @@ impl ResponsesWebsocketConnection {
         let idle_timeout = self.idle_timeout;
         let server_reasoning_included = self.server_reasoning_included;
         let models_etag = self.models_etag.clone();
+        let server_model = self.server_model.clone();
         let telemetry = self.telemetry.clone();
         let request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
 
         tokio::spawn(async move {
+            if let Some(model) = server_model {
+                let _ = tx_event.send(Ok(ResponseEvent::ServerModel(model))).await;
+            }
             if let Some(etag) = models_etag {
                 let _ = tx_event.send(Ok(ResponseEvent::ModelsEtag(etag))).await;
             }
@@ -260,6 +268,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
     pub async fn connect(
         &self,
         extra_headers: HeaderMap,
+        default_headers: HeaderMap,
         turn_state: Option<Arc<OnceLock<String>>>,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
@@ -268,27 +277,43 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
             .websocket_url_for_path("responses")
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
 
-        let mut headers = self.provider.headers.clone();
-        headers.extend(extra_headers);
+        let mut headers =
+            merge_request_headers(&self.provider.headers, extra_headers, default_headers);
         add_auth_headers_to_header_map(&self.auth, &mut headers);
 
-        let (stream, server_reasoning_included, models_etag) =
+        let (stream, server_reasoning_included, models_etag, server_model) =
             connect_websocket(ws_url, headers, turn_state.clone()).await?;
         Ok(ResponsesWebsocketConnection::new(
             stream,
             self.provider.stream_idle_timeout,
             server_reasoning_included,
             models_etag,
+            server_model,
             telemetry,
         ))
     }
+}
+
+fn merge_request_headers(
+    provider_headers: &HeaderMap,
+    extra_headers: HeaderMap,
+    default_headers: HeaderMap,
+) -> HeaderMap {
+    let mut headers = provider_headers.clone();
+    headers.extend(extra_headers);
+    for (name, value) in &default_headers {
+        if let http::header::Entry::Vacant(entry) = headers.entry(name) {
+            entry.insert(value.clone());
+        }
+    }
+    headers
 }
 
 async fn connect_websocket(
     url: Url,
     headers: HeaderMap,
     turn_state: Option<Arc<OnceLock<String>>>,
-) -> Result<(WsStream, bool, Option<String>), ApiError> {
+) -> Result<(WsStream, bool, Option<String>, Option<String>), ApiError> {
     ensure_rustls_crypto_provider();
     info!("connecting to websocket: {url}");
 
@@ -325,6 +350,11 @@ async fn connect_websocket(
         .get(X_MODELS_ETAG_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(ToString::to_string);
+    let server_model = response
+        .headers()
+        .get(OPENAI_MODEL_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
     if let Some(turn_state) = turn_state
         && let Some(header_value) = response
             .headers()
@@ -333,7 +363,12 @@ async fn connect_websocket(
     {
         let _ = turn_state.set(header_value.to_string());
     }
-    Ok((WsStream::new(stream), reasoning_included, models_etag))
+    Ok((
+        WsStream::new(stream),
+        reasoning_included,
+        models_etag,
+        server_model,
+    ))
 }
 
 fn websocket_config() -> WebSocketConfig {
@@ -453,6 +488,7 @@ async fn run_websocket_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
 ) -> Result<(), ApiError> {
+    let mut last_server_model: Option<String> = None;
     let request_text = match serde_json::to_string(&request_body) {
         Ok(text) => text,
         Err(err) => {
@@ -519,6 +555,14 @@ async fn run_websocket_response_stream(
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
                     }
                     continue;
+                }
+                if let Some(model) = event.response_model()
+                    && last_server_model.as_deref() != Some(model.as_str())
+                {
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::ServerModel(model.clone())))
+                        .await;
+                    last_server_model = Some(model);
                 }
                 match process_responses_event(event) {
                     Ok(Some(event)) => {
@@ -672,5 +716,38 @@ mod tests {
             .expect("expected websocket error payload to be parsed");
         let api_error = map_wrapped_websocket_error_event(wrapped_error);
         assert!(api_error.is_none());
+    }
+
+    #[test]
+    fn merge_request_headers_matches_http_precedence() {
+        let mut provider_headers = HeaderMap::new();
+        provider_headers.insert(
+            "originator",
+            HeaderValue::from_static("provider-originator"),
+        );
+        provider_headers.insert("x-priority", HeaderValue::from_static("provider"));
+
+        let mut extra_headers = HeaderMap::new();
+        extra_headers.insert("x-priority", HeaderValue::from_static("extra"));
+
+        let mut default_headers = HeaderMap::new();
+        default_headers.insert("originator", HeaderValue::from_static("default-originator"));
+        default_headers.insert("x-priority", HeaderValue::from_static("default"));
+        default_headers.insert("x-default-only", HeaderValue::from_static("default-only"));
+
+        let merged = merge_request_headers(&provider_headers, extra_headers, default_headers);
+
+        assert_eq!(
+            merged.get("originator"),
+            Some(&HeaderValue::from_static("provider-originator"))
+        );
+        assert_eq!(
+            merged.get("x-priority"),
+            Some(&HeaderValue::from_static("extra"))
+        );
+        assert_eq!(
+            merged.get("x-default-only"),
+            Some(&HeaderValue::from_static("default-only"))
+        );
     }
 }

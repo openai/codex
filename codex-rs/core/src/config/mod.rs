@@ -7,6 +7,8 @@ use crate::config::types::History;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
+use crate::config::types::MemoriesConfig;
+use crate::config::types::MemoriesToml;
 use crate::config::types::Notice;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
@@ -45,14 +47,16 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
+use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
+#[cfg(target_os = "macos")]
+use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -75,6 +79,8 @@ use std::path::Path;
 use std::path::PathBuf;
 #[cfg(test)]
 use tempfile::tempdir;
+#[cfg(not(target_os = "macos"))]
+type MacOsSeatbeltProfileExtensions = ();
 
 use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
@@ -118,6 +124,25 @@ pub(crate) fn test_config() -> Config {
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
+pub struct Permissions {
+    /// Approval policy for executing commands.
+    pub approval_policy: Constrained<AskForApproval>,
+    /// Effective sandbox policy used for shell/unified exec.
+    pub sandbox_policy: Constrained<SandboxPolicy>,
+    /// Effective network configuration applied to all spawned processes.
+    pub network: Option<NetworkProxySpec>,
+    /// Policy used to build process environments for shell/unified exec.
+    pub shell_environment_policy: ShellEnvironmentPolicy,
+    /// Effective Windows sandbox mode derived from `[windows].sandbox` or
+    /// legacy feature keys.
+    pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
+    /// Optional macOS seatbelt extension profile used to extend default
+    /// seatbelt permissions when running under seatbelt.
+    pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
+}
+
+/// Application configuration loaded from disk and merged with overrides.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// Provenance for how this [`Config`] was derived (merged layers + enforced
     /// requirements).
@@ -147,24 +172,17 @@ pub struct Config {
     /// Optionally specify the personality of the model
     pub personality: Option<Personality>,
 
-    /// Approval policy for executing commands.
-    pub approval_policy: Constrained<AskForApproval>,
-
-    pub sandbox_policy: Constrained<SandboxPolicy>,
+    /// Effective permission configuration for shell tool execution.
+    pub permissions: Permissions,
 
     /// enforce_residency means web traffic cannot be routed outside of a
     /// particular geography. HTTP clients should direct their requests
     /// using backend-specific headers or URLs to enforce this.
     pub enforce_residency: Constrained<Option<ResidencyRequirement>>,
 
-    /// Effective network configuration applied to all spawned processes.
-    pub network: Option<NetworkProxySpec>,
-
     /// True if the user passed in an override or set a value in config.toml
     /// for either of approval_policy or sandbox_mode.
     pub did_user_set_custom_approval_policy_or_sandbox_mode: bool,
-
-    pub shell_environment_policy: ShellEnvironmentPolicy,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -186,6 +204,13 @@ pub struct Config {
 
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
+
+    /// Optional commit attribution text for commit message co-author trailers.
+    ///
+    /// - `None`: use default attribution (`Codex <noreply@openai.com>`)
+    /// - `Some("")` or whitespace-only: disable commit attribution
+    /// - `Some("...")`: use the provided attribution text verbatim
+    pub commit_attribution: Option<String>,
 
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
@@ -223,7 +248,6 @@ pub struct Config {
     pub show_tooltips: bool,
 
     /// Start the TUI in the specified collaboration mode (plan/default).
-    pub experimental_mode: Option<ModeKind>,
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
@@ -234,6 +258,9 @@ pub struct Config {
     pub tui_alternate_screen: AltScreenMode,
 
     /// Ordered list of status line item identifiers for the TUI.
+    ///
+    /// When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and
+    /// `current-dir`.
     pub tui_status_line: Option<Vec<String>>,
 
     /// The directory that should be treated as the current working directory
@@ -279,6 +306,12 @@ pub struct Config {
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
 
+    /// User-defined role declarations keyed by role name.
+    pub agent_roles: BTreeMap<String, AgentRoleConfig>,
+
+    /// Memories subsystem settings.
+    pub memories: MemoriesConfig,
+
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
@@ -306,6 +339,12 @@ pub struct Config {
 
     /// Optional absolute path to the Node runtime used by `js_repl`.
     pub js_repl_node_path: Option<PathBuf>,
+
+    /// Ordered list of directories to search for Node modules in `js_repl`.
+    pub js_repl_node_module_dirs: Vec<PathBuf>,
+
+    /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
+    pub zsh_path: Option<PathBuf>,
 
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
@@ -343,10 +382,6 @@ pub struct Config {
 
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
-
-    /// Effective Windows sandbox mode derived from `[windows].sandbox` or
-    /// legacy feature keys.
-    pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
@@ -896,6 +931,11 @@ pub struct ConfigToml {
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
+    /// Optional commit attribution text for commit message co-author trailers.
+    ///
+    /// Set to an empty string to disable automatic commit attribution.
+    pub commit_attribution: Option<String>,
+
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     #[serde(default)]
     pub forced_chatgpt_workspace_id: Option<String>,
@@ -944,6 +984,12 @@ pub struct ConfigToml {
 
     /// Optional absolute path to the Node runtime used by `js_repl`.
     pub js_repl_node_path: Option<AbsolutePathBuf>,
+
+    /// Ordered list of directories to search for Node modules in `js_repl`.
+    pub js_repl_node_module_dirs: Option<Vec<AbsolutePathBuf>>,
+
+    /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
+    pub zsh_path: Option<AbsolutePathBuf>,
 
     /// Profile to use from the `profiles` map.
     pub profile: Option<String>,
@@ -999,6 +1045,9 @@ pub struct ConfigToml {
 
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
+
+    /// Memories subsystem settings.
+    pub memories: Option<MemoriesToml>,
 
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
@@ -1127,6 +1176,36 @@ pub struct AgentsToml {
     /// When unset, no limit is enforced.
     #[schemars(range(min = 1))]
     pub max_threads: Option<usize>,
+
+    /// User-defined role declarations keyed by role name.
+    ///
+    /// Example:
+    /// ```toml
+    /// [agents.researcher]
+    /// description = "Research-focused role."
+    /// config_file = "./agents/researcher.toml"
+    /// ```
+    #[serde(default, flatten)]
+    pub roles: BTreeMap<String, AgentRoleToml>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentRoleConfig {
+    /// Human-facing role documentation used in spawn tool guidance.
+    pub description: Option<String>,
+    /// Path to a role-specific config layer.
+    pub config_file: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AgentRoleToml {
+    /// Human-facing role documentation used in spawn tool guidance.
+    pub description: Option<String>,
+
+    /// Path to a role-specific config layer.
+    /// Relative paths are resolved relative to the `config.toml` that defines them.
+    pub config_file: Option<AbsolutePathBuf>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -1198,6 +1277,7 @@ impl ConfigToml {
                     exclude_slash_tmp,
                 }) => SandboxPolicy::WorkspaceWrite {
                     writable_roots: writable_roots.clone(),
+                    read_only_access: ReadOnlyAccess::FullAccess,
                     network_access: *network_access,
                     exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                     exclude_slash_tmp: *exclude_slash_tmp,
@@ -1289,6 +1369,8 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub js_repl_node_path: Option<PathBuf>,
+    pub js_repl_node_module_dirs: Option<Vec<PathBuf>>,
+    pub zsh_path: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
@@ -1395,7 +1477,7 @@ impl Config {
         Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack)
     }
 
-    fn load_config_with_layer_stack(
+    pub(crate) fn load_config_with_layer_stack(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: PathBuf,
@@ -1416,6 +1498,8 @@ impl Config {
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             js_repl_node_path: js_repl_node_path_override,
+            js_repl_node_module_dirs: js_repl_node_module_dirs_override,
+            zsh_path: zsh_path_override,
             base_instructions,
             developer_instructions,
             personality,
@@ -1568,6 +1652,29 @@ impl Config {
                 "agents.max_threads must be at least 1",
             ));
         }
+        let agent_roles = cfg
+            .agents
+            .as_ref()
+            .map(|agents| {
+                agents
+                    .roles
+                    .iter()
+                    .map(|(name, role)| {
+                        let config_file =
+                            role.config_file.as_ref().map(AbsolutePathBuf::to_path_buf);
+                        Self::validate_agent_role_config_file(name, config_file.as_deref())?;
+                        Ok((
+                            name.clone(),
+                            AgentRoleConfig {
+                                description: role.description.clone(),
+                                config_file,
+                            },
+                        ))
+                    })
+                    .collect::<std::io::Result<BTreeMap<_, _>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -1620,6 +1727,8 @@ impl Config {
             }
         });
 
+        let commit_attribution = cfg.commit_attribution;
+
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
         // behaviour matches other path-like config values.
@@ -1652,6 +1761,20 @@ impl Config {
         let js_repl_node_path = js_repl_node_path_override
             .or(config_profile.js_repl_node_path.map(Into::into))
             .or(cfg.js_repl_node_path.map(Into::into));
+        let js_repl_node_module_dirs = js_repl_node_module_dirs_override
+            .or_else(|| {
+                config_profile
+                    .js_repl_node_module_dirs
+                    .map(|dirs| dirs.into_iter().map(Into::into).collect::<Vec<PathBuf>>())
+            })
+            .or_else(|| {
+                cfg.js_repl_node_module_dirs
+                    .map(|dirs| dirs.into_iter().map(Into::into).collect::<Vec<PathBuf>>())
+            })
+            .unwrap_or_default();
+        let zsh_path = zsh_path_override
+            .or(config_profile.zsh_path.map(Into::into))
+            .or(cfg.zsh_path.map(Into::into));
 
         let review_model = override_review_model.or(cfg.review_model);
 
@@ -1724,18 +1847,23 @@ impl Config {
             model_provider,
             cwd: resolved_cwd,
             startup_warnings,
-            approval_policy: constrained_approval_policy.value,
-            sandbox_policy: constrained_sandbox_policy.value,
+            permissions: Permissions {
+                approval_policy: constrained_approval_policy.value,
+                sandbox_policy: constrained_sandbox_policy.value,
+                network,
+                shell_environment_policy,
+                windows_sandbox_mode,
+                macos_seatbelt_profile_extensions: None,
+            },
             enforce_residency: enforce_residency.value,
-            network,
             did_user_set_custom_approval_policy_or_sandbox_mode,
-            shell_environment_policy,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
             personality,
             developer_instructions,
             compact_prompt,
+            commit_attribution,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
@@ -1761,6 +1889,8 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
+            agent_roles,
+            memories: cfg.memories.unwrap_or_default().into(),
             codex_home,
             log_dir,
             config_layer_stack,
@@ -1769,6 +1899,8 @@ impl Config {
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
             js_repl_node_path,
+            js_repl_node_module_dirs,
+            zsh_path,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
             show_raw_agent_reasoning: cfg
@@ -1794,7 +1926,6 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             use_experimental_unified_exec_tool,
             ghost_snapshot,
-            windows_sandbox_mode,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
@@ -1827,7 +1958,6 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
-            experimental_mode: cfg.tui.as_ref().and_then(|t| t.experimental_mode),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()
@@ -1899,30 +2029,67 @@ impl Config {
         }
     }
 
+    fn validate_agent_role_config_file(
+        role_name: &str,
+        config_file: Option<&Path>,
+    ) -> std::io::Result<()> {
+        let Some(config_file) = config_file else {
+            return Ok(());
+        };
+
+        let metadata = std::fs::metadata(config_file).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "agents.{role_name}.config_file must point to an existing file at {}: {e}",
+                    config_file.display()
+                ),
+            )
+        })?;
+        if metadata.is_file() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "agents.{role_name}.config_file must point to a file: {}",
+                    config_file.display()
+                ),
+            ))
+        }
+    }
+
     pub fn set_windows_sandbox_enabled(&mut self, value: bool) {
-        self.windows_sandbox_mode = if value {
+        self.permissions.windows_sandbox_mode = if value {
             Some(WindowsSandboxModeToml::Unelevated)
         } else if matches!(
-            self.windows_sandbox_mode,
+            self.permissions.windows_sandbox_mode,
             Some(WindowsSandboxModeToml::Unelevated)
         ) {
             None
         } else {
-            self.windows_sandbox_mode
+            self.permissions.windows_sandbox_mode
         };
     }
 
     pub fn set_windows_elevated_sandbox_enabled(&mut self, value: bool) {
-        self.windows_sandbox_mode = if value {
+        self.permissions.windows_sandbox_mode = if value {
             Some(WindowsSandboxModeToml::Elevated)
         } else if matches!(
-            self.windows_sandbox_mode,
+            self.permissions.windows_sandbox_mode,
             Some(WindowsSandboxModeToml::Elevated)
         ) {
             None
         } else {
-            self.windows_sandbox_mode
+            self.permissions.windows_sandbox_mode
         };
+    }
+
+    pub fn managed_network_requirements_enabled(&self) -> bool {
+        self.config_layer_stack
+            .requirements_toml()
+            .network
+            .is_some()
     }
 }
 
@@ -1976,6 +2143,8 @@ mod tests {
     use crate::config::types::FeedbackConfigToml;
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
+    use crate::config::types::MemoriesConfig;
+    use crate::config::types::MemoriesToml;
     use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
@@ -2059,6 +2228,47 @@ persistence = "none"
             }),
             history_no_persistence_cfg.history
         );
+
+        let memories = r#"
+[memories]
+max_raw_memories_for_global = 512
+max_rollout_age_days = 42
+max_rollouts_per_startup = 9
+min_rollout_idle_hours = 24
+phase_1_model = "gpt-5-mini"
+phase_2_model = "gpt-5"
+"#;
+        let memories_cfg =
+            toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(MemoriesToml {
+                max_raw_memories_for_global: Some(512),
+                max_rollout_age_days: Some(42),
+                max_rollouts_per_startup: Some(9),
+                min_rollout_idle_hours: Some(24),
+                phase_1_model: Some("gpt-5-mini".to_string()),
+                phase_2_model: Some("gpt-5".to_string()),
+            }),
+            memories_cfg.memories
+        );
+
+        let config = Config::load_from_base_config_with_overrides(
+            memories_cfg,
+            ConfigOverrides::default(),
+            tempdir().expect("tempdir").path().to_path_buf(),
+        )
+        .expect("load config from memories settings");
+        assert_eq!(
+            config.memories,
+            MemoriesConfig {
+                max_raw_memories_for_global: 512,
+                max_rollout_age_days: 42,
+                max_rollouts_per_startup: 9,
+                min_rollout_idle_hours: 24,
+                phase_1_model: Some("gpt-5-mini".to_string()),
+                phase_2_model: Some("gpt-5".to_string()),
+            }
+        );
     }
 
     #[test]
@@ -2078,7 +2288,6 @@ persistence = "none"
                 notification_method: NotificationMethod::Auto,
                 animations: true,
                 show_tooltips: true,
-                experimental_mode: None,
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
             }
@@ -2122,7 +2331,7 @@ network_access = true  # This should be ignored.
             &PathBuf::from("/tmp/test"),
             None,
         );
-        assert_eq!(resolution, SandboxPolicy::ReadOnly);
+        assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
 
         let writable_root = test_absolute_path("/my/workspace");
         let sandbox_workspace_write = format!(
@@ -2150,12 +2359,13 @@ exclude_slash_tmp = true
             None,
         );
         if cfg!(target_os = "windows") {
-            assert_eq!(resolution, SandboxPolicy::ReadOnly);
+            assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
         } else {
             assert_eq!(
                 resolution,
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![writable_root.clone()],
+                    read_only_access: ReadOnlyAccess::FullAccess,
                     network_access: false,
                     exclude_tmpdir_env_var: true,
                     exclude_slash_tmp: true,
@@ -2191,12 +2401,13 @@ trust_level = "trusted"
             None,
         );
         if cfg!(target_os = "windows") {
-            assert_eq!(resolution, SandboxPolicy::ReadOnly);
+            assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
         } else {
             assert_eq!(
                 resolution,
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![writable_root],
+                    read_only_access: ReadOnlyAccess::FullAccess,
                     network_access: false,
                     exclude_tmpdir_env_var: true,
                     exclude_slash_tmp: true,
@@ -2362,12 +2573,12 @@ trust_level = "trusted"
 
         let expected_backend = AbsolutePathBuf::try_from(backend).unwrap();
         if cfg!(target_os = "windows") {
-            match config.sandbox_policy.get() {
-                &SandboxPolicy::ReadOnly => {}
+            match config.permissions.sandbox_policy.get() {
+                SandboxPolicy::ReadOnly { .. } => {}
                 other => panic!("expected read-only policy on Windows, got {other:?}"),
             }
         } else {
-            match config.sandbox_policy.get() {
+            match config.permissions.sandbox_policy.get() {
                 SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                     assert_eq!(
                         writable_roots
@@ -2509,7 +2720,10 @@ trust_level = "trusted"
     #[test]
     fn web_search_mode_for_turn_uses_preference_for_read_only() {
         let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-        let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::ReadOnly);
+        let mode = resolve_web_search_mode_for_turn(
+            &web_search_mode,
+            &SandboxPolicy::new_read_only_policy(),
+        );
 
         assert_eq!(mode, WebSearchMode::Cached);
     }
@@ -2653,7 +2867,7 @@ profile = "project"
         )?;
 
         assert!(matches!(
-            config.sandbox_policy.get(),
+            config.permissions.sandbox_policy.get(),
             &SandboxPolicy::DangerFullAccess
         ));
         assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
@@ -2691,12 +2905,12 @@ profile = "project"
 
         if cfg!(target_os = "windows") {
             assert!(matches!(
-                config.sandbox_policy.get(),
-                SandboxPolicy::ReadOnly
+                config.permissions.sandbox_policy.get(),
+                SandboxPolicy::ReadOnly { .. }
             ));
         } else {
             assert!(matches!(
-                config.sandbox_policy.get(),
+                config.permissions.sandbox_policy.get(),
                 SandboxPolicy::WorkspaceWrite { .. }
             ));
         }
@@ -3880,6 +4094,74 @@ model = "gpt-5.1-codex"
         Ok(())
     }
 
+    #[test]
+    fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let missing_path = codex_home.path().join("agents").join("researcher.toml");
+        let cfg = ConfigToml {
+            agents: Some(AgentsToml {
+                max_threads: None,
+                roles: BTreeMap::from([(
+                    "researcher".to_string(),
+                    AgentRoleToml {
+                        description: Some("Research role".to_string()),
+                        config_file: Some(AbsolutePathBuf::from_absolute_path(missing_path)?),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        };
+
+        let result = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        );
+        let err = result.expect_err("missing role config file should be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let message = err.to_string();
+        assert!(message.contains("agents.researcher.config_file"));
+        assert!(message.contains("must point to an existing file"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn agent_role_relative_config_file_resolves_against_config_toml() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let role_config_path = codex_home.path().join("agents").join("researcher.toml");
+        tokio::fs::create_dir_all(
+            role_config_path
+                .parent()
+                .expect("role config should have a parent directory"),
+        )
+        .await?;
+        tokio::fs::write(&role_config_path, "model = \"gpt-5\"").await?;
+        tokio::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"[agents.researcher]
+description = "Research role"
+config_file = "./agents/researcher.toml"
+"#,
+        )
+        .await?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await?;
+        assert_eq!(
+            config
+                .agent_roles
+                .get("researcher")
+                .and_then(|role| role.config_file.as_ref()),
+            Some(&role_config_path)
+        );
+
+        Ok(())
+    }
+
     fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
         let toml = r#"
 model = "o3"
@@ -4012,12 +4294,16 @@ model_verbosity = "high"
                 model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
-                approval_policy: Constrained::allow_any(AskForApproval::Never),
-                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                permissions: Permissions {
+                    approval_policy: Constrained::allow_any(AskForApproval::Never),
+                    sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                    network: None,
+                    shell_environment_policy: ShellEnvironmentPolicy::default(),
+                    windows_sandbox_mode: None,
+                    macos_seatbelt_profile_extensions: None,
+                },
                 enforce_residency: Constrained::allow_any(None),
-                network: None,
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
-                shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -4030,6 +4316,8 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
                 agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+                agent_roles: BTreeMap::new(),
+                memories: MemoriesConfig::default(),
                 codex_home: fixture.codex_home(),
                 log_dir: fixture.codex_home().join("log"),
                 config_layer_stack: Default::default(),
@@ -4039,6 +4327,8 @@ model_verbosity = "high"
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
                 js_repl_node_path: None,
+                js_repl_node_module_dirs: Vec::new(),
+                zsh_path: None,
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
@@ -4050,6 +4340,7 @@ model_verbosity = "high"
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
+                commit_attribution: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
@@ -4060,7 +4351,6 @@ model_verbosity = "high"
                 suppress_unstable_features_warning: false,
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
-                windows_sandbox_mode: None,
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
                 check_for_update_on_startup: true,
@@ -4069,7 +4359,6 @@ model_verbosity = "high"
                 tui_notification_method: Default::default(),
                 animations: true,
                 show_tooltips: true,
-                experimental_mode: None,
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
@@ -4119,12 +4408,16 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai-custom".to_string(),
             model_provider: fixture.openai_custom_provider.clone(),
-            approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            permissions: Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                network: None,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+                macos_seatbelt_profile_extensions: None,
+            },
             enforce_residency: Constrained::allow_any(None),
-            network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4137,6 +4430,8 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_roles: BTreeMap::new(),
+            memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
@@ -4146,6 +4441,8 @@ model_verbosity = "high"
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             js_repl_node_path: None,
+            js_repl_node_module_dirs: Vec::new(),
+            zsh_path: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
@@ -4157,6 +4454,7 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -4167,7 +4465,6 @@ model_verbosity = "high"
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
-            windows_sandbox_mode: None,
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4176,7 +4473,6 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
-            experimental_mode: None,
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
@@ -4224,12 +4520,16 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            permissions: Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                network: None,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+                macos_seatbelt_profile_extensions: None,
+            },
             enforce_residency: Constrained::allow_any(None),
-            network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4242,6 +4542,8 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_roles: BTreeMap::new(),
+            memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
@@ -4251,6 +4553,8 @@ model_verbosity = "high"
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             js_repl_node_path: None,
+            js_repl_node_module_dirs: Vec::new(),
+            zsh_path: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
@@ -4262,6 +4566,7 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -4272,7 +4577,6 @@ model_verbosity = "high"
             suppress_unstable_features_warning: false,
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
-            windows_sandbox_mode: None,
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4281,7 +4585,6 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
-            experimental_mode: None,
             analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
@@ -4315,12 +4618,16 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            permissions: Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                network: None,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+                macos_seatbelt_profile_extensions: None,
+            },
             enforce_residency: Constrained::allow_any(None),
-            network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4333,6 +4640,8 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_roles: BTreeMap::new(),
+            memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
@@ -4342,6 +4651,8 @@ model_verbosity = "high"
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             js_repl_node_path: None,
+            js_repl_node_module_dirs: Vec::new(),
+            zsh_path: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
@@ -4353,6 +4664,7 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -4363,7 +4675,6 @@ model_verbosity = "high"
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
-            windows_sandbox_mode: None,
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4372,7 +4683,6 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
-            experimental_mode: None,
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
@@ -4666,7 +4976,7 @@ trust_level = "untrusted"
         // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
         if cfg!(target_os = "windows") {
             assert!(
-                matches!(resolution, SandboxPolicy::ReadOnly),
+                matches!(resolution, SandboxPolicy::ReadOnly { .. }),
                 "Expected ReadOnly on Windows, got {resolution:?}"
             );
         } else {
@@ -4757,7 +5067,7 @@ trust_level = "untrusted"
         );
 
         if cfg!(target_os = "windows") {
-            assert_eq!(resolution, SandboxPolicy::ReadOnly);
+            assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
         } else {
             assert_eq!(resolution, SandboxPolicy::new_workspace_write_policy());
         }
@@ -4896,7 +5206,7 @@ mcp_oauth_callback_port = 5678
 
         // Verify that untrusted projects get UnlessTrusted approval policy
         assert_eq!(
-            config.approval_policy.value(),
+            config.permissions.approval_policy.value(),
             AskForApproval::UnlessTrusted,
             "Expected UnlessTrusted approval policy for untrusted project"
         );
@@ -4904,13 +5214,16 @@ mcp_oauth_callback_port = 5678
         // Verify that untrusted projects still get WorkspaceWrite sandbox (or ReadOnly on Windows)
         if cfg!(target_os = "windows") {
             assert!(
-                matches!(config.sandbox_policy.get(), SandboxPolicy::ReadOnly),
+                matches!(
+                    config.permissions.sandbox_policy.get(),
+                    SandboxPolicy::ReadOnly { .. }
+                ),
                 "Expected ReadOnly on Windows"
             );
         } else {
             assert!(
                 matches!(
-                    config.sandbox_policy.get(),
+                    config.permissions.sandbox_policy.get(),
                     SandboxPolicy::WorkspaceWrite { .. }
                 ),
                 "Expected WorkspaceWrite sandbox for untrusted project"
@@ -4937,8 +5250,10 @@ mcp_oauth_callback_port = 5678
             }))
             .build()
             .await?;
-
-        assert_eq!(*config.sandbox_policy.get(), SandboxPolicy::ReadOnly);
+        assert_eq!(
+            *config.permissions.sandbox_policy.get(),
+            SandboxPolicy::new_read_only_policy()
+        );
         Ok(())
     }
 
@@ -4972,7 +5287,10 @@ mcp_oauth_callback_port = 5678
             ))
             .build()
             .await?;
-        assert_eq!(*config.sandbox_policy.get(), SandboxPolicy::ReadOnly);
+        assert_eq!(
+            *config.permissions.sandbox_policy.get(),
+            SandboxPolicy::new_read_only_policy()
+        );
         Ok(())
     }
 
@@ -5002,7 +5320,10 @@ mcp_oauth_callback_port = 5678
 
         assert_eq!(config.web_search_mode.value(), WebSearchMode::Cached);
         assert_eq!(
-            resolve_web_search_mode_for_turn(&config.web_search_mode, config.sandbox_policy.get()),
+            resolve_web_search_mode_for_turn(
+                &config.web_search_mode,
+                config.permissions.sandbox_policy.get(),
+            ),
             WebSearchMode::Cached,
         );
         Ok(())
@@ -5036,7 +5357,10 @@ trust_level = "untrusted"
             .build()
             .await?;
 
-        assert_eq!(config.approval_policy.value(), AskForApproval::OnRequest);
+        assert_eq!(
+            config.permissions.approval_policy.value(),
+            AskForApproval::OnRequest
+        );
         Ok(())
     }
 
@@ -5061,7 +5385,10 @@ trust_level = "untrusted"
             }))
             .build()
             .await?;
-        assert_eq!(config.approval_policy.value(), AskForApproval::OnRequest);
+        assert_eq!(
+            config.permissions.approval_policy.value(),
+            AskForApproval::OnRequest
+        );
         Ok(())
     }
 }
