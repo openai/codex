@@ -154,14 +154,14 @@ impl AgentControl {
         Ok(thread.subscribe_status())
     }
 
-    pub(crate) async fn get_last_token_usage(&self, agent_id: ThreadId) -> Option<TokenUsage> {
+    pub(crate) async fn get_total_token_usage(&self, agent_id: ThreadId) -> Option<TokenUsage> {
         let Ok(state) = self.upgrade() else {
             return None;
         };
         let Ok(thread) = state.get_thread(agent_id).await else {
             return None;
         };
-        thread.last_token_usage().await
+        thread.total_token_usage().await
     }
 
     fn upgrade(&self) -> CodexResult<Arc<ThreadManagerState>> {

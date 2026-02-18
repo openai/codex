@@ -295,7 +295,7 @@ mod agent {
             .await;
 
             if matches!(final_status, AgentStatus::Completed(_)) {
-                if let Some(token_usage) = agent_control.get_last_token_usage(thread_id).await {
+                if let Some(token_usage) = agent_control.get_total_token_usage(thread_id).await {
                     emit_token_usage_metrics(&session, &token_usage);
                 }
                 job::succeed(&session, &db, &claim, new_watermark, "succeeded").await;

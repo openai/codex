@@ -1474,9 +1474,9 @@ impl Session {
         state.history.get_total_token_usage_breakdown()
     }
 
-    pub(crate) async fn last_token_usage(&self) -> Option<TokenUsage> {
+    pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
         let state = self.state.lock().await;
-        state.token_info().map(|info| info.last_token_usage)
+        state.token_info().map(|info| info.total_token_usage)
     }
 
     pub(crate) async fn get_estimated_token_count(

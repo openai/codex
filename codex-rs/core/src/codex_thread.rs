@@ -74,8 +74,8 @@ impl CodexThread {
         self.codex.agent_status.clone()
     }
 
-    pub(crate) async fn last_token_usage(&self) -> Option<TokenUsage> {
-        self.codex.session.last_token_usage().await
+    pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
+        self.codex.session.total_token_usage().await
     }
 
     pub fn rollout_path(&self) -> Option<PathBuf> {
