@@ -176,21 +176,20 @@ pub fn validate_policy_against_constraints(
         },
     )?;
 
-    let allow_all_unix_sockets = constraints.dangerously_allow_all_unix_sockets;
+    let allow_all_unix_sockets = constraints
+        .dangerously_allow_all_unix_sockets
+        .unwrap_or(constraints.allow_unix_sockets.is_none());
     validate(
         config.network.dangerously_allow_all_unix_sockets,
-        move |candidate| match allow_all_unix_sockets {
-            Some(true) | None => Ok(()),
-            Some(false) => {
-                if *candidate {
-                    Err(invalid_value(
-                        "network.dangerously_allow_all_unix_sockets",
-                        "true",
-                        "false (disabled by managed config)",
-                    ))
-                } else {
-                    Ok(())
-                }
+        move |candidate| {
+            if *candidate && !allow_all_unix_sockets {
+                Err(invalid_value(
+                    "network.dangerously_allow_all_unix_sockets",
+                    "true",
+                    "false (disabled by managed config)",
+                ))
+            } else {
+                Ok(())
             }
         },
     )?;
