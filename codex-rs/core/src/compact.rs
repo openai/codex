@@ -485,6 +485,7 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
                 Some(TurnItem::UserMessage(_))
             )
         }
+        // Keep compaction records for local/remote history continuity and token accounting.
         ResponseItem::Compaction { .. } => true,
         ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }

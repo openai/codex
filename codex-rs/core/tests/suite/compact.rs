@@ -2962,11 +2962,6 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     );
     let third_request_body = requests[2].body_json().to_string();
     assert!(
-        third_request_body.contains("REMOTE_COMPACT_SUMMARY")
-            || third_request_body.contains(FINAL_REPLY),
-        "third turn should include compacted history"
-    );
-    assert!(
         third_request_body.contains("ENCRYPTED_COMPACTION_SUMMARY"),
         "third turn should include compaction summary item"
     );

@@ -1051,10 +1051,14 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
                 )
             });
 
-            if has_compacted_user_summary && has_compaction_item && has_compacted_assistant_note {
+            if has_compacted_user_summary && has_compaction_item {
                 assert!(
                     !has_permissions_developer_message,
                     "manual remote compact rollout replacement history should not inject permissions context"
+                );
+                assert!(
+                    !has_compacted_assistant_note,
+                    "manual remote compact rollout replacement history should drop assistant notes"
                 );
                 saw_compacted_history = true;
                 break;
