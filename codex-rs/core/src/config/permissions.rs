@@ -1,16 +1,19 @@
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct PermissionsToml {
     /// Network proxy settings from `[permissions.network]`.
     /// User config can enable the proxy; managed requirements may still constrain values.
     pub network: Option<NetworkToml>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct NetworkToml {
     pub enabled: Option<bool>,
     pub proxy_url: Option<String>,
@@ -21,11 +24,19 @@ pub struct NetworkToml {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_admin: Option<bool>,
+    #[schemars(with = "Option<NetworkModeSchema>")]
     pub mode: Option<NetworkMode>,
     pub allowed_domains: Option<Vec<String>>,
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum NetworkModeSchema {
+    Limited,
+    Full,
 }
 
 impl NetworkToml {

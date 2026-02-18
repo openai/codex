@@ -910,7 +910,6 @@ pub struct ConfigToml {
 
     /// Nested permissions settings.
     #[serde(default)]
-    #[schemars(skip)]
     pub permissions: Option<PermissionsToml>,
 
     /// Optional external command to spawn for end-user notifications.
