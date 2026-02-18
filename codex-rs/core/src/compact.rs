@@ -466,9 +466,10 @@ fn is_user_shell_command_record(item: &ResponseItem) -> bool {
 ///   instruction content.
 /// - non-user-content `user` messages (session prefix/instruction wrappers),
 ///   keeping only real user messages as parsed by `parse_turn_item`.
+/// - all non-user transcript items except compaction records.
 ///
-/// This intentionally keeps `user`-role warnings and compaction-generated
-/// summary messages because they parse as `TurnItem::UserMessage`.
+/// This intentionally keeps compaction-generated summary messages because they
+/// parse as `TurnItem::UserMessage`.
 fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } => {
@@ -476,7 +477,7 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
                 return false;
             }
             if role != "user" {
-                return true;
+                return false;
             }
 
             matches!(
@@ -484,6 +485,7 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
                 Some(TurnItem::UserMessage(_))
             )
         }
+        ResponseItem::Compaction { .. } => true,
         ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
@@ -492,8 +494,7 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::GhostSnapshot { .. }
-        | ResponseItem::Compaction { .. }
-        | ResponseItem::Other => true,
+        | ResponseItem::Other => false,
     }
 }
 
@@ -1078,6 +1079,15 @@ do things
         assert!(!super::should_keep_compacted_history_item(
             &shell_command_user
         ));
+    }
+
+    #[test]
+    fn should_keep_compacted_history_item_keeps_compaction_item() {
+        let compaction = ResponseItem::Compaction {
+            encrypted_content: "abc123".to_string(),
+        };
+
+        assert!(super::should_keep_compacted_history_item(&compaction));
     }
 
     #[test]
@@ -1667,15 +1677,6 @@ keep me updated
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: format!("{SUMMARY_PREFIX}\nlatest summary"),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "assistant after latest summary".to_string(),
                 }],
                 end_turn: None,
                 phase: None,
