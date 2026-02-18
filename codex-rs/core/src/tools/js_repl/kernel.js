@@ -13,7 +13,9 @@ const { inspect, TextDecoder, TextEncoder } = require("node:util");
 const vm = require("node:vm");
 
 const { SourceTextModule, SyntheticModule } = vm;
-const meriyahPromise = import("./meriyah.umd.min.js").then((m) => m.default ?? m);
+const meriyahPromise = import("./meriyah.umd.min.js").then(
+  (m) => m.default ?? m,
+);
 
 // vm contexts start with very few globals. Populate common Node/web globals
 // so snippets and dependencies behave like a normal modern JS runtime.
@@ -100,8 +102,12 @@ function toNodeBuiltinSpecifier(specifier) {
 }
 
 function isDeniedBuiltin(specifier) {
-  const normalized = specifier.startsWith("node:") ? specifier.slice(5) : specifier;
-  return deniedBuiltinModules.has(specifier) || deniedBuiltinModules.has(normalized);
+  const normalized = specifier.startsWith("node:")
+    ? specifier.slice(5)
+    : specifier;
+  return (
+    deniedBuiltinModules.has(specifier) || deniedBuiltinModules.has(normalized)
+  );
 }
 
 /** @type {Map<string, (msg: any) => void>} */
@@ -123,7 +129,10 @@ const moduleSearchBases = (() => {
     const resolved = path.isAbsolute(trimmed)
       ? trimmed
       : path.resolve(process.cwd(), trimmed);
-    const base = path.basename(resolved) === "node_modules" ? path.dirname(resolved) : resolved;
+    const base =
+      path.basename(resolved) === "node_modules"
+        ? path.dirname(resolved)
+        : resolved;
     if (seen.has(base)) {
       continue;
     }
@@ -150,17 +159,25 @@ function getRequireForBase(base) {
 }
 
 function isModuleNotFoundError(err) {
-  return err?.code === "MODULE_NOT_FOUND" || err?.code === "ERR_MODULE_NOT_FOUND";
+  return (
+    err?.code === "MODULE_NOT_FOUND" || err?.code === "ERR_MODULE_NOT_FOUND"
+  );
 }
 
 function isWithinBaseNodeModules(base, resolvedPath) {
   const nodeModulesRoot = path.resolve(base, "node_modules");
   const relative = path.relative(nodeModulesRoot, resolvedPath);
-  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+  return (
+    relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
+  );
 }
 
 function isBarePackageSpecifier(specifier) {
-  if (typeof specifier !== "string" || !specifier || specifier.trim() !== specifier) {
+  if (
+    typeof specifier !== "string" ||
+    !specifier ||
+    specifier.trim() !== specifier
+  ) {
     return false;
   }
   if (specifier.startsWith("./") || specifier.startsWith("../")) {
@@ -212,7 +229,9 @@ function resolveBareSpecifier(specifier) {
 function resolveSpecifier(specifier) {
   if (specifier.startsWith("node:") || builtinModuleSet.has(specifier)) {
     if (isDeniedBuiltin(specifier)) {
-      throw new Error(`Importing module "${specifier}" is not allowed in js_repl`);
+      throw new Error(
+        `Importing module "${specifier}" is not allowed in js_repl`,
+      );
     }
     return { kind: "builtin", specifier: toNodeBuiltinSpecifier(specifier) };
   }
@@ -290,13 +309,24 @@ function collectBindings(ast) {
     } else if (stmt.type === "ClassDeclaration" && stmt.id) {
       map.set(stmt.id.name, "class");
     } else if (stmt.type === "ForStatement") {
-      if (stmt.init && stmt.init.type === "VariableDeclaration" && stmt.init.kind === "var") {
+      if (
+        stmt.init &&
+        stmt.init.type === "VariableDeclaration" &&
+        stmt.init.kind === "var"
+      ) {
         for (const decl of stmt.init.declarations) {
           collectPatternNames(decl.id, "var", map);
         }
       }
-    } else if (stmt.type === "ForInStatement" || stmt.type === "ForOfStatement") {
-      if (stmt.left && stmt.left.type === "VariableDeclaration" && stmt.left.kind === "var") {
+    } else if (
+      stmt.type === "ForInStatement" ||
+      stmt.type === "ForOfStatement"
+    ) {
+      if (
+        stmt.left &&
+        stmt.left.type === "VariableDeclaration" &&
+        stmt.left.kind === "var"
+      ) {
         for (const decl of stmt.left.declarations) {
           collectPatternNames(decl.id, "var", map);
         }
@@ -324,7 +354,8 @@ async function buildModuleSource(code) {
     prelude += 'import * as __prev from "@prev";\n';
     prelude += priorBindings
       .map((b) => {
-        const keyword = b.kind === "var" ? "var" : b.kind === "const" ? "const" : "let";
+        const keyword =
+          b.kind === "var" ? "var" : b.kind === "const" ? "const" : "let";
         return `${keyword} ${b.name} = __prev.${b.name};`;
       })
       .join("\n");
@@ -340,9 +371,14 @@ async function buildModuleSource(code) {
   }
   // Export the merged binding set so the next cell can import it through @prev.
   const exportNames = Array.from(mergedBindings.keys());
-  const exportStmt = exportNames.length ? `\nexport { ${exportNames.join(", ")} };` : "";
+  const exportStmt = exportNames.length
+    ? `\nexport { ${exportNames.join(", ")} };`
+    : "";
 
-  const nextBindings = Array.from(mergedBindings, ([name, kind]) => ({ name, kind }));
+  const nextBindings = Array.from(mergedBindings, ([name, kind]) => ({
+    name,
+    kind,
+  }));
   return { source: `${prelude}${code}${exportStmt}`, nextBindings };
 }
 
@@ -353,7 +389,9 @@ function send(message) {
 
 function formatLog(args) {
   return args
-    .map((arg) => (typeof arg === "string" ? arg : inspect(arg, { depth: 4, colors: false })))
+    .map((arg) =>
+      typeof arg === "string" ? arg : inspect(arg, { depth: 4, colors: false }),
+    )
     .join(" ");
 }
 
@@ -446,7 +484,10 @@ async function handleExec(message) {
             exportNames,
             function initSynthetic() {
               for (const binding of previousBindings) {
-                this.setExport(binding.name, previousModule.namespace[binding.name]);
+                this.setExport(
+                  binding.name,
+                  previousModule.namespace[binding.name],
+                );
               }
             },
             { context },
