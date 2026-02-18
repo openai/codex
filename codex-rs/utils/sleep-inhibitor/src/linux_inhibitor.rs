@@ -170,6 +170,9 @@ impl Drop for LinuxSleepInhibitor {
 }
 
 fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
+    // Ensure the helper receives SIGTERM when the original parent dies.
+    // `parent_pid` is captured before spawn and checked in `pre_exec` to avoid
+    // the fork/exec race where the parent exits before PDEATHSIG is armed.
     let parent_pid = unsafe { libc::getpid() };
     let mut command = match backend {
         LinuxBackend::SystemdInhibit => {
