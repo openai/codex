@@ -42,7 +42,7 @@ pub struct NetworkProxySettings {
     pub allow_unix_sockets: Vec<String>,
     pub allow_local_binding: bool,
     #[serde(default)]
-    pub mitm: MitmConfig,
+    pub mitm: bool,
 }
 
 impl Default for NetworkProxySettings {
@@ -62,7 +62,7 @@ impl Default for NetworkProxySettings {
             denied_domains: Vec::new(),
             allow_unix_sockets: Vec::new(),
             allow_local_binding: true,
-            mitm: MitmConfig::default(),
+            mitm: false,
         }
     }
 }
@@ -89,26 +89,6 @@ impl NetworkMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MitmConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub inspect: bool,
-    #[serde(default = "default_mitm_max_body_bytes")]
-    pub max_body_bytes: usize,
-}
-
-impl Default for MitmConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            inspect: false,
-            max_body_bytes: default_mitm_max_body_bytes(),
-        }
-    }
-}
-
 fn default_proxy_url() -> String {
     "http://127.0.0.1:3128".to_string()
 }
@@ -119,10 +99,6 @@ fn default_admin_url() -> String {
 
 fn default_socks_url() -> String {
     "http://127.0.0.1:8081".to_string()
-}
-
-fn default_mitm_max_body_bytes() -> usize {
-    4096
 }
 
 /// Clamp non-loopback bind addresses to loopback unless explicitly allowed.
@@ -373,7 +349,7 @@ mod tests {
                 denied_domains: Vec::new(),
                 allow_unix_sockets: Vec::new(),
                 allow_local_binding: true,
-                mitm: MitmConfig::default(),
+                mitm: false,
             }
         );
     }

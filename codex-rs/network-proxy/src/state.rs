@@ -56,9 +56,8 @@ pub fn build_config_state(
 ) -> anyhow::Result<ConfigState> {
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
-    let mitm = if config.network.mitm.enabled {
+    let mitm = if config.network.mitm {
         Some(Arc::new(MitmState::new(
-            &config.network.mitm,
             config.network.allow_upstream_proxy,
         )?))
     } else {

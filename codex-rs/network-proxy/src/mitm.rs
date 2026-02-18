@@ -1,4 +1,3 @@
-use crate::config::MitmConfig;
 use crate::config::NetworkMode;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
@@ -75,6 +74,9 @@ pub struct MitmState {
     max_body_bytes: usize,
 }
 
+const MITM_INSPECT_BODIES: bool = false;
+const MITM_MAX_BODY_BYTES: usize = 4096;
+
 impl std::fmt::Debug for MitmState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Avoid dumping internal state (CA material, connectors, etc.) to logs.
@@ -86,7 +88,7 @@ impl std::fmt::Debug for MitmState {
 }
 
 impl MitmState {
-    pub fn new(cfg: &MitmConfig, allow_upstream_proxy: bool) -> Result<Self> {
+    pub fn new(allow_upstream_proxy: bool) -> Result<Self> {
         // MITM exists to make limited-mode HTTPS enforceable: once CONNECT is established, plain
         // proxying would lose visibility into the inner HTTP request. We generate/load a local CA
         // and issue per-host leaf certs so we can terminate TLS and apply policy.
@@ -104,8 +106,8 @@ impl MitmState {
         Ok(Self {
             issuer,
             upstream,
-            inspect: cfg.inspect,
-            max_body_bytes: cfg.max_body_bytes,
+            inspect: MITM_INSPECT_BODIES,
+            max_body_bytes: MITM_MAX_BODY_BYTES,
         })
     }
 

@@ -34,13 +34,9 @@ allow_upstream_proxy = true
 dangerously_allow_non_loopback_proxy = false
 dangerously_allow_non_loopback_admin = false
 mode = "full" # default when unset; use "limited" for read-only mode
-
-[network.mitm]
-# When enabled, HTTPS CONNECT can be terminated so limited-mode method policy still applies.
-enabled = false
+# When true, HTTPS CONNECT can be terminated so limited-mode method policy still applies.
+mitm = false
 # CA cert/key are managed internally under $CODEX_HOME/proxy/ (ca.pem + ca.key).
-# Maximum size of request/response bodies MITM will buffer for inspection.
-max_body_bytes = 1048576
 
 # Hosts must match the allowlist (unless denied).
 # If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
