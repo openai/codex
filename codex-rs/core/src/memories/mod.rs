@@ -11,6 +11,7 @@ mod start;
 mod storage;
 #[cfg(test)]
 mod tests;
+pub(crate) mod usage;
 
 /// Starts the memory startup pipeline for eligible root sessions.
 /// This is the single entrypoint that `codex` uses to trigger memory startup.
