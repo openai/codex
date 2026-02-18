@@ -478,9 +478,6 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
             if role != "user" {
                 return true;
             }
-            if is_user_shell_command_record(item) {
-                return false;
-            }
 
             matches!(
                 crate::event_mapping::parse_turn_item(item),
