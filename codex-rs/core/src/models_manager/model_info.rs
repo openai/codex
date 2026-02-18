@@ -19,6 +19,40 @@ const LOCAL_FRIENDLY_TEMPLATE: &str =
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
+pub(crate) fn with_model_info_patch(
+    mut model: ModelInfo,
+    model_key: &str,
+    config: &Config,
+) -> ModelInfo {
+    let Some(model_info_patch) = config.model_info.overrides.get(model_key) else {
+        return model;
+    };
+
+    let clears_model_messages =
+        model_info_patch.base_instructions.is_some() && model_info_patch.model_messages.is_none();
+    model_info_patch.apply_to(&mut model);
+    // Keep parity with top-level config behavior: explicit base instructions
+    // should disable template-driven model messages unless the patch sets them again.
+    if clears_model_messages {
+        model.model_messages = None;
+    }
+
+    model
+}
+
+pub(crate) fn with_model_info_patches(
+    mut model_info: ModelInfo,
+    resolved_slug: &str,
+    requested_model: &str,
+    config: &Config,
+) -> ModelInfo {
+    model_info = with_model_info_patch(model_info, resolved_slug, config);
+    if requested_model != resolved_slug {
+        model_info = with_model_info_patch(model_info, requested_model, config);
+    }
+    model_info
+}
+
 pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> ModelInfo {
     if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries
         && supports_reasoning_summaries

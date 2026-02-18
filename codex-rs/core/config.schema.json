@@ -102,6 +102,13 @@
       ],
       "type": "string"
     },
+    "ApplyPatchToolType": {
+      "enum": [
+        "freeform",
+        "function"
+      ],
+      "type": "string"
+    },
     "AppsConfigToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AppConfig"
@@ -172,6 +179,16 @@
             "ephemeral"
           ],
           "type": "string"
+        }
+      ]
+    },
+    "CatalogJsonSourceToml": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        {
+          "$ref": "#/definitions/ModelsResponse"
         }
       ]
     },
@@ -402,6 +419,17 @@
       },
       "type": "object"
     },
+    "ConfigShellToolType": {
+      "description": "Shell execution capability for a model.",
+      "enum": [
+        "default",
+        "local",
+        "unified_exec",
+        "disabled",
+        "shell_command"
+      ],
+      "type": "string"
+    },
     "FeedbackConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -481,6 +509,25 @@
         }
       ]
     },
+    "InputModality": {
+      "description": "Canonical user-input modality tags advertised by a model.",
+      "oneOf": [
+        {
+          "description": "Plain text turns and tool payloads.",
+          "enum": [
+            "text"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Image attachments included in user turns.",
+          "enum": [
+            "image"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "MemoriesToml": {
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
@@ -514,6 +561,328 @@
         "phase_2_model": {
           "description": "Model used for memory consolidation.",
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ModelInfo": {
+      "description": "Model metadata returned by the Codex backend `/models` endpoint.\n\n`#[derive(ModelPatch)]` auto-generates `ModelInfoPatch`, which is used by `model_info.overrides` in config to apply per-field updates. All fields are patchable unless marked `#[model_patch(skip)]`. Patch updates are set-only.",
+      "properties": {
+        "apply_patch_tool_type": {
+          "$ref": "#/definitions/ApplyPatchToolType"
+        },
+        "auto_compact_token_limit": {
+          "description": "Token threshold for automatic compaction. When omitted, core derives it from `context_window` (90%). When provided, core clamps it to 90% of the context window when available.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "base_instructions": {
+          "type": "string"
+        },
+        "context_window": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "default_reasoning_level": {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
+        "default_verbosity": {
+          "$ref": "#/definitions/Verbosity"
+        },
+        "description": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "effective_context_window_percent": {
+          "default": 95,
+          "description": "Percentage of the context window considered usable for inputs, after reserving headroom for system prompts, tool overhead, and model output.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "experimental_supported_tools": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "input_modalities": {
+          "default": [
+            "text",
+            "image"
+          ],
+          "description": "Input modalities accepted by the backend for this model.",
+          "items": {
+            "$ref": "#/definitions/InputModality"
+          },
+          "type": "array"
+        },
+        "model_messages": {
+          "$ref": "#/definitions/ModelMessages"
+        },
+        "prefer_websockets": {
+          "default": false,
+          "description": "When true, this model should use websocket transport even when websocket features are off.",
+          "type": "boolean"
+        },
+        "priority": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "shell_type": {
+          "$ref": "#/definitions/ConfigShellToolType"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "support_verbosity": {
+          "type": "boolean"
+        },
+        "supported_in_api": {
+          "type": "boolean"
+        },
+        "supported_reasoning_levels": {
+          "items": {
+            "$ref": "#/definitions/ReasoningEffortPreset"
+          },
+          "type": "array"
+        },
+        "supports_parallel_tool_calls": {
+          "type": "boolean"
+        },
+        "supports_reasoning_summaries": {
+          "type": "boolean"
+        },
+        "truncation_policy": {
+          "$ref": "#/definitions/TruncationPolicyConfig"
+        },
+        "upgrade": {
+          "$ref": "#/definitions/ModelInfoUpgrade"
+        },
+        "visibility": {
+          "$ref": "#/definitions/ModelVisibility"
+        }
+      },
+      "required": [
+        "base_instructions",
+        "display_name",
+        "experimental_supported_tools",
+        "priority",
+        "shell_type",
+        "slug",
+        "support_verbosity",
+        "supported_in_api",
+        "supported_reasoning_levels",
+        "supports_parallel_tool_calls",
+        "supports_reasoning_summaries",
+        "truncation_policy",
+        "visibility"
+      ],
+      "type": "object"
+    },
+    "ModelInfoConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "catalog_json": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CatalogJsonSourceToml"
+            }
+          ],
+          "description": "Optional full catalog overlay applied on top of bundled and fetched model metadata. This can be either a literal `ModelsResponse` object or a path to a JSON file containing one."
+        },
+        "overrides": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ModelInfoPatch"
+          },
+          "default": {},
+          "description": "Per-model metadata overrides keyed by model slug.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "ModelInfoPatch": {
+      "additionalProperties": false,
+      "properties": {
+        "apply_patch_tool_type": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApplyPatchToolType"
+            }
+          ],
+          "default": null
+        },
+        "auto_compact_token_limit": {
+          "default": null,
+          "format": "int64",
+          "type": "integer"
+        },
+        "base_instructions": {
+          "default": null,
+          "type": "string"
+        },
+        "context_window": {
+          "default": null,
+          "format": "int64",
+          "type": "integer"
+        },
+        "default_reasoning_level": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "default": null
+        },
+        "default_verbosity": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Verbosity"
+            }
+          ],
+          "default": null
+        },
+        "description": {
+          "default": null,
+          "type": "string"
+        },
+        "display_name": {
+          "default": null,
+          "type": "string"
+        },
+        "effective_context_window_percent": {
+          "default": null,
+          "format": "int64",
+          "type": "integer"
+        },
+        "experimental_supported_tools": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "input_modalities": {
+          "default": null,
+          "items": {
+            "$ref": "#/definitions/InputModality"
+          },
+          "type": "array"
+        },
+        "model_messages": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelMessages"
+            }
+          ],
+          "default": null
+        },
+        "prefer_websockets": {
+          "default": null,
+          "type": "boolean"
+        },
+        "priority": {
+          "default": null,
+          "format": "int32",
+          "type": "integer"
+        },
+        "shell_type": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ConfigShellToolType"
+            }
+          ],
+          "default": null
+        },
+        "support_verbosity": {
+          "default": null,
+          "type": "boolean"
+        },
+        "supported_in_api": {
+          "default": null,
+          "type": "boolean"
+        },
+        "supported_reasoning_levels": {
+          "default": null,
+          "items": {
+            "$ref": "#/definitions/ReasoningEffortPreset"
+          },
+          "type": "array"
+        },
+        "supports_parallel_tool_calls": {
+          "default": null,
+          "type": "boolean"
+        },
+        "supports_reasoning_summaries": {
+          "default": null,
+          "type": "boolean"
+        },
+        "truncation_policy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TruncationPolicyConfig"
+            }
+          ],
+          "default": null
+        },
+        "upgrade": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelInfoUpgrade"
+            }
+          ],
+          "default": null
+        },
+        "visibility": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelVisibility"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
+    "ModelInfoUpgrade": {
+      "properties": {
+        "migration_markdown": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "migration_markdown",
+        "model"
+      ],
+      "type": "object"
+    },
+    "ModelInstructionsVariables": {
+      "properties": {
+        "personality_default": {
+          "type": "string"
+        },
+        "personality_friendly": {
+          "type": "string"
+        },
+        "personality_pragmatic": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ModelMessages": {
+      "description": "A strongly-typed template for assembling model instructions and developer messages. If instructions_* is populated and valid, it will override base_instructions.",
+      "properties": {
+        "instructions_template": {
+          "type": "string"
+        },
+        "instructions_variables": {
+          "$ref": "#/definitions/ModelInstructionsVariables"
         }
       },
       "type": "object"
@@ -603,6 +972,30 @@
       },
       "required": [
         "name"
+      ],
+      "type": "object"
+    },
+    "ModelVisibility": {
+      "description": "Visibility of a model in the picker or APIs.",
+      "enum": [
+        "list",
+        "hide",
+        "none"
+      ],
+      "type": "string"
+    },
+    "ModelsResponse": {
+      "description": "Response wrapper for `/models`.",
+      "properties": {
+        "models": {
+          "items": {
+            "$ref": "#/definitions/ModelInfo"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "models"
       ],
       "type": "object"
     },
@@ -977,6 +1370,28 @@
       ],
       "type": "string"
     },
+    "ReasoningEffortPreset": {
+      "description": "A reasoning effort option that can be surfaced for a model.",
+      "properties": {
+        "description": {
+          "description": "Short human description shown next to the effort in UIs.",
+          "type": "string"
+        },
+        "effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Effort level that the model supports."
+        }
+      },
+      "required": [
+        "description",
+        "effort"
+      ],
+      "type": "object"
+    },
     "ReasoningSummary": {
       "description": "A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
       "oneOf": [
@@ -1132,6 +1547,30 @@
           "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "TruncationMode": {
+      "description": "Server-provided truncation policy metadata for a model.",
+      "enum": [
+        "bytes",
+        "tokens"
+      ],
+      "type": "string"
+    },
+    "TruncationPolicyConfig": {
+      "properties": {
+        "limit": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/definitions/TruncationMode"
+        }
+      },
+      "required": [
+        "limit",
+        "mode"
+      ],
       "type": "object"
     },
     "TrustLevel": {
@@ -1592,6 +2031,14 @@
       "description": "Size of the context window for the model, in tokens.",
       "format": "int64",
       "type": "integer"
+    },
+    "model_info": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ModelInfoConfigToml"
+        }
+      ],
+      "description": "Custom model metadata source and per-model overrides."
     },
     "model_instructions_file": {
       "allOf": [

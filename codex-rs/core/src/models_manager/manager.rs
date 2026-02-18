@@ -77,6 +77,9 @@ impl ModelsManager {
         if let Err(err) = self.refresh_available_models(refresh_strategy).await {
             error!("failed to refresh available models: {err}");
         }
+        // todo(sayan): Make preset/list/default-model flows config-aware so
+        // `model_info.catalog_json` and `model_info.overrides` are reflected in
+        // picker/app-server model metadata as well (today only get_model_info uses them).
         let remote_models = self.get_remote_models().await;
         self.build_available_models(remote_models)
     }
@@ -125,7 +128,14 @@ impl ModelsManager {
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
-        let remote = self.find_remote_model_by_longest_prefix(model).await;
+        let remote = Self::find_model_by_longest_prefix(
+            model,
+            &self.get_effective_remote_models(config).await,
+        );
+        let resolved_slug = remote
+            .as_ref()
+            .map(|remote| remote.slug.clone())
+            .unwrap_or_else(|| model.to_string());
         let model_info = if let Some(remote) = remote {
             ModelInfo {
                 slug: model.to_string(),
@@ -135,12 +145,15 @@ impl ModelsManager {
         } else {
             model_info::model_info_from_slug(model)
         };
-        model_info::with_config_overrides(model_info, config)
+        let mut model_info =
+            model_info::with_model_info_patches(model_info, &resolved_slug, model, config);
+        model_info = model_info::with_config_overrides(model_info, config);
+        model_info
     }
 
-    async fn find_remote_model_by_longest_prefix(&self, model: &str) -> Option<ModelInfo> {
+    fn find_model_by_longest_prefix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
         let mut best: Option<ModelInfo> = None;
-        for candidate in self.get_remote_models().await {
+        for candidate in candidates {
             if !model.starts_with(&candidate.slug) {
                 continue;
             }
@@ -150,7 +163,7 @@ impl ModelsManager {
                 true
             };
             if is_better_match {
-                best = Some(candidate);
+                best = Some(candidate.clone());
             }
         }
         best
@@ -312,6 +325,23 @@ impl ModelsManager {
         self.remote_models.read().await.clone()
     }
 
+    async fn get_effective_remote_models(&self, config: &Config) -> Vec<ModelInfo> {
+        let mut remote_models = self.get_remote_models().await;
+        if let Some(catalog_json) = config.model_info.catalog_json.as_ref() {
+            for model in &catalog_json.models {
+                if let Some(existing_index) = remote_models
+                    .iter()
+                    .position(|existing| existing.slug == model.slug)
+                {
+                    remote_models[existing_index] = model.clone();
+                } else {
+                    remote_models.push(model.clone());
+                }
+            }
+        }
+        remote_models
+    }
+
     fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError> {
         Ok(self.remote_models.try_read()?.clone())
     }
@@ -353,7 +383,30 @@ impl ModelsManager {
         model: &str,
         config: &Config,
     ) -> ModelInfo {
-        model_info::with_config_overrides(model_info::model_info_from_slug(model), config)
+        let remote = config
+            .model_info
+            .catalog_json
+            .as_ref()
+            .and_then(|catalog_json| {
+                Self::find_model_by_longest_prefix(model, &catalog_json.models)
+            });
+        let resolved_slug = remote
+            .as_ref()
+            .map(|remote| remote.slug.clone())
+            .unwrap_or_else(|| model.to_string());
+        let model_info = if let Some(remote) = remote {
+            ModelInfo {
+                slug: model.to_string(),
+                used_fallback_model_metadata: false,
+                ..remote
+            }
+        } else {
+            model_info::model_info_from_slug(model)
+        };
+        let mut model_info =
+            model_info::with_model_info_patches(model_info, &resolved_slug, model, config);
+        model_info = model_info::with_config_overrides(model_info, config);
+        model_info
     }
 }
 
@@ -365,6 +418,7 @@ mod tests {
     use crate::config::ConfigBuilder;
     use crate::model_provider_info::WireApi;
     use chrono::Utc;
+    use codex_protocol::openai_models::ModelInfoPatch;
     use codex_protocol::openai_models::ModelsResponse;
     use core_test_support::responses::mount_models_once;
     use pretty_assertions::assert_eq;
@@ -464,6 +518,116 @@ mod tests {
             .await;
         assert!(unknown.used_fallback_model_metadata);
         assert_eq!(unknown.slug, "model-that-does-not-exist");
+    }
+
+    #[tokio::test]
+    async fn get_model_info_applies_catalog_overlay_and_overrides() {
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        config.model_info.catalog_json = Some(ModelsResponse {
+            models: vec![remote_model("gpt-overlay", "Overlay", 0)],
+        });
+        config.model_info.overrides.insert(
+            "gpt-overlay-experiment".to_string(),
+            ModelInfoPatch {
+                context_window: Some(456_789),
+                supports_parallel_tool_calls: Some(true),
+                ..Default::default()
+            },
+        );
+
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager);
+
+        let model_info = manager
+            .get_model_info("gpt-overlay-experiment", &config)
+            .await;
+
+        assert_eq!(model_info.slug, "gpt-overlay-experiment");
+        assert_eq!(model_info.display_name, "Overlay");
+        assert_eq!(model_info.context_window, Some(456_789));
+        assert!(model_info.supports_parallel_tool_calls);
+        assert!(!model_info.used_fallback_model_metadata);
+    }
+
+    #[tokio::test]
+    async fn get_model_info_applies_resolved_slug_override_for_suffix_model() {
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        config.model_info.catalog_json = Some(ModelsResponse {
+            models: vec![remote_model("gpt-overlay", "Overlay", 0)],
+        });
+        config.model_info.overrides.insert(
+            "gpt-overlay".to_string(),
+            ModelInfoPatch {
+                display_name: Some("Overlay Canonical".to_string()),
+                context_window: Some(123_456),
+                ..Default::default()
+            },
+        );
+
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager);
+
+        let model_info = manager
+            .get_model_info("gpt-overlay-experiment", &config)
+            .await;
+
+        assert_eq!(model_info.slug, "gpt-overlay-experiment");
+        assert_eq!(model_info.display_name, "Overlay Canonical");
+        assert_eq!(model_info.context_window, Some(123_456));
+        assert!(!model_info.used_fallback_model_metadata);
+    }
+
+    #[tokio::test]
+    async fn get_model_info_requested_override_wins_over_resolved_slug_override() {
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        config.model_info.catalog_json = Some(ModelsResponse {
+            models: vec![remote_model("gpt-overlay", "Overlay", 0)],
+        });
+        config.model_info.overrides.insert(
+            "gpt-overlay".to_string(),
+            ModelInfoPatch {
+                context_window: Some(111_111),
+                supports_parallel_tool_calls: Some(true),
+                ..Default::default()
+            },
+        );
+        config.model_info.overrides.insert(
+            "gpt-overlay-experiment".to_string(),
+            ModelInfoPatch {
+                context_window: Some(222_222),
+                ..Default::default()
+            },
+        );
+
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager);
+
+        let model_info = manager
+            .get_model_info("gpt-overlay-experiment", &config)
+            .await;
+
+        assert_eq!(model_info.slug, "gpt-overlay-experiment");
+        assert_eq!(model_info.context_window, Some(222_222));
+        assert!(model_info.supports_parallel_tool_calls);
+        assert!(!model_info.used_fallback_model_metadata);
     }
 
     #[tokio::test]
