@@ -10,7 +10,7 @@ use codex_protocol::items::TurnItem;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::analytics_client::InvokeType;
+use crate::analytics_client::InvocationType;
 use crate::analytics_client::SkillInvocation;
 use crate::analytics_client::TrackEventsContext;
 use crate::analytics_client::skill_id_for_local_skill;
@@ -91,7 +91,7 @@ pub(crate) async fn build_implicit_invocation_context(
             skill_name: skill.name,
             skill_scope: skill.scope,
             skill_path: skill.path,
-            invoke_type: InvokeType::Implicit,
+            invocation_type: InvocationType::Implicit,
         };
         let repo_root = get_git_repo_root(invocation.skill_path.as_path());
         let repo_url = if let Some(root) = repo_root.as_ref() {
@@ -540,7 +540,7 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
 mod tests {
     use super::ImplicitSkillCandidate;
     use super::ImplicitSkillDetector;
-    use super::InvokeType;
+    use super::InvocationType;
     use super::SkillInvocation;
     use super::detect_skill_doc_read;
     use super::detect_skill_script_run;
@@ -581,7 +581,7 @@ mod tests {
             skill_name: "test-skill".to_string(),
             skill_scope: codex_protocol::protocol::SkillScope::User,
             skill_path: skill_doc_path,
-            invoke_type: InvokeType::Implicit,
+            invocation_type: InvocationType::Implicit,
         };
         let candidate = ImplicitSkillCandidate {
             invocation,
@@ -615,7 +615,7 @@ mod tests {
             skill_name: "test-skill".to_string(),
             skill_scope: codex_protocol::protocol::SkillScope::User,
             skill_path: skill_doc_path,
-            invoke_type: InvokeType::Implicit,
+            invocation_type: InvocationType::Implicit,
         };
         let candidate = ImplicitSkillCandidate {
             invocation,
@@ -647,7 +647,7 @@ mod tests {
             skill_name: "test-skill".to_string(),
             skill_scope: codex_protocol::protocol::SkillScope::User,
             skill_path: skill_doc_path,
-            invoke_type: InvokeType::Implicit,
+            invocation_type: InvocationType::Implicit,
         };
         let candidate = ImplicitSkillCandidate {
             invocation,
