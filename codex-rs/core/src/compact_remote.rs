@@ -6,7 +6,7 @@ use crate::codex::TurnContext;
 use crate::compact::CompactCallsite;
 use crate::compact::extract_latest_model_switch_update_from_items;
 use crate::compact::extract_trailing_model_switch_update_for_compaction_request;
-use crate::compact::insert_initial_context_before_last_real_user;
+use crate::compact::insert_initial_context_before_last_user_anchor;
 use crate::compact::process_compacted_history;
 use crate::compact::should_keep_compacted_history_item;
 use crate::context_manager::ContextManager;
@@ -162,7 +162,7 @@ async fn run_remote_compact_task_inner_impl(
             // These callsites do not get a later post-compaction canonical-context write in
             // `run_turn`, so replacement history must carry canonical context directly.
             let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
-            insert_initial_context_before_last_real_user(&mut new_history, initial_context);
+            insert_initial_context_before_last_user_anchor(&mut new_history, initial_context);
         }
         CompactCallsite::ManualCompact => {
             // Manual `/compact` intentionally rewrites transcript history without reseeding turn

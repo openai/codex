@@ -1790,7 +1790,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_layout()
     insta::assert_snapshot!(
         "remote_mid_turn_compaction_summary_only_shapes",
         format_labeled_requests_snapshot(
-            "Remote mid-turn compaction where compact output has only summary user content: continuation layout keeps the summary-only compact output without inserting extra context items.",
+            "Remote mid-turn compaction where compact output has only summary user content: continuation layout reinjects canonical context before the latest summary.",
             &[
                 ("Remote Compaction Request", &compact_request),
                 (

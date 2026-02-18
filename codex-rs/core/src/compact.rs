@@ -300,7 +300,7 @@ async fn run_compact_task_inner(
             // These callsites do not get a later post-compaction canonical-context write in
             // `run_turn`, so replacement history must carry canonical context directly.
             let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
-            insert_initial_context_before_last_real_user(&mut new_history, initial_context);
+            insert_initial_context_before_last_user_anchor(&mut new_history, initial_context);
         }
         CompactCallsite::ManualCompact => {
             // Manual `/compact` intentionally rewrites transcript history without reseeding turn
@@ -389,15 +389,27 @@ pub(crate) fn process_compacted_history(
     compacted_history
 }
 
-pub(crate) fn insert_initial_context_before_last_real_user(
+pub(crate) fn insert_initial_context_before_last_user_anchor(
     compacted_history: &mut Vec<ResponseItem>,
     initial_context: Vec<ResponseItem>,
 ) {
     if initial_context.is_empty() {
         return;
     }
-    if let Some(last_real_user_index) = compacted_history.iter().rposition(is_real_user_message) {
-        compacted_history.splice(last_real_user_index..last_real_user_index, initial_context);
+    let insertion_index = compacted_history
+        .iter()
+        .rposition(is_real_user_message)
+        .or_else(|| {
+            compacted_history.iter().rposition(|item| {
+                matches!(
+                    crate::event_mapping::parse_turn_item(item),
+                    Some(TurnItem::UserMessage(user_message))
+                        if is_summary_message(&user_message.message())
+                )
+            })
+        });
+    if let Some(index) = insertion_index {
+        compacted_history.splice(index..index, initial_context);
     }
 }
 
@@ -1267,5 +1279,71 @@ keep me updated
             phase: None,
         }];
         assert_eq!(refreshed, expected);
+    }
+
+    #[test]
+    fn insert_initial_context_before_last_user_anchor_falls_back_to_last_summary() {
+        let mut compacted_history = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nolder summary"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nlatest summary"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        let initial_context = vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "fresh permissions".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        insert_initial_context_before_last_user_anchor(&mut compacted_history, initial_context);
+
+        let expected = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nolder summary"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "fresh permissions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nlatest summary"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        assert_eq!(compacted_history, expected);
     }
 }
