@@ -378,17 +378,11 @@ pub(crate) fn insert_initial_context_before_last_real_user(
     if initial_context.is_empty() {
         return;
     }
-    if let Some(last_real_user_index) = compacted_history.iter().rposition(|item| {
-        matches!(
-            crate::event_mapping::parse_turn_item(item),
-            Some(TurnItem::UserMessage(user_message)) if !is_summary_message(&user_message.message())
-        )
-    }) {
+    if let Some(last_real_user_index) = compacted_history.iter().rposition(is_real_user_message) {
         compacted_history.splice(last_real_user_index..last_real_user_index, initial_context);
     }
 }
 
-#[cfg(test)]
 fn is_real_user_message(item: &ResponseItem) -> bool {
     matches!(
         crate::event_mapping::parse_turn_item(item),
