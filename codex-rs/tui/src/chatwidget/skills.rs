@@ -144,9 +144,22 @@ impl ChatWidget {
 }
 
 fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<ProtocolSkillMetadata> {
+    let cwd_canonical = dunce::canonicalize(cwd).ok();
     skills_entries
         .iter()
-        .find(|entry| entry.cwd.as_path() == cwd)
+        .find(|entry| {
+            if entry.cwd.as_path() == cwd {
+                return true;
+            }
+
+            let Some(cwd_canonical) = cwd_canonical.as_ref() else {
+                return false;
+            };
+            let Ok(entry_canonical) = dunce::canonicalize(&entry.cwd) else {
+                return false;
+            };
+            entry_canonical == *cwd_canonical
+        })
         .map(|entry| entry.skills.clone())
         .unwrap_or_default()
 }
@@ -249,6 +262,48 @@ pub(crate) fn find_skill_mentions_with_tool_mentions(
     }
 
     matches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::skills_for_cwd;
+    use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
+    use codex_core::protocol::SkillScope;
+    use codex_core::protocol::SkillsListEntry;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    #[cfg(unix)]
+    #[test]
+    fn skills_for_cwd_matches_symlinked_paths() {
+        let tmp = tempdir().expect("tempdir");
+        let real_dir = tmp.path().join("real");
+        let link_dir = tmp.path().join("link");
+        std::fs::create_dir_all(&real_dir).expect("create real dir");
+        std::os::unix::fs::symlink(&real_dir, &link_dir).expect("create symlink");
+
+        let skill = ProtocolSkillMetadata {
+            name: "demo".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            path: PathBuf::from("/tmp/skills/demo/SKILL.md"),
+            scope: SkillScope::Repo,
+            enabled: true,
+        };
+
+        let entries = vec![SkillsListEntry {
+            cwd: real_dir.clone(),
+            skills: vec![skill.clone()],
+            errors: Vec::new(),
+        }];
+
+        let matched = skills_for_cwd(&link_dir, &entries);
+        let names = matched.iter().map(|s| s.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names, vec!["demo"]);
+    }
 }
 
 pub(crate) fn find_app_mentions(
