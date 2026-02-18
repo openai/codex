@@ -189,39 +189,7 @@ async fn run_remote_compact_task_inner_impl(
             .filter(|item| should_keep_compacted_history_item(item))
             .cloned()
             .collect();
-        for incoming_item in incoming_history_items {
-            if let Some(index) =
-                new_history
-                    .iter()
-                    .rposition(|candidate| match (candidate, &incoming_item) {
-                        (
-                            ResponseItem::Message {
-                                role: candidate_role,
-                                content: candidate_content,
-                                ..
-                            },
-                            ResponseItem::Message {
-                                role: incoming_role,
-                                content: incoming_content,
-                                ..
-                            },
-                        ) => {
-                            candidate_role == incoming_role && candidate_content == incoming_content
-                        }
-                        (
-                            ResponseItem::Compaction {
-                                encrypted_content: candidate_content,
-                            },
-                            ResponseItem::Compaction {
-                                encrypted_content: incoming_content,
-                            },
-                        ) => candidate_content == incoming_content,
-                        _ => candidate == &incoming_item,
-                    })
-            {
-                new_history.remove(index);
-            }
-        }
+        remove_incoming_echoes_from_compacted_history(&mut new_history, &incoming_history_items);
     }
     // Reattach stripped model-switch updates only for compaction paths that do not carry
     // incoming turn items. Pre-turn compaction appends turn context and user input after
@@ -269,6 +237,51 @@ fn build_compact_request_log_data(
 
     CompactRequestLogData {
         failing_compaction_request_model_visible_bytes,
+    }
+}
+
+/// Remote compaction may echo incoming items in `new_history`. Because incoming items are
+/// appended after compaction at the caller, remove one semantic duplicate for each incoming item
+/// so turn-context/user entries do not appear twice.
+fn remove_incoming_echoes_from_compacted_history(
+    new_history: &mut Vec<ResponseItem>,
+    incoming_history_items: &[ResponseItem],
+) {
+    for incoming_item in incoming_history_items {
+        if let Some(index) = new_history.iter().rposition(|candidate| {
+            response_items_match_for_compaction_merge(candidate, incoming_item)
+        }) {
+            new_history.remove(index);
+        }
+    }
+}
+
+fn response_items_match_for_compaction_merge(
+    candidate: &ResponseItem,
+    incoming_item: &ResponseItem,
+) -> bool {
+    match (candidate, incoming_item) {
+        (
+            ResponseItem::Message {
+                role: candidate_role,
+                content: candidate_content,
+                ..
+            },
+            ResponseItem::Message {
+                role: incoming_role,
+                content: incoming_content,
+                ..
+            },
+        ) => candidate_role == incoming_role && candidate_content == incoming_content,
+        (
+            ResponseItem::Compaction {
+                encrypted_content: candidate_content,
+            },
+            ResponseItem::Compaction {
+                encrypted_content: incoming_content,
+            },
+        ) => candidate_content == incoming_content,
+        _ => candidate == incoming_item,
     }
 }
 
