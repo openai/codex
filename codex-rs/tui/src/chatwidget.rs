@@ -1309,18 +1309,25 @@ impl ChatWidget {
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.saw_plan_item_this_turn = true;
-        let finalized_streamed_cell =
+        let (finalized_streamed_cell, consolidated_plan_source) =
             if let Some(mut controller) = self.plan_stream_controller.take() {
                 controller.finalize()
             } else {
-                None
+                (None, None)
             };
         if let Some(cell) = finalized_streamed_cell {
             self.add_boxed_history(cell);
             // TODO: Replace streamed output with the final plan item text if plan streaming is
             // removed or if we need to reconcile mismatches between streamed and final content.
+            if let Some(source) = consolidated_plan_source {
+                self.app_event_tx
+                    .send(AppEvent::ConsolidateProposedPlan(source));
+            }
         } else if !plan_text.is_empty() {
             self.add_to_history(history_cell::new_proposed_plan(plan_text));
+        } else if let Some(source) = consolidated_plan_source {
+            self.app_event_tx
+                .send(AppEvent::ConsolidateProposedPlan(source));
         }
         if should_restore_after_stream {
             self.pending_status_indicator_restore = true;
@@ -1399,10 +1406,15 @@ impl ChatWidget {
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
-        if let Some(mut controller) = self.plan_stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
-            self.add_boxed_history(cell);
+        if let Some(mut controller) = self.plan_stream_controller.take() {
+            let (cell, source) = controller.finalize();
+            if let Some(cell) = cell {
+                self.add_boxed_history(cell);
+            }
+            if let Some(source) = source {
+                self.app_event_tx
+                    .send(AppEvent::ConsolidateProposedPlan(source));
+            }
         }
         self.flush_unified_exec_wait_streak();
         if !from_replay {
@@ -7205,6 +7217,10 @@ impl ChatWidget {
     /// Whether an agent message stream is active (not a plan stream).
     pub(crate) fn has_active_agent_stream(&self) -> bool {
         self.stream_controller.is_some()
+    }
+
+    pub(crate) fn has_active_plan_stream(&self) -> bool {
+        self.plan_stream_controller.is_some()
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {

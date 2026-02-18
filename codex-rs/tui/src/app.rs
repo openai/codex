@@ -257,6 +257,31 @@ fn trailing_agent_message_run_start(transcript_cells: &[Arc<dyn HistoryCell>]) -
     start
 }
 
+fn trailing_proposed_plan_stream_run_start(transcript_cells: &[Arc<dyn HistoryCell>]) -> usize {
+    let end = transcript_cells.len();
+    let mut start = end;
+
+    while start > 0
+        && transcript_cells[start - 1].is_stream_continuation()
+        && transcript_cells[start - 1]
+            .as_any()
+            .is::<history_cell::ProposedPlanStreamCell>()
+    {
+        start -= 1;
+    }
+
+    if start > 0
+        && transcript_cells[start - 1]
+            .as_any()
+            .is::<history_cell::ProposedPlanStreamCell>()
+        && !transcript_cells[start - 1].is_stream_continuation()
+    {
+        start -= 1;
+    }
+
+    start
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
     usage_line: String,
@@ -1121,7 +1146,11 @@ impl App {
         let Some(deadline) = self.resize_reflow_pending_until else {
             return Ok(());
         };
-        if Instant::now() < deadline || self.overlay.is_some() {
+        if Instant::now() < deadline
+            || self.overlay.is_some()
+            || self.chat_widget.has_active_agent_stream()
+            || self.chat_widget.has_active_plan_stream()
+        {
             return Ok(());
         }
 
@@ -1157,7 +1186,10 @@ impl App {
 
     fn should_mark_reflow_as_stream_time(&self) -> bool {
         self.chat_widget.has_active_agent_stream()
+            || self.chat_widget.has_active_plan_stream()
             || trailing_agent_message_run_start(&self.transcript_cells)
+                < self.transcript_cells.len()
+            || trailing_proposed_plan_stream_run_start(&self.transcript_cells)
                 < self.transcript_cells.len()
     }
 
@@ -1908,6 +1940,40 @@ impl App {
                     );
                     self.reflow_ran_during_stream = false;
                 }
+            }
+            AppEvent::ConsolidateProposedPlan(source) => {
+                let end = self.transcript_cells.len();
+                let start = trailing_proposed_plan_stream_run_start(&self.transcript_cells);
+                let consolidated: Arc<dyn HistoryCell> =
+                    Arc::new(history_cell::new_proposed_plan(source));
+
+                if start < end {
+                    self.transcript_cells
+                        .splice(start..end, std::iter::once(consolidated.clone()));
+
+                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+                        t.consolidate_cells(start..end, consolidated.clone());
+                        tui.frame_requester().schedule_frame();
+                    }
+                } else {
+                    self.transcript_cells.push(consolidated.clone());
+                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+                        t.insert_cell(consolidated.clone());
+                        tui.frame_requester().schedule_frame();
+                    }
+                    self.insert_history_cell_lines(
+                        tui,
+                        consolidated.as_ref(),
+                        tui.terminal.last_known_screen_size.width,
+                    );
+                }
+
+                if self.reflow_ran_during_stream {
+                    self.schedule_resize_reflow();
+                    tui.frame_requester()
+                        .schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
+                }
+                self.reflow_ran_during_stream = false;
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {

@@ -136,6 +136,13 @@ pub(crate) enum AppEvent {
     /// If `reflow_ran_during_stream` is set, a follow-up reflow is scheduled.
     ConsolidateAgentMessage(String),
 
+    /// Replace the contiguous run of streaming `ProposedPlanStreamCell`s at the
+    /// end of the transcript with a single source-backed `ProposedPlanCell`.
+    ///
+    /// Emitted by `ChatWidget::on_plan_item_completed` after plan stream
+    /// finalization.
+    ConsolidateProposedPlan(String),
+
     /// Apply rollback semantics to local transcript cells.
     ///
     /// This is emitted when rollback was not initiated by the current

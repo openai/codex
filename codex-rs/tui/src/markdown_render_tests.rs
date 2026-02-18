@@ -1347,6 +1347,35 @@ fn table_keeps_sparse_rows_with_empty_trailing_cells() {
 }
 
 #[test]
+fn table_normalizes_uneven_row_column_counts() {
+    let md = "| A | B | C |\n|---|---|---|\n| 1 | 2 |\n| 3 | 4 | 5 | 6 |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines.iter().any(|line| line.starts_with('┌'))
+            && lines.iter().any(|line| line.starts_with('└')),
+        "expected normalized uneven rows to remain in boxed table output: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ 1") && line.ends_with('│')),
+        "expected shorter row to be padded inside grid: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ 3") && line.ends_with('│')),
+        "expected longer row to be truncated to grid width: {lines:?}"
+    );
+}
+
+#[test]
 fn table_keeps_sparse_sentence_row_inside_grid() {
     let md = "| A | B | C |\n|---|---|---|\n| This is done. | | |\n";
     let text = render_markdown_text(md);

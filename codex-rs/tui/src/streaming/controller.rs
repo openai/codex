@@ -20,17 +20,15 @@
 //!
 //! ## Resize handling
 //!
-//! On terminal width change, `StreamCore::set_width` remaps the
-//! already-emitted stable boundary to the new width from source-byte anchors
-//! and line-end source maps, then rebuilds the stable queue.  The
-//! caller (`App`) schedules a debounced full-transcript reflow so committed
-//! `AgentMarkdownCell`s re-render from source at the new width.
+//! On terminal width change, `StreamCore::set_width` re-renders at the new
+//! width and rebuilds the queued stable region from the current emitted line
+//! count. This intentionally avoids byte-level remap complexity while the
+//! stream is active; finalized content is canonicalized by transcript
+//! consolidation into source-backed markdown cells.
 //!
 //! ## Invariants
 //!
 //! - `emitted_stable_len <= enqueued_stable_len <= rendered_lines.len()`.
-//! - `rendered_line_end_source_bytes.len() == rendered_lines.len()`.
-//! - `rendered_line_end_source_totals.len() == rendered_lines.len()`.
 //! - `raw_source` is append-only until `reset()`; never modified mid-stream.
 //! - Tail starts exactly at `enqueued_stable_len`.
 //! - During confirmed table streaming, only lines from the table header onward
@@ -39,7 +37,6 @@
 use crate::history_cell::HistoryCell;
 use crate::history_cell::{self};
 use crate::markdown::append_markdown_agent;
-use crate::markdown::render_markdown_agent_with_source_map;
 use crate::render::line_utils::prefix_lines;
 use crate::style::proposed_plan_style;
 use ratatui::prelude::Stylize;
@@ -50,7 +47,6 @@ use std::time::Instant;
 use crate::table_detect::is_table_delimiter_line;
 use crate::table_detect::is_table_header_line;
 use crate::table_detect::parse_table_segments;
-use std::collections::HashMap;
 
 use super::StreamState;
 
@@ -75,20 +71,10 @@ struct StreamCore {
     raw_source: String,
     /// Full re-render of `raw_source` at `width`. Rebuilt on every committed delta.
     rendered_lines: Vec<Line<'static>>,
-    /// Per-rendered-line source byte offsets (raw source coordinates).
-    rendered_line_end_source_bytes: Vec<usize>,
-    /// Per-rendered-line total count of lines sharing that source byte offset.
-    rendered_line_end_source_totals: Vec<usize>,
     /// Lines enqueued into the commit-animation queue.
     enqueued_stable_len: usize,
     /// Lines actually emitted to scrollback.
     emitted_stable_len: usize,
-    /// Raw source boundary reached by emitted stable lines.
-    emitted_stable_source_bytes: usize,
-    /// How many emitted stable lines end exactly at `emitted_stable_source_bytes`.
-    emitted_stable_lines_at_source_byte: usize,
-    /// Total rendered lines ending at `emitted_stable_source_bytes` in current render.
-    emitted_stable_lines_at_source_byte_total: usize,
     /// Cached rendered line count for prefix-before-table keyed by source start and width.
     stable_prefix_len_cache: Option<StablePrefixLenCache>,
     /// Incremental holdback scanner state for append-only source updates.
@@ -108,13 +94,8 @@ impl StreamCore {
             width,
             raw_source: String::new(),
             rendered_lines: Vec::new(),
-            rendered_line_end_source_bytes: Vec::new(),
-            rendered_line_end_source_totals: Vec::new(),
             enqueued_stable_len: 0,
             emitted_stable_len: 0,
-            emitted_stable_source_bytes: 0,
-            emitted_stable_lines_at_source_byte: 0,
-            emitted_stable_lines_at_source_byte_total: 0,
             stable_prefix_len_cache: None,
             holdback_scanner: TableHoldbackScanner::new(),
         }
@@ -160,9 +141,7 @@ impl StreamCore {
     /// Step animation: dequeue one line, update the emitted count.
     fn tick(&mut self) -> Vec<Line<'static>> {
         let step = self.state.step();
-        let emitted_start = self.emitted_stable_len;
         self.emitted_stable_len += step.len();
-        self.advance_emitted_source_boundary(emitted_start, self.emitted_stable_len);
         step
     }
 
@@ -175,9 +154,7 @@ impl StreamCore {
         if step.is_empty() {
             return step;
         }
-        let emitted_start = self.emitted_stable_len;
         self.emitted_stable_len += step.len();
-        self.advance_emitted_source_boundary(emitted_start, self.emitted_stable_len);
         step
     }
 
@@ -208,13 +185,13 @@ impl StreamCore {
 
     /// Update rendering width and rebuild queued stable lines for the new layout.
     ///
-    /// Re-renders once at the new width and remaps already-emitted progress by
-    /// source boundary (`emitted_stable_source_bytes`) plus tie-break count for
-    /// wrapped lines that share the same line-end source offset.
+    /// Re-renders once at the new width and rebuilds queue state from the
+    /// current emitted line count.
     fn set_width(&mut self, width: Option<usize>) {
         if self.width == width {
             return;
         }
+        let had_pending_queue = self.state.queued_len() > 0;
         self.width = width;
         self.state.collector.set_width(width);
         if self.raw_source.is_empty() {
@@ -222,8 +199,14 @@ impl StreamCore {
         }
 
         self.recompute_streaming_render();
-        self.emitted_stable_len = self.remap_emitted_len_from_source_boundary();
-        self.sync_emitted_source_counters_from_render();
+        self.emitted_stable_len = self.emitted_stable_len.min(self.rendered_lines.len());
+        self.state.clear_queue();
+        if self.emitted_stable_len > 0 && !had_pending_queue {
+            // Avoid replaying already-emitted content after resize when no
+            // stable lines were waiting in the queue.
+            self.enqueued_stable_len = self.rendered_lines.len();
+            return;
+        }
         self.rebuild_stable_queue_from_render();
     }
 
@@ -232,39 +215,16 @@ impl StreamCore {
         self.state.clear();
         self.raw_source.clear();
         self.rendered_lines.clear();
-        self.rendered_line_end_source_bytes.clear();
-        self.rendered_line_end_source_totals.clear();
         self.enqueued_stable_len = 0;
         self.emitted_stable_len = 0;
-        self.emitted_stable_source_bytes = 0;
-        self.emitted_stable_lines_at_source_byte = 0;
-        self.emitted_stable_lines_at_source_byte_total = 0;
         self.stable_prefix_len_cache = None;
         self.holdback_scanner.reset();
     }
 
     /// Re-render the full `raw_source` at current `width`.
     fn recompute_streaming_render(&mut self) {
-        let rendered = render_markdown_agent_with_source_map(&self.raw_source, self.width);
-        self.rendered_lines = rendered.lines;
-        self.rendered_line_end_source_bytes = rendered.line_end_source_bytes;
-        let mut source_totals: HashMap<usize, usize> = HashMap::new();
-        for source_end in &self.rendered_line_end_source_bytes {
-            *source_totals.entry(*source_end).or_insert(0) += 1;
-        }
-        self.rendered_line_end_source_totals = self
-            .rendered_line_end_source_bytes
-            .iter()
-            .map(|source_end| source_totals.get(source_end).copied().unwrap_or(1))
-            .collect();
-        debug_assert_eq!(
-            self.rendered_line_end_source_bytes.len(),
-            self.rendered_lines.len()
-        );
-        debug_assert_eq!(
-            self.rendered_line_end_source_totals.len(),
-            self.rendered_lines.len()
-        );
+        self.rendered_lines.clear();
+        append_markdown_agent(&self.raw_source, self.width, &mut self.rendered_lines);
     }
 
     /// Advance `enqueued_stable_len` toward the target stable boundary and enqueue any
@@ -391,89 +351,6 @@ impl StreamCore {
         });
         stable_prefix_len
     }
-
-    fn advance_emitted_source_boundary(&mut self, emitted_start: usize, emitted_end: usize) {
-        if emitted_start >= emitted_end || self.rendered_line_end_source_bytes.is_empty() {
-            return;
-        }
-
-        let end = emitted_end.min(self.rendered_line_end_source_bytes.len());
-        for (offset, line_end_source) in self.rendered_line_end_source_bytes[emitted_start..end]
-            .iter()
-            .enumerate()
-        {
-            let line_index = emitted_start + offset;
-            if *line_end_source > self.emitted_stable_source_bytes {
-                self.emitted_stable_source_bytes = *line_end_source;
-                self.emitted_stable_lines_at_source_byte = 1;
-                self.emitted_stable_lines_at_source_byte_total = self
-                    .rendered_line_end_source_totals
-                    .get(line_index)
-                    .copied()
-                    .unwrap_or(1);
-            } else if *line_end_source == self.emitted_stable_source_bytes {
-                self.emitted_stable_lines_at_source_byte += 1;
-            }
-        }
-    }
-
-    fn remap_emitted_len_from_source_boundary(&self) -> usize {
-        if self.emitted_stable_len == 0 {
-            return 0;
-        }
-        if self.emitted_stable_source_bytes >= self.raw_source.len() {
-            return self.rendered_lines.len();
-        }
-
-        let mut lines_before = 0usize;
-        let mut lines_at = 0usize;
-        for line_end_source in &self.rendered_line_end_source_bytes {
-            if *line_end_source < self.emitted_stable_source_bytes {
-                lines_before += 1;
-            } else if *line_end_source == self.emitted_stable_source_bytes {
-                lines_at += 1;
-            }
-        }
-        let emitted_at_boundary = if self.emitted_stable_lines_at_source_byte
-            >= self.emitted_stable_lines_at_source_byte_total
-        {
-            lines_at
-        } else if lines_at >= self.emitted_stable_lines_at_source_byte {
-            self.emitted_stable_lines_at_source_byte
-        } else {
-            0
-        };
-        lines_before
-            + emitted_at_boundary.min(self.rendered_lines.len().saturating_sub(lines_before))
-    }
-
-    fn sync_emitted_source_counters_from_render(&mut self) {
-        let emitted_len = self
-            .emitted_stable_len
-            .min(self.rendered_line_end_source_bytes.len());
-        if emitted_len == 0 {
-            self.emitted_stable_source_bytes = 0;
-            self.emitted_stable_lines_at_source_byte = 0;
-            self.emitted_stable_lines_at_source_byte_total = 0;
-            return;
-        }
-
-        let boundary = self.rendered_line_end_source_bytes[emitted_len - 1];
-        let emitted_at_boundary = self.rendered_line_end_source_bytes[..emitted_len]
-            .iter()
-            .rev()
-            .take_while(|line_end| **line_end == boundary)
-            .count();
-        let total_at_boundary = self
-            .rendered_line_end_source_totals
-            .get(emitted_len - 1)
-            .copied()
-            .unwrap_or(1);
-
-        self.emitted_stable_source_bytes = boundary;
-        self.emitted_stable_lines_at_source_byte = emitted_at_boundary;
-        self.emitted_stable_lines_at_source_byte_total = total_at_boundary;
-    }
 }
 
 /// Controller for streaming agent message content with table-aware holdback.
@@ -587,12 +464,19 @@ impl PlanStreamController {
         self.core.push_delta(delta)
     }
 
-    /// Finalize the active stream. Drain and emit now.
-    pub(crate) fn finalize(&mut self) -> Option<Box<dyn HistoryCell>> {
+    /// Finalize the active stream. Returns the final cell (if any remaining
+    /// lines) plus raw markdown source for consolidation.
+    pub(crate) fn finalize(&mut self) -> (Option<Box<dyn HistoryCell>>, Option<String>) {
         let remaining = self.core.finalize_remaining();
+        if self.core.raw_source.is_empty() {
+            self.core.reset();
+            return (None, None);
+        }
+
+        let source = self.core.raw_source.clone();
         let out = self.emit(remaining, true);
         self.core.reset();
-        out
+        (out, Some(source))
     }
 
     pub(crate) fn on_commit_tick(&mut self) -> (Option<Box<dyn HistoryCell>>, bool) {
@@ -1084,7 +968,7 @@ mod tests {
                 }
             }
         }
-        if let Some(cell) = ctrl.finalize() {
+        if let (Some(cell), _source) = ctrl.finalize() {
             lines.extend(cell.transcript_lines(u16::MAX));
         }
         lines_to_plain_strings(&lines)
@@ -1187,6 +1071,41 @@ mod tests {
     }
 
     #[test]
+    fn controller_set_width_partial_drain_keeps_pending_queue() {
+        let mut ctrl = StreamController::new(Some(40));
+        ctrl.push("AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ\n");
+        ctrl.push("second line\n");
+
+        let (cell, idle) = ctrl.on_commit_tick();
+        assert!(cell.is_some(), "expected 1 emitted line");
+        assert!(!idle, "queue should still have lines");
+        assert!(ctrl.queued_lines() > 0, "expected pending queued lines");
+
+        ctrl.set_width(Some(20));
+
+        assert!(
+            ctrl.queued_lines() > 0,
+            "resize must preserve pending queued lines"
+        );
+
+        let mut drained = Vec::new();
+        for _ in 0..64 {
+            let (cell, is_idle) = ctrl.on_commit_tick();
+            if let Some(cell) = cell {
+                drained.extend(lines_to_plain_strings(&cell.transcript_lines(u16::MAX)));
+            }
+            if is_idle {
+                break;
+            }
+        }
+
+        assert!(
+            drained.iter().any(|l| l.contains("second line")),
+            "pending lines should continue draining after resize; got {drained:?}",
+        );
+    }
+
+    #[test]
     fn controller_set_width_preserves_in_flight_tail() {
         let mut ctrl = StreamController::new(Some(80));
         ctrl.push("tail without newline");
@@ -1209,10 +1128,11 @@ mod tests {
         ctrl.set_width(Some(24));
 
         let rendered = lines_to_plain_strings(
-            &ctrl
+            &(ctrl
                 .finalize()
+                .0
                 .expect("expected finalized tail")
-                .transcript_lines(u16::MAX),
+                .transcript_lines(u16::MAX)),
         );
 
         assert!(
@@ -1220,38 +1140,6 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Item without newline")),
             "expected finalized plan content after resize, got {rendered:?}",
-        );
-    }
-
-    #[test]
-    fn remap_emitted_len_preserves_source_boundary_tie_breaks() {
-        let mut core = StreamCore::new(Some(80));
-        core.raw_source = "line\nline\nline\n".to_string();
-        core.rendered_lines = vec![
-            Line::from("row-0"),
-            Line::from("row-1"),
-            Line::from("row-2"),
-            Line::from("row-3"),
-            Line::from("row-4"),
-        ];
-        core.rendered_line_end_source_bytes = vec![5, 5, 9, 14, 14];
-        core.rendered_line_end_source_totals = vec![2, 2, 1, 2, 2];
-        core.emitted_stable_len = 3;
-        core.emitted_stable_source_bytes = 5;
-        core.emitted_stable_lines_at_source_byte_total = 2;
-
-        core.emitted_stable_lines_at_source_byte = 1;
-        assert_eq!(
-            core.remap_emitted_len_from_source_boundary(),
-            1,
-            "expected one emitted line at source boundary when one was previously emitted",
-        );
-
-        core.emitted_stable_lines_at_source_byte = 2;
-        assert_eq!(
-            core.remap_emitted_len_from_source_boundary(),
-            2,
-            "expected all lines at source boundary when boundary was fully emitted",
         );
     }
 
