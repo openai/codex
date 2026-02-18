@@ -5,18 +5,17 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
-    "AskForApproval": {
-      "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
+    "AskForApprovalProtocolV1": {
       "oneOf": [
         {
-          "description": "Under this policy, only \"known safe\" commands—as determined by `is_safe_command()`—that **only read files** are auto‑approved. Everything else will ask the user to approve.",
+          "description": "Under this policy, only \"known safe\" commands—those matching `is_safe_command()` and performing read-only file operations—are auto-approved. Everything else will ask the user to approve.",
           "enum": [
             "untrusted"
           ],
           "type": "string"
         },
         {
-          "description": "DEPRECATED: *All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox. Prefer `OnRequest` for interactive runs or `Never` for non-interactive runs.",
+          "description": "DEPRECATED: *All* commands are auto-approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox. Prefer `on-request` for interactive runs or `never` for non-interactive runs.",
           "enum": [
             "on-failure"
           ],
@@ -28,6 +27,36 @@
             "on-request"
           ],
           "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Fine-grained rejection controls for approval prompts.",
+          "properties": {
+            "reject": {
+              "properties": {
+                "mcp_elicitations": {
+                  "type": "boolean"
+                },
+                "rules": {
+                  "type": "boolean"
+                },
+                "sandbox_approval": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "mcp_elicitations",
+                "rules",
+                "sandbox_approval"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reject"
+          ],
+          "title": "RejectAskForApprovalProtocolV1",
+          "type": "object"
         },
         {
           "description": "Never ask the user to approve commands. Failures are immediately returned to the model, and never escalated to the user for approval.",
@@ -50,7 +79,7 @@
         "approvalPolicy": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AskForApproval"
+              "$ref": "#/definitions/AskForApprovalProtocolV1"
             },
             {
               "type": "null"
@@ -200,7 +229,7 @@
         "approvalPolicy": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AskForApproval"
+              "$ref": "#/definitions/AskForApprovalProtocolV1"
             },
             {
               "type": "null"

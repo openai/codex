@@ -20,6 +20,7 @@ export type { ApplyPatchApprovalResponse } from "./ApplyPatchApprovalResponse";
 export type { ArchiveConversationParams } from "./ArchiveConversationParams";
 export type { ArchiveConversationResponse } from "./ArchiveConversationResponse";
 export type { AskForApproval } from "./AskForApproval";
+export type { AskForApprovalProtocolV1 } from "./AskForApprovalProtocolV1";
 export type { AuthMode } from "./AuthMode";
 export type { AuthStatusChangeNotification } from "./AuthStatusChangeNotification";
 export type { BackgroundEventEvent } from "./BackgroundEventEvent";
