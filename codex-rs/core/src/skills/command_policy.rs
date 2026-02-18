@@ -2,6 +2,7 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::SandboxPolicy;
 use dunce::canonicalize as canonicalize_path;
 
@@ -16,17 +17,51 @@ use crate::skills::SkillLoadOutcome;
 /// 1. `command_cwd` reflects the effective command target location.
 /// 2. If `command_cwd` is contained by multiple skill directories, the first
 ///    enabled skill in `skills_outcome.skills` wins.
-/// 3. Command tokens are not used for matching.
+/// 3. If `command_cwd` does not match, each command action path is checked.
 ///
 /// Returns `None` when no enabled skill with permissions matches
-/// `command_cwd`.
+/// `command_cwd` or command action paths.
 pub(crate) fn resolve_skill_sandbox_extension_for_command(
     skills_outcome: &SkillLoadOutcome,
     command_cwd: &Path,
+    command_actions: &[ParsedCommand],
 ) -> Option<SandboxPolicy> {
-    let candidate = normalize_candidate_path(command_cwd)?;
-    let permissions = match_skill_for_candidate(skills_outcome, candidate.as_path())?;
-    Some(permissions.sandbox_policy.get().clone())
+    let command_cwd = normalize_candidate_path(command_cwd)?;
+    if let Some(permissions) = match_skill_for_candidate(skills_outcome, command_cwd.as_path()) {
+        return Some(permissions.sandbox_policy.get().clone());
+    }
+
+    for command_action in command_actions {
+        let Some(action_candidate) =
+            command_action_candidate_path(command_action, command_cwd.as_path())
+        else {
+            continue;
+        };
+        if let Some(permissions) = match_skill_for_candidate(skills_outcome, &action_candidate) {
+            return Some(permissions.sandbox_policy.get().clone());
+        }
+    }
+
+    None
+}
+
+fn command_action_candidate_path(
+    command_action: &ParsedCommand,
+    command_cwd: &Path,
+) -> Option<PathBuf> {
+    let action_path = match command_action {
+        ParsedCommand::Read { path, .. } => Some(path.as_path()),
+        ParsedCommand::ListFiles { path, .. } | ParsedCommand::Search { path, .. } => {
+            path.as_deref().map(Path::new)
+        }
+        ParsedCommand::Unknown { .. } => None,
+    }?;
+    let action_path = if action_path.is_absolute() {
+        action_path.to_path_buf()
+    } else {
+        command_cwd.join(action_path)
+    };
+    normalize_candidate_path(action_path.as_path())
 }
 
 fn normalize_candidate_path(path: &Path) -> Option<PathBuf> {
@@ -99,6 +134,7 @@ mod tests {
     use crate::protocol::SandboxPolicy;
     use crate::skills::SkillLoadOutcome;
     use crate::skills::model::SkillMetadata;
+    use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::SkillScope;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -161,13 +197,13 @@ mod tests {
             skill_policy.clone(),
         )]);
 
-        let resolved = resolve_skill_sandbox_extension_for_command(&outcome, &scripts_dir);
+        let resolved = resolve_skill_sandbox_extension_for_command(&outcome, &scripts_dir, &[]);
 
         assert_eq!(resolved, Some(skill_policy));
     }
 
     #[test]
-    fn does_not_resolve_policy_when_only_command_path_matches() {
+    fn does_not_resolve_policy_when_neither_cwd_nor_command_action_paths_match() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let skill_dir = tempdir.path().join("skills/demo");
         let outside_dir = tempdir.path().join("outside");
@@ -191,9 +227,45 @@ mod tests {
             skill_policy.clone(),
         )]);
 
-        let resolved = resolve_skill_sandbox_extension_for_command(&outcome, &outside_dir);
+        let resolved = resolve_skill_sandbox_extension_for_command(&outcome, &outside_dir, &[]);
 
         assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn resolves_policy_when_command_action_path_is_inside_skill_directory() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = tempdir.path().join("skills/demo");
+        let outside_dir = tempdir.path().join("outside");
+        std::fs::create_dir_all(&outside_dir).expect("create outside");
+        let scripts_dir = skill_dir.join("scripts");
+        std::fs::create_dir_all(&scripts_dir).expect("create scripts");
+        let skill_path = skill_dir.join("SKILL.md");
+        std::fs::write(&skill_path, "skill").expect("write SKILL.md");
+        let skill_path = canonical(&skill_path);
+
+        let skill_policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: true,
+                readable_roots: vec![
+                    AbsolutePathBuf::try_from(skill_dir.join("data")).expect("absolute"),
+                ],
+            },
+        };
+        let outcome = outcome_with_skills(vec![skill_with_policy(
+            skill_path.clone(),
+            skill_policy.clone(),
+        )]);
+
+        let command_actions = vec![ParsedCommand::Read {
+            cmd: format!("cat {}", skill_path.display()),
+            name: "SKILL.md".to_string(),
+            path: skill_path,
+        }];
+        let resolved =
+            resolve_skill_sandbox_extension_for_command(&outcome, &outside_dir, &command_actions);
+
+        assert_eq!(resolved, Some(skill_policy));
     }
 
     #[test]
@@ -212,7 +284,7 @@ mod tests {
         )]);
         outcome.disabled_paths.insert(skill_path);
 
-        let resolved = resolve_skill_sandbox_extension_for_command(&outcome, &skill_dir);
+        let resolved = resolve_skill_sandbox_extension_for_command(&outcome, &skill_dir, &[]);
 
         assert_eq!(resolved, None);
     }
@@ -257,7 +329,8 @@ mod tests {
             skill_with_policy(canonical(&nested_skill_path), nested_policy.clone()),
         ]);
 
-        let resolved = resolve_skill_sandbox_extension_for_command(&outcome, &nested_skill_dir);
+        let resolved =
+            resolve_skill_sandbox_extension_for_command(&outcome, &nested_skill_dir, &[]);
 
         assert_eq!(resolved, Some(parent_policy));
     }
