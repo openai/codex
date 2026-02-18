@@ -280,6 +280,21 @@ fn callback_path_from_redirect_uri(redirect_uri: &str) -> Result<String> {
     Ok(parsed.path().to_string())
 }
 
+fn callback_bind_host(callback_url: Option<&str>) -> &'static str {
+    let Some(callback_url) = callback_url else {
+        return "127.0.0.1";
+    };
+
+    let Ok(parsed) = Url::parse(callback_url) else {
+        return "127.0.0.1";
+    };
+
+    match parsed.host_str() {
+        Some("localhost" | "127.0.0.1" | "::1") | None => "127.0.0.1",
+        Some(_) => "0.0.0.0",
+    }
+}
+
 impl OauthLoginFlow {
     #[allow(clippy::too_many_arguments)]
     async fn new(
@@ -295,10 +310,11 @@ impl OauthLoginFlow {
     ) -> Result<Self> {
         const DEFAULT_OAUTH_TIMEOUT_SECS: i64 = 300;
 
+        let bind_host = callback_bind_host(callback_url);
         let callback_port = resolve_callback_port(callback_port)?;
         let bind_addr = match callback_port {
-            Some(port) => format!("127.0.0.1:{port}"),
-            None => "127.0.0.1:0".to_string(),
+            Some(port) => format!("{bind_host}:{port}"),
+            None => format!("{bind_host}:0"),
         };
 
         let server = Arc::new(Server::http(&bind_addr).map_err(|err| anyhow!(err))?);
