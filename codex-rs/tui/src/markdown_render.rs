@@ -59,7 +59,6 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
 use regex_lite::Regex;
-use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -250,11 +249,6 @@ pub fn render_markdown_text(input: &str) -> Text<'static> {
     render_markdown_text_with_width(input, /*width*/ None)
 }
 
-pub(crate) struct RenderedMarkdownWithSourceMap {
-    pub(crate) text: Text<'static>,
-    pub(crate) line_end_input_bytes: Vec<usize>,
-}
-
 /// Render markdown constrained to a known terminal width.
 ///
 /// The renderer preserves table structure when possible and falls back to
@@ -277,33 +271,13 @@ pub(crate) fn render_markdown_text_with_width_and_cwd(
     width: Option<usize>,
     cwd: Option<&Path>,
 ) -> Text<'static> {
-    render_markdown_text_with_width_and_cwd_and_source_map(input, width, cwd).text
-}
-
-#[cfg(test)]
-pub(crate) fn render_markdown_text_with_width_and_source_map(
-    input: &str,
-    width: Option<usize>,
-) -> RenderedMarkdownWithSourceMap {
-    let cwd = std::env::current_dir().ok();
-    render_markdown_text_with_width_and_cwd_and_source_map(input, width, cwd.as_deref())
-}
-
-pub(crate) fn render_markdown_text_with_width_and_cwd_and_source_map(
-    input: &str,
-    width: Option<usize>,
-    cwd: Option<&Path>,
-) -> RenderedMarkdownWithSourceMap {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
-    let parser = Parser::new_ext(input, options).into_offset_iter();
-    let mut w = Writer::new(parser, width, input.len(), cwd);
+    let parser = Parser::new_ext(input, options);
+    let mut w = Writer::new(parser, width, cwd);
     w.run();
-    RenderedMarkdownWithSourceMap {
-        text: w.text,
-        line_end_input_bytes: w.line_end_input_bytes,
-    }
+    w.text
 }
 
 #[derive(Clone, Debug)]
@@ -344,13 +318,10 @@ static HASH_LOCATION_SUFFIX_RE: LazyLock<Regex> =
 /// allocation; when `None`, lines keep their intrinsic width.
 struct Writer<'a, I>
 where
-    I: Iterator<Item = (Event<'a>, Range<usize>)>,
+    I: Iterator<Item = Event<'a>>,
 {
     iter: I,
-    source_len: usize,
     text: Text<'static>,
-    line_end_input_bytes: Vec<usize>,
-    current_event_end: usize,
     styles: MarkdownStyles,
     inline_styles: Vec<Style>,
     indent_stack: Vec<IndentContext>,
@@ -376,20 +347,12 @@ where
 
 impl<'a, I> Writer<'a, I>
 where
-    I: Iterator<Item = (Event<'a>, Range<usize>)>,
+    I: Iterator<Item = Event<'a>>,
 {
-    fn new(
-        iter: I,
-        wrap_width: Option<usize>,
-        source_len: usize,
-        cwd: Option<&Path>,
-    ) -> Self {
+    fn new(iter: I, wrap_width: Option<usize>, cwd: Option<&Path>) -> Self {
         Self {
             iter,
-            source_len,
             text: Text::default(),
-            line_end_input_bytes: Vec::new(),
-            current_event_end: 0,
             styles: MarkdownStyles::default(),
             inline_styles: Vec::new(),
             indent_stack: Vec::new(),
@@ -415,11 +378,9 @@ where
     }
 
     fn run(&mut self) {
-        while let Some((ev, range)) = self.iter.next() {
-            self.current_event_end = range.end;
+        while let Some(ev) = self.iter.next() {
             self.handle_event(ev);
         }
-        self.current_event_end = self.source_len;
         self.flush_current_line();
     }
 
@@ -1689,7 +1650,6 @@ where
 
     fn push_output_line(&mut self, line: Line<'static>) {
         self.text.lines.push(line);
-        self.line_end_input_bytes.push(self.current_event_end);
     }
 
     fn prefix_spans(&self, pending_marker_line: bool) -> Vec<Span<'static>> {
@@ -2134,10 +2094,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn wrap_cell_preserves_hard_break_lines() {
+        let mut cell = TableCell::default();
+        cell.push_span("first line".into());
+        cell.hard_break();
+        cell.push_span("second line".into());
+
+        let writer = W::new(std::iter::empty(), Some(80));
+        let wrapped = writer.wrap_cell(&cell, 40);
+        let rendered = wrapped
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.clone())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rendered,
+            vec!["first line".to_string(), "second line".to_string()]
+        );
+    }
+
     // ---------------------------------------------------------------
     // Type alias for calling private associated functions on Writer.
     // ---------------------------------------------------------------
-    type W<'a> = Writer<'a, std::iter::Empty<(Event<'a>, std::ops::Range<usize>)>>;
+    type W<'a> = Writer<'a, std::iter::Empty<Event<'a>>>;
 
     /// Build a single-line `TableCell` from plain text.
     fn make_cell(text: &str) -> TableCell {
