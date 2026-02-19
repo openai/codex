@@ -153,6 +153,7 @@ export type { ReasoningItemContent } from "./ReasoningItemContent";
 export type { ReasoningItemReasoningSummary } from "./ReasoningItemReasoningSummary";
 export type { ReasoningRawContentDeltaEvent } from "./ReasoningRawContentDeltaEvent";
 export type { ReasoningSummary } from "./ReasoningSummary";
+export type { RejectConfig } from "./RejectConfig";
 export type { RemoteSkillDownloadedEvent } from "./RemoteSkillDownloadedEvent";
 export type { RemoteSkillSummary } from "./RemoteSkillSummary";
 export type { RemoveConversationListenerParams } from "./RemoveConversationListenerParams";

@@ -32,6 +32,10 @@ use shlex::try_join as shlex_try_join;
 
 const PROMPT_CONFLICT_REASON: &str =
     "approval required by policy, but AskForApproval is set to Never";
+const REJECT_SANDBOX_APPROVAL_REASON: &str =
+    "approval required by policy, but AskForApproval::Reject.sandbox_approval is set";
+const REJECT_RULES_APPROVAL_REASON: &str =
+    "approval required by policy rule, but AskForApproval::Reject.rules is set";
 const RULES_DIR_NAME: &str = "rules";
 const RULE_EXTENSION: &str = "rules";
 const DEFAULT_POLICY_FILE: &str = "default.rules";
@@ -88,6 +92,37 @@ fn is_policy_match(rule_match: &RuleMatch) -> bool {
     match rule_match {
         RuleMatch::PrefixRuleMatch { .. } => true,
         RuleMatch::HeuristicsRuleMatch { .. } => false,
+    }
+}
+
+/// Returns a rejection reason when `approval_policy` disallows surfacing the
+/// current prompt to the user.
+///
+/// `prompt_is_rule` distinguishes policy-rule prompts from sandbox/escalation
+/// prompts so `Reject.rules` and `Reject.sandbox_approval` are honored
+/// independently. When both are present, policy-rule prompts take precedence.
+fn prompt_is_rejected_by_policy(
+    approval_policy: AskForApproval,
+    prompt_is_rule: bool,
+) -> Option<&'static str> {
+    match approval_policy {
+        AskForApproval::Never => Some(PROMPT_CONFLICT_REASON),
+        AskForApproval::OnFailure => None,
+        AskForApproval::OnRequest => None,
+        AskForApproval::UnlessTrusted => None,
+        AskForApproval::Reject(reject_config) => {
+            if prompt_is_rule {
+                if reject_config.rejects_rules_approval() {
+                    Some(REJECT_RULES_APPROVAL_REASON)
+                } else {
+                    None
+                }
+            } else if reject_config.rejects_sandbox_approval() {
+                Some(REJECT_SANDBOX_APPROVAL_REASON)
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -196,12 +231,14 @@ impl ExecPolicyManager {
                 reason: derive_forbidden_reason(command, &evaluation),
             },
             Decision::Prompt => {
-                if matches!(approval_policy, AskForApproval::Never) {
-                    ExecApprovalRequirement::Forbidden {
-                        reason: PROMPT_CONFLICT_REASON.to_string(),
-                    }
-                } else {
-                    ExecApprovalRequirement::NeedsApproval {
+                let prompt_is_rule = evaluation.matched_rules.iter().any(|rule_match| {
+                    is_policy_match(rule_match) && rule_match.decision() == Decision::Prompt
+                });
+                match prompt_is_rejected_by_policy(approval_policy, prompt_is_rule) {
+                    Some(reason) => ExecApprovalRequirement::Forbidden {
+                        reason: reason.to_string(),
+                    },
+                    None => ExecApprovalRequirement::NeedsApproval {
                         reason: derive_prompt_reason(command, &evaluation),
                         proposed_execpolicy_amendment: requested_amendment.or_else(|| {
                             if auto_amendment_allowed {
@@ -212,7 +249,7 @@ impl ExecPolicyManager {
                                 None
                             }
                         }),
-                    }
+                    },
                 }
             }
             Decision::Allow => ExecApprovalRequirement::Skip {
@@ -465,6 +502,20 @@ pub fn render_decision_for_unmatched_command(
                 }
             }
         }
+        AskForApproval::Reject(_) => match sandbox_policy {
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                // Mirror on-request behavior for unmatched commands; prompt-vs-reject is handled
+                // by `prompt_is_rejected_by_policy`.
+                Decision::Allow
+            }
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => {
+                if sandbox_permissions.requires_escalated_permissions() {
+                    Decision::Prompt
+                } else {
+                    Decision::Allow
+                }
+            }
+        },
     }
 }
 
@@ -690,6 +741,7 @@ mod tests {
     use crate::config_loader::ConfigRequirementsToml;
     use codex_app_server_protocol::ConfigLayerSource;
     use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::RejectConfig;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -1193,6 +1245,122 @@ prefix_rule(
             requirement,
             ExecApprovalRequirement::Forbidden {
                 reason: PROMPT_CONFLICT_REASON.to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn unmatched_reject_policy_still_prompts_for_restricted_sandbox_escalation() {
+        let command = vec!["madeup-cmd".to_string()];
+
+        assert_eq!(
+            Decision::Prompt,
+            render_decision_for_unmatched_command(
+                AskForApproval::Reject(RejectConfig {
+                    sandbox_approval: false,
+                    rules: false,
+                    mcp_elicitations: false,
+                }),
+                &SandboxPolicy::new_read_only_policy(),
+                &command,
+                SandboxPermissions::RequireEscalated,
+                false,
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_approval_requirement_rejects_unmatched_prompt_when_sandbox_rejection_enabled() {
+        let command = vec!["madeup-cmd".to_string()];
+
+        let requirement = ExecPolicyManager::default()
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::Reject(RejectConfig {
+                    sandbox_approval: true,
+                    rules: false,
+                    mcp_elicitations: false,
+                }),
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Forbidden {
+                reason: REJECT_SANDBOX_APPROVAL_REASON.to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn mixed_rule_and_sandbox_prompt_prioritizes_rule_for_rejection_decision() {
+        let policy_src = r#"prefix_rule(pattern=["git"], decision="prompt")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "git status && madeup-cmd".to_string(),
+        ];
+
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::Reject(RejectConfig {
+                    sandbox_approval: true,
+                    rules: false,
+                    mcp_elicitations: false,
+                }),
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert!(matches!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn mixed_rule_and_sandbox_prompt_rejects_when_rules_rejection_enabled() {
+        let policy_src = r#"prefix_rule(pattern=["git"], decision="prompt")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "git status && madeup-cmd".to_string(),
+        ];
+
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::Reject(RejectConfig {
+                    sandbox_approval: false,
+                    rules: true,
+                    mcp_elicitations: false,
+                }),
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Forbidden {
+                reason: REJECT_RULES_APPROVAL_REASON.to_string(),
             }
         );
     }
