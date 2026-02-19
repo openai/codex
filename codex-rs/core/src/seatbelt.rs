@@ -117,8 +117,20 @@ struct ProxyPolicyInputs {
     ports: Vec<u16>,
     has_proxy_config: bool,
     allow_local_binding: bool,
-    allow_unix_sockets: Vec<AbsolutePathBuf>,
-    dangerously_allow_all_unix_sockets: bool,
+    unix_domain_socket_policy: UnixDomainSocketPolicy,
+}
+
+#[derive(Debug, Clone)]
+// Keep allow-all and allowlist modes disjoint so we don't carry ignored state.
+enum UnixDomainSocketPolicy {
+    AllowAll,
+    Restricted { allowed: Vec<AbsolutePathBuf> },
+}
+
+impl Default for UnixDomainSocketPolicy {
+    fn default() -> Self {
+        Self::Restricted { allowed: vec![] }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -131,27 +143,33 @@ fn proxy_policy_inputs(network: Option<&NetworkProxy>) -> ProxyPolicyInputs {
     if let Some(network) = network {
         let mut env = HashMap::new();
         network.apply_to_env(&mut env);
-        let allow_unix_sockets = network
-            .allow_unix_sockets()
-            .iter()
-            .filter_map(|socket_path| match normalize_path_for_sandbox(Path::new(socket_path)) {
-                Some(path) => Some((path.to_string_lossy().to_string(), path)),
-                None => {
-                    warn!(
-                        "ignoring network.allow_unix_sockets entry because it could not be normalized: {socket_path}"
-                    );
-                    None
-                }
-            })
-            .collect::<BTreeMap<_, _>>()
-            .into_values()
-            .collect();
+        let unix_domain_socket_policy = if network.dangerously_allow_all_unix_sockets() {
+            UnixDomainSocketPolicy::AllowAll
+        } else {
+            let allowed = network
+                .allow_unix_sockets()
+                .iter()
+                .filter_map(
+                    |socket_path| match normalize_path_for_sandbox(Path::new(socket_path)) {
+                        Some(path) => Some((path.to_string_lossy().to_string(), path)),
+                        None => {
+                            warn!(
+                                "ignoring network.allow_unix_sockets entry because it could not be normalized: {socket_path}"
+                            );
+                            None
+                        }
+                    },
+                )
+                .collect::<BTreeMap<_, _>>()
+                .into_values()
+                .collect();
+            UnixDomainSocketPolicy::Restricted { allowed }
+        };
         return ProxyPolicyInputs {
             ports: proxy_loopback_ports_from_env(&env),
             has_proxy_config: has_proxy_url_env_vars(&env),
             allow_local_binding: network.allow_local_binding(),
-            allow_unix_sockets,
-            dangerously_allow_all_unix_sockets: network.dangerously_allow_all_unix_sockets(),
+            unix_domain_socket_policy,
         };
     }
 
@@ -175,13 +193,11 @@ fn normalize_path_for_sandbox(path: &Path) -> Option<AbsolutePathBuf> {
 }
 
 fn unix_socket_path_params(proxy: &ProxyPolicyInputs) -> Vec<UnixSocketPathParam> {
-    if proxy.dangerously_allow_all_unix_sockets {
-        // The wildcard flag takes precedence over the explicit allowlist.
-        return vec![];
-    }
-
     let mut deduped_paths: BTreeMap<String, AbsolutePathBuf> = BTreeMap::new();
-    for path in &proxy.allow_unix_sockets {
+    let UnixDomainSocketPolicy::Restricted { allowed } = &proxy.unix_domain_socket_policy else {
+        return vec![];
+    };
+    for path in allowed {
         deduped_paths
             .entry(path.to_string_lossy().to_string())
             .or_insert_with(|| path.clone());
@@ -208,7 +224,10 @@ fn unix_socket_dir_params(proxy: &ProxyPolicyInputs) -> Vec<(String, PathBuf)> {
 /// When non-empty, the returned string is newline-terminated so callers can
 /// append it directly to larger policy blocks.
 fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
-    if proxy.dangerously_allow_all_unix_sockets {
+    if matches!(
+        proxy.unix_domain_socket_policy,
+        UnixDomainSocketPolicy::AllowAll
+    ) {
         return "(allow network* (subpath \"/\"))\n".to_string();
     }
 
@@ -490,6 +509,7 @@ fn macos_dir_params() -> Vec<(String, PathBuf)> {
 mod tests {
     use super::MACOS_SEATBELT_BASE_POLICY;
     use super::ProxyPolicyInputs;
+    use super::UnixDomainSocketPolicy;
     use super::create_seatbelt_command_args;
     use super::create_seatbelt_command_args_with_extensions;
     use super::dynamic_network_policy;
@@ -751,8 +771,9 @@ mod tests {
                 ports: vec![43128],
                 has_proxy_config: true,
                 allow_local_binding: false,
-                allow_unix_sockets: vec![absolute_path("/tmp/example.sock")],
-                dangerously_allow_all_unix_sockets: false,
+                unix_domain_socket_policy: UnixDomainSocketPolicy::Restricted {
+                    allowed: vec![absolute_path("/tmp/example.sock")],
+                },
             },
         );
 
@@ -765,7 +786,9 @@ mod tests {
     #[test]
     fn unix_socket_policy_non_empty_output_is_newline_terminated() {
         let allowlist_policy = unix_socket_policy(&ProxyPolicyInputs {
-            allow_unix_sockets: vec![absolute_path("/tmp/example.sock")],
+            unix_domain_socket_policy: UnixDomainSocketPolicy::Restricted {
+                allowed: vec![absolute_path("/tmp/example.sock")],
+            },
             ..ProxyPolicyInputs::default()
         });
         assert!(
@@ -774,7 +797,7 @@ mod tests {
         );
 
         let allow_all_policy = unix_socket_policy(&ProxyPolicyInputs {
-            dangerously_allow_all_unix_sockets: true,
+            unix_domain_socket_policy: UnixDomainSocketPolicy::AllowAll,
             ..ProxyPolicyInputs::default()
         });
         assert!(
@@ -786,11 +809,13 @@ mod tests {
     #[test]
     fn unix_socket_dir_params_use_stable_param_names() {
         let params = unix_socket_dir_params(&ProxyPolicyInputs {
-            allow_unix_sockets: vec![
-                absolute_path("/tmp/b.sock"),
-                absolute_path("/tmp/a.sock"),
-                absolute_path("/tmp/a.sock"),
-            ],
+            unix_domain_socket_policy: UnixDomainSocketPolicy::Restricted {
+                allowed: vec![
+                    absolute_path("/tmp/b.sock"),
+                    absolute_path("/tmp/a.sock"),
+                    absolute_path("/tmp/a.sock"),
+                ],
+            },
             ..ProxyPolicyInputs::default()
         });
 
@@ -823,8 +848,7 @@ mod tests {
                 ports: vec![43128],
                 has_proxy_config: true,
                 allow_local_binding: false,
-                allow_unix_sockets: vec![],
-                dangerously_allow_all_unix_sockets: true,
+                unix_domain_socket_policy: UnixDomainSocketPolicy::AllowAll,
             },
         );
 
