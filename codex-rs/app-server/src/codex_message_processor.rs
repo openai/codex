@@ -5828,9 +5828,22 @@ impl CodexMessageProcessor {
         let thread_watch_manager = self.thread_watch_manager.clone();
         let fallback_model_provider = self.config.model_provider_id.clone();
         tokio::spawn(async move {
+            let mut active_turn_id: Option<String> = None;
+            let mut active_turn_terminal_seen = true;
+            let mut logged_tail_without_terminal = false;
+            let mut last_event_kind = String::new();
+
             loop {
                 tokio::select! {
                     _ = &mut cancel_rx => {
+                        if !active_turn_terminal_seen {
+                            warn!(
+                                thread_id = %conversation_id,
+                                active_turn_id = ?active_turn_id,
+                                last_event_kind = %last_event_kind,
+                                "listener cancelled while active turn has no terminal event yet"
+                            );
+                        }
                         // User has unsubscribed, so exit this task.
                         break;
                     }
@@ -5838,10 +5851,56 @@ impl CodexMessageProcessor {
                         let event = match event {
                             Ok(event) => event,
                             Err(err) => {
-                                tracing::warn!("thread.next_event() failed with: {err}");
+                                warn!(
+                                    thread_id = %conversation_id,
+                                    active_turn_id = ?active_turn_id,
+                                    active_turn_terminal_seen,
+                                    last_event_kind = %last_event_kind,
+                                    "thread.next_event() failed with: {err}"
+                                );
+                                if !active_turn_terminal_seen {
+                                    warn!(
+                                        thread_id = %conversation_id,
+                                        active_turn_id = ?active_turn_id,
+                                        "stream ended before terminal turn event"
+                                    );
+                                }
                                 break;
                             }
                         };
+
+                        last_event_kind = event.msg.to_string();
+                        match &event.msg {
+                            EventMsg::TurnStarted(ev) => {
+                                active_turn_id = Some(ev.turn_id.clone());
+                                active_turn_terminal_seen = false;
+                                logged_tail_without_terminal = false;
+                            }
+                            EventMsg::TurnComplete(ev) => {
+                                active_turn_id = Some(ev.turn_id.clone());
+                                active_turn_terminal_seen = true;
+                                logged_tail_without_terminal = false;
+                            }
+                            EventMsg::TurnAborted(ev) => {
+                                if let Some(turn_id) = ev.turn_id.clone() {
+                                    active_turn_id = Some(turn_id);
+                                }
+                                active_turn_terminal_seen = true;
+                                logged_tail_without_terminal = false;
+                            }
+                            EventMsg::TurnDiff(_) | EventMsg::ItemCompleted(_) => {
+                                if !active_turn_terminal_seen && !logged_tail_without_terminal {
+                                    info!(
+                                        thread_id = %conversation_id,
+                                        active_turn_id = ?active_turn_id,
+                                        event_kind = %last_event_kind,
+                                        "observed tail event before terminal turn event"
+                                    );
+                                    logged_tail_without_terminal = true;
+                                }
+                            }
+                            _ => {}
+                        }
 
                         // For now, we send a notification for every event,
                         // JSON-serializing the `Event` as-is, but these should

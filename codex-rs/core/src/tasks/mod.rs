@@ -154,11 +154,9 @@ impl Session {
                     // Update previous model before TurnComplete is emitted so
                     // immediately following turns observe the correct switch state.
                     sess.set_previous_model(Some(model_slug)).await;
-                    if !task_cancellation_token.is_cancelled() {
-                        // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                        sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
-                            .await;
-                    }
+                    // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
+                    sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
+                        .await;
                     done_clone.notify_waiters();
                 }
                 .instrument(session_span),
@@ -214,6 +212,14 @@ impl Session {
             *active = None;
         }
         drop(active);
+        if !should_clear_active_turn {
+            warn!(
+                turn_id = %turn_context.sub_id,
+                "on_task_finished skipped terminal event because task is no longer active"
+            );
+            return;
+        }
+
         if !pending_input.is_empty() {
             let pending_response_items = pending_input
                 .into_iter()

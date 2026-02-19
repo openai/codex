@@ -7848,6 +7848,46 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
+    #[tokio::test]
+    async fn cancelled_task_without_abort_emits_turn_complete() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+        {
+            let active = sess.active_turn.lock().await;
+            let task = active
+                .as_ref()
+                .and_then(|turn| turn.tasks.get(&tc.sub_id))
+                .expect("running task should exist");
+            task.cancellation_token.cancel();
+        }
+
+        let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for event")
+            .expect("event");
+        match evt.msg {
+            EventMsg::TurnComplete(e) => {
+                assert_eq!(e.turn_id, tc.sub_id);
+                assert_eq!(e.last_agent_message, None);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn task_finish_persists_leftover_pending_input() {
         let (sess, tc, _rx) = make_session_and_context_with_rx().await;

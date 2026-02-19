@@ -57,8 +57,7 @@ impl ActiveTurn {
     }
 
     pub(crate) fn remove_task(&mut self, sub_id: &str) -> bool {
-        self.tasks.swap_remove(sub_id);
-        self.tasks.is_empty()
+        self.tasks.swap_remove(sub_id).is_some() && self.tasks.is_empty()
     }
 
     pub(crate) fn drain_tasks(&mut self) -> Vec<RunningTask> {
