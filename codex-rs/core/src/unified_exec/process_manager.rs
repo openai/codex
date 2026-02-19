@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::features::Feature;
 use crate::parse_command::parse_command;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
@@ -615,9 +616,11 @@ impl UnifiedExecProcessManager {
             .skills_manager
             .skills_for_cwd(&context.turn.cwd, false)
             .await;
+        let shell_zsh_fork_enabled = context.session.features().enabled(Feature::ShellZshFork);
         let command_actions = parse_command(&request.command);
         let effective_sandbox_policy = resolve_skill_sandbox_extension_for_command(
             &skills_outcome,
+            shell_zsh_fork_enabled,
             &request.command,
             &cwd,
             &command_actions,

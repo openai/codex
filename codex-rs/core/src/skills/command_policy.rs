@@ -14,19 +14,26 @@ use crate::skills::SkillLoadOutcome;
 /// skill for a command invocation.
 ///
 /// Assumptions:
-/// 1. `command` contains the executable and arguments for the invocation.
-/// 2. `command_cwd` reflects the effective command target location.
-/// 3. Only commands executed via `zsh` are eligible.
-/// 4. Only executable paths under `<skill>/scripts` are eligible.
+/// 1. Skill policy extension is enabled only when `shell_zsh_fork` is enabled.
+/// 2. `command` contains the executable and arguments for the invocation.
+/// 3. `command_cwd` reflects the effective command target location.
+/// 4. Only commands executed via `zsh` are eligible.
+/// 5. Only executable paths under `<skill>/scripts` are eligible.
 ///
-/// Returns `None` when command shell is not `zsh`, or when no enabled skill
-/// with permissions matches an eligible command action executable.
+/// Returns `None` when `shell_zsh_fork` is disabled, command shell is not
+/// `zsh`, or when no enabled skill with permissions matches an eligible
+/// command action executable.
 pub(crate) fn resolve_skill_sandbox_extension_for_command(
     skills_outcome: &SkillLoadOutcome,
+    shell_zsh_fork_enabled: bool,
     command: &[String],
     command_cwd: &Path,
     command_actions: &[ParsedCommand],
 ) -> Option<SandboxPolicy> {
+    if !shell_zsh_fork_enabled {
+        return None;
+    }
+
     let command_executable_name = command
         .first()
         .and_then(|program| Path::new(program).file_name())
@@ -218,8 +225,13 @@ mod tests {
             cmd: "skills/demo/scripts/run.sh".to_string(),
         }];
 
-        let resolved =
-            resolve_skill_sandbox_extension_for_command(&outcome, &command, &cwd, &command_actions);
+        let resolved = resolve_skill_sandbox_extension_for_command(
+            &outcome,
+            true,
+            &command,
+            &cwd,
+            &command_actions,
+        );
 
         assert_eq!(resolved, Some(skill_policy));
     }
@@ -257,6 +269,7 @@ mod tests {
 
         let resolved = resolve_skill_sandbox_extension_for_command(
             &outcome,
+            true,
             &command,
             tempdir.path(),
             &command_actions,
@@ -296,6 +309,7 @@ mod tests {
         }];
         let resolved = resolve_skill_sandbox_extension_for_command(
             &outcome,
+            true,
             &command,
             tempdir.path(),
             &command_actions,
@@ -331,6 +345,7 @@ mod tests {
 
         let resolved = resolve_skill_sandbox_extension_for_command(
             &outcome,
+            true,
             &command,
             tempdir.path(),
             &command_actions,
@@ -395,6 +410,7 @@ mod tests {
 
         let resolved = resolve_skill_sandbox_extension_for_command(
             &outcome,
+            true,
             &command,
             tempdir.path(),
             &command_actions,
@@ -426,8 +442,44 @@ mod tests {
 
         let resolved = resolve_skill_sandbox_extension_for_command(
             &outcome,
+            true,
             &command,
             skill_dir.join("scripts").as_path(),
+            &command_actions,
+        );
+
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn does_not_resolve_policy_when_shell_zsh_fork_is_disabled() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = tempdir.path().join("skills/demo");
+        let scripts_dir = skill_dir.join("scripts");
+        std::fs::create_dir_all(&scripts_dir).expect("create scripts");
+        std::fs::write(scripts_dir.join("run.sh"), "#!/bin/sh\necho ok\n").expect("write script");
+        let skill_path = skill_dir.join("SKILL.md");
+        std::fs::write(&skill_path, "skill").expect("write SKILL.md");
+        let cwd = tempdir.path().to_path_buf();
+
+        let outcome = outcome_with_skills(vec![skill_with_policy(
+            canonical(&skill_path),
+            SandboxPolicy::new_workspace_write_policy(),
+        )]);
+        let command = vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "skills/demo/scripts/run.sh".to_string(),
+        ];
+        let command_actions = vec![ParsedCommand::Unknown {
+            cmd: "skills/demo/scripts/run.sh".to_string(),
+        }];
+
+        let resolved = resolve_skill_sandbox_extension_for_command(
+            &outcome,
+            false,
+            &command,
+            &cwd,
             &command_actions,
         );
 

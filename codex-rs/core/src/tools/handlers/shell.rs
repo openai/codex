@@ -9,6 +9,7 @@ use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::parse_command::parse_command;
@@ -305,9 +306,11 @@ impl ShellHandler {
             .skills_manager
             .skills_for_cwd(&turn.cwd, false)
             .await;
+        let shell_zsh_fork_enabled = session.features().enabled(Feature::ShellZshFork);
         let command_actions = parse_command(&exec_params.command);
         let effective_sandbox_policy = resolve_skill_sandbox_extension_for_command(
             &skills_outcome,
+            shell_zsh_fork_enabled,
             &exec_params.command,
             &exec_params.cwd,
             &command_actions,
