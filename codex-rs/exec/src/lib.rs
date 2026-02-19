@@ -253,6 +253,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model_provider: model_provider.clone(),
         codex_linux_sandbox_exe,
         js_repl_node_path: None,
+        js_repl_node_module_dirs: None,
+        zsh_path: None,
         base_instructions: None,
         developer_instructions: None,
         personality: None,
@@ -378,6 +380,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         auth_manager.clone(),
         SessionSource::Exec,
         openai_models_provider,
+        config.model_catalog.clone(),
     ));
     let default_model = thread_manager
         .get_models_manager()

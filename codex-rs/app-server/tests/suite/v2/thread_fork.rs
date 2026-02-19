@@ -14,6 +14,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use pretty_assertions::assert_eq;
@@ -80,6 +81,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     assert_ne!(thread.id, conversation_id);
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
+    assert_eq!(thread.status, ThreadStatus::Idle);
     let thread_path = thread.path.clone().expect("thread path");
     assert!(thread_path.is_absolute());
     assert_ne!(thread_path, original_path);

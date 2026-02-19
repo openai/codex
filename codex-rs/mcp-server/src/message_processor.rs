@@ -68,6 +68,7 @@ impl MessageProcessor {
             auth_manager,
             SessionSource::Mcp,
             openai_models_provider,
+            config.model_catalog.clone(),
         ));
         Self {
             outgoing,

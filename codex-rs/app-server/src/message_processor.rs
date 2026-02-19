@@ -180,6 +180,7 @@ impl MessageProcessor {
             auth_manager.clone(),
             SessionSource::VSCode,
             openai_models_provider,
+            config.model_catalog.clone(),
         ));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {

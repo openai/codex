@@ -69,6 +69,8 @@ impl ToolsConfig {
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
+        } else if features.enabled(Feature::ShellZshFork) {
+            ConfigShellToolType::ShellCommand
         } else if features.enabled(Feature::UnifiedExec) {
             // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
             if codex_utils_pty::conpty_supported() {
@@ -110,17 +112,6 @@ impl ToolsConfig {
         self.agent_roles = agent_roles;
         self
     }
-}
-
-pub(crate) fn filter_tools_for_model(tools: Vec<ToolSpec>, config: &ToolsConfig) -> Vec<ToolSpec> {
-    if !config.js_repl_tools_only {
-        return tools;
-    }
-
-    tools
-        .into_iter()
-        .filter(|spec| matches!(spec.name(), "js_repl" | "js_repl_reset"))
-        .collect()
 }
 
 /// Generic JSON‑Schema subset needed for our tool definitions
@@ -655,7 +646,7 @@ fn create_wait_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "wait".to_string(),
-        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out."
+        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches his final status, a notification message will be received containing the same completed status."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -1709,27 +1700,6 @@ mod tests {
         }
     }
 
-    fn assert_contains_tool_specs(tools: &[ToolSpec], expected_subset: &[&str]) {
-        use std::collections::HashSet;
-        let mut names = HashSet::new();
-        let mut duplicates = Vec::new();
-        for name in tools.iter().map(tool_name) {
-            if !names.insert(name) {
-                duplicates.push(name);
-            }
-        }
-        assert!(
-            duplicates.is_empty(),
-            "duplicate tool entries detected: {duplicates:?}"
-        );
-        for expected in expected_subset {
-            assert!(
-                names.contains(expected),
-                "expected tool {expected} to be present; had: {names:?}"
-            );
-        }
-    }
-
     fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
         match config.shell_type {
             ConfigShellToolType::Default => Some("shell"),
@@ -1950,77 +1920,6 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
-    }
-
-    #[test]
-    fn js_repl_tools_only_filters_model_tools() {
-        let config = test_config();
-        let model_info =
-            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
-        features.enable(Feature::JsRepl);
-        features.enable(Feature::JsReplToolsOnly);
-
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
-        });
-        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-        let filtered = filter_tools_for_model(
-            tools.iter().map(|tool| tool.spec.clone()).collect(),
-            &tools_config,
-        );
-        assert_contains_tool_specs(&filtered, &["js_repl", "js_repl_reset"]);
-        assert!(
-            !filtered.iter().any(|tool| tool_name(tool) == "shell"),
-            "expected non-js_repl tools to be hidden when js_repl_tools_only is enabled"
-        );
-    }
-
-    #[test]
-    fn js_repl_tools_only_hides_dynamic_tools_from_model_tools() {
-        let config = test_config();
-        let model_info =
-            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
-        features.enable(Feature::JsRepl);
-        features.enable(Feature::JsReplToolsOnly);
-
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
-        });
-        let dynamic_tools = vec![DynamicToolSpec {
-            name: "dynamic_echo".to_string(),
-            description: "echo dynamic payload".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string"}
-                },
-                "required": ["text"],
-                "additionalProperties": false
-            }),
-        }];
-        let (tools, _) = build_specs(&tools_config, None, None, &dynamic_tools).build();
-        assert!(
-            tools.iter().any(|tool| tool.spec.name() == "dynamic_echo"),
-            "expected dynamic tool in full router specs"
-        );
-
-        let filtered = filter_tools_for_model(
-            tools.iter().map(|tool| tool.spec.clone()).collect(),
-            &tools_config,
-        );
-        assert!(
-            !filtered
-                .iter()
-                .any(|tool| tool_name(tool) == "dynamic_echo"),
-            "expected dynamic tools to be hidden from direct model tools in js_repl_tools_only mode"
-        );
-        assert_contains_tool_specs(&filtered, &["js_repl", "js_repl_reset"]);
     }
 
     fn assert_model_tools(
@@ -2344,6 +2243,23 @@ mod tests {
             subset.push(shell_tool);
         }
         assert_contains_tool_names(&tools, &subset);
+    }
+
+    #[test]
+    fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::ShellZshFork);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Live),
+        });
+
+        assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
     }
 
     #[test]

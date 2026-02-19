@@ -26,10 +26,10 @@ use std::sync::Arc;
 pub struct UnifiedExecHandler;
 
 #[derive(Debug, Deserialize)]
-struct ExecCommandArgs {
+pub(crate) struct ExecCommandArgs {
     cmd: String,
     #[serde(default)]
-    workdir: Option<String>,
+    pub(crate) workdir: Option<String>,
     #[serde(default)]
     shell: Option<String>,
     #[serde(default = "default_login")]
@@ -238,7 +238,7 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
+pub(crate) fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
     let model_shell = args.shell.as_ref().map(|shell_str| {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
         shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();

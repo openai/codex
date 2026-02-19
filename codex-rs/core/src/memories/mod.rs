@@ -11,6 +11,7 @@ mod start;
 mod storage;
 #[cfg(test)]
 mod tests;
+pub(crate) mod usage;
 
 /// Starts the memory startup pipeline for eligible root sessions.
 /// This is the single entrypoint that `codex` uses to trigger memory startup.
@@ -26,7 +27,7 @@ mod artifacts {
 /// Phase 1 (startup extraction).
 mod phase_one {
     /// Default model used for phase 1.
-    pub(super) const MODEL: &str = "gpt-5.3-codex-spark";
+    pub(super) const MODEL: &str = "gpt-5.1-codex-mini";
     /// Prompt used for phase 1.
     pub(super) const PROMPT: &str = include_str!("../../templates/memories/stage_one_system.md");
     /// Concurrency cap for startup memory extraction and consolidation scheduling.
@@ -67,14 +68,20 @@ mod phase_two {
 mod metrics {
     /// Number of phase-1 startup jobs grouped by status.
     pub(super) const MEMORY_PHASE_ONE_JOBS: &str = "codex.memory.phase1";
+    /// End-to-end latency for a single phase-1 startup run.
+    pub(super) const MEMORY_PHASE_ONE_E2E_MS: &str = "codex.memory.phase1.e2e_ms";
     /// Number of raw memories produced by phase-1 startup extraction.
     pub(super) const MEMORY_PHASE_ONE_OUTPUT: &str = "codex.memory.phase1.output";
     /// Histogram for aggregate token usage across one phase-1 startup run.
     pub(super) const MEMORY_PHASE_ONE_TOKEN_USAGE: &str = "codex.memory.phase1.token_usage";
     /// Number of phase-2 startup jobs grouped by status.
     pub(super) const MEMORY_PHASE_TWO_JOBS: &str = "codex.memory.phase2";
+    /// End-to-end latency for a single phase-2 consolidation run.
+    pub(super) const MEMORY_PHASE_TWO_E2E_MS: &str = "codex.memory.phase2.e2e_ms";
     /// Number of stage-1 memories included in each phase-2 consolidation step.
     pub(super) const MEMORY_PHASE_TWO_INPUT: &str = "codex.memory.phase2.input";
+    /// Histogram for aggregate token usage across one phase-2 consolidation run.
+    pub(super) const MEMORY_PHASE_TWO_TOKEN_USAGE: &str = "codex.memory.phase2.token_usage";
 }
 
 use std::path::Path;

@@ -47,6 +47,7 @@ pub enum RefreshStrategy {
 pub struct ModelsManager {
     local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
+    has_custom_model_catalog: bool,
     auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
@@ -57,11 +58,18 @@ impl ModelsManager {
     /// Construct a manager scoped to the provided `AuthManager`.
     ///
     /// Uses `codex_home` to store cached model metadata and initializes with built-in presets.
-    pub fn new(codex_home: PathBuf, auth_manager: Arc<AuthManager>) -> Self {
+    /// When `model_catalog` is provided, it becomes the authoritative remote model list and
+    /// background refreshes from `/models` are disabled.
+    pub fn new(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        model_catalog: Option<ModelsResponse>,
+    ) -> Self {
         Self::new_with_provider(
             codex_home,
             auth_manager,
             ModelProviderInfo::create_openai_provider(),
+            model_catalog,
         )
     }
 
@@ -70,12 +78,18 @@ impl ModelsManager {
         codex_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         provider: ModelProviderInfo,
+        model_catalog: Option<ModelsResponse>,
     ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
+        let has_custom_model_catalog = model_catalog.is_some();
+        let remote_models = model_catalog
+            .map(|catalog| catalog.models)
+            .unwrap_or_else(|| Self::load_remote_models_from_file().unwrap_or_default());
         Self {
             local_models: builtin_model_presets(auth_manager.auth_mode()),
-            remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
+            remote_models: RwLock::new(remote_models),
+            has_custom_model_catalog,
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
@@ -138,7 +152,34 @@ impl ModelsManager {
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
-        let remote = self.find_remote_model_by_longest_prefix(model).await;
+        let remote_models = self.get_remote_models().await;
+        Self::construct_model_info_from_candidates(model, &remote_models, config)
+    }
+
+    fn find_model_by_longest_prefix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
+        let mut best: Option<ModelInfo> = None;
+        for candidate in candidates {
+            if !model.starts_with(&candidate.slug) {
+                continue;
+            }
+            let is_better_match = if let Some(current) = best.as_ref() {
+                candidate.slug.len() > current.slug.len()
+            } else {
+                true
+            };
+            if is_better_match {
+                best = Some(candidate.clone());
+            }
+        }
+        best
+    }
+
+    fn construct_model_info_from_candidates(
+        model: &str,
+        candidates: &[ModelInfo],
+        config: &Config,
+    ) -> ModelInfo {
+        let remote = Self::find_model_by_longest_prefix(model, candidates);
         let model_info = if let Some(remote) = remote {
             ModelInfo {
                 slug: model.to_string(),
@@ -149,24 +190,6 @@ impl ModelsManager {
             model_info::model_info_from_slug(model)
         };
         model_info::with_config_overrides(model_info, config)
-    }
-
-    async fn find_remote_model_by_longest_prefix(&self, model: &str) -> Option<ModelInfo> {
-        let mut best: Option<ModelInfo> = None;
-        for candidate in self.get_remote_models().await {
-            if !model.starts_with(&candidate.slug) {
-                continue;
-            }
-            let is_better_match = if let Some(current) = best.as_ref() {
-                candidate.slug.len() > current.slug.len()
-            } else {
-                true
-            };
-            if is_better_match {
-                best = Some(candidate);
-            }
-        }
-        best
     }
 
     /// Refresh models if the provided ETag differs from the cached ETag.
@@ -187,6 +210,11 @@ impl ModelsManager {
 
     /// Refresh available models according to the specified strategy.
     async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
+        // don't override the custom model catalog if one was provided by the user
+        if self.has_custom_model_catalog {
+            return Ok(());
+        }
+
         if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt) {
             if matches!(
                 refresh_strategy,
@@ -335,7 +363,7 @@ impl ModelsManager {
         auth_manager: Arc<AuthManager>,
         provider: ModelProviderInfo,
     ) -> Self {
-        Self::new_with_provider(codex_home, auth_manager, provider)
+        Self::new_with_provider(codex_home, auth_manager, provider, None)
     }
 
     /// Get model identifier without consulting remote state or cache.
@@ -357,7 +385,12 @@ impl ModelsManager {
         model: &str,
         config: &Config,
     ) -> ModelInfo {
-        model_info::with_config_overrides(model_info::model_info_from_slug(model), config)
+        let candidates: &[ModelInfo] = if let Some(model_catalog) = config.model_catalog.as_ref() {
+            &model_catalog.models
+        } else {
+            &[]
+        };
+        Self::construct_model_info_from_candidates(model, candidates, config)
     }
 }
 
@@ -450,7 +483,7 @@ mod tests {
             .expect("load default test config");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager);
+        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None);
         let known_slug = manager
             .get_remote_models()
             .await
@@ -468,6 +501,36 @@ mod tests {
             .await;
         assert!(unknown.used_fallback_model_metadata);
         assert_eq!(unknown.slug, "model-that-does-not-exist");
+    }
+
+    #[tokio::test]
+    async fn get_model_info_uses_custom_catalog() {
+        let codex_home = tempdir().expect("temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            Some(ModelsResponse {
+                models: vec![remote_model("gpt-overlay", "Overlay", 0)],
+            }),
+        );
+
+        let model_info = manager
+            .get_model_info("gpt-overlay-experiment", &config)
+            .await;
+
+        assert_eq!(model_info.slug, "gpt-overlay-experiment");
+        assert_eq!(model_info.display_name, "Overlay");
+        assert_eq!(model_info.context_window, Some(272_000));
+        assert!(!model_info.supports_parallel_tool_calls);
+        assert!(!model_info.used_fallback_model_metadata);
     }
 
     #[tokio::test]
