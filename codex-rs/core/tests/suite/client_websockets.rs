@@ -715,7 +715,7 @@ async fn responses_websocket_appends_on_prefix() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_turn_metadata_can_appear_after_initial_request() {
+async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
@@ -730,7 +730,7 @@ async fn responses_websocket_turn_metadata_can_appear_after_initial_request() {
 
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
-    let base_turn_metadata = r#"{"turn_id":"turn-123","sandbox":"workspace-write"}"#;
+    let first_turn_metadata = r#"{"turn_id":"turn-123","sandbox":"workspace-write"}"#;
     let enriched_turn_metadata = r#"{"turn_id":"turn-123","sandbox":"workspace-write","workspaces":[{"root_path":"/tmp/repo","latest_git_commit_hash":"abc123","associated_remote_urls":["git@github.com:openai/codex.git"],"has_changes":true}]}"#;
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
@@ -743,7 +743,7 @@ async fn responses_websocket_turn_metadata_can_appear_after_initial_request() {
         &mut client_session,
         &harness,
         &prompt_one,
-        Some(base_turn_metadata),
+        Some(first_turn_metadata),
     )
     .await;
     stream_until_complete_with_turn_metadata(
@@ -762,12 +762,24 @@ async fn responses_websocket_turn_metadata_can_appear_after_initial_request() {
     assert_eq!(first["type"].as_str(), Some("response.create"));
     assert_eq!(
         first["client_metadata"]["x-codex-turn-metadata"].as_str(),
-        Some(base_turn_metadata)
+        Some(first_turn_metadata)
     );
     assert_eq!(second["type"].as_str(), Some("response.append"));
     assert_eq!(
         second["client_metadata"]["x-codex-turn-metadata"].as_str(),
         Some(enriched_turn_metadata)
+    );
+
+    let first_metadata: serde_json::Value =
+        serde_json::from_str(first_turn_metadata).expect("first metadata should be valid json");
+    let second_metadata: serde_json::Value = serde_json::from_str(enriched_turn_metadata)
+        .expect("enriched metadata should be valid json");
+
+    assert_eq!(first_metadata["turn_id"].as_str(), Some("turn-123"));
+    assert_eq!(second_metadata["turn_id"].as_str(), Some("turn-123"));
+    assert_eq!(
+        second_metadata["workspaces"][0]["has_changes"].as_bool(),
+        Some(true)
     );
 
     server.shutdown().await;
