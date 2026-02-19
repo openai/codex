@@ -430,10 +430,11 @@ impl UnifiedExecProcessManager {
             let process_id = entry.process_id.clone();
 
             if entry.process.has_exited() {
-                let Some(mut entry) = store.remove(&process_id) else {
+                let Some(entry) = store.remove(&process_id) else {
                     return ProcessStatus::Unknown;
                 };
-                Self::abort_all_watcher_tasks(&mut entry);
+                // Do not abort watcher tasks on natural exit detection here.
+                // The exit watcher emits ExecCommandEnd after output draining.
                 ProcessStatus::Exited {
                     exit_code,
                     entry: Box::new(entry),
