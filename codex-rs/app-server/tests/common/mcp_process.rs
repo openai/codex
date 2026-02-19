@@ -64,6 +64,7 @@ use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnSteerParams;
+use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_core::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use tokio::process::Command;
 
@@ -104,6 +105,10 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "debug");
+        // Bazel/Linux workers can run with smaller default thread stacks, which makes
+        // tokio-runtime-worker stack overflows more likely in app-server integration tests.
+        // Pin a larger minimum stack for the spawned test server process.
+        cmd.env("RUST_MIN_STACK", "4194304");
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
 
         for (k, v) in env_overrides {
@@ -587,6 +592,14 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("review/start", params).await
+    }
+
+    pub async fn send_windows_sandbox_setup_start_request(
+        &mut self,
+        params: WindowsSandboxSetupStartParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("windowsSandbox/setupStart", params).await
     }
 
     /// Send a `cancelLoginChatGpt` JSON-RPC request.

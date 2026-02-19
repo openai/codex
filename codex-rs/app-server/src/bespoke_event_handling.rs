@@ -8,6 +8,8 @@ use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
+use crate::thread_status::ThreadWatchActiveGuard;
+use crate::thread_status::ThreadWatchManager;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
@@ -71,6 +73,7 @@ use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_core::CodexThread;
+use codex_core::ThreadManager;
 use codex_core::parse_command::shlex_join;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -109,8 +112,10 @@ pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
     conversation_id: ThreadId,
     conversation: Arc<CodexThread>,
+    thread_manager: Arc<ThreadManager>,
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
+    thread_watch_manager: ThreadWatchManager,
     api_version: ApiVersion,
     fallback_model_provider: String,
 ) {
@@ -119,8 +124,16 @@ pub(crate) async fn apply_bespoke_event_handling(
         msg,
     } = event;
     match msg {
-        EventMsg::TurnStarted(_) => {}
+        EventMsg::TurnStarted(_) => {
+            thread_watch_manager
+                .note_turn_started(&conversation_id.to_string())
+                .await;
+        }
         EventMsg::TurnComplete(_ev) => {
+            let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
+            thread_watch_manager
+                .note_turn_completed(&conversation_id.to_string(), turn_failed)
+                .await;
             handle_turn_complete(conversation_id, event_turn_id, &outgoing, &thread_state).await;
         }
         EventMsg::Warning(_warning_event) => {}
@@ -144,77 +157,87 @@ pub(crate) async fn apply_bespoke_event_handling(
             changes,
             reason,
             grant_root,
-        }) => match api_version {
-            ApiVersion::V1 => {
-                let params = ApplyPatchApprovalParams {
-                    conversation_id,
-                    call_id: call_id.clone(),
-                    file_changes: changes.clone(),
-                    reason,
-                    grant_root,
-                };
-                let rx = outgoing
-                    .send_request(ServerRequestPayload::ApplyPatchApproval(params))
-                    .await;
-                tokio::spawn(async move {
-                    on_patch_approval_response(call_id, rx, conversation).await;
-                });
-            }
-            ApiVersion::V2 => {
-                // Until we migrate the core to be aware of a first class FileChangeItem
-                // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
-                let item_id = call_id.clone();
-                let patch_changes = convert_patch_changes(&changes);
-
-                let first_start = {
-                    let mut state = thread_state.lock().await;
-                    state
-                        .turn_summary
-                        .file_change_started
-                        .insert(item_id.clone())
-                };
-                if first_start {
-                    let item = ThreadItem::FileChange {
-                        id: item_id.clone(),
-                        changes: patch_changes.clone(),
-                        status: PatchApplyStatus::InProgress,
-                    };
-                    let notification = ItemStartedNotification {
-                        thread_id: conversation_id.to_string(),
-                        turn_id: event_turn_id.clone(),
-                        item,
-                    };
-                    outgoing
-                        .send_server_notification(ServerNotification::ItemStarted(notification))
-                        .await;
-                }
-
-                let params = FileChangeRequestApprovalParams {
-                    thread_id: conversation_id.to_string(),
-                    turn_id: turn_id.clone(),
-                    item_id: item_id.clone(),
-                    reason,
-                    grant_root,
-                };
-                let rx = outgoing
-                    .send_request(ServerRequestPayload::FileChangeRequestApproval(params))
-                    .await;
-                tokio::spawn(async move {
-                    on_file_change_request_approval_response(
-                        event_turn_id,
+        }) => {
+            let permission_guard = thread_watch_manager
+                .note_permission_requested(&conversation_id.to_string())
+                .await;
+            match api_version {
+                ApiVersion::V1 => {
+                    let params = ApplyPatchApprovalParams {
                         conversation_id,
-                        item_id,
-                        patch_changes,
-                        rx,
-                        conversation,
-                        outgoing,
-                        thread_state.clone(),
-                    )
-                    .await;
-                });
+                        call_id: call_id.clone(),
+                        file_changes: changes.clone(),
+                        reason,
+                        grant_root,
+                    };
+                    let rx = outgoing
+                        .send_request(ServerRequestPayload::ApplyPatchApproval(params))
+                        .await;
+                    tokio::spawn(async move {
+                        let _permission_guard = permission_guard;
+                        on_patch_approval_response(call_id, rx, conversation).await;
+                    });
+                }
+                ApiVersion::V2 => {
+                    // Until we migrate the core to be aware of a first class FileChangeItem
+                    // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
+                    let item_id = call_id.clone();
+                    let patch_changes = convert_patch_changes(&changes);
+
+                    let first_start = {
+                        let mut state = thread_state.lock().await;
+                        state
+                            .turn_summary
+                            .file_change_started
+                            .insert(item_id.clone())
+                    };
+                    if first_start {
+                        let item = ThreadItem::FileChange {
+                            id: item_id.clone(),
+                            changes: patch_changes.clone(),
+                            status: PatchApplyStatus::InProgress,
+                        };
+                        let notification = ItemStartedNotification {
+                            thread_id: conversation_id.to_string(),
+                            turn_id: event_turn_id.clone(),
+                            item,
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ItemStarted(notification))
+                            .await;
+                    }
+
+                    let params = FileChangeRequestApprovalParams {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: turn_id.clone(),
+                        item_id: item_id.clone(),
+                        reason,
+                        grant_root,
+                    };
+                    let rx = outgoing
+                        .send_request(ServerRequestPayload::FileChangeRequestApproval(params))
+                        .await;
+                    tokio::spawn(async move {
+                        on_file_change_request_approval_response(
+                            event_turn_id,
+                            conversation_id,
+                            item_id,
+                            patch_changes,
+                            rx,
+                            conversation,
+                            outgoing,
+                            thread_state.clone(),
+                            permission_guard,
+                        )
+                        .await;
+                    });
+                }
             }
-        },
+        }
         EventMsg::ExecApprovalRequest(ev) => {
+            let permission_guard = thread_watch_manager
+                .note_permission_requested(&conversation_id.to_string())
+                .await;
             let approval_id_for_op = ev.effective_approval_id();
             let ExecApprovalRequestEvent {
                 call_id,
@@ -242,6 +265,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         .send_request(ServerRequestPayload::ExecCommandApproval(params))
                         .await;
                     tokio::spawn(async move {
+                        let _permission_guard = permission_guard;
                         on_exec_approval_response(
                             approval_id_for_op,
                             event_turn_id,
@@ -290,6 +314,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             conversation,
                             outgoing,
                             thread_state.clone(),
+                            permission_guard,
                         )
                         .await;
                     });
@@ -298,6 +323,9 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::RequestUserInput(request) => {
             if matches!(api_version, ApiVersion::V2) {
+                let user_input_guard = thread_watch_manager
+                    .note_user_input_requested(&conversation_id.to_string())
+                    .await;
                 let questions = request
                     .questions
                     .into_iter()
@@ -328,7 +356,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_request(ServerRequestPayload::ToolRequestUserInput(params))
                     .await;
                 tokio::spawn(async move {
-                    on_request_user_input_response(event_turn_id, rx, conversation).await;
+                    on_request_user_input_response(
+                        event_turn_id,
+                        rx,
+                        conversation,
+                        user_input_guard,
+                    )
+                    .await;
                 });
             } else {
                 error!(
@@ -589,6 +623,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::CollabCloseEnd(end_event) => {
+            if thread_manager
+                .get_thread(end_event.receiver_thread_id)
+                .await
+                .is_err()
+            {
+                thread_watch_manager
+                    .remove_thread(&end_event.receiver_thread_id.to_string())
+                    .await;
+            }
             let status = match &end_event.status {
                 codex_protocol::protocol::AgentStatus::Errored(_)
                 | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
@@ -727,6 +770,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::Error(ev) => {
+            thread_watch_manager
+                .note_system_error(&conversation_id.to_string())
+                .await;
+
             let message = ev.message.clone();
             let codex_error_info = ev.codex_error_info.clone();
 
@@ -1106,6 +1153,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 }
             }
 
+            thread_watch_manager
+                .note_turn_interrupted(&conversation_id.to_string())
+                .await;
             handle_turn_interrupted(conversation_id, event_turn_id, &outgoing, &thread_state).await;
         }
         EventMsg::ThreadRolledBack(_rollback_event) => {
@@ -1135,6 +1185,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
                             Ok(items) => {
                                 thread.turns = build_turns_from_rollout_items(&items);
+                                thread.status = thread_watch_manager
+                                    .loaded_status_for_thread(&thread.id)
+                                    .await;
                                 ThreadRollbackResponse { thread }
                             }
                             Err(err) => {
@@ -1198,6 +1251,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &outgoing,
             )
             .await;
+        }
+        EventMsg::ShutdownComplete => {
+            thread_watch_manager
+                .note_thread_shutdown(&conversation_id.to_string())
+                .await;
         }
 
         _ => {}
@@ -1553,8 +1611,10 @@ async fn on_request_user_input_response(
     event_turn_id: String,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
+    user_input_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
+    drop(user_input_guard);
     let value = match response {
         Ok(Ok(value)) => value,
         Ok(Err(err)) => {
@@ -1711,8 +1771,10 @@ async fn on_file_change_request_approval_response(
     codex: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<Mutex<ThreadState>>,
+    permission_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
+    drop(permission_guard);
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {
             let response = serde_json::from_value::<FileChangeRequestApprovalResponse>(value)
@@ -1776,8 +1838,10 @@ async fn on_command_execution_request_approval_response(
     conversation: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<Mutex<ThreadState>>,
+    permission_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
+    drop(permission_guard);
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {
             let response = serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value)
