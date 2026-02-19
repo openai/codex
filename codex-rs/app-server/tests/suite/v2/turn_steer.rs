@@ -12,6 +12,8 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
@@ -136,7 +138,7 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
 
     let steer_req = mcp
         .send_turn_steer_request(TurnSteerParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "steer".to_string(),
                 text_elements: Vec::new(),
@@ -151,6 +153,25 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
     .await??;
     let steer: TurnSteerResponse = to_response::<TurnSteerResponse>(steer_resp)?;
     assert_eq!(steer.turn_id, turn.id);
+
+    let interrupt_req = mcp
+        .send_turn_interrupt_request(TurnInterruptParams {
+            thread_id: thread.id,
+            turn_id: steer.turn_id,
+        })
+        .await?;
+    let _: TurnInterruptResponse = to_response::<TurnInterruptResponse>(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(interrupt_req)),
+        )
+        .await??,
+    )?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/turn_aborted"),
+    )
+    .await??;
 
     Ok(())
 }

@@ -28,7 +28,10 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::features::FEATURES;
@@ -100,7 +103,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run echo hi".to_string(),
                 text_elements: Vec::new(),
@@ -114,11 +117,12 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    timeout(
+    let turn_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
     )
     .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
 
     let started_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -148,6 +152,25 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     assert!(command.starts_with(&zsh_path.display().to_string()));
     assert!(command.contains(" -lc 'echo hi'"));
     assert_eq!(cwd, workspace);
+
+    let turn_interrupt_request_id = mcp
+        .send_turn_interrupt_request(TurnInterruptParams {
+            thread_id: thread.id,
+            turn_id: turn.id,
+        })
+        .await?;
+    let _: TurnInterruptResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(turn_interrupt_request_id)),
+        )
+        .await??,
+    )?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/turn_aborted"),
+    )
+    .await??;
 
     Ok(())
 }
@@ -504,11 +527,12 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             ..Default::default()
         })
         .await?;
-    timeout(
+    let turn_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
     )
     .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
 
     let mut approval_ids = Vec::new();
     for decision in [
@@ -576,6 +600,25 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     );
     assert_eq!(approval_ids.len(), 2);
     assert_ne!(approval_ids[0], approval_ids[1]);
+
+    let turn_interrupt_request_id = mcp
+        .send_turn_interrupt_request(TurnInterruptParams {
+            thread_id: thread.id,
+            turn_id: turn.id,
+        })
+        .await?;
+    let _: TurnInterruptResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(turn_interrupt_request_id)),
+        )
+        .await??,
+    )?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/turn_aborted"),
+    )
+    .await??;
 
     Ok(())
 }
