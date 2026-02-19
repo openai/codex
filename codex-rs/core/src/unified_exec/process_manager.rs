@@ -139,8 +139,10 @@ impl UnifiedExecProcessManager {
             let mut store = self.process_store.lock().await;
             store.remove(process_id)
         };
-        if let Some(mut entry) = removed {
-            Self::abort_all_watcher_tasks(&mut entry);
+        if let Some(entry) = removed {
+            // Intentionally do not abort watcher tasks here. In attached flows
+            // (for example network denial), stream/exit watchers must finish so
+            // ExecCommandEnd is still emitted after forced termination.
             Self::unregister_network_attempt_for_entry(&entry).await;
         }
     }
