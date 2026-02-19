@@ -2728,7 +2728,7 @@ pub enum ThreadItem {
 }
 
 impl ThreadItem {
-    pub fn item_id(&self) -> &str {
+    pub fn id(&self) -> &str {
         match self {
             ThreadItem::UserMessage { id, .. }
             | ThreadItem::AgentMessage { id, .. }

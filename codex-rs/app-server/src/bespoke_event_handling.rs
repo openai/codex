@@ -71,6 +71,7 @@ use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::build_turns_from_rollout_items;
+use codex_app_server_protocol::convert_patch_changes;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::parse_command::shlex_join;
@@ -180,7 +181,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     // Until we migrate the core to be aware of a first class FileChangeItem
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                     let item_id = call_id.clone();
-                    let patch_changes = codex_app_server_protocol::convert_patch_changes(&changes);
+                    let patch_changes = convert_patch_changes(&changes);
 
                     let first_start = {
                         let mut state = thread_state.lock().await;
@@ -948,9 +949,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             if first_start {
                 let item = ThreadItem::FileChange {
                     id: item_id.clone(),
-                    changes: codex_app_server_protocol::convert_patch_changes(
-                        &patch_begin_event.changes,
-                    ),
+                    changes: convert_patch_changes(&patch_begin_event.changes),
                     status: PatchApplyStatus::InProgress,
                 };
                 let notification = ItemStartedNotification {
@@ -969,8 +968,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let item_id = patch_end_event.call_id.clone();
 
             let status: PatchApplyStatus = (&patch_end_event.status).into();
-            let changes =
-                codex_app_server_protocol::convert_patch_changes(&patch_end_event.changes);
+            let changes = convert_patch_changes(&patch_end_event.changes);
             complete_file_change_item(
                 conversation_id,
                 item_id,

@@ -43,6 +43,7 @@ use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
 use std::collections::HashMap;
+use tracing::warn;
 use uuid::Uuid;
 
 #[cfg(test)]
@@ -846,9 +847,9 @@ impl ThreadHistoryBuilder {
             return;
         }
 
-        eprintln!(
-            "dropping turn-scoped item `{}` for unknown turn id `{turn_id}`",
-            item.item_id()
+        warn!(
+            item_id = item.id(),
+            "dropping turn-scoped item for unknown turn id `{turn_id}`"
         );
     }
 
@@ -944,7 +945,7 @@ fn format_file_change_diff(change: &codex_protocol::protocol::FileChange) -> Str
 fn upsert_turn_item(items: &mut Vec<ThreadItem>, item: ThreadItem) {
     if let Some(existing_item) = items
         .iter_mut()
-        .find(|existing_item| existing_item.item_id() == item.item_id())
+        .find(|existing_item| existing_item.id() == item.id())
     {
         *existing_item = item;
         return;
