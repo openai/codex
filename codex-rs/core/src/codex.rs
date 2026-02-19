@@ -3448,25 +3448,10 @@ mod handlers {
 
         // Attempt to inject input into current task.
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
-            sess.seed_initial_context_if_needed(&current_context).await;
-            let previous_model = sess.previous_model().await;
-            let previous_context_item = sess.previous_context_item().await;
-            let update_items = sess.build_settings_update_items(
-                previous_context_item.as_ref(),
-                previous_model.as_deref(),
-                &current_context,
-            );
-            if !update_items.is_empty() {
-                sess.record_conversation_items(&current_context, &update_items)
-                    .await;
-            }
-
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
             sess.spawn_task(Arc::clone(&current_context), items, regular_task)
-                .await;
-            sess.set_previous_context_item(Some(current_context.to_turn_context_item()))
                 .await;
         }
     }
@@ -4306,13 +4291,31 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
-    if run_pre_sampling_compact(&sess, &turn_context)
-        .await
-        .is_err()
-    {
-        error!("Failed to run pre-sampling compact");
-        return None;
+    let pre_sampling_compacted = match run_pre_sampling_compact(&sess, &turn_context).await {
+        Ok(compacted) => compacted,
+        Err(_) => {
+            error!("Failed to run pre-sampling compact");
+            return None;
+        }
+    };
+
+    let previous_model = sess.previous_model().await;
+    let previous_context_item = sess.previous_context_item().await;
+    let context_items = if pre_sampling_compacted || previous_context_item.is_none() {
+        sess.build_initial_context(turn_context.as_ref()).await
+    } else {
+        sess.build_settings_update_items(
+            previous_context_item.as_ref(),
+            previous_model.as_deref(),
+            turn_context.as_ref(),
+        )
+    };
+    if !context_items.is_empty() {
+        sess.record_conversation_items(&turn_context, &context_items)
+            .await;
     }
+    sess.set_previous_context_item(Some(turn_context.to_turn_context_item()))
+        .await;
 
     let skills_outcome = Some(
         sess.services
@@ -4633,9 +4636,9 @@ pub(crate) async fn run_turn(
 async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
     let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
-    maybe_run_previous_model_inline_compact(
+    let mut compacted = maybe_run_previous_model_inline_compact(
         sess,
         turn_context,
         total_usage_tokens_before_compaction,
@@ -4649,23 +4652,24 @@ async fn run_pre_sampling_compact(
     // Compact if the total usage tokens are greater than the auto compact limit
     if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(sess, turn_context).await?;
+        compacted = true;
     }
-    Ok(())
+    Ok(compacted)
 }
 
 /// Runs pre-sampling compaction against the previous model when switching to a smaller
 /// context-window model.
 ///
-/// Returns `Ok(())` when compaction either completed successfully or was skipped because the
-/// model/context-window preconditions were not met. Returns `Err(_)` only when compaction was
-/// attempted and failed.
+/// Returns `Ok(true)` when compaction ran successfully, `Ok(false)` when compaction was skipped
+/// because the model/context-window preconditions were not met, and `Err(_)` only when compaction
+/// was attempted and failed.
 async fn maybe_run_previous_model_inline_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     total_usage_tokens: i64,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
     let Some(previous_model) = sess.previous_model().await else {
-        return Ok(());
+        return Ok(false);
     };
     let previous_turn_context = Arc::new(
         turn_context
@@ -4674,10 +4678,10 @@ async fn maybe_run_previous_model_inline_compact(
     );
 
     let Some(old_context_window) = previous_turn_context.model_context_window() else {
-        return Ok(());
+        return Ok(false);
     };
     let Some(new_context_window) = turn_context.model_context_window() else {
-        return Ok(());
+        return Ok(false);
     };
     let new_auto_compact_limit = turn_context
         .model_info
@@ -4688,8 +4692,9 @@ async fn maybe_run_previous_model_inline_compact(
         && old_context_window > new_context_window;
     if should_run {
         run_auto_compact(sess, &previous_turn_context).await?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) -> CodexResult<()> {
