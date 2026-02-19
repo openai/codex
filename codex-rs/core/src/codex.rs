@@ -1287,7 +1287,9 @@ impl Session {
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
-            unified_exec_manager: UnifiedExecProcessManager::default(),
+            unified_exec_manager: UnifiedExecProcessManager::new(
+                config.background_terminal_max_timeout,
+            ),
             zsh_exec_bridge,
             analytics_events_client: AnalyticsEventsClient::new(
                 Arc::clone(&config),
@@ -7458,7 +7460,9 @@ mod tests {
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
-            unified_exec_manager: UnifiedExecProcessManager::default(),
+            unified_exec_manager: UnifiedExecProcessManager::new(
+                config.background_terminal_max_timeout,
+            ),
             zsh_exec_bridge: ZshExecBridge::default(),
             analytics_events_client: AnalyticsEventsClient::new(
                 Arc::clone(&config),
@@ -7607,7 +7611,9 @@ mod tests {
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
-            unified_exec_manager: UnifiedExecProcessManager::default(),
+            unified_exec_manager: UnifiedExecProcessManager::new(
+                config.background_terminal_max_timeout,
+            ),
             zsh_exec_bridge: ZshExecBridge::default(),
             analytics_events_client: AnalyticsEventsClient::new(
                 Arc::clone(&config),

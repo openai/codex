@@ -1295,6 +1295,12 @@
       "default": null,
       "description": "Settings for app-specific controls."
     },
+    "background_terminal_timeout": {
+      "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
       "type": "string"

@@ -194,7 +194,7 @@ pub(super) fn rollout_summary_file_stem_from_parts(
     source_updated_at: chrono::DateTime<chrono::Utc>,
     rollout_slug: Option<&str>,
 ) -> String {
-    const ROLLOUT_SLUG_MAX_LEN: usize = 20;
+    const ROLLOUT_SLUG_MAX_LEN: usize = 60;
     const SHORT_HASH_ALPHABET: &[u8; 62] =
         b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     const SHORT_HASH_SPACE: u32 = 14_776_336;
@@ -318,12 +318,17 @@ mod tests {
         let thread_id = fixed_thread_id();
         let memory = stage1_output_with_slug(
             thread_id,
-            Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345"),
+            Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345_67890_ABCDE_fghij_klmno"),
         );
 
+        let stem = rollout_summary_file_stem(&memory);
+        let slug = stem
+            .strip_prefix(&format!("{FIXED_PREFIX}-"))
+            .expect("slug suffix should be present");
+        assert_eq!(slug.len(), 60);
         assert_eq!(
-            rollout_summary_file_stem(&memory),
-            format!("{FIXED_PREFIX}-unsafe_slug_with_spa")
+            slug,
+            "unsafe_slug_with_spaces___symbols___extra_long_12345_67890_a"
         );
     }
 
