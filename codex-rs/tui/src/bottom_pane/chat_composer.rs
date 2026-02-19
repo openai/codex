@@ -1235,34 +1235,8 @@ impl ChatComposer {
         // If recording, stop on Space release when supported. On terminals without key-release
         // events, Space repeat events are handled as "still held" and stop is driven by timeout
         // in `process_space_hold_trigger`.
-        #[cfg(not(target_os = "linux"))]
-        if self.voice_state.voice.is_some() {
-            let should_stop = if self.voice_state.key_release_supported {
-                match key_event.kind {
-                    KeyEventKind::Release => matches!(key_event.code, KeyCode::Char(' ')),
-                    KeyEventKind::Press | KeyEventKind::Repeat => {
-                        !matches!(key_event.code, KeyCode::Char(' '))
-                    }
-                }
-            } else {
-                match key_event.kind {
-                    KeyEventKind::Release => matches!(key_event.code, KeyCode::Char(' ')),
-                    KeyEventKind::Press | KeyEventKind::Repeat => {
-                        if matches!(key_event.code, KeyCode::Char(' ')) {
-                            self.voice_state.space_recording_last_repeat_at = Some(Instant::now());
-                            false
-                        } else {
-                            true
-                        }
-                    }
-                }
-            };
-            if should_stop {
-                let needs_redraw = self.stop_recording_and_start_transcription();
-                return (InputResult::None, needs_redraw);
-            }
-            // Swallow non-stopping keys while recording
-            return (InputResult::None, false);
+        if let Some(result) = self.handle_key_event_while_recording(key_event) {
+            return result;
         }
 
         if !self.input_enabled {
@@ -2682,6 +2656,9 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
+        if let Some(result) = self.handle_voice_space_key_event(&key_event) {
+            return result;
+        }
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('d'),
@@ -2746,31 +2723,47 @@ impl ChatComposer {
                 let should_queue = !self.steer_enabled;
                 self.handle_submission(should_queue)
             }
-            // Spacebar hold-to-talk: begin pending hold on initial press
-            KeyEvent {
-                code: KeyCode::Char(' '),
-                kind: KeyEventKind::Press,
-                ..
-            } if self.voice_transcription_enabled() => {
+            input => self.handle_input_basic(input),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn handle_voice_space_key_event(
+        &mut self,
+        key_event: &KeyEvent,
+    ) -> Option<(InputResult, bool)> {
+        None
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn handle_voice_space_key_event(
+        &mut self,
+        key_event: &KeyEvent,
+    ) -> Option<(InputResult, bool)> {
+        if !self.voice_transcription_enabled() || !matches!(key_event.code, KeyCode::Char(' ')) {
+            return None;
+        }
+        match key_event.kind {
+            KeyEventKind::Press => {
                 if self.paste_burst.is_active() {
-                    return self.handle_input_basic(key_event);
+                    return Some(self.handle_input_basic(*key_event));
                 }
-                // If textarea is empty, start recording immediately without inserting a space
+
+                // If textarea is empty, start recording immediately without inserting a space.
                 if self.textarea.text().is_empty() {
-                    #[cfg(not(target_os = "linux"))]
                     if self.start_recording_with_placeholder() {
-                        return (InputResult::None, true);
+                        return Some((InputResult::None, true));
                     }
-                    // Fall back to normal input handling for space
-                    return self.handle_input_basic(key_event);
+                    return Some(self.handle_input_basic(*key_event));
                 }
+
                 // If a hold is already pending, swallow further press events to
                 // avoid inserting multiple spaces and resetting the timer on key repeat.
                 if self.voice_state.space_hold_started_at.is_some() {
                     if !self.voice_state.key_release_supported {
                         self.voice_state.space_hold_repeat_seen = true;
                     }
-                    return (InputResult::None, false);
+                    return Some((InputResult::None, false));
                 }
 
                 // Insert a named element that renders as a space so we can later
@@ -2789,30 +2782,22 @@ impl ChatComposer {
                 Self::schedule_space_hold_timer(flag.clone(), frame);
                 self.voice_state.space_hold_trigger = Some(flag);
 
-                (InputResult::None, true)
+                Some((InputResult::None, true))
             }
             // If we see a repeat before release, handling occurs in the top-level pending block.
-            KeyEvent {
-                code: KeyCode::Char(' '),
-                kind: KeyEventKind::Repeat,
-                ..
-            } if self.voice_transcription_enabled() => {
+            KeyEventKind::Repeat => {
                 // Swallow repeats while a hold is pending to avoid extra spaces.
                 if self.voice_state.space_hold_started_at.is_some() {
                     if !self.voice_state.key_release_supported {
                         self.voice_state.space_hold_repeat_seen = true;
                     }
-                    return (InputResult::None, false);
+                    return Some((InputResult::None, false));
                 }
-                // Fallback: if no pending hold, treat as normal input
-                self.handle_input_basic(key_event)
+                // Fallback: if no pending hold, treat as normal input.
+                Some(self.handle_input_basic(*key_event))
             }
-            // Space release without pending (fallback): treat as normal input
-            KeyEvent {
-                code: KeyCode::Char(' '),
-                kind: KeyEventKind::Release,
-                ..
-            } if self.voice_transcription_enabled() => {
+            // Space release without pending (fallback): treat as normal input.
+            KeyEventKind::Release => {
                 // If a hold is pending, convert the element to a plain space and clear state.
                 self.voice_state.space_hold_started_at = None;
                 if let Some(id) = self.voice_state.space_hold_element_id.take() {
@@ -2820,10 +2805,48 @@ impl ChatComposer {
                 }
                 self.voice_state.space_hold_trigger = None;
                 self.voice_state.space_hold_repeat_seen = false;
-                (InputResult::None, true)
+                Some((InputResult::None, true))
             }
-            input => self.handle_input_basic(input),
         }
+    }
+
+    fn handle_key_event_while_recording(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> Option<(InputResult, bool)> {
+        #[cfg(not(target_os = "linux"))]
+        if self.voice_state.voice.is_some() {
+            let should_stop = if self.voice_state.key_release_supported {
+                match key_event.kind {
+                    KeyEventKind::Release => matches!(key_event.code, KeyCode::Char(' ')),
+                    KeyEventKind::Press | KeyEventKind::Repeat => {
+                        !matches!(key_event.code, KeyCode::Char(' '))
+                    }
+                }
+            } else {
+                match key_event.kind {
+                    KeyEventKind::Release => matches!(key_event.code, KeyCode::Char(' ')),
+                    KeyEventKind::Press | KeyEventKind::Repeat => {
+                        if matches!(key_event.code, KeyCode::Char(' ')) {
+                            self.voice_state.space_recording_last_repeat_at = Some(Instant::now());
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                }
+            };
+
+            if should_stop {
+                let needs_redraw = self.stop_recording_and_start_transcription();
+                return Some((InputResult::None, needs_redraw));
+            }
+
+            // Swallow non-stopping keys while recording.
+            return Some((InputResult::None, false));
+        }
+
+        None
     }
 
     fn is_bang_shell_command(&self) -> bool {
