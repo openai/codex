@@ -12,6 +12,7 @@ use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use pretty_assertions::assert_eq;
@@ -111,6 +112,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     } = to_response::<ThreadRollbackResponse>(rollback_resp)?;
 
     assert_eq!(rolled_back_thread.turns.len(), 1);
+    assert_eq!(rolled_back_thread.status, ThreadStatus::Idle);
     assert_eq!(rolled_back_thread.turns[0].items.len(), 2);
     match &rolled_back_thread.turns[0].items[0] {
         ThreadItem::UserMessage { content, .. } => {
@@ -140,6 +142,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
     assert_eq!(thread.turns.len(), 1);
+    assert_eq!(thread.status, ThreadStatus::Idle);
     assert_eq!(thread.turns[0].items.len(), 2);
     match &thread.turns[0].items[0] {
         ThreadItem::UserMessage { content, .. } => {
