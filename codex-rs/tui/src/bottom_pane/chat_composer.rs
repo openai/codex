@@ -372,6 +372,7 @@ pub(crate) struct ChatComposer {
     footer_flash: Option<FooterFlash>,
     context_window_percent: Option<i64>,
     // Monotonically increasing identifier for textarea elements we insert.
+    #[cfg(not(target_os = "linux"))]
     next_element_id: u64,
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
@@ -477,6 +478,7 @@ impl ChatComposer {
             selected_remote_image_index: None,
             footer_flash: None,
             context_window_percent: None,
+            #[cfg(not(target_os = "linux"))]
             next_element_id: 0,
             context_window_used_tokens: None,
             skills: None,
@@ -499,6 +501,7 @@ impl ChatComposer {
         this
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn next_id(&mut self) -> String {
         let id = self.next_element_id;
         self.next_element_id = self.next_element_id.wrapping_add(1);
@@ -585,6 +588,7 @@ impl ChatComposer {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn voice_transcription_enabled(&self) -> bool {
         self.voice_state.transcription_enabled && cfg!(not(target_os = "linux"))
     }
@@ -2811,11 +2815,19 @@ impl ChatComposer {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn handle_key_event_while_recording(
+        &mut self,
+        _key_event: KeyEvent,
+    ) -> Option<(InputResult, bool)> {
+        None
+    }
+
+    #[cfg(not(target_os = "linux"))]
     fn handle_key_event_while_recording(
         &mut self,
         key_event: KeyEvent,
     ) -> Option<(InputResult, bool)> {
-        #[cfg(not(target_os = "linux"))]
         if self.voice_state.voice.is_some() {
             let should_stop = if self.voice_state.key_release_supported {
                 match key_event.kind {
@@ -3615,6 +3627,7 @@ impl ChatComposer {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn schedule_space_hold_timer(flag: Arc<AtomicBool>, frame: Option<FrameRequester>) {
         const HOLD_DELAY_MILLIS: u64 = 500;
         if let Ok(handle) = Handle::try_current() {
@@ -3632,6 +3645,7 @@ impl ChatComposer {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn complete_space_hold_timer(flag: Arc<AtomicBool>, frame: Option<FrameRequester>) {
         flag.store(true, Ordering::Relaxed);
         if let Some(frame) = frame {

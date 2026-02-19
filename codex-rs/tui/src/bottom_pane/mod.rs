@@ -33,6 +33,7 @@ use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
@@ -334,6 +335,10 @@ impl BottomPane {
 
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if !self.view_stack.is_empty() {
+            if key_event.kind == KeyEventKind::Release {
+                return InputResult::None;
+            }
+
             // We need three pieces of information after routing the key:
             // whether Esc completed the view, whether the view finished for any
             // reason, and whether a paste-burst timer should be scheduled.
@@ -1025,6 +1030,7 @@ mod tests {
     use crate::app_event::AppEvent;
     use codex_core::protocol::Op;
     use codex_protocol::protocol::SkillScope;
+    use crossterm::event::KeyEventKind;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use ratatui::buffer::Buffer;
@@ -1599,6 +1605,60 @@ mod tests {
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         assert_eq!(on_ctrl_c_calls.get(), 0);
+        assert_eq!(handle_calls.get(), 1);
+    }
+
+    #[test]
+    fn release_events_are_ignored_for_active_view() {
+        #[derive(Default)]
+        struct CountingView {
+            handle_calls: Rc<Cell<usize>>,
+        }
+
+        impl Renderable for CountingView {
+            fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+            fn desired_height(&self, _width: u16) -> u16 {
+                0
+            }
+        }
+
+        impl BottomPaneView for CountingView {
+            fn handle_key_event(&mut self, _key_event: KeyEvent) {
+                self.handle_calls
+                    .set(self.handle_calls.get().saturating_add(1));
+            }
+        }
+
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        let handle_calls = Rc::new(Cell::new(0));
+        pane.push_view(Box::new(CountingView {
+            handle_calls: Rc::clone(&handle_calls),
+        }));
+
+        pane.handle_key_event(KeyEvent::new_with_kind(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+            KeyEventKind::Press,
+        ));
+        pane.handle_key_event(KeyEvent::new_with_kind(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        ));
+
         assert_eq!(handle_calls.get(), 1);
     }
 }
