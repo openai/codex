@@ -56,7 +56,7 @@ async fn run_cmd_output(
     writable_roots: &[PathBuf],
     timeout_ms: u64,
 ) -> codex_core::exec::ExecToolCallOutput {
-    run_cmd_result_with_writable_roots(cmd, writable_roots, timeout_ms, false)
+    run_cmd_result_with_writable_roots(cmd, writable_roots, timeout_ms, false, false)
         .await
         .expect("sandboxed command should execute")
 }
@@ -67,6 +67,7 @@ async fn run_cmd_result_with_writable_roots(
     writable_roots: &[PathBuf],
     timeout_ms: u64,
     use_bwrap_sandbox: bool,
+    network_access: bool,
 ) -> Result<codex_core::exec::ExecToolCallOutput> {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
@@ -89,7 +90,7 @@ async fn run_cmd_result_with_writable_roots(
             .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
             .collect(),
         read_only_access: Default::default(),
-        network_access: false,
+        network_access,
         // Exclude tmp-related folders from writable roots because we need a
         // folder that is writable by tests but that we intentionally disallow
         // writing to in the sandbox.
@@ -119,9 +120,6 @@ fn is_bwrap_unavailable_output(output: &codex_core::exec::ExecToolCallOutput) ->
             && (output.stderr.text.contains("Operation not permitted")
                 || output.stderr.text.contains("Permission denied")
                 || output.stderr.text.contains("Invalid argument")))
-        || (output.stderr.text.contains("loopback: Failed RTM_NEW")
-            && (output.stderr.text.contains("Operation not permitted")
-                || output.stderr.text.contains("Permission denied")))
 }
 
 async fn should_skip_bwrap_tests() -> bool {
@@ -129,6 +127,7 @@ async fn should_skip_bwrap_tests() -> bool {
         &["bash", "-lc", "true"],
         &[],
         NETWORK_TIMEOUT_MS,
+        true,
         true,
     )
     .await
@@ -179,7 +178,7 @@ async fn test_root_write() {
 #[tokio::test]
 async fn test_dev_null_write() {
     if should_skip_bwrap_tests().await {
-        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
         return;
     }
 
@@ -189,6 +188,7 @@ async fn test_dev_null_write() {
         // We have seen timeouts when running this test in CI on GitHub,
         // so we are using a generous timeout until we can diagnose further.
         LONG_TIMEOUT_MS,
+        true,
         true,
     )
     .await
@@ -200,7 +200,7 @@ async fn test_dev_null_write() {
 #[tokio::test]
 async fn bwrap_populates_minimal_dev_nodes() {
     if should_skip_bwrap_tests().await {
-        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
         return;
     }
 
@@ -213,6 +213,7 @@ async fn bwrap_populates_minimal_dev_nodes() {
         &[],
         LONG_TIMEOUT_MS,
         true,
+        true,
     )
     .await
     .expect("sandboxed command should execute");
@@ -223,7 +224,7 @@ async fn bwrap_populates_minimal_dev_nodes() {
 #[tokio::test]
 async fn bwrap_preserves_writable_dev_shm_bind_mount() {
     if should_skip_bwrap_tests().await {
-        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
         return;
     }
     if !std::path::Path::new("/dev/shm").exists() {
@@ -249,6 +250,7 @@ async fn bwrap_preserves_writable_dev_shm_bind_mount() {
         ],
         &[PathBuf::from("/dev/shm")],
         LONG_TIMEOUT_MS,
+        true,
         true,
     )
     .await
@@ -389,7 +391,7 @@ async fn sandbox_blocks_nc() {
 #[tokio::test]
 async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
     if should_skip_bwrap_tests().await {
-        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
         return;
     }
 
@@ -412,6 +414,7 @@ async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
             &[tmpdir.path().to_path_buf()],
             LONG_TIMEOUT_MS,
             true,
+            true,
         )
         .await,
         ".git write should be denied under bubblewrap",
@@ -427,6 +430,7 @@ async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
             &[tmpdir.path().to_path_buf()],
             LONG_TIMEOUT_MS,
             true,
+            true,
         )
         .await,
         ".codex write should be denied under bubblewrap",
@@ -438,7 +442,7 @@ async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
 #[tokio::test]
 async fn sandbox_blocks_codex_symlink_replacement_attack() {
     if should_skip_bwrap_tests().await {
-        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
         return;
     }
 
@@ -462,6 +466,7 @@ async fn sandbox_blocks_codex_symlink_replacement_attack() {
             ],
             &[tmpdir.path().to_path_buf()],
             LONG_TIMEOUT_MS,
+            true,
             true,
         )
         .await,
