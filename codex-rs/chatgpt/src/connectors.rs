@@ -464,6 +464,7 @@ const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
 ];
 const FIRST_PARTY_CHAT_DISALLOWED_CONNECTOR_IDS: &[&str] =
     &["connector_0f9c9d4592e54d0a9a12b3f44a1e2010"];
+const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
 fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
     filter_disallowed_connectors_for_originator(connectors, originator().value.as_str())
@@ -486,7 +487,9 @@ fn filter_disallowed_connectors_for_originator(
 }
 
 fn is_connector_allowed(connector: &AppInfo, disallowed_connector_ids: &[&str]) -> bool {
-    !disallowed_connector_ids.contains(&connector.id.as_str())
+    let connector_id = connector.id.as_str();
+    !connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX)
+        && !disallowed_connector_ids.contains(&connector_id)
 }
 
 #[cfg(test)]
@@ -533,20 +536,13 @@ mod tests {
     }
 
     #[test]
-    fn allows_openai_prefixed_connectors_when_not_explicitly_disallowed() {
+    fn filters_openai_prefixed_connectors() {
         let filtered = filter_disallowed_connectors(vec![
             app("connector_openai_foo"),
             app("connector_openai_bar"),
             app("gamma"),
         ]);
-        assert_eq!(
-            filtered,
-            vec![
-                app("connector_openai_foo"),
-                app("connector_openai_bar"),
-                app("gamma")
-            ]
-        );
+        assert_eq!(filtered, vec![app("gamma")]);
     }
 
     #[test]
@@ -559,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn first_party_chat_originator_filters_only_target_connector() {
+    fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
         let filtered = filter_disallowed_connectors_for_originator(
             vec![
                 app("connector_openai_foo"),
@@ -570,10 +566,7 @@ mod tests {
         );
         assert_eq!(
             filtered,
-            vec![
-                app("connector_openai_foo"),
-                app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
-            ]
+            vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c"),]
         );
     }
 
