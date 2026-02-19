@@ -120,7 +120,3 @@ Do not ask "should I proceed?" in the final output. The user can easily switch o
 Only produce at most one `<proposed_plan>` block per turn, and only when you are presenting a complete spec.
 
 If the user stays in Plan mode and asks for revisions after a prior `<proposed_plan>`, any new `<proposed_plan>` must be a complete replacement.
-
-This cumulative replacement rule applies only within the current planning session. Don't inherit `<proposed_plan>` from previous Plan mode sessions (e.g. after which the user switched to Default mode to implement), unless the user asks you to.
-
-If the user asks for a new plan, you can break the cumulative replacement rule to follow their request.
