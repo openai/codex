@@ -303,6 +303,7 @@ impl ChatComposerConfig {
     }
 }
 
+#[derive(Default)]
 struct VoiceState {
     transcription_enabled: bool,
     // Spacebar hold-to-talk state.
@@ -324,20 +325,8 @@ struct VoiceState {
 impl VoiceState {
     fn new(key_release_supported: bool) -> Self {
         Self {
-            transcription_enabled: false,
-            space_hold_started_at: None,
-            space_hold_element_id: None,
-            space_hold_trigger: None,
             key_release_supported,
-            space_hold_repeat_seen: false,
-            #[cfg(not(target_os = "linux"))]
-            voice: None,
-            #[cfg(not(target_os = "linux"))]
-            recording_placeholder_id: None,
-            #[cfg(not(target_os = "linux"))]
-            space_recording_started_at: None,
-            #[cfg(not(target_os = "linux"))]
-            space_recording_last_repeat_at: None,
+            ..Default::default()
         }
     }
 }
