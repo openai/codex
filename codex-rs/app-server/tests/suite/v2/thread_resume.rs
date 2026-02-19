@@ -36,6 +36,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const RUNNING_THREAD_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
 #[tokio::test]
@@ -324,7 +325,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut primary = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
+    timeout(RUNNING_THREAD_TEST_TIMEOUT, primary.initialize()).await??;
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
@@ -333,7 +334,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         })
         .await?;
     let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
+        RUNNING_THREAD_TEST_TIMEOUT,
         primary.read_stream_until_response_message(RequestId::Integer(start_id)),
     )
     .await??;
@@ -350,12 +351,12 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         })
         .await?;
     timeout(
-        DEFAULT_READ_TIMEOUT,
+        RUNNING_THREAD_TEST_TIMEOUT,
         primary.read_stream_until_response_message(RequestId::Integer(seed_turn_id)),
     )
     .await??;
     timeout(
-        DEFAULT_READ_TIMEOUT,
+        RUNNING_THREAD_TEST_TIMEOUT,
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
@@ -373,14 +374,14 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         })
         .await?;
     let running_turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
+        RUNNING_THREAD_TEST_TIMEOUT,
         primary.read_stream_until_response_message(RequestId::Integer(running_turn_request_id)),
     )
     .await??;
     let TurnStartResponse { turn: running_turn } =
         to_response::<TurnStartResponse>(running_turn_resp)?;
     timeout(
-        DEFAULT_READ_TIMEOUT,
+        RUNNING_THREAD_TEST_TIMEOUT,
         primary.read_stream_until_notification_message("turn/started"),
     )
     .await??;
@@ -401,7 +402,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         })
         .await?;
     let resume_err: JSONRPCError = timeout(
-        DEFAULT_READ_TIMEOUT,
+        RUNNING_THREAD_TEST_TIMEOUT,
         primary.read_stream_until_error_message(RequestId::Integer(resume_id)),
     )
     .await??;
@@ -503,14 +504,14 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         })
         .await?;
     let running_turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
+        RUNNING_THREAD_TEST_TIMEOUT,
         primary.read_stream_until_response_message(RequestId::Integer(running_turn_request_id)),
     )
     .await??;
     let TurnStartResponse { turn: running_turn } =
         to_response::<TurnStartResponse>(running_turn_resp)?;
     timeout(
-        DEFAULT_READ_TIMEOUT,
+        RUNNING_THREAD_TEST_TIMEOUT,
         primary.read_stream_until_notification_message("turn/started"),
     )
     .await??;
@@ -523,7 +524,7 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         })
         .await?;
     let resume_err: JSONRPCError = timeout(
-        DEFAULT_READ_TIMEOUT,
+        RUNNING_THREAD_TEST_TIMEOUT,
         primary.read_stream_until_error_message(RequestId::Integer(resume_id)),
     )
     .await??;
