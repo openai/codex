@@ -32,12 +32,14 @@ use codex_network_proxy::NetworkProxy;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::sandboxing::SandboxPermissions;
 
 mod async_watcher;
+mod detached_store;
 mod errors;
 mod head_tail_buffer;
 mod process;
@@ -47,6 +49,9 @@ pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
     process_manager::set_deterministic_process_ids_for_tests(enabled);
 }
 
+pub use detached_store::DetachedProcessSummary;
+pub(crate) use detached_store::DetachedUnifiedExecStore;
+pub use detached_store::ReattachSummary;
 pub(crate) use errors::UnifiedExecError;
 pub(crate) use process::UnifiedExecProcess;
 
@@ -139,7 +144,7 @@ impl Default for UnifiedExecProcessManager {
     }
 }
 
-struct ProcessEntry {
+pub(crate) struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
     call_id: String,
     process_id: String,
@@ -148,6 +153,12 @@ struct ProcessEntry {
     network_attempt_id: Option<String>,
     session: Weak<Session>,
     last_used: tokio::time::Instant,
+    // Session-bound watcher tasks.
+    // - `stream_task` and `network_task` are aborted on detach.
+    // - `exit_task` is retained while detached, then aborted on reattach/cleanup.
+    stream_task: Option<JoinHandle<()>>,
+    exit_task: Option<JoinHandle<()>>,
+    network_task: Option<JoinHandle<()>>,
 }
 
 pub(crate) fn clamp_yield_time(yield_time_ms: u64) -> u64 {
@@ -486,6 +497,68 @@ mod tests {
                 .processes
                 .is_empty()
         );
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn export_import_keeps_process_alive_and_stable_process_id() -> anyhow::Result<()> {
+        skip_if_sandbox!(Ok(()));
+
+        let (session, turn) = test_session_and_turn().await;
+
+        let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
+        let process_id = open_shell.process_id.clone().expect("expected process id");
+
+        let mut detached = session
+            .services
+            .unified_exec_manager
+            .export_processes()
+            .await;
+        assert_eq!(detached.len(), 1);
+        let detached_entry = detached.pop().expect("expected detached entry");
+        assert_eq!(detached_entry.process_id, process_id);
+        assert_eq!(detached_entry.network_attempt_id, None);
+
+        let err = write_stdin(&session, process_id.as_str(), "", 100)
+            .await
+            .expect_err("detached process should be unavailable in old manager");
+        match err {
+            UnifiedExecError::UnknownProcessId { process_id: err_id } => {
+                assert_eq!(err_id, process_id);
+            }
+            other => panic!("expected UnknownProcessId, got {other:?}"),
+        }
+
+        detached_entry
+            .process
+            .writer_sender()
+            .send(b"echo detached-alive\n".to_vec())
+            .await
+            .expect("writer channel should be available while detached");
+
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        let mut skipped_entries = Vec::new();
+        let import = session
+            .services
+            .unified_exec_manager
+            .import_processes(vec![detached_entry], &mut skipped_entries)
+            .await;
+        assert_eq!(import.reattached_count, 1);
+        assert_eq!(import.skipped_count, 0);
+        assert!(import.skipped_process_ids.is_empty());
+        assert!(skipped_entries.is_empty());
+
+        let resumed = write_stdin(&session, process_id.as_str(), "", 2_500).await?;
+        assert!(resumed.output.contains("detached-alive"));
+
+        write_stdin(&session, process_id.as_str(), "exit\n", 2_500).await?;
+        session
+            .services
+            .unified_exec_manager
+            .terminate_all_processes()
+            .await;
 
         Ok(())
     }
