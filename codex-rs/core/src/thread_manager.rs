@@ -230,12 +230,11 @@ impl ThreadManager {
 
     pub async fn list_models(
         &self,
-        config: &Config,
         refresh_strategy: crate::models_manager::manager::RefreshStrategy,
     ) -> Vec<ModelPreset> {
         self.state
             .models_manager
-            .list_models(config, refresh_strategy)
+            .list_models(refresh_strategy)
             .await
     }
 
@@ -492,7 +491,7 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
-        self.file_watcher.register_config(&config);
+        let watch_registration = self.file_watcher.register_config(&config);
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
@@ -508,13 +507,15 @@ impl ThreadManagerState {
             persist_extended_history,
         )
         .await?;
-        self.finalize_thread_spawn(codex, thread_id).await
+        self.finalize_thread_spawn(codex, thread_id, watch_registration)
+            .await
     }
 
     async fn finalize_thread_spawn(
         &self,
         codex: Codex,
         thread_id: ThreadId,
+        watch_registration: crate::file_watcher::WatchRegistration,
     ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
         let session_configured = match event {
@@ -530,6 +531,7 @@ impl ThreadManagerState {
         let thread = Arc::new(CodexThread::new(
             codex,
             session_configured.rollout_path.clone(),
+            watch_registration,
         ));
         let mut threads = self.threads.write().await;
         threads.insert(thread_id, thread.clone());

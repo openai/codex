@@ -21,6 +21,7 @@ pub use codex_thread::ThreadConfigSnapshot;
 mod agent;
 mod codex_delegate;
 mod command_canonicalization;
+mod commit_attribution;
 pub mod config;
 pub mod config_loader;
 pub mod connectors;
@@ -108,6 +109,7 @@ pub mod terminal;
 mod tools;
 pub mod turn_diff_tracker;
 mod turn_metadata;
+mod zsh_exec_bridge;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;
@@ -151,6 +153,7 @@ pub use file_watcher::FileWatcherEvent;
 pub use safety::get_platform_sandbox;
 pub use tools::spec::parse_tool_input_schema;
 pub use turn_metadata::build_turn_metadata_header;
+pub use zsh_exec_bridge::maybe_run_zsh_exec_wrapper_mode;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.
 pub use codex_protocol::protocol;

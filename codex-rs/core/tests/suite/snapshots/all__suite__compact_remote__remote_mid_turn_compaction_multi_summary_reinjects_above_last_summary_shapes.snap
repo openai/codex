@@ -1,0 +1,21 @@
+---
+source: core/tests/suite/compact_remote.rs
+expression: "format_labeled_requests_snapshot(\"Remote mid-turn compaction after an earlier summary compaction: the older summary remains in model-visible history and round-trips into the next compact request.\",\n&[(\"Second Turn Request (Before Mid-Turn Compaction)\", &requests[1]),\n(\"Remote Compaction Request\", &compact_request),])"
+---
+Scenario: Remote mid-turn compaction after an earlier summary compaction: the older summary remains in model-visible history and round-trips into the next compact request.
+
+## Second Turn Request (Before Mid-Turn Compaction)
+00:message/user:USER_ONE
+01:message/user:<COMPACTION_SUMMARY>\nREMOTE_OLDER_SUMMARY
+02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+03:message/user:<AGENTS_MD>
+04:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+05:message/user:<COMPACTION_SUMMARY>\nREMOTE_LATEST_SUMMARY
+06:message/user:USER_TWO
+
+## Remote Compaction Request
+00:message/user:USER_ONE
+01:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/user:<AGENTS_MD>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+04:message/user:<COMPACTION_SUMMARY>\nREMOTE_OLDER_SUMMARY

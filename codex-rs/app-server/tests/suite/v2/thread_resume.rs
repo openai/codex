@@ -14,6 +14,7 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
@@ -129,6 +130,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);
+    assert_eq!(thread.status, ThreadStatus::Idle);
 
     assert_eq!(
         thread.turns.len(),
@@ -178,6 +180,7 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
     let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
     assert_eq!(thread.updated_at, rollout.expected_updated_at);
+    assert_eq!(thread.status, ThreadStatus::Idle);
 
     let after_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
     assert_eq!(after_modified, rollout.before_modified);
@@ -283,11 +286,16 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    timeout(
+    let resume_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         secondary.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
+    let ThreadResumeResponse {
+        thread: resumed_thread,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_ne!(resumed_thread.status, ThreadStatus::NotLoaded);
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -582,8 +590,15 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
         primary.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let ThreadResumeResponse { model, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    let ThreadResumeResponse { thread, model, .. } =
+        to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(model, "gpt-5.1-codex-max");
+    assert_eq!(
+        thread.status,
+        ThreadStatus::Active {
+            active_flags: vec![],
+        }
+    );
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -630,6 +645,7 @@ async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Re
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
     assert_eq!(resumed_thread.updated_at, expected_updated_at);
+    assert_eq!(resumed_thread.status, ThreadStatus::Idle);
 
     let after_resume_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
     assert_eq!(after_resume_modified, before_modified);
@@ -761,6 +777,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(resumed.id, thread.id);
     assert_eq!(resumed.path, thread.path);
+    assert_eq!(resumed.status, ThreadStatus::Idle);
 
     Ok(())
 }
@@ -809,6 +826,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     assert!(!resumed.id.is_empty());
     assert_eq!(model_provider, "mock_provider");
     assert_eq!(resumed.preview, history_text);
+    assert_eq!(resumed.status, ThreadStatus::Idle);
 
     Ok(())
 }
@@ -951,6 +969,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     )
     .await??;
     let resume: ThreadResumeResponse = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(resume.thread.status, ThreadStatus::Idle);
 
     let turn_id = secondary
         .send_turn_start_request(TurnStartParams {
@@ -1008,7 +1027,6 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 [features]
-remote_models = false
 personality = true
 
 [model_providers.mock_provider]
@@ -1038,7 +1056,6 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 [features]
-remote_models = false
 personality = true
 
 [model_providers.mock_provider]
