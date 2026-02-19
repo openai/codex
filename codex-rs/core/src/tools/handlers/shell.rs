@@ -13,7 +13,6 @@ use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
-use crate::sandboxing::normalize_additional_permissions;
 use crate::shell::Shell;
 use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ToolInvocation;
@@ -22,14 +21,15 @@ use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
-use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::approval_requirement_for_sandbox_permissions;
 use codex_protocol::models::AdditionalPermissions;
 
 pub struct ShellHandler;
@@ -294,55 +294,14 @@ impl ShellHandler {
         }
 
         let request_permission_enabled = session.features().enabled(Feature::RequestPermission);
-        if !request_permission_enabled
-            && (exec_params
-                .sandbox_permissions
-                .uses_additional_permissions()
-                || additional_permissions.is_some())
-        {
-            return Err(FunctionCallError::RespondToModel(
-                "additional permissions are disabled; enable `features.request_permission` before using `with_additional_permissions`"
-                    .to_string(),
-            ));
-        }
-
-        let normalized_additional_permissions = if exec_params
-            .sandbox_permissions
-            .uses_additional_permissions()
-        {
-            if !matches!(
-                turn.approval_policy,
-                codex_protocol::protocol::AskForApproval::OnRequest
-            ) {
-                let approval_policy = turn.approval_policy;
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "approval policy is {approval_policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest"
-                )));
-            }
-            let Some(additional_permissions) = additional_permissions else {
-                return Err(FunctionCallError::RespondToModel(
-                    "missing `additional_permissions`; provide `fs_read` and/or `fs_write` when using `with_additional_permissions`"
-                        .to_string(),
-                ));
-            };
-            let normalized =
-                normalize_additional_permissions(additional_permissions, &exec_params.cwd)
-                    .map_err(FunctionCallError::RespondToModel)?;
-            if normalized.is_empty() {
-                return Err(FunctionCallError::RespondToModel(
-                    "`additional_permissions` must include at least one path in `fs_read` or `fs_write`"
-                        .to_string(),
-                ));
-            }
-            Some(normalized)
-        } else if additional_permissions.is_some() {
-            return Err(FunctionCallError::RespondToModel(
-                "`additional_permissions` requires `sandbox_permissions` set to `with_additional_permissions`"
-                    .to_string(),
-            ));
-        } else {
-            None
-        };
+        let normalized_additional_permissions = normalize_and_validate_additional_permissions(
+            request_permission_enabled,
+            turn.approval_policy,
+            exec_params.sandbox_permissions,
+            additional_permissions,
+            &exec_params.cwd,
+        )
+        .map_err(FunctionCallError::RespondToModel)?;
 
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
@@ -396,28 +355,11 @@ impl ShellHandler {
                 prefix_rule,
             })
             .await;
-        let exec_approval_requirement = if exec_params
-            .sandbox_permissions
-            .uses_additional_permissions()
-        {
-            match exec_approval_requirement {
-                ExecApprovalRequirement::Forbidden { reason } => {
-                    ExecApprovalRequirement::Forbidden { reason }
-                }
-                ExecApprovalRequirement::NeedsApproval { reason, .. } => {
-                    ExecApprovalRequirement::NeedsApproval {
-                        reason,
-                        proposed_execpolicy_amendment: None,
-                    }
-                }
-                ExecApprovalRequirement::Skip { .. } => ExecApprovalRequirement::NeedsApproval {
-                    reason: exec_params.justification.clone(),
-                    proposed_execpolicy_amendment: None,
-                },
-            }
-        } else {
-            exec_approval_requirement
-        };
+        let exec_approval_requirement = approval_requirement_for_sandbox_permissions(
+            exec_params.sandbox_permissions,
+            exec_approval_requirement,
+            exec_params.justification.clone(),
+        );
 
         let req = ShellRequest {
             command: exec_params.command.clone(),

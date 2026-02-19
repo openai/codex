@@ -24,8 +24,8 @@ use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
-use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::approval_requirement_for_sandbox_permissions;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::formatted_truncate_text;
@@ -583,26 +583,11 @@ impl UnifiedExecProcessManager {
                 prefix_rule: request.prefix_rule.clone(),
             })
             .await;
-        let exec_approval_requirement = if request.sandbox_permissions.uses_additional_permissions()
-        {
-            match exec_approval_requirement {
-                ExecApprovalRequirement::Forbidden { reason } => {
-                    ExecApprovalRequirement::Forbidden { reason }
-                }
-                ExecApprovalRequirement::NeedsApproval { reason, .. } => {
-                    ExecApprovalRequirement::NeedsApproval {
-                        reason,
-                        proposed_execpolicy_amendment: None,
-                    }
-                }
-                ExecApprovalRequirement::Skip { .. } => ExecApprovalRequirement::NeedsApproval {
-                    reason: request.justification.clone(),
-                    proposed_execpolicy_amendment: None,
-                },
-            }
-        } else {
-            exec_approval_requirement
-        };
+        let exec_approval_requirement = approval_requirement_for_sandbox_permissions(
+            request.sandbox_permissions,
+            exec_approval_requirement,
+            request.justification.clone(),
+        );
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             cwd,

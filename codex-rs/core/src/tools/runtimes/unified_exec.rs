@@ -26,6 +26,7 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
@@ -138,20 +139,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
-        if req.sandbox_permissions.requires_escalated_permissions()
-            || (!req.sandbox_permissions.uses_additional_permissions()
-                && matches!(
-                    req.exec_approval_requirement,
-                    ExecApprovalRequirement::Skip {
-                        bypass_sandbox: true,
-                        ..
-                    }
-                ))
-        {
-            SandboxOverride::BypassSandboxFirstAttempt
-        } else {
-            SandboxOverride::NoOverride
-        }
+        sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
     }
 }
 

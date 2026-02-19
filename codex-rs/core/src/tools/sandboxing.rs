@@ -10,6 +10,7 @@ use crate::error::CodexErr;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
+use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::SandboxTransformError;
 use crate::state::SessionServices;
 use crate::tools::network_approval::NetworkApprovalSpec;
@@ -194,10 +195,56 @@ pub(crate) fn default_exec_approval_requirement(
     }
 }
 
+pub(crate) fn approval_requirement_for_sandbox_permissions(
+    sandbox_permissions: SandboxPermissions,
+    exec_approval_requirement: ExecApprovalRequirement,
+    justification: Option<String>,
+) -> ExecApprovalRequirement {
+    if !sandbox_permissions.uses_additional_permissions() {
+        return exec_approval_requirement;
+    }
+
+    match exec_approval_requirement {
+        ExecApprovalRequirement::Forbidden { reason } => {
+            ExecApprovalRequirement::Forbidden { reason }
+        }
+        ExecApprovalRequirement::NeedsApproval { reason, .. } => {
+            ExecApprovalRequirement::NeedsApproval {
+                reason,
+                proposed_execpolicy_amendment: None,
+            }
+        }
+        ExecApprovalRequirement::Skip { .. } => ExecApprovalRequirement::NeedsApproval {
+            reason: justification,
+            proposed_execpolicy_amendment: None,
+        },
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SandboxOverride {
     NoOverride,
     BypassSandboxFirstAttempt,
+}
+
+pub(crate) fn sandbox_override_for_first_attempt(
+    sandbox_permissions: SandboxPermissions,
+    exec_approval_requirement: &ExecApprovalRequirement,
+) -> SandboxOverride {
+    if sandbox_permissions.requires_escalated_permissions()
+        || (!sandbox_permissions.uses_additional_permissions()
+            && matches!(
+                exec_approval_requirement,
+                ExecApprovalRequirement::Skip {
+                    bypass_sandbox: true,
+                    ..
+                }
+            ))
+    {
+        SandboxOverride::BypassSandboxFirstAttempt
+    } else {
+        SandboxOverride::NoOverride
+    }
 }
 
 pub(crate) trait Approvable<Req> {
@@ -328,6 +375,7 @@ impl<'a> SandboxAttempt<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandboxing::SandboxPermissions;
     use codex_protocol::protocol::NetworkAccess;
     use codex_protocol::protocol::RejectConfig;
     use pretty_assertions::assert_eq;
@@ -398,6 +446,41 @@ mod tests {
                 reason: None,
                 proposed_execpolicy_amendment: None,
             }
+        );
+    }
+
+    #[test]
+    fn additional_permissions_force_needs_approval() {
+        assert_eq!(
+            approval_requirement_for_sandbox_permissions(
+                SandboxPermissions::WithAdditionalPermissions,
+                ExecApprovalRequirement::Skip {
+                    bypass_sandbox: true,
+                    proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                        "git".to_string(),
+                        "status".to_string(),
+                    ])),
+                },
+                Some("need file access".to_string()),
+            ),
+            ExecApprovalRequirement::NeedsApproval {
+                reason: Some("need file access".to_string()),
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[test]
+    fn additional_permissions_do_not_bypass_sandbox_first_attempt() {
+        assert_eq!(
+            sandbox_override_for_first_attempt(
+                SandboxPermissions::WithAdditionalPermissions,
+                &ExecApprovalRequirement::Skip {
+                    bypass_sandbox: true,
+                    proposed_execpolicy_amendment: None,
+                },
+            ),
+            SandboxOverride::NoOverride
         );
     }
 }

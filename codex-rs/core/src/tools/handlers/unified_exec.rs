@@ -4,7 +4,6 @@ use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
 use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
-use crate::sandboxing::normalize_additional_permissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::skills::maybe_emit_implicit_skill_invocation;
@@ -12,6 +11,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -166,16 +166,6 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let request_permission_enabled =
                     session.features().enabled(Feature::RequestPermission);
-                if !request_permission_enabled
-                    && (sandbox_permissions.uses_additional_permissions()
-                        || additional_permissions.is_some())
-                {
-                    manager.release_process_id(&process_id).await;
-                    return Err(FunctionCallError::RespondToModel(
-                        "additional permissions are disabled; enable `features.request_permission` before using `with_additional_permissions`"
-                            .to_string(),
-                    ));
-                }
 
                 if sandbox_permissions.requires_escalated_permissions()
                     && !matches!(
@@ -194,51 +184,20 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
-                let normalized_additional_permissions = if sandbox_permissions
-                    .uses_additional_permissions()
-                {
-                    if !matches!(
+                let normalized_additional_permissions =
+                    match normalize_and_validate_additional_permissions(
+                        request_permission_enabled,
                         context.turn.approval_policy,
-                        codex_protocol::protocol::AskForApproval::OnRequest
+                        sandbox_permissions,
+                        additional_permissions,
+                        &cwd,
                     ) {
-                        let approval_policy = context.turn.approval_policy;
-                        manager.release_process_id(&process_id).await;
-                        return Err(FunctionCallError::RespondToModel(format!(
-                            "approval policy is {approval_policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest"
-                        )));
-                    }
-                    let Some(additional_permissions) = additional_permissions else {
-                        manager.release_process_id(&process_id).await;
-                        return Err(FunctionCallError::RespondToModel(
-                            "missing `additional_permissions`; provide `fs_read` and/or `fs_write` when using `with_additional_permissions`"
-                                .to_string(),
-                        ));
+                        Ok(normalized) => normalized,
+                        Err(err) => {
+                            manager.release_process_id(&process_id).await;
+                            return Err(FunctionCallError::RespondToModel(err));
+                        }
                     };
-                    let normalized =
-                        match normalize_additional_permissions(additional_permissions, &cwd) {
-                            Ok(normalized) => normalized,
-                            Err(err) => {
-                                manager.release_process_id(&process_id).await;
-                                return Err(FunctionCallError::RespondToModel(err));
-                            }
-                        };
-                    if normalized.is_empty() {
-                        manager.release_process_id(&process_id).await;
-                        return Err(FunctionCallError::RespondToModel(
-                            "`additional_permissions` must include at least one path in `fs_read` or `fs_write`"
-                                .to_string(),
-                        ));
-                    }
-                    Some(normalized)
-                } else if additional_permissions.is_some() {
-                    manager.release_process_id(&process_id).await;
-                    return Err(FunctionCallError::RespondToModel(
-                        "`additional_permissions` requires `sandbox_permissions` set to `with_additional_permissions`"
-                            .to_string(),
-                    ));
-                } else {
-                    None
-                };
 
                 if let Some(output) = intercept_apply_patch(
                     &command,

@@ -25,6 +25,7 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use crate::zsh_exec_bridge::ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR;
 use codex_network_proxy::NetworkProxy;
@@ -135,20 +136,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
-        if req.sandbox_permissions.requires_escalated_permissions()
-            || (!req.sandbox_permissions.uses_additional_permissions()
-                && matches!(
-                    req.exec_approval_requirement,
-                    ExecApprovalRequirement::Skip {
-                        bypass_sandbox: true,
-                        ..
-                    }
-                ))
-        {
-            SandboxOverride::BypassSandboxFirstAttempt
-        } else {
-            SandboxOverride::NoOverride
-        }
+        sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
     }
 }
 
