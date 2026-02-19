@@ -660,10 +660,7 @@ impl TurnContext {
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
     }
 
-    pub(crate) fn to_turn_context_item(
-        &self,
-        collaboration_mode: CollaborationMode,
-    ) -> TurnContextItem {
+    pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             cwd: self.cwd.clone(),
@@ -672,7 +669,7 @@ impl TurnContext {
             network: self.turn_context_network_item(),
             model: self.model_info.slug.clone(),
             personality: self.personality,
-            collaboration_mode: Some(collaboration_mode),
+            collaboration_mode: Some(self.collaboration_mode.clone()),
             effort: self.reasoning_effort,
             summary: self.reasoning_summary,
             user_instructions: self.user_instructions.clone(),
@@ -1993,11 +1990,6 @@ impl Session {
             .await
     }
 
-    pub(crate) async fn current_collaboration_mode(&self) -> CollaborationMode {
-        let state = self.state.lock().await;
-        state.session_configuration.collaboration_mode.clone()
-    }
-
     pub(crate) fn is_model_switch_developer_message(item: &ResponseItem) -> bool {
         let ResponseItem::Message { role, content, .. } = item else {
             return false;
@@ -3132,11 +3124,8 @@ impl Session {
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
     // Seed with context in case there is an OverrideTurnContext first.
     let initial_context = sess.new_default_turn().await;
-    let initial_collaboration_mode = initial_context.collaboration_mode.clone();
-    sess.set_previous_context_item(Some(
-        initial_context.to_turn_context_item(initial_collaboration_mode),
-    ))
-    .await;
+    sess.set_previous_context_item(Some(initial_context.to_turn_context_item()))
+        .await;
 
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
@@ -3446,11 +3435,8 @@ mod handlers {
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
             sess.spawn_task(Arc::clone(&current_context), items, regular_task)
                 .await;
-            let collaboration_mode = current_context.collaboration_mode.clone();
-            sess.set_previous_context_item(Some(
-                current_context.to_turn_context_item(collaboration_mode),
-            ))
-            .await;
+            sess.set_previous_context_item(Some(current_context.to_turn_context_item()))
+                .await;
         }
     }
 
@@ -3479,8 +3465,7 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
-        let collaboration_mode = turn_context.collaboration_mode.clone();
-        sess.set_previous_context_item(Some(turn_context.to_turn_context_item(collaboration_mode)))
+        sess.set_previous_context_item(Some(turn_context.to_turn_context_item()))
             .await;
     }
 
@@ -5467,9 +5452,7 @@ async fn try_run_sampling_request(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    let collaboration_mode = sess.current_collaboration_mode().await;
-    let rollout_item =
-        RolloutItem::TurnContext(turn_context.to_turn_context_item(collaboration_mode));
+    let rollout_item = RolloutItem::TurnContext(turn_context.to_turn_context_item());
 
     feedback_tags!(
         model = turn_context.model_info.slug.clone(),
@@ -7736,9 +7719,7 @@ mod tests {
         .expect("rebuild config layer stack with network requirements");
         current_context.config = Arc::new(config);
 
-        let previous_collaboration_mode = previous_context.collaboration_mode.clone();
-        let previous_context_item =
-            previous_context.to_turn_context_item(previous_collaboration_mode);
+        let previous_context_item = previous_context.to_turn_context_item();
         let update_items = session.build_settings_update_items(
             Some(&previous_context_item),
             None,
