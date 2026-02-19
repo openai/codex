@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
@@ -127,6 +128,7 @@ fn run_setup_refresh_inner(
         command_cwd: command_cwd.to_path_buf(),
         read_roots,
         write_roots,
+        proxy_ports: proxy_ports_from_env(env_map),
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         refresh_only: true,
     };
@@ -173,6 +175,8 @@ pub struct SetupMarker {
     pub online_username: String,
     #[serde(default)]
     pub created_at: Option<String>,
+    #[serde(default)]
+    pub proxy_ports: Vec<u16>,
 }
 
 impl SetupMarker {
@@ -305,9 +309,57 @@ struct ElevationPayload {
     command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
+    #[serde(default)]
+    proxy_ports: Vec<u16>,
     real_user: String,
     #[serde(default)]
     refresh_only: bool,
+}
+
+const PROXY_ENV_KEYS: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "WS_PROXY",
+    "WSS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "ws_proxy",
+    "wss_proxy",
+];
+
+pub(crate) fn proxy_ports_from_env(env_map: &HashMap<String, String>) -> Vec<u16> {
+    let mut ports = BTreeSet::new();
+    for key in PROXY_ENV_KEYS {
+        if let Some(value) = env_map.get(*key) {
+            if let Some(port) = loopback_proxy_port_from_url(value) {
+                ports.insert(port);
+            }
+        }
+    }
+    ports.into_iter().collect()
+}
+
+fn loopback_proxy_port_from_url(url: &str) -> Option<u16> {
+    let authority = url.trim().split_once("://")?.1.split('/').next()?;
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, hp)| hp);
+
+    if let Some(host) = host_port.strip_prefix('[') {
+        let (host, rest) = host.split_once(']')?;
+        if host != "::1" {
+            return None;
+        }
+        let port = rest.strip_prefix(':')?.parse::<u16>().ok()?;
+        return (port != 0).then_some(port);
+    }
+
+    let (host, port) = host_port.rsplit_once(':')?;
+    if !(host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1") {
+        return None;
+    }
+    let port = port.parse::<u16>().ok()?;
+    (port != 0).then_some(port)
 }
 
 fn quote_arg(arg: &str) -> String {
@@ -522,6 +574,7 @@ pub fn run_elevated_setup(
         command_cwd: command_cwd.to_path_buf(),
         read_roots,
         write_roots,
+        proxy_ports: proxy_ports_from_env(env_map),
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         refresh_only: false,
     };
@@ -577,4 +630,57 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
             && !key.starts_with(&secrets_dir_prefix)
     });
     roots
+}
+
+#[cfg(test)]
+mod tests {
+    use super::loopback_proxy_port_from_url;
+    use super::proxy_ports_from_env;
+    use std::collections::HashMap;
+
+    #[test]
+    fn loopback_proxy_url_parsing_supports_common_forms() {
+        assert_eq!(
+            loopback_proxy_port_from_url("http://localhost:3128"),
+            Some(3128)
+        );
+        assert_eq!(
+            loopback_proxy_port_from_url("https://127.0.0.1:8080"),
+            Some(8080)
+        );
+        assert_eq!(
+            loopback_proxy_port_from_url("socks5h://user:pass@[::1]:1080"),
+            Some(1080)
+        );
+    }
+
+    #[test]
+    fn loopback_proxy_url_parsing_rejects_non_loopback_and_zero_port() {
+        assert_eq!(
+            loopback_proxy_port_from_url("http://example.com:3128"),
+            None
+        );
+        assert_eq!(loopback_proxy_port_from_url("http://127.0.0.1:0"), None);
+        assert_eq!(loopback_proxy_port_from_url("localhost:8080"), None);
+    }
+
+    #[test]
+    fn proxy_ports_from_env_dedupes_and_sorts() {
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:8080".to_string(),
+        );
+        env.insert(
+            "http_proxy".to_string(),
+            "http://localhost:8080".to_string(),
+        );
+        env.insert("ALL_PROXY".to_string(), "socks5h://[::1]:1081".to_string());
+        env.insert(
+            "HTTPS_PROXY".to_string(),
+            "https://example.com:9999".to_string(),
+        );
+
+        assert_eq!(proxy_ports_from_env(&env), vec![1081, 8080]);
+    }
 }

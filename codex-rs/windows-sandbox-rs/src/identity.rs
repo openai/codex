@@ -3,6 +3,7 @@ use crate::logging::debug_log;
 use crate::policy::SandboxPolicy;
 use crate::setup::gather_read_roots;
 use crate::setup::gather_write_roots;
+use crate::setup::proxy_ports_from_env;
 use crate::setup::run_elevated_setup;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
@@ -132,15 +133,16 @@ pub fn require_logon_sandbox_creds(
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
     let needed_read = gather_read_roots(command_cwd, policy);
     let needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
+    let desired_proxy_ports = proxy_ports_from_env(env_map);
     // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
     // granting the sandbox group access to this directory without granting the capability SID.
     let mut setup_reason: Option<String> = None;
-    let mut _existing_marker: Option<SetupMarker> = None;
+    let mut existing_marker: Option<SetupMarker> = None;
 
     let mut identity = match load_marker(codex_home)? {
         Some(marker) if marker.version_matches() => {
-            _existing_marker = Some(marker.clone());
+            existing_marker = Some(marker.clone());
             let selected = select_identity(policy, codex_home)?;
             if selected.is_none() {
                 setup_reason =
@@ -153,6 +155,15 @@ pub fn require_logon_sandbox_creds(
             None
         }
     };
+    if let (Some(marker), Some(_)) = (&existing_marker, &identity) {
+        if marker.proxy_ports != desired_proxy_ports {
+            setup_reason = Some(format!(
+                "sandbox proxy allowlist changed (stored={:?}, desired={:?})",
+                marker.proxy_ports, desired_proxy_ports
+            ));
+            identity = None;
+        }
+    }
 
     if identity.is_none() {
         if let Some(reason) = &setup_reason {
