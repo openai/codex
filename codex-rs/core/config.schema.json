@@ -15,7 +15,7 @@
               "$ref": "#/definitions/AbsolutePathBuf"
             }
           ],
-          "description": "Path to a role-specific config layer."
+          "description": "Path to a role-specific config layer. Relative paths are resolved relative to the `config.toml` that defines them."
         },
         "description": {
           "description": "Human-facing role documentation used in spawn tool guidance.",
@@ -330,6 +330,13 @@
         },
         "include_apply_patch_tool": {
           "type": "boolean"
+        },
+        "js_repl_node_module_dirs": {
+          "description": "Ordered list of directories to search for Node modules in `js_repl`.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
         },
         "js_repl_node_path": {
           "$ref": "#/definitions/AbsolutePathBuf"
@@ -1178,7 +1185,7 @@
         },
         "status_line": {
           "default": null,
-          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line.",
+          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line. When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and `current-dir`.",
           "items": {
             "type": "string"
           },
@@ -1517,6 +1524,13 @@
     "instructions": {
       "description": "System instructions.",
       "type": "string"
+    },
+    "js_repl_node_module_dirs": {
+      "description": "Ordered list of directories to search for Node modules in `js_repl`.",
+      "items": {
+        "$ref": "#/definitions/AbsolutePathBuf"
+      },
+      "type": "array"
     },
     "js_repl_node_path": {
       "allOf": [

@@ -454,7 +454,6 @@ fn normalize_connector_value(value: Option<&str>) -> Option<String> {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_openai_connectors() {
+    fn filters_openai_prefixed_connectors() {
         let filtered = filter_disallowed_connectors(vec![
             app("connector_openai_foo"),
             app("connector_openai_bar"),

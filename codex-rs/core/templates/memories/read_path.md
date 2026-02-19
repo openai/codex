@@ -45,15 +45,6 @@ accordingly.
 should revise the files accordingly. Usually you should directly update
 memory_summary.md (such as general tips and user profile section) and MEMORY.md.
 
-Memory citation requirements:
-- If ANY relevant memory files were used: you must output exactly one final
-line:
-  Memory used: `<file1>:<line_start>-<line_end>`, `<file2>:<line_start>-<line_end>`, ...
-  - Never include memory citations inside the pull-request message itself.
-  - Never cite blank lines; double-check ranges.
-  - Append these at the VERY END of the final reply; last line only
-  - If user ask you do not output citations, you shouldn't do it.
-
 ========= MEMORY_SUMMARY BEGINS =========
 {{ memory_summary }}
 ========= MEMORY_SUMMARY ENDS =========

@@ -62,6 +62,7 @@ mod message_processor;
 mod models;
 mod outgoing_message;
 mod thread_state;
+mod thread_status;
 mod transport;
 
 pub use crate::transport::AppServerTransport;
@@ -550,14 +551,12 @@ pub async fn run_main_with_transport(
                                         connection_state.session.initialized.then_some(*connection_id)
                                     })
                                     .collect();
-                                if !initialized_connection_ids.is_empty() {
-                                    processor
-                                        .try_attach_thread_listener(
-                                            thread_id,
-                                            initialized_connection_ids,
-                                        )
-                                        .await;
-                                }
+                                processor
+                                    .try_attach_thread_listener(
+                                        thread_id,
+                                        initialized_connection_ids,
+                                    )
+                                    .await;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                                 // TODO(jif) handle lag.

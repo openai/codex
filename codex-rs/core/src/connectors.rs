@@ -20,6 +20,8 @@ use crate::CodexAuth;
 use crate::SandboxState;
 use crate::config::Config;
 use crate::config::types::AppsConfigToml;
+use crate::default_client::is_first_party_chat_originator;
+use crate::default_client::originator;
 use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
@@ -356,26 +358,39 @@ const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
     "connector_68e004f14af881919eb50893d3d9f523",
     "connector_69272cb413a081919685ec3c88d1744e",
 ];
+const FIRST_PARTY_CHAT_DISALLOWED_CONNECTOR_IDS: &[&str] =
+    &["connector_0f9c9d4592e54d0a9a12b3f44a1e2010"];
 const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
 pub fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
-    connectors
-        .into_iter()
-        .filter(is_connector_allowed)
-        .collect()
+    filter_disallowed_connectors_for_originator(connectors, originator().value.as_str())
 }
 
 pub(crate) fn is_connector_id_allowed(connector_id: &str) -> bool {
-    if connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX)
-        || DISALLOWED_CONNECTOR_IDS.contains(&connector_id)
-    {
-        return false;
-    }
-    true
+    is_connector_id_allowed_for_originator(connector_id, originator().value.as_str())
 }
 
-fn is_connector_allowed(connector: &AppInfo) -> bool {
-    is_connector_id_allowed(connector.id.as_str())
+fn filter_disallowed_connectors_for_originator(
+    connectors: Vec<AppInfo>,
+    originator_value: &str,
+) -> Vec<AppInfo> {
+    connectors
+        .into_iter()
+        .filter(|connector| {
+            is_connector_id_allowed_for_originator(connector.id.as_str(), originator_value)
+        })
+        .collect()
+}
+
+fn is_connector_id_allowed_for_originator(connector_id: &str, originator_value: &str) -> bool {
+    let disallowed_connector_ids = if is_first_party_chat_originator(originator_value) {
+        FIRST_PARTY_CHAT_DISALLOWED_CONNECTOR_IDS
+    } else {
+        DISALLOWED_CONNECTOR_IDS
+    };
+
+    !connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX)
+        && !disallowed_connector_ids.contains(&connector_id)
 }
 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
@@ -504,5 +519,21 @@ mod tests {
             app("delta"),
         ]);
         assert_eq!(filtered, vec![app("delta")]);
+    }
+
+    #[test]
+    fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
+        let filtered = filter_disallowed_connectors_for_originator(
+            vec![
+                app("connector_openai_foo"),
+                app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
+                app("connector_0f9c9d4592e54d0a9a12b3f44a1e2010"),
+            ],
+            "codex_atlas",
+        );
+        assert_eq!(
+            filtered,
+            vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c"),]
+        );
     }
 }

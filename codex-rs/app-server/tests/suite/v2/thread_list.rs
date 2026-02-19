@@ -2,6 +2,8 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_fake_rollout_with_source;
+use app_test_support::create_final_assistant_message_sse_response;
+use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::DateTime;
@@ -14,6 +16,12 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::UserInput;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
@@ -21,6 +29,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::cmp::Reverse;
 use std::fs;
@@ -157,7 +166,9 @@ async fn thread_list_basic_empty() -> Result<()> {
 
     let mut mcp = init_mcp(codex_home.path()).await?;
 
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(10),
@@ -172,6 +183,97 @@ async fn thread_list_basic_empty() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_list_reports_system_error_idle_flag_after_failed_turn() -> Result<()> {
+    let responses = vec![
+        create_final_assistant_message_sse_response("seeded")?,
+        responses::sse_failed("resp-2", "server_error", "simulated failure"),
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_runtime_config(codex_home.path(), &server.uri())?;
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let seed_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "seed history".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let seed_turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(seed_turn_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response::<TurnStartResponse>(seed_turn_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let failed_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "fail turn".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let failed_turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(failed_turn_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response::<TurnStartResponse>(failed_turn_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("error"),
+    )
+    .await??;
+
+    let ThreadListResponse { data, .. } = list_threads(
+        &mut mcp,
+        None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        Some(vec![
+            ThreadSourceKind::AppServer,
+            ThreadSourceKind::Cli,
+            ThreadSourceKind::VsCode,
+        ]),
+        None,
+    )
+    .await?;
+    let listed = data
+        .iter()
+        .find(|candidate| candidate.id == thread.id)
+        .expect("expected started thread to be listed");
+    assert_eq!(listed.status, ThreadStatus::SystemError,);
+
+    Ok(())
+}
+
 // Minimal config.toml for listing.
 fn create_minimal_config(codex_home: &std::path::Path) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
@@ -181,6 +283,29 @@ fn create_minimal_config(codex_home: &std::path::Path) -> std::io::Result<()> {
 model = "mock-model"
 approval_policy = "never"
 "#,
+    )
+}
+
+fn create_runtime_config(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
     )
 }
 
@@ -240,6 +365,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
+        assert_eq!(thread.status, ThreadStatus::NotLoaded);
     }
     let cursor1 = cursor1.expect("expected nextCursor on first page");
 
@@ -266,6 +392,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
+        assert_eq!(thread.status, ThreadStatus::NotLoaded);
     }
     assert_eq!(cursor2, None, "expected nextCursor to be null on last page");
 
@@ -298,7 +425,9 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
 
     // Filter to only other_provider; expect 1 item, nextCursor None.
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(10),
@@ -369,7 +498,9 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let ThreadListResponse { data, next_cursor } = to_response::<ThreadListResponse>(resp)?;
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = to_response::<ThreadListResponse>(resp)?;
 
     assert_eq!(next_cursor, None);
     assert_eq!(data.len(), 1);
@@ -405,7 +536,9 @@ async fn thread_list_empty_source_kinds_defaults_to_interactive_only() -> Result
 
     let mut mcp = init_mcp(codex_home.path()).await?;
 
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(10),
@@ -454,7 +587,9 @@ async fn thread_list_filters_by_source_kind_subagent_thread_spawn() -> Result<()
 
     let mut mcp = init_mcp(codex_home.path()).await?;
 
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(10),
@@ -607,7 +742,9 @@ async fn thread_list_fetches_until_limit_or_exhausted() -> Result<()> {
 
     // Request 8 threads for the target provider; the matches only start on the
     // third page so we rely on pagination to reach the limit.
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(8),
@@ -653,7 +790,9 @@ async fn thread_list_enforces_max_limit() -> Result<()> {
 
     let mut mcp = init_mcp(codex_home.path()).await?;
 
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(200),
@@ -700,7 +839,9 @@ async fn thread_list_stops_when_not_enough_filtered_results_exist() -> Result<()
 
     // Request more threads than exist after filtering; expect all matches to be
     // returned with nextCursor None.
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(10),
@@ -934,6 +1075,7 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
     let ThreadListResponse {
         data: page1,
         next_cursor: cursor1,
+        ..
     } = list_threads_with_sort(
         &mut mcp,
         None,
@@ -951,6 +1093,7 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
     let ThreadListResponse {
         data: page2,
         next_cursor: cursor2,
+        ..
     } = list_threads_with_sort(
         &mut mcp,
         Some(cursor1),
