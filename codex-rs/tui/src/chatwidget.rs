@@ -3098,6 +3098,8 @@ impl ChatWidget {
             {
                 self.cycle_collaboration_mode();
             }
+            // Terminals can encode Option+Up as Alt+Up or Ctrl+Up (e.g. CSI 1;5A),
+            // so accept either modifier for queued-message restore.
             KeyEvent {
                 code: KeyCode::Up,
                 modifiers,
