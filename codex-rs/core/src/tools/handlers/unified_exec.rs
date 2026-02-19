@@ -54,10 +54,12 @@ struct WriteStdinArgs {
     session_id: i32,
     #[serde(default)]
     chars: String,
-    #[serde(default = "default_write_stdin_yield_time_ms")]
-    yield_time_ms: u64,
+    #[serde(default)]
+    yield_time_ms: Option<u64>,
     #[serde(default)]
     max_output_tokens: Option<usize>,
+    #[serde(default)]
+    no_timeout: bool,
 }
 
 fn default_exec_yield_time_ms() -> u64 {
@@ -199,12 +201,29 @@ impl ToolHandler for UnifiedExecHandler {
             }
             "write_stdin" => {
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;
+                if args.no_timeout {
+                    if !args.chars.is_empty() {
+                        return Err(FunctionCallError::RespondToModel(
+                            "`no_timeout=true` requires empty `chars`.".to_string(),
+                        ));
+                    }
+                    if args.yield_time_ms.is_some() {
+                        return Err(FunctionCallError::RespondToModel(
+                            "`no_timeout=true` requires `yield_time_ms` to be omitted.".to_string(),
+                        ));
+                    }
+                }
+
+                let yield_time_ms = args
+                    .yield_time_ms
+                    .unwrap_or_else(default_write_stdin_yield_time_ms);
                 let response = manager
                     .write_stdin(WriteStdinRequest {
                         process_id: &args.session_id.to_string(),
                         input: &args.chars,
-                        yield_time_ms: args.yield_time_ms,
+                        yield_time_ms,
                         max_output_tokens: args.max_output_tokens,
+                        no_timeout: args.no_timeout,
                     })
                     .await
                     .map_err(|err| {
