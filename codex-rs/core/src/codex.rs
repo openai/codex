@@ -4301,14 +4301,23 @@ pub(crate) async fn run_turn(
 
     let previous_model = sess.previous_model().await;
     let previous_context_item = sess.previous_context_item().await;
+    let settings_update_items = sess.build_settings_update_items(
+        previous_context_item.as_ref(),
+        previous_model.as_deref(),
+        turn_context.as_ref(),
+    );
     let context_items = if pre_sampling_compacted || previous_context_item.is_none() {
-        sess.build_initial_context(turn_context.as_ref()).await
+        let mut initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+        if let Some(model_switch_item) = settings_update_items
+            .iter()
+            .find(|item| Session::is_model_switch_developer_message(item))
+            .cloned()
+        {
+            initial_context.push(model_switch_item);
+        }
+        initial_context
     } else {
-        sess.build_settings_update_items(
-            previous_context_item.as_ref(),
-            previous_model.as_deref(),
-            turn_context.as_ref(),
-        )
+        settings_update_items
     };
     if !context_items.is_empty() {
         sess.record_conversation_items(&turn_context, &context_items)
