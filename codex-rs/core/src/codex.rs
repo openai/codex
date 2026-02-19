@@ -2686,7 +2686,7 @@ impl Session {
     ///
     /// If full context is injected and a model switch occurred, this appends the `<model_switch>`
     /// developer message so model-specific instructions are not lost.
-    pub(crate) async fn set_previous_context_item(
+    pub(crate) async fn record_context_updates_and_set_previous_context_item(
         &self,
         turn_context: &TurnContext,
         resumed_model: Option<&str>,
@@ -3525,8 +3525,13 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
-        sess.set_previous_context_item(turn_context.as_ref(), None, false, false)
-            .await;
+        sess.record_context_updates_and_set_previous_context_item(
+            turn_context.as_ref(),
+            None,
+            false,
+            false,
+        )
+        .await;
     }
 
     pub async fn resolve_elicitation(
@@ -4344,7 +4349,7 @@ pub(crate) async fn run_turn(
     };
 
     let previous_model = sess.previous_model().await;
-    sess.set_previous_context_item(
+    sess.record_context_updates_and_set_previous_context_item(
         turn_context.as_ref(),
         previous_model.as_deref(),
         pre_sampling_compacted,
@@ -7844,10 +7849,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_previous_context_item_injects_full_context_when_baseline_missing() {
+    async fn record_context_updates_and_set_previous_context_item_injects_full_context_when_baseline_missing()
+     {
         let (session, turn_context) = make_session_and_context().await;
         session
-            .set_previous_context_item(&turn_context, None, false, false)
+            .record_context_updates_and_set_previous_context_item(&turn_context, None, false, false)
             .await;
         let history = session.clone_history().await;
         let initial_context = session.build_initial_context(&turn_context).await;
@@ -7862,7 +7868,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_previous_context_item_reinjects_full_context_after_clear() {
+    async fn record_context_updates_and_set_previous_context_item_reinjects_full_context_after_clear()
+     {
         let (session, turn_context) = make_session_and_context().await;
         let compacted_summary = ResponseItem::Message {
             id: None,
@@ -7884,7 +7891,7 @@ mod tests {
         session.clear_previous_context_item().await;
 
         session
-            .set_previous_context_item(&turn_context, None, false, false)
+            .record_context_updates_and_set_previous_context_item(&turn_context, None, false, false)
             .await;
 
         let history = session.clone_history().await;
