@@ -1390,12 +1390,26 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_including_incoming_shapes",
         format_labeled_requests_snapshot(
-            "Remote pre-turn auto-compaction with a context override emits the context diff in the compact request while excluding the incoming user message.",
+            "Remote pre-turn auto-compaction with a context override excludes incoming-turn context diffs from the compact request, then appends those diffs immediately before the incoming user message after compaction.",
             &[
                 ("Remote Compaction Request", &compact_request),
                 ("Remote Post-Compaction History Layout", &requests[2]),
             ]
         )
+    );
+    assert!(
+        !compact_request
+            .body_json()
+            .to_string()
+            .contains(PRETURN_CONTEXT_DIFF_CWD),
+        "pre-turn remote compaction request should exclude incoming context diff items"
+    );
+    assert!(
+        requests[2]
+            .body_json()
+            .to_string()
+            .contains(PRETURN_CONTEXT_DIFF_CWD),
+        "post-compaction remote request should include incoming context diff items"
     );
     assert_eq!(
         requests[2]

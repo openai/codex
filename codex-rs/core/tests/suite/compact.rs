@@ -3007,7 +3007,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     insta::assert_snapshot!(
         "pre_turn_compaction_including_incoming_shapes",
         format_labeled_requests_snapshot(
-            "Pre-turn auto-compaction with a context override emits the context diff in the compact request while the incoming user message is still excluded.",
+            "Pre-turn auto-compaction with a context override excludes incoming-turn context diffs from the compact request, then appends those diffs immediately before the incoming user message after compaction.",
             &[
                 ("Local Compaction Request", &requests[2]),
                 ("Local Post-Compaction History Layout", &requests[3]),
@@ -3021,10 +3021,20 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             .any(|text| text == "USER_THREE"),
         "current behavior excludes incoming user message from pre-turn compaction input"
     );
+    let compact_body = requests[2].body_json().to_string();
+    assert!(
+        !compact_body.contains(PRETURN_CONTEXT_DIFF_CWD),
+        "pre-turn compaction request should exclude incoming context diff items"
+    );
     let follow_up_user_texts = requests[3].message_input_texts("user");
     assert!(
         follow_up_user_texts.iter().any(|text| text == "USER_THREE"),
         "expected post-compaction follow-up request to keep incoming user text"
+    );
+    let follow_up_body = requests[3].body_json().to_string();
+    assert!(
+        follow_up_body.contains(PRETURN_CONTEXT_DIFF_CWD),
+        "post-compaction follow-up request should include the incoming context diff items"
     );
     let follow_up_user_images = requests[3].message_input_image_urls("user");
     assert!(
