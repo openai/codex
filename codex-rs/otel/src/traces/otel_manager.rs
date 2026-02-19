@@ -588,25 +588,8 @@ impl OtelManager {
         );
     }
 
-    pub async fn log_tool_result_with_tags<F, Fut, E>(
-        &self,
-        tool_name: &str,
-        call_id: &str,
-        arguments: &str,
-        extra_tags: &[(&str, &str)],
-        f: F,
-    ) -> Result<(String, bool), E>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<(String, bool), E>>,
-        E: Display,
-    {
-        self.log_tool_result_with_context(tool_name, call_id, arguments, extra_tags, None, None, f)
-            .await
-    }
-
     #[allow(clippy::too_many_arguments)]
-    pub async fn log_tool_result_with_context<F, Fut, E>(
+    pub async fn log_tool_result_with_tags<F, Fut, E>(
         &self,
         tool_name: &str,
         call_id: &str,
