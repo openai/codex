@@ -1,338 +1,185 @@
-use crate::CodexAuth;
-use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
-use crate::codex::Session;
 use crate::default_client::default_headers;
-use codex_api::AuthProvider;
+use crate::error::CodexErr;
+use crate::error::Result as CodexResult;
+use codex_api::Provider as ApiProvider;
 use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeWebsocketClient;
-use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
-use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::ConversationAudioOutEvent;
-use codex_protocol::protocol::ConversationItemAddedEvent;
-use codex_protocol::protocol::ConversationStartedEvent;
-use codex_protocol::protocol::ConversationStoppedEvent;
-use codex_protocol::protocol::ErrorEvent;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use http::HeaderMap;
-use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
+const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
+const TEXT_IN_QUEUE_CAPACITY: usize = 64;
+
 pub(crate) struct RealtimeConversationManager {
-    runtime: Mutex<Option<ConversationRuntime>>,
+    state: Mutex<Option<ConversationState>>,
 }
 
 #[allow(dead_code)]
-struct ConversationRuntime {
-    sub_id: String,
-    writer: RealtimeWebsocketWriter,
-    events_task: JoinHandle<()>,
+struct ConversationState {
+    audio_tx: mpsc::Sender<RealtimeAudioFrame>,
+    text_tx: mpsc::Sender<String>,
+    task: JoinHandle<()>,
 }
 
 #[allow(dead_code)]
 impl RealtimeConversationManager {
     pub(crate) fn new() -> Self {
         Self {
-            runtime: Mutex::new(None),
+            state: Mutex::new(None),
         }
     }
 
     pub(crate) async fn start(
         &self,
-        sess: &Arc<Session>,
-        sub_id: String,
-        api_url: Option<String>,
-        backend_prompt: Option<String>,
+        api_provider: ApiProvider,
+        extra_headers: HeaderMap,
+        prompt: String,
         session_id: Option<String>,
-    ) {
-        let mut guard = self.runtime.lock().await;
-        if let Some(runtime) = guard.take() {
-            drop(guard);
-            stop_conversation_runtime(runtime).await;
+    ) -> CodexResult<()> {
+        let previous_state = {
+            let mut guard = self.state.lock().await;
+            guard.take()
+        };
+        if let Some(state) = previous_state {
+            state.task.abort();
+            let _ = state.task.await;
         }
 
-        let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
-        let provider = turn_context.provider.clone();
-        let auth = sess.services.auth_manager.auth().await;
-
-        let api_provider = match provider.to_api_provider(auth.as_ref().map(CodexAuth::auth_mode)) {
-            Ok(provider) => provider,
-            Err(err) => {
-                emit_conversation_error(
-                    sess,
-                    &sub_id,
-                    format!("failed to build provider: {err}"),
-                    Some(CodexErrorInfo::Other),
-                )
-                .await;
-                return;
-            }
-        };
-
-        let auth_provider = match auth_provider_from_auth(auth, &provider) {
-            Ok(auth_provider) => auth_provider,
-            Err(err) => {
-                emit_conversation_error(
-                    sess,
-                    &sub_id,
-                    format!("failed to resolve auth: {err}"),
-                    Some(CodexErrorInfo::Other),
-                )
-                .await;
-                return;
-            }
-        };
-
-        let mut extra_headers = HeaderMap::new();
-        if let Some(token) = auth_provider.bearer_token()
-            && let Ok(header) = http::HeaderValue::from_str(&format!("Bearer {token}"))
-        {
-            extra_headers.insert(http::header::AUTHORIZATION, header);
-        }
-        if let Some(account_id) = auth_provider.account_id()
-            && let Ok(header) = http::HeaderValue::from_str(&account_id)
-        {
-            extra_headers.insert("ChatGPT-Account-ID", header);
-        }
-
-        let prompt = match backend_prompt {
-            Some(prompt) => prompt,
-            None => sess.get_base_instructions().await.text,
-        };
-
-        let config = RealtimeSessionConfig {
-            api_url: api_url.unwrap_or_else(|| api_provider.base_url.clone()),
-            prompt,
-            session_id,
-        };
-
+        let session_config = RealtimeSessionConfig { prompt, session_id };
         let client = RealtimeWebsocketClient::new(api_provider);
-        let connection = match client
-            .connect(config, extra_headers, default_headers())
+        let connection = client
+            .connect(session_config, extra_headers, default_headers())
             .await
-        {
-            Ok(connection) => connection,
-            Err(err) => {
-                let mapped_error = map_api_error(err);
-                emit_conversation_error(
-                    sess,
-                    &sub_id,
-                    format!("failed to open realtime conversation: {mapped_error}"),
-                    Some(CodexErrorInfo::Other),
-                )
-                .await;
-                return;
-            }
-        };
+            .map_err(map_api_error)?;
 
         let writer = connection.writer();
         let events = connection.events();
-        let manager = Arc::clone(&sess.conversation);
-        let sess_clone = Arc::clone(sess);
-        let sub_id_clone = sub_id.clone();
+        let (audio_tx, mut audio_rx) = mpsc::channel::<RealtimeAudioFrame>(AUDIO_IN_QUEUE_CAPACITY);
+        let (text_tx, mut text_rx) = mpsc::channel::<String>(TEXT_IN_QUEUE_CAPACITY);
 
-        let events_task = tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             loop {
-                match events.next_event().await {
-                    Ok(Some(event)) => match event {
-                        RealtimeEvent::SessionCreated { session_id } => {
-                            sess_clone
-                                .send_event_raw(Event {
-                                    id: sub_id_clone.clone(),
-                                    msg: EventMsg::ConversationStarted(ConversationStartedEvent {
-                                        session_id,
-                                    }),
-                                })
-                                .await;
+                tokio::select! {
+                    biased;
+                    text = text_rx.recv() => {
+                        match text {
+                            Some(text) => {
+                                if let Err(err) = writer.send_conversation_item_create(text).await {
+                                    let mapped_error = map_api_error(err);
+                                    warn!("failed to send input text: {mapped_error}");
+                                    break;
+                                }
+                            }
+                            None => {
+                                break;
+                            }
                         }
-                        RealtimeEvent::SessionUpdated { .. } => {}
-                        RealtimeEvent::AudioOut(frame) => {
-                            sess_clone
-                                .send_event_raw(Event {
-                                    id: sub_id_clone.clone(),
-                                    msg: EventMsg::ConversationAudioOut(
-                                        ConversationAudioOutEvent {
-                                            frame:
-                                                codex_protocol::protocol::ConversationAudioFrame {
-                                                    data: frame.data,
-                                                    sample_rate: frame.sample_rate,
-                                                    num_channels: frame.num_channels,
-                                                    samples_per_channel: frame.samples_per_channel,
-                                                },
-                                        },
-                                    ),
-                                })
-                                .await;
+                    }
+                    event = events.next_event() => {
+                        match event {
+                            Ok(Some(RealtimeEvent::SessionCreated { .. }))
+                            | Ok(Some(RealtimeEvent::SessionUpdated { .. }))
+                            | Ok(Some(RealtimeEvent::AudioOut(_)))
+                            | Ok(Some(RealtimeEvent::ConversationItemAdded(_))) => {}
+                            Ok(Some(RealtimeEvent::Error(message))) => {
+                                error!("realtime stream error: {message}");
+                                break;
+                            }
+                            Ok(None) => {
+                                break;
+                            }
+                            Err(err) => {
+                                let mapped_error = map_api_error(err);
+                                error!("realtime stream closed: {mapped_error}");
+                                break;
+                            }
                         }
-                        RealtimeEvent::ConversationItemAdded(item) => {
-                            sess_clone
-                                .send_event_raw(Event {
-                                    id: sub_id_clone.clone(),
-                                    msg: EventMsg::ConversationItemAdded(
-                                        ConversationItemAddedEvent { item },
-                                    ),
-                                })
-                                .await;
+                    }
+                    frame = audio_rx.recv() => {
+                        match frame {
+                            Some(frame) => {
+                                if let Err(err) = writer.send_audio_frame(frame).await {
+                                    let mapped_error = map_api_error(err);
+                                    error!("failed to send input audio: {mapped_error}");
+                                    break;
+                                }
+                            }
+                            None => {
+                                break;
+                            }
                         }
-                        RealtimeEvent::Error(message) => {
-                            emit_conversation_error(
-                                &sess_clone,
-                                &sub_id_clone,
-                                format!("realtime stream error: {message}"),
-                                Some(CodexErrorInfo::Other),
-                            )
-                            .await;
-                        }
-                    },
-                    Ok(None) => break,
-                    Err(err) => {
-                        let mapped_error = map_api_error(err);
-                        emit_conversation_error(
-                            &sess_clone,
-                            &sub_id_clone,
-                            format!("realtime stream closed: {mapped_error}"),
-                            Some(CodexErrorInfo::Other),
-                        )
-                        .await;
-                        break;
                     }
                 }
             }
+        });
 
-            if manager.clear_runtime_if_sub_id(&sub_id_clone).await {
-                sess_clone
-                    .send_event_raw(Event {
-                        id: sub_id_clone,
-                        msg: EventMsg::ConversationStopped(ConversationStoppedEvent),
-                    })
-                    .await;
+        let mut guard = self.state.lock().await;
+        *guard = Some(ConversationState {
+            audio_tx,
+            text_tx,
+            task,
+        });
+        Ok(())
+    }
+
+    pub(crate) async fn audio_in(&self, frame: RealtimeAudioFrame) -> CodexResult<()> {
+        let sender = {
+            let guard = self.state.lock().await;
+            guard.as_ref().map(|state| state.audio_tx.clone())
+        };
+
+        let Some(sender) = sender else {
+            return Err(CodexErr::InvalidRequest(
+                "conversation is not running".to_string(),
+            ));
+        };
+
+        match sender.try_send(frame) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                warn!("dropping input audio frame due to full queue");
+                Ok(())
             }
-        });
-
-        let mut guard = self.runtime.lock().await;
-        *guard = Some(ConversationRuntime {
-            sub_id,
-            writer,
-            events_task,
-        });
-    }
-
-    pub(crate) async fn audio_in(&self, sess: &Session, sub_id: &str, frame: RealtimeAudioFrame) {
-        let writer = {
-            let guard = self.runtime.lock().await;
-            guard.as_ref().map(|runtime| runtime.writer.clone())
-        };
-
-        let Some(writer) = writer else {
-            emit_conversation_error(
-                sess,
-                sub_id,
-                "conversation is not running",
-                Some(CodexErrorInfo::BadRequest),
-            )
-            .await;
-            return;
-        };
-
-        if let Err(err) = writer.send_audio_frame(frame).await {
-            let mapped_error = map_api_error(err);
-            emit_conversation_error(
-                sess,
-                sub_id,
-                format!("failed to send conversation input: {mapped_error}"),
-                Some(CodexErrorInfo::Other),
-            )
-            .await;
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(CodexErr::InvalidRequest(
+                "conversation is not running".to_string(),
+            )),
         }
     }
 
-    pub(crate) async fn text_in(&self, sess: &Session, sub_id: &str, text: String) {
-        let writer = {
-            let guard = self.runtime.lock().await;
-            guard.as_ref().map(|runtime| runtime.writer.clone())
+    pub(crate) async fn text_in(&self, text: String) -> CodexResult<()> {
+        let sender = {
+            let guard = self.state.lock().await;
+            guard.as_ref().map(|state| state.text_tx.clone())
         };
 
-        let Some(writer) = writer else {
-            emit_conversation_error(
-                sess,
-                sub_id,
-                "conversation is not running",
-                Some(CodexErrorInfo::BadRequest),
-            )
-            .await;
-            return;
+        let Some(sender) = sender else {
+            return Err(CodexErr::InvalidRequest(
+                "conversation is not running".to_string(),
+            ));
         };
 
-        if let Err(err) = writer.send_conversation_item_create(text).await {
-            let mapped_error = map_api_error(err);
-            emit_conversation_error(
-                sess,
-                sub_id,
-                format!("failed to send conversation input: {mapped_error}"),
-                Some(CodexErrorInfo::Other),
-            )
-            .await;
+        sender
+            .send(text)
+            .await
+            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
+        Ok(())
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        let state = {
+            let mut guard = self.state.lock().await;
+            guard.take()
+        };
+
+        if let Some(state) = state {
+            state.task.abort();
+            let _ = state.task.await;
         }
     }
-
-    pub(crate) async fn shutdown(&self, sess: &Session, sub_id: &str) {
-        let mut guard = self.runtime.lock().await;
-        if let Some(runtime) = guard.take() {
-            drop(guard);
-            stop_conversation_runtime(runtime).await;
-            sess.send_event_raw(Event {
-                id: sub_id.to_string(),
-                msg: EventMsg::ConversationStopped(ConversationStoppedEvent),
-            })
-            .await;
-        }
-    }
-
-    async fn clear_runtime_if_sub_id(&self, sub_id: &str) -> bool {
-        let mut guard = self.runtime.lock().await;
-        if guard
-            .as_ref()
-            .is_some_and(|runtime| runtime.sub_id == sub_id)
-        {
-            let _ = guard.take();
-            true
-        } else {
-            false
-        }
-    }
-}
-
-async fn emit_conversation_error(
-    sess: &Session,
-    sub_id: &str,
-    message: impl Into<String>,
-    codex_error_info: Option<CodexErrorInfo>,
-) {
-    sess.send_event_raw(Event {
-        id: sub_id.to_string(),
-        msg: EventMsg::Error(ErrorEvent {
-            message: message.into(),
-            codex_error_info,
-        }),
-    })
-    .await;
-}
-
-async fn stop_conversation_runtime(runtime: ConversationRuntime) {
-    let ConversationRuntime {
-        writer,
-        events_task,
-        ..
-    } = runtime;
-    if let Err(err) = writer.close().await {
-        let mapped_error = map_api_error(err);
-        warn!(error = %mapped_error, "failed to close realtime websocket writer");
-    }
-    events_task.abort();
-    let _ = events_task.await;
 }

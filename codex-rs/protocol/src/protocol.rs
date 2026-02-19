@@ -340,15 +340,6 @@ pub enum Op {
     ListModels,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct ConversationAudioFrame {
-    pub data: String,
-    pub sample_rate: u32,
-    pub num_channels: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub samples_per_channel: Option<u32>,
-}
-
 /// Determines the conditions under which the user is consulted to approve
 /// running the command proposed by Codex.
 #[derive(
@@ -988,15 +979,6 @@ pub enum EventMsg {
 
     /// Notification that a patch application has finished.
     PatchApplyEnd(PatchApplyEndEvent),
-
-    /// Realtime bidirectional conversation session is created upstream.
-    ConversationStarted(ConversationStartedEvent),
-    /// Realtime bidirectional conversation emitted output audio.
-    ConversationAudioOut(ConversationAudioOutEvent),
-    /// Realtime bidirectional conversation emitted a conversation item.
-    ConversationItemAdded(ConversationItemAddedEvent),
-    /// Realtime bidirectional conversation stream is closed.
-    ConversationStopped(ConversationStoppedEvent),
 
     TurnDiff(TurnDiffEvent),
 
@@ -1703,24 +1685,6 @@ pub struct WebSearchEndEvent {
     pub query: String,
     pub action: WebSearchAction,
 }
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ConversationStartedEvent {
-    pub session_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ConversationAudioOutEvent {
-    pub frame: ConversationAudioFrame,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ConversationItemAddedEvent {
-    pub item: Value,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ConversationStoppedEvent;
 
 // Conversation kept for backward compatibility.
 /// Response payload for `Op::GetHistory` containing the current session's

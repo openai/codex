@@ -4004,7 +4004,7 @@ mod handlers {
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-        sess.conversation.shutdown(sess, &sub_id).await;
+        sess.conversation.shutdown().await;
         sess.services
             .unified_exec_manager
             .terminate_all_processes()

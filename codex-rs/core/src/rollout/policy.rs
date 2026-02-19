@@ -161,10 +161,6 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::PlanDelta(_)
         | EventMsg::ReasoningContentDelta(_)
         | EventMsg::ReasoningRawContentDelta(_)
-        | EventMsg::ConversationStarted(_)
-        | EventMsg::ConversationAudioOut(_)
-        | EventMsg::ConversationItemAdded(_)
-        | EventMsg::ConversationStopped(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::CollabAgentSpawnBegin(_)
         | EventMsg::CollabAgentInteractionBegin(_)
