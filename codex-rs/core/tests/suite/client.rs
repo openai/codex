@@ -582,6 +582,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         codex_home.path().to_path_buf(),
         auth_manager,
         SessionSource::Exec,
+        config.model_catalog.clone(),
     );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config)
