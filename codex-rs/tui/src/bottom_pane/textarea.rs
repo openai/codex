@@ -306,9 +306,11 @@ impl TextArea {
             } if is_altgr(modifiers) => self.insert_str(&c.to_string()),
             KeyEvent {
                 code: KeyCode::Backspace,
-                modifiers: KeyModifiers::ALT,
+                modifiers,
                 ..
-            } => self.delete_backward_word(),
+            } if modifiers.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
+                self.delete_backward_word()
+            }
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
@@ -320,9 +322,11 @@ impl TextArea {
             } => self.delete_backward(1),
             KeyEvent {
                 code: KeyCode::Delete,
-                modifiers: KeyModifiers::ALT,
+                modifiers,
                 ..
-            }  => self.delete_forward_word(),
+            } if modifiers.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
+                self.delete_forward_word()
+            }
             KeyEvent {
                 code: KeyCode::Delete,
                 ..
@@ -1737,6 +1741,13 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
         assert_eq!(t.text(), "hello ");
         assert_eq!(t.cursor(), 6);
+
+        // Some terminals encode Option+Backspace as Ctrl+Backspace.
+        let mut t = ta_with("hello world");
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "hello ");
+        assert_eq!(t.cursor(), 6);
     }
 
     #[test]
@@ -1753,6 +1764,13 @@ mod tests {
         let mut t = ta_with("hello world");
         t.set_cursor(0);
         t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::ALT));
+        assert_eq!(t.text(), " world");
+        assert_eq!(t.cursor(), 0);
+
+        // Some terminals encode Option+Delete as Ctrl+Delete.
+        let mut t = ta_with("hello world");
+        t.set_cursor(0);
+        t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL));
         assert_eq!(t.text(), " world");
         assert_eq!(t.cursor(), 0);
 
