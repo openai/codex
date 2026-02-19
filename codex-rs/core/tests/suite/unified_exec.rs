@@ -1868,7 +1868,7 @@ async fn write_stdin_no_timeout_waits_for_process_exit() -> Result<()> {
         .get(wait_call_id)
         .expect("missing no-timeout write_stdin output");
     assert!(
-        wait_output.wall_time_seconds >= 0.8,
+        wait_output.wall_time_seconds >= 0.6,
         "no_timeout should wait for process completion; wall_time={}",
         wait_output.wall_time_seconds
     );

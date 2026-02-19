@@ -366,9 +366,7 @@ impl UnifiedExecProcessManager {
                 .await;
                 collected.append(&mut next);
 
-                if cancellation_token.is_cancelled()
-                    && output_closed.load(std::sync::atomic::Ordering::Acquire)
-                {
+                if cancellation_token.is_cancelled() {
                     let mut trailing = Self::collect_output_until_deadline(
                         &output_buffer,
                         &output_notify,
