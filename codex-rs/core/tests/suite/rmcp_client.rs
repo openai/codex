@@ -840,8 +840,31 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
 /// This test writes to a fallback credentials file in CODEX_HOME.
 /// Ideally, we wouldn't need to serialize the test but it's much more cumbersome to wire CODEX_HOME through the code.
 #[serial(codex_home)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
+#[test]
+fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+    let handle = std::thread::Builder::new()
+        .name("streamable_http_with_oauth_round_trip".to_string())
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(|| -> anyhow::Result<()> {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()?;
+            runtime.block_on(streamable_http_with_oauth_round_trip_impl())
+        })?;
+
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!(
+            "streamable_http_with_oauth_round_trip thread panicked"
+        )),
+    }
+}
+
+#[allow(clippy::expect_used)]
+async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
