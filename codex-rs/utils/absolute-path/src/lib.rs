@@ -68,10 +68,7 @@ impl AbsolutePathBuf {
     }
 
     pub fn parent(&self) -> Option<Self> {
-        self.0.parent().map(|p| {
-            #[expect(clippy::expect_used)]
-            Self::from_absolute_path(p).expect("parent of AbsolutePathBuf must be absolute")
-        })
+        self.0.parent().map(|p| Self(p.to_path_buf()))
     }
 
     pub fn as_path(&self) -> &Path {
@@ -284,5 +281,22 @@ mod tests {
             abs_path_buf.as_path(),
             base_dir.join("~").join("code").as_path()
         );
+    }
+
+    #[test]
+    fn parent_of_absolute_path_is_absolute() {
+        let temp_dir = tempdir().expect("base dir");
+        let child = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("child"))
+            .expect("absolute path");
+        let parent = child.parent().expect("parent");
+        assert_eq!(parent.as_path(), temp_dir.path());
+        assert!(parent.as_path().is_absolute());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn root_has_no_parent() {
+        let root = AbsolutePathBuf::from_absolute_path("/").expect("absolute root");
+        assert_eq!(root.parent(), None);
     }
 }
