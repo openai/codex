@@ -205,6 +205,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries.clone(),
+        &config.permissions.approval_policy,
         tx_event,
         sandbox_state,
     )
