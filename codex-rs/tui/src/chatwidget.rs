@@ -2699,9 +2699,13 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
-        widget
-            .bottom_pane
-            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
+        widget.bottom_pane.set_status_line_enabled(
+            widget
+                .config
+                .tui_status_line
+                .as_ref()
+                .is_some_and(|items| !items.is_empty()),
+        );
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -2865,9 +2869,13 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
-        widget
-            .bottom_pane
-            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
+        widget.bottom_pane.set_status_line_enabled(
+            widget
+                .config
+                .tui_status_line
+                .as_ref()
+                .is_some_and(|items| !items.is_empty()),
+        );
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -3020,9 +3028,13 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
-        widget
-            .bottom_pane
-            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
+        widget.bottom_pane.set_status_line_enabled(
+            widget
+                .config
+                .tui_status_line
+                .as_ref()
+                .is_some_and(|items| !items.is_empty()),
+        );
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -6214,10 +6226,7 @@ impl ChatWidget {
         if !config.features.enabled(Feature::CollaborationModes) {
             return None;
         }
-        let mut mask = match config.experimental_mode {
-            Some(kind) => collaboration_modes::mask_for_kind(models_manager, kind)?,
-            None => collaboration_modes::default_mask(models_manager)?,
-        };
+        let mut mask = collaboration_modes::default_mask(models_manager)?;
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }
