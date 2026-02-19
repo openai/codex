@@ -1263,7 +1263,9 @@ impl Session {
             };
 
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new(
+                &config.permissions.approval_policy,
+            ))),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             analytics_events_client: AnalyticsEventsClient::new(
@@ -1380,19 +1382,19 @@ impl Session {
         required_mcp_servers.sort();
         let cancel_token = sess.mcp_startup_cancellation_token().await;
 
-        sess.services
-            .mcp_connection_manager
-            .write()
-            .await
+        let mut mcp_connection_manager = sess.services.mcp_connection_manager.write().await;
+        mcp_connection_manager
             .initialize(
                 &mcp_servers,
                 config.mcp_oauth_credentials_store_mode,
                 auth_statuses.clone(),
+                &session_configuration.approval_policy,
                 tx_event.clone(),
                 cancel_token,
                 sandbox_state,
             )
             .await;
+        drop(mcp_connection_manager);
         if !required_mcp_servers.is_empty() {
             let failures = sess
                 .services
@@ -1828,6 +1830,11 @@ impl Session {
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
+        self.services
+            .mcp_connection_manager
+            .read()
+            .await
+            .set_approval_policy(&session_configuration.approval_policy);
 
         if sandbox_policy_changed {
             let sandbox_state = SandboxState {
@@ -2997,12 +3004,14 @@ impl Session {
         };
         let cancel_token = self.reset_mcp_startup_cancellation_token().await;
 
-        let mut refreshed_manager = McpConnectionManager::default();
+        let mut refreshed_manager =
+            McpConnectionManager::new(&turn_context.config.permissions.approval_policy);
         refreshed_manager
             .initialize(
                 &mcp_servers,
                 store_mode,
                 auth_statuses,
+                &turn_context.config.permissions.approval_policy,
                 self.get_tx_event(),
                 cancel_token,
                 sandbox_state,
@@ -7265,7 +7274,9 @@ mod tests {
 
         let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new(
+                &config.permissions.approval_policy,
+            ))),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             analytics_events_client: AnalyticsEventsClient::new(
@@ -7413,7 +7424,9 @@ mod tests {
 
         let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new(
+                &config.permissions.approval_policy,
+            ))),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             analytics_events_client: AnalyticsEventsClient::new(
