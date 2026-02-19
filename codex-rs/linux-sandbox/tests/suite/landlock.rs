@@ -119,6 +119,9 @@ fn is_bwrap_unavailable_output(output: &codex_core::exec::ExecToolCallOutput) ->
             && (output.stderr.text.contains("Operation not permitted")
                 || output.stderr.text.contains("Permission denied")
                 || output.stderr.text.contains("Invalid argument")))
+        || (output.stderr.text.contains("loopback: Failed RTM_NEW")
+            && (output.stderr.text.contains("Operation not permitted")
+                || output.stderr.text.contains("Permission denied")))
 }
 
 async fn should_skip_bwrap_tests() -> bool {
