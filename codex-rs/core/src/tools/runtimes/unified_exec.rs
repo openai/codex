@@ -200,7 +200,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         )
         .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let exec_env = attempt
-            .env_for(spec, req.network.as_ref())
+            .env_for(spec, req.network.as_ref(), None)
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
             .open_session_with_exec_env(&exec_env, req.tty)

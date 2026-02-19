@@ -53,6 +53,85 @@ impl MacOsSeatbeltProfileExtensions {
     }
 }
 
+pub(crate) fn merge_macos_seatbelt_profile_extensions(
+    base: Option<&MacOsSeatbeltProfileExtensions>,
+    extension: Option<&MacOsSeatbeltProfileExtensions>,
+) -> Option<MacOsSeatbeltProfileExtensions> {
+    match (base, extension) {
+        (None, None) => None,
+        (Some(base), None) => Some(base.clone().normalized()),
+        (None, Some(extension)) => Some(extension.clone().normalized()),
+        (Some(base), Some(extension)) => {
+            let base = base.normalized();
+            let extension = extension.normalized();
+            Some(
+                MacOsSeatbeltProfileExtensions {
+                    macos_preferences: merge_macos_preferences_permission(
+                        &base.macos_preferences,
+                        &extension.macos_preferences,
+                    ),
+                    macos_automation: merge_macos_automation_permission(
+                        &base.macos_automation,
+                        &extension.macos_automation,
+                    ),
+                    macos_accessibility: base.macos_accessibility && extension.macos_accessibility,
+                    macos_calendar: base.macos_calendar && extension.macos_calendar,
+                }
+                .normalized(),
+            )
+        }
+    }
+}
+
+fn merge_macos_preferences_permission(
+    base: &MacOsPreferencesPermission,
+    extension: &MacOsPreferencesPermission,
+) -> MacOsPreferencesPermission {
+    fn rank(permission: &MacOsPreferencesPermission) -> u8 {
+        match permission {
+            MacOsPreferencesPermission::None => 0,
+            MacOsPreferencesPermission::ReadOnly => 1,
+            MacOsPreferencesPermission::ReadWrite => 2,
+        }
+    }
+
+    if rank(extension) < rank(base) {
+        extension.clone()
+    } else {
+        base.clone()
+    }
+}
+
+fn merge_macos_automation_permission(
+    base: &MacOsAutomationPermission,
+    extension: &MacOsAutomationPermission,
+) -> MacOsAutomationPermission {
+    match (base, extension) {
+        (MacOsAutomationPermission::None, _) | (_, MacOsAutomationPermission::None) => {
+            MacOsAutomationPermission::None
+        }
+        (MacOsAutomationPermission::All, other) | (other, MacOsAutomationPermission::All) => {
+            other.clone()
+        }
+        (
+            MacOsAutomationPermission::BundleIds(base_ids),
+            MacOsAutomationPermission::BundleIds(extension_ids),
+        ) => {
+            let base_ids = base_ids.iter().cloned().collect::<BTreeSet<_>>();
+            let extension_ids = extension_ids.iter().cloned().collect::<BTreeSet<_>>();
+            let intersection = base_ids
+                .intersection(&extension_ids)
+                .cloned()
+                .collect::<Vec<_>>();
+            if intersection.is_empty() {
+                MacOsAutomationPermission::None
+            } else {
+                MacOsAutomationPermission::BundleIds(intersection)
+            }
+        }
+    }
+}
+
 pub(crate) fn build_seatbelt_extensions(
     extensions: &MacOsSeatbeltProfileExtensions,
 ) -> SeatbeltExtensionPolicy {
@@ -166,6 +245,7 @@ mod tests {
     use super::MacOsPreferencesPermission;
     use super::MacOsSeatbeltProfileExtensions;
     use super::build_seatbelt_extensions;
+    use super::merge_macos_seatbelt_profile_extensions;
 
     #[test]
     fn preferences_read_only_emits_read_clauses_only() {
@@ -244,5 +324,96 @@ mod tests {
         let policy = build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions::default());
         assert!(policy.policy.contains("(allow user-preference-read)"));
         assert!(!policy.policy.contains("(allow user-preference-write)"));
+    }
+
+    #[test]
+    fn merge_extensions_intersects_permissions() {
+        let base = MacOsSeatbeltProfileExtensions {
+            macos_preferences: MacOsPreferencesPermission::ReadOnly,
+            macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                "com.apple.Notes".to_string(),
+                "com.apple.Calendar".to_string(),
+            ]),
+            macos_accessibility: false,
+            macos_calendar: true,
+        };
+        let extension = MacOsSeatbeltProfileExtensions {
+            macos_preferences: MacOsPreferencesPermission::ReadWrite,
+            macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                "com.apple.Reminders".to_string(),
+                "com.apple.Calendar".to_string(),
+            ]),
+            macos_accessibility: true,
+            macos_calendar: false,
+        };
+
+        let merged =
+            merge_macos_seatbelt_profile_extensions(Some(&base), Some(&extension)).expect("merged");
+
+        assert_eq!(
+            merged.macos_preferences,
+            MacOsPreferencesPermission::ReadOnly
+        );
+        assert_eq!(
+            merged.macos_automation,
+            MacOsAutomationPermission::BundleIds(vec!["com.apple.Calendar".to_string(),])
+        );
+        assert!(!merged.macos_accessibility);
+        assert!(!merged.macos_calendar);
+    }
+
+    #[test]
+    fn merge_extensions_all_intersects_to_other_side() {
+        let base = MacOsSeatbeltProfileExtensions {
+            macos_automation: MacOsAutomationPermission::All,
+            ..Default::default()
+        };
+        let extension = MacOsSeatbeltProfileExtensions {
+            macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                "com.apple.Notes".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let merged =
+            merge_macos_seatbelt_profile_extensions(Some(&base), Some(&extension)).expect("merged");
+        assert_eq!(
+            merged.macos_automation,
+            MacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string(),])
+        );
+    }
+
+    #[test]
+    fn merge_extensions_none_intersects_to_none() {
+        let base = MacOsSeatbeltProfileExtensions {
+            macos_automation: MacOsAutomationPermission::All,
+            ..Default::default()
+        };
+        let extension = MacOsSeatbeltProfileExtensions {
+            macos_automation: MacOsAutomationPermission::None,
+            ..Default::default()
+        };
+
+        let merged =
+            merge_macos_seatbelt_profile_extensions(Some(&base), Some(&extension)).expect("merged");
+        assert_eq!(merged.macos_automation, MacOsAutomationPermission::None);
+    }
+
+    #[test]
+    fn merge_extensions_normalizes_single_source() {
+        let extension = MacOsSeatbeltProfileExtensions {
+            macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                " com.apple.Notes ".to_string(),
+                "com.apple.Notes".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let merged =
+            merge_macos_seatbelt_profile_extensions(None, Some(&extension)).expect("merged");
+        assert_eq!(
+            merged.macos_automation,
+            MacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string()])
+        );
     }
 }

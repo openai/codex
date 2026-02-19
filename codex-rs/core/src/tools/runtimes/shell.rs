@@ -10,6 +10,8 @@ use crate::features::Feature;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
+#[cfg(target_os = "macos")]
+use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
 use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
@@ -31,6 +33,8 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
+#[cfg(not(target_os = "macos"))]
+type MacOsSeatbeltProfileExtensions = ();
 
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
@@ -42,6 +46,7 @@ pub struct ShellRequest {
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
+    pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
     pub exec_approval_requirement: ExecApprovalRequirement,
 }
 
@@ -203,7 +208,11 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
                 req.justification.clone(),
             )?;
             let env = attempt
-                .env_for(spec, req.network.as_ref())
+                .env_for(
+                    spec,
+                    req.network.as_ref(),
+                    req.macos_seatbelt_profile_extensions.as_ref(),
+                )
                 .map_err(|err| ToolError::Codex(err.into()))?;
             return ctx
                 .session
@@ -222,7 +231,11 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.justification.clone(),
         )?;
         let mut env = attempt
-            .env_for(spec, req.network.as_ref())
+            .env_for(
+                spec,
+                req.network.as_ref(),
+                req.macos_seatbelt_profile_extensions.as_ref(),
+            )
             .map_err(|err| ToolError::Codex(err.into()))?;
         env.network_attempt_id = ctx.network_attempt_id.clone();
         let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))

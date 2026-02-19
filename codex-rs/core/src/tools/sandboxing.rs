@@ -293,6 +293,9 @@ impl<'a> SandboxAttempt<'a> {
         &self,
         spec: CommandSpec,
         network: Option<&NetworkProxy>,
+        macos_seatbelt_profile_extensions: Option<
+            &crate::sandboxing::MacOsSeatbeltProfileExtensions,
+        >,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
         self.manager
             .transform(crate::sandboxing::SandboxTransformRequest {
@@ -305,6 +308,7 @@ impl<'a> SandboxAttempt<'a> {
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe,
                 use_linux_sandbox_bwrap: self.use_linux_sandbox_bwrap,
                 windows_sandbox_level: self.windows_sandbox_level,
+                macos_seatbelt_profile_extensions,
             })
     }
 }

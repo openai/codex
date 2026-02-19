@@ -15,8 +15,12 @@ use crate::is_safe_command::is_known_safe_command;
 use crate::parse_command::parse_command;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::extend_sandbox_policy;
+#[cfg(target_os = "macos")]
+use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
+#[cfg(target_os = "macos")]
+use crate::seatbelt_permissions::merge_macos_seatbelt_profile_extensions;
 use crate::shell::Shell;
-use crate::skills::resolve_skill_sandbox_extension_for_command;
+use crate::skills::resolve_skill_permissions_for_command;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -30,6 +34,8 @@ use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::sandboxing::ToolCtx;
+#[cfg(not(target_os = "macos"))]
+type MacOsSeatbeltProfileExtensions = ();
 
 pub struct ShellHandler;
 
@@ -308,19 +314,29 @@ impl ShellHandler {
             .await;
         let shell_zsh_fork_enabled = session.features().enabled(Feature::ShellZshFork);
         let command_actions = parse_command(&exec_params.command);
-        let effective_sandbox_policy = resolve_skill_sandbox_extension_for_command(
+        let skill_permissions = resolve_skill_permissions_for_command(
             &skills_outcome,
             shell_zsh_fork_enabled,
             &exec_params.command,
             &exec_params.cwd,
             &command_actions,
-        )
-        .map_or_else(
+        );
+        let effective_sandbox_policy = skill_permissions.as_ref().map_or_else(
             || turn.sandbox_policy.clone(),
-            |skill_sandbox_policy| {
-                extend_sandbox_policy(&turn.sandbox_policy, &skill_sandbox_policy)
+            |skill_permissions| {
+                extend_sandbox_policy(&turn.sandbox_policy, skill_permissions.sandbox_policy.get())
             },
         );
+        let effective_macos_seatbelt_profile_extensions =
+            merge_turn_and_skill_macos_seatbelt_profile_extensions(
+                turn.config
+                    .permissions
+                    .macos_seatbelt_profile_extensions
+                    .as_ref(),
+                skill_permissions
+                    .as_ref()
+                    .and_then(|permissions| permissions.macos_seatbelt_profile_extensions.as_ref()),
+            );
 
         let exec_approval_requirement = session
             .services
@@ -343,6 +359,7 @@ impl ShellHandler {
             network: exec_params.network.clone(),
             sandbox_permissions: exec_params.sandbox_permissions,
             justification: exec_params.justification.clone(),
+            macos_seatbelt_profile_extensions: effective_macos_seatbelt_profile_extensions,
             exec_approval_requirement,
         };
         let mut orchestrator = ToolOrchestrator::new();
@@ -372,6 +389,22 @@ impl ShellHandler {
             success: Some(true),
         })
     }
+}
+
+#[cfg(target_os = "macos")]
+fn merge_turn_and_skill_macos_seatbelt_profile_extensions(
+    turn_extensions: Option<&MacOsSeatbeltProfileExtensions>,
+    skill_extensions: Option<&MacOsSeatbeltProfileExtensions>,
+) -> Option<MacOsSeatbeltProfileExtensions> {
+    merge_macos_seatbelt_profile_extensions(turn_extensions, skill_extensions)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn merge_turn_and_skill_macos_seatbelt_profile_extensions(
+    _turn_extensions: Option<&MacOsSeatbeltProfileExtensions>,
+    _skill_extensions: Option<&MacOsSeatbeltProfileExtensions>,
+) -> Option<MacOsSeatbeltProfileExtensions> {
+    None
 }
 
 #[cfg(test)]

@@ -3,14 +3,13 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::SandboxPolicy;
 use dunce::canonicalize as canonicalize_path;
 
 use crate::config::Permissions;
 use crate::path_utils::normalize_for_path_comparison;
 use crate::skills::SkillLoadOutcome;
 
-/// Resolves the sandbox policy extension contributed by the first matching
+/// Resolves the full permissions extension contributed by the first matching
 /// skill for a command invocation.
 ///
 /// Assumptions:
@@ -23,13 +22,30 @@ use crate::skills::SkillLoadOutcome;
 /// Returns `None` when `shell_zsh_fork` is disabled, command shell is not
 /// `zsh`, or when no enabled skill with permissions matches an eligible
 /// command action executable.
-pub(crate) fn resolve_skill_sandbox_extension_for_command(
+pub(crate) fn resolve_skill_permissions_for_command(
     skills_outcome: &SkillLoadOutcome,
     shell_zsh_fork_enabled: bool,
     command: &[String],
     command_cwd: &Path,
     command_actions: &[ParsedCommand],
-) -> Option<SandboxPolicy> {
+) -> Option<Permissions> {
+    resolve_skill_permissions_ref(
+        skills_outcome,
+        shell_zsh_fork_enabled,
+        command,
+        command_cwd,
+        command_actions,
+    )
+    .cloned()
+}
+
+fn resolve_skill_permissions_ref<'a>(
+    skills_outcome: &'a SkillLoadOutcome,
+    shell_zsh_fork_enabled: bool,
+    command: &[String],
+    command_cwd: &Path,
+    command_actions: &[ParsedCommand],
+) -> Option<&'a Permissions> {
     if !shell_zsh_fork_enabled {
         return None;
     }
@@ -48,7 +64,7 @@ pub(crate) fn resolve_skill_sandbox_extension_for_command(
             continue;
         };
         if let Some(permissions) = match_skill_for_candidate(skills_outcome, &action_candidate) {
-            return Some(permissions.sandbox_policy.get().clone());
+            return Some(permissions);
         }
     }
 
@@ -74,7 +90,7 @@ fn command_action_candidate_path(
         | ParsedCommand::Search { .. } => None,
     }?;
     let action_path = if action_path.is_absolute() {
-        action_path.to_path_buf()
+        action_path
     } else {
         command_cwd.join(action_path)
     };
@@ -143,7 +159,7 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_skill_sandbox_extension_for_command;
+    use super::resolve_skill_permissions_for_command;
     use crate::config::Constrained;
     use crate::config::Permissions;
     use crate::config::types::ShellEnvironmentPolicy;
@@ -191,6 +207,23 @@ mod tests {
 
     fn canonical(path: &Path) -> PathBuf {
         dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    fn resolve_skill_sandbox_extension_for_command(
+        skills_outcome: &SkillLoadOutcome,
+        shell_zsh_fork_enabled: bool,
+        command: &[String],
+        command_cwd: &Path,
+        command_actions: &[ParsedCommand],
+    ) -> Option<SandboxPolicy> {
+        resolve_skill_permissions_for_command(
+            skills_outcome,
+            shell_zsh_fork_enabled,
+            command,
+            command_cwd,
+            command_actions,
+        )
+        .map(|permissions| permissions.sandbox_policy.get().clone())
     }
 
     #[test]
@@ -256,7 +289,7 @@ mod tests {
         };
         let outcome = outcome_with_skills(vec![skill_with_policy(
             canonical(&skill_path),
-            skill_policy.clone(),
+            skill_policy,
         )]);
         let command = vec![
             "/bin/bash".to_string(),
@@ -297,7 +330,7 @@ mod tests {
         };
         let outcome = outcome_with_skills(vec![skill_with_policy(
             canonical(&skill_path),
-            skill_policy.clone(),
+            skill_policy,
         )]);
         let command = vec![
             "/bin/zsh".to_string(),
@@ -396,7 +429,7 @@ mod tests {
             exclude_slash_tmp: false,
         };
         let outcome = outcome_with_skills(vec![
-            skill_with_policy(canonical(&parent_skill_path), parent_policy.clone()),
+            skill_with_policy(canonical(&parent_skill_path), parent_policy),
             skill_with_policy(canonical(&nested_skill_path), nested_policy.clone()),
         ]);
         let command = vec![

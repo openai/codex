@@ -151,7 +151,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
     ) -> Result<ExecToolCallOutput, ToolError> {
         let spec = Self::build_command_spec(req)?;
         let env = attempt
-            .env_for(spec, None)
+            .env_for(spec, None, None)
             .map_err(|err| ToolError::Codex(err.into()))?;
         let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
             .await

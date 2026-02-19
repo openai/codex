@@ -225,6 +225,7 @@ pub async fn process_exec_tool_call(
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
             use_linux_sandbox_bwrap,
             windows_sandbox_level,
+            macos_seatbelt_profile_extensions: None,
         })
         .map_err(CodexErr::from)?;
 

@@ -617,6 +617,7 @@ impl JsReplManager {
                     .features
                     .enabled(crate::features::Feature::UseLinuxSandboxBwrap),
                 windows_sandbox_level: turn.windows_sandbox_level,
+                macos_seatbelt_profile_extensions: None,
             })
             .map_err(|err| format!("failed to configure sandbox for js_repl: {err}"))?;
 
