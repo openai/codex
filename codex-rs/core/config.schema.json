@@ -1296,7 +1296,7 @@
       "description": "Settings for app-specific controls."
     },
     "background_terminal_timeout": {
-      "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `30000`.",
+      "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
       "format": "uint64",
       "minimum": 0.0,
       "type": "integer"
