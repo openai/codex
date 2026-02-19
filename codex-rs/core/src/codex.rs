@@ -2674,11 +2674,6 @@ impl Session {
         state.previous_context_item()
     }
 
-    pub(crate) async fn seed_previous_context_item(&self, item: TurnContextItem) {
-        let mut state = self.state.lock().await;
-        state.set_previous_context_item(Some(item));
-    }
-
     pub(crate) async fn clear_previous_context_item(&self) {
         let mut state = self.state.lock().await;
         state.set_previous_context_item(None);
@@ -3192,8 +3187,10 @@ impl Session {
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
     // Seed with context in case there is an OverrideTurnContext first.
     let initial_context = sess.new_default_turn().await;
-    sess.seed_previous_context_item(initial_context.to_turn_context_item())
-        .await;
+    {
+        let mut state = sess.state.lock().await;
+        state.set_previous_context_item(Some(initial_context.to_turn_context_item()));
+    }
 
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
@@ -7870,8 +7867,10 @@ mod tests {
             .record_into_history(std::slice::from_ref(&compacted_summary), &turn_context)
             .await;
         session
-            .seed_previous_context_item(turn_context.to_turn_context_item())
-            .await;
+            .state
+            .lock()
+            .await
+            .set_previous_context_item(Some(turn_context.to_turn_context_item()));
         session.clear_previous_context_item().await;
 
         session
