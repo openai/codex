@@ -9,7 +9,6 @@ use codex_api::RealtimeEvent;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
-use codex_api::error::ApiError;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioOutEvent;
 use codex_protocol::protocol::ConversationItemAddedEvent;
@@ -51,48 +50,9 @@ impl RealtimeConversationManager {
         backend_prompt: Option<String>,
         session_id: Option<String>,
     ) {
-        self.start_conversation(sess, sub_id, api_url, backend_prompt, session_id)
-            .await;
-    }
-
-    pub(crate) async fn audio_in(&self, sess: &Session, sub_id: &str, frame: RealtimeAudioFrame) {
-        self.with_writer(sess, sub_id, |writer| async move {
-            writer.send_audio_frame(frame).await
-        })
-        .await;
-    }
-
-    pub(crate) async fn text_in(&self, sess: &Session, sub_id: &str, text: String) {
-        self.with_writer(sess, sub_id, |writer| async move {
-            writer.send_conversation_item_create(text).await
-        })
-        .await;
-    }
-
-    pub(crate) async fn stop(&self, sess: &Session, sub_id: &str) {
-        self.shutdown(sess, sub_id).await;
-    }
-
-    pub(crate) async fn shutdown(&self, sess: &Session, sub_id: &str) {
-        if let Some(runtime) = self.take_runtime().await {
-            stop_conversation_runtime(runtime).await;
-            sess.send_event_raw(Event {
-                id: sub_id.to_string(),
-                msg: EventMsg::ConversationStopped(ConversationStoppedEvent),
-            })
-            .await;
-        }
-    }
-
-    async fn start_conversation(
-        &self,
-        sess: &Arc<Session>,
-        sub_id: String,
-        api_url: Option<String>,
-        backend_prompt: Option<String>,
-        session_id: Option<String>,
-    ) {
-        if let Some(runtime) = self.take_runtime().await {
+        let mut guard = self.runtime.lock().await;
+        if let Some(runtime) = guard.take() {
+            drop(guard);
             stop_conversation_runtime(runtime).await;
         }
 
@@ -254,27 +214,83 @@ impl RealtimeConversationManager {
             }
         });
 
-        self.set_runtime(ConversationRuntime {
+        let mut guard = self.runtime.lock().await;
+        *guard = Some(ConversationRuntime {
             sub_id,
             writer,
             events_task,
-        })
-        .await;
+        });
     }
 
-    async fn writer(&self) -> Option<RealtimeWebsocketWriter> {
-        let guard = self.runtime.lock().await;
-        guard.as_ref().map(|runtime| runtime.writer.clone())
+    pub(crate) async fn audio_in(&self, sess: &Session, sub_id: &str, frame: RealtimeAudioFrame) {
+        let writer = {
+            let guard = self.runtime.lock().await;
+            guard.as_ref().map(|runtime| runtime.writer.clone())
+        };
+
+        let Some(writer) = writer else {
+            emit_conversation_error(
+                sess,
+                sub_id,
+                "conversation is not running",
+                Some(CodexErrorInfo::BadRequest),
+            )
+            .await;
+            return;
+        };
+
+        if let Err(err) = writer.send_audio_frame(frame).await {
+            let mapped_error = map_api_error(err);
+            emit_conversation_error(
+                sess,
+                sub_id,
+                format!("failed to send conversation input: {mapped_error}"),
+                Some(CodexErrorInfo::Other),
+            )
+            .await;
+        }
     }
 
-    async fn set_runtime(&self, runtime: ConversationRuntime) {
+    pub(crate) async fn text_in(&self, sess: &Session, sub_id: &str, text: String) {
+        let writer = {
+            let guard = self.runtime.lock().await;
+            guard.as_ref().map(|runtime| runtime.writer.clone())
+        };
+
+        let Some(writer) = writer else {
+            emit_conversation_error(
+                sess,
+                sub_id,
+                "conversation is not running",
+                Some(CodexErrorInfo::BadRequest),
+            )
+            .await;
+            return;
+        };
+
+        if let Err(err) = writer.send_conversation_item_create(text).await {
+            let mapped_error = map_api_error(err);
+            emit_conversation_error(
+                sess,
+                sub_id,
+                format!("failed to send conversation input: {mapped_error}"),
+                Some(CodexErrorInfo::Other),
+            )
+            .await;
+        }
+    }
+
+    pub(crate) async fn shutdown(&self, sess: &Session, sub_id: &str) {
         let mut guard = self.runtime.lock().await;
-        *guard = Some(runtime);
-    }
-
-    async fn take_runtime(&self) -> Option<ConversationRuntime> {
-        let mut guard = self.runtime.lock().await;
-        guard.take()
+        if let Some(runtime) = guard.take() {
+            drop(guard);
+            stop_conversation_runtime(runtime).await;
+            sess.send_event_raw(Event {
+                id: sub_id.to_string(),
+                msg: EventMsg::ConversationStopped(ConversationStoppedEvent),
+            })
+            .await;
+        }
     }
 
     async fn clear_runtime_if_sub_id(&self, sub_id: &str) -> bool {
@@ -287,34 +303,6 @@ impl RealtimeConversationManager {
             true
         } else {
             false
-        }
-    }
-
-    async fn with_writer<F, Fut>(&self, sess: &Session, sub_id: &str, f: F)
-    where
-        F: FnOnce(RealtimeWebsocketWriter) -> Fut,
-        Fut: std::future::Future<Output = Result<(), ApiError>>,
-    {
-        let Some(writer) = self.writer().await else {
-            emit_conversation_error(
-                sess,
-                sub_id,
-                "conversation is not running",
-                Some(CodexErrorInfo::BadRequest),
-            )
-            .await;
-            return;
-        };
-
-        if let Err(err) = f(writer).await {
-            let mapped_error = map_api_error(err);
-            emit_conversation_error(
-                sess,
-                sub_id,
-                format!("failed to send conversation input: {mapped_error}"),
-                Some(CodexErrorInfo::Other),
-            )
-            .await;
         }
     }
 }
