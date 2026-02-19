@@ -2679,6 +2679,13 @@ impl Session {
         state.set_previous_context_item(None);
     }
 
+    /// Persist the latest turn context snapshot and emit any required model-visible context updates.
+    ///
+    /// When the previous snapshot is missing (or `force_full_context_injection` is true), this
+    /// injects full initial context. Otherwise, it emits only settings diff items.
+    ///
+    /// If full context is injected and a model switch occurred, this appends the `<model_switch>`
+    /// developer message so model-specific instructions are not lost.
     pub(crate) async fn set_previous_context_item(
         &self,
         turn_context: &TurnContext,
@@ -2696,6 +2703,8 @@ impl Session {
             force_full_context_injection || previous_context_item.is_none();
         let context_items = if should_inject_full_context {
             let mut initial_context = self.build_initial_context(turn_context).await;
+            // Full reinjection bypasses the pure diff item list, so explicitly preserve a
+            // model-switch instruction when one is needed this turn.
             if let Some(model_switch_item) = settings_update_items
                 .iter()
                 .find(|item| Session::is_model_switch_developer_message(item))
@@ -2705,6 +2714,7 @@ impl Session {
             }
             initial_context
         } else {
+            // Steady-state path: append only context diffs to minimize token overhead.
             settings_update_items
         };
         if !context_items.is_empty() {
