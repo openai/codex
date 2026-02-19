@@ -1,5 +1,6 @@
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
+use crate::config::ValidatedUnixSocketPath;
 use crate::policy::Host;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
@@ -436,12 +437,16 @@ impl NetworkProxyState {
         };
         let requested_canonical = std::fs::canonicalize(requested_abs.as_path()).ok();
         for allowed in &guard.config.network.allow_unix_sockets {
-            let allowed_path = Path::new(allowed);
-            if !allowed_path.is_absolute() {
-                continue;
-            }
+            let allowed_path = match ValidatedUnixSocketPath::parse(allowed) {
+                Ok(ValidatedUnixSocketPath::Native(path)) => path,
+                Ok(ValidatedUnixSocketPath::UnixStyleAbsolute(_)) => continue,
+                Err(err) => {
+                    warn!("ignoring invalid network.allow_unix_sockets entry at runtime: {err:#}");
+                    continue;
+                }
+            };
 
-            if allowed == path {
+            if allowed_path.as_path() == requested_abs.as_path() {
                 return Ok(true);
             }
 
@@ -450,7 +455,7 @@ impl NetworkProxyState {
             let Some(requested_canonical) = &requested_canonical else {
                 continue;
             };
-            if let Ok(allowed_canonical) = std::fs::canonicalize(allowed_path)
+            if let Ok(allowed_canonical) = std::fs::canonicalize(allowed_path.as_path())
                 && &allowed_canonical == requested_canonical
             {
                 return Ok(true);

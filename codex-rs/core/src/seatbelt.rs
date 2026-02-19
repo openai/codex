@@ -121,21 +121,31 @@ struct ProxyPolicyInputs {
     dangerously_allow_all_unix_sockets: bool,
 }
 
+#[derive(Debug, Clone)]
+struct UnixSocketPathParam {
+    key: String,
+    path: AbsolutePathBuf,
+}
+
 fn proxy_policy_inputs(network: Option<&NetworkProxy>) -> ProxyPolicyInputs {
     if let Some(network) = network {
         let mut env = HashMap::new();
         network.apply_to_env(&mut env);
-        let mut allow_unix_sockets = Vec::new();
-        for socket_path in network.allow_unix_sockets() {
-            match normalize_path_for_sandbox(Path::new(socket_path)) {
-                Some(path) => allow_unix_sockets.push(path),
+        let allow_unix_sockets = network
+            .allow_unix_sockets()
+            .iter()
+            .filter_map(|socket_path| match normalize_path_for_sandbox(Path::new(socket_path)) {
+                Some(path) => Some((path.to_string_lossy().to_string(), path)),
                 None => {
                     warn!(
                         "ignoring network.allow_unix_sockets entry because it could not be normalized: {socket_path}"
                     );
+                    None
                 }
-            }
-        }
+            })
+            .collect::<BTreeMap<_, _>>()
+            .into_values()
+            .collect();
         return ProxyPolicyInputs {
             ports: proxy_loopback_ports_from_env(&env),
             has_proxy_config: has_proxy_url_env_vars(&env),
@@ -149,6 +159,8 @@ fn proxy_policy_inputs(network: Option<&NetworkProxy>) -> ProxyPolicyInputs {
 }
 
 fn normalize_path_for_sandbox(path: &Path) -> Option<AbsolutePathBuf> {
+    // `AbsolutePathBuf::from_absolute_path()` normalizes relative paths against the current
+    // working directory, so keep the explicit check to avoid silently accepting relative entries.
     if !path.is_absolute() {
         return None;
     }
@@ -162,8 +174,9 @@ fn normalize_path_for_sandbox(path: &Path) -> Option<AbsolutePathBuf> {
     normalized_path.or(Some(absolute_path))
 }
 
-fn unix_socket_path_params(proxy: &ProxyPolicyInputs) -> Vec<(String, AbsolutePathBuf)> {
+fn unix_socket_path_params(proxy: &ProxyPolicyInputs) -> Vec<UnixSocketPathParam> {
     if proxy.dangerously_allow_all_unix_sockets {
+        // The wildcard flag takes precedence over the explicit allowlist.
         return vec![];
     }
 
@@ -177,14 +190,17 @@ fn unix_socket_path_params(proxy: &ProxyPolicyInputs) -> Vec<(String, AbsolutePa
     deduped_paths
         .into_values()
         .enumerate()
-        .map(|(index, path)| (format!("UNIX_SOCKET_PATH_{index}"), path))
+        .map(|(index, path)| UnixSocketPathParam {
+            key: format!("UNIX_SOCKET_PATH_{index}"),
+            path,
+        })
         .collect()
 }
 
 fn unix_socket_dir_params(proxy: &ProxyPolicyInputs) -> Vec<(String, PathBuf)> {
     unix_socket_path_params(proxy)
         .into_iter()
-        .map(|(key, path)| (key, path.into_path_buf()))
+        .map(|param| (param.key, param.path.into_path_buf()))
         .collect()
 }
 
@@ -198,7 +214,7 @@ fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
 
     unix_socket_path_params(proxy)
         .iter()
-        .map(|(key, _)| format!("(allow network* (subpath (param \"{key}\")))\n"))
+        .map(|param| format!("(allow network* (subpath (param \"{}\")))\n", param.key))
         .collect()
 }
 
