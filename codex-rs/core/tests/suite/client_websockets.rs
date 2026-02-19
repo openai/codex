@@ -715,6 +715,77 @@ async fn responses_websocket_appends_on_prefix() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "assistant output"),
+            ev_done(),
+        ],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness.client.new_session();
+    let first_turn_metadata = r#"{"turn_id":"turn-123","sandbox":"workspace-write"}"#;
+    let enriched_turn_metadata = r#"{"turn_id":"turn-123","sandbox":"workspace-write","workspaces":[{"root_path":"/tmp/repo","latest_git_commit_hash":"abc123","associated_remote_urls":["git@github.com:openai/codex.git"],"has_changes":true}]}"#;
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![
+        message_item("hello"),
+        assistant_message_item("msg-1", "assistant output"),
+        message_item("second"),
+    ]);
+
+    stream_until_complete_with_turn_metadata(
+        &mut client_session,
+        &harness,
+        &prompt_one,
+        Some(first_turn_metadata),
+    )
+    .await;
+    stream_until_complete_with_turn_metadata(
+        &mut client_session,
+        &harness,
+        &prompt_two,
+        Some(enriched_turn_metadata),
+    )
+    .await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let first = connection.first().expect("missing request").body_json();
+    let second = connection.get(1).expect("missing request").body_json();
+
+    assert_eq!(first["type"].as_str(), Some("response.create"));
+    assert_eq!(
+        first["client_metadata"]["x-codex-turn-metadata"].as_str(),
+        Some(first_turn_metadata)
+    );
+    assert_eq!(second["type"].as_str(), Some("response.append"));
+    assert_eq!(
+        second["client_metadata"]["x-codex-turn-metadata"].as_str(),
+        Some(enriched_turn_metadata)
+    );
+
+    let first_metadata: serde_json::Value =
+        serde_json::from_str(first_turn_metadata).expect("first metadata should be valid json");
+    let second_metadata: serde_json::Value = serde_json::from_str(enriched_turn_metadata)
+        .expect("enriched metadata should be valid json");
+
+    assert_eq!(first_metadata["turn_id"].as_str(), Some("turn-123"));
+    assert_eq!(second_metadata["turn_id"].as_str(), Some("turn-123"));
+    assert_eq!(
+        second_metadata["workspaces"][0]["has_changes"].as_bool(),
+        Some(true)
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_creates_on_prefix_when_previous_completion_cannot_append() {
     skip_if_no_network!();
 
@@ -1174,6 +1245,15 @@ async fn stream_until_complete(
     harness: &WebsocketTestHarness,
     prompt: &Prompt,
 ) {
+    stream_until_complete_with_turn_metadata(client_session, harness, prompt, None).await;
+}
+
+async fn stream_until_complete_with_turn_metadata(
+    client_session: &mut ModelClientSession,
+    harness: &WebsocketTestHarness,
+    prompt: &Prompt,
+    turn_metadata_header: Option<&str>,
+) {
     let mut stream = client_session
         .stream(
             prompt,
@@ -1181,7 +1261,7 @@ async fn stream_until_complete(
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            None,
+            turn_metadata_header,
         )
         .await
         .expect("websocket stream failed");

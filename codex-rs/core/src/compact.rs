@@ -118,13 +118,7 @@ async fn run_compact_task_inner(
     // Reuse one client session so turn-scoped state (sticky routing, websocket append tracking)
     // survives retries within this compact turn.
 
-    // TODO: If we need to guarantee the persisted mode always matches the prompt used for this
-    // turn, capture it in TurnContext at creation time. Using SessionConfiguration here avoids
-    // duplicating model settings on TurnContext, but an Op after turn start could update the
-    // session config before this write occurs.
-    let collaboration_mode = sess.current_collaboration_mode().await;
-    let rollout_item =
-        RolloutItem::TurnContext(turn_context.to_turn_context_item(collaboration_mode));
+    let rollout_item = RolloutItem::TurnContext(turn_context.to_turn_context_item());
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {

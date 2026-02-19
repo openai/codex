@@ -12,7 +12,6 @@ pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
 use codex_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::AuthManager;
@@ -27,7 +26,6 @@ use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_connection_manager::McpConnectionManagerInitializeParams;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::token_data::TokenData;
 
@@ -126,10 +124,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     let auth_status_entries =
         compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode).await;
 
-    let mut mcp_connection_manager = McpConnectionManager::default();
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
-    let cancel_token = CancellationToken::new();
 
     let sandbox_state = SandboxState {
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
@@ -138,20 +134,17 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         use_linux_sandbox_bwrap: config.features.enabled(Feature::UseLinuxSandboxBwrap),
     };
 
-    mcp_connection_manager
-        .initialize(
-            &mcp_servers,
-            McpConnectionManagerInitializeParams {
-                store_mode: config.mcp_oauth_credentials_store_mode,
-                auth_entries: auth_status_entries,
-                tx_event,
-                cancel_token: cancel_token.clone(),
-                initial_sandbox_state: sandbox_state,
-                codex_home: config.codex_home.clone(),
-                codex_apps_tools_cache_key: codex_apps_tools_cache_key(auth.as_ref()),
-            },
-        )
-        .await;
+    let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+        &mcp_servers,
+        config.mcp_oauth_credentials_store_mode,
+        auth_status_entries,
+        &config.permissions.approval_policy,
+        tx_event,
+        sandbox_state,
+        config.codex_home.clone(),
+        codex_apps_tools_cache_key(auth.as_ref()),
+    )
+    .await;
 
     if force_refetch
         && let Err(err) = mcp_connection_manager

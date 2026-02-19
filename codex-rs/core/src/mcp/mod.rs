@@ -14,7 +14,6 @@ use codex_protocol::mcp::Tool;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
 use serde_json::Value;
-use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -24,7 +23,6 @@ use crate::config::types::McpServerTransportConfig;
 use crate::features::Feature;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_connection_manager::McpConnectionManagerInitializeParams;
 use crate::mcp_connection_manager::SandboxState;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 
@@ -193,10 +191,8 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     let auth_status_entries =
         compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode).await;
 
-    let mut mcp_connection_manager = McpConnectionManager::default();
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
-    let cancel_token = CancellationToken::new();
 
     // Use ReadOnly sandbox policy for MCP snapshot collection (safest default)
     let sandbox_state = SandboxState {
@@ -206,20 +202,17 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         use_linux_sandbox_bwrap: config.features.enabled(Feature::UseLinuxSandboxBwrap),
     };
 
-    mcp_connection_manager
-        .initialize(
-            &mcp_servers,
-            McpConnectionManagerInitializeParams {
-                store_mode: config.mcp_oauth_credentials_store_mode,
-                auth_entries: auth_status_entries.clone(),
-                tx_event,
-                cancel_token: cancel_token.clone(),
-                initial_sandbox_state: sandbox_state,
-                codex_home: config.codex_home.clone(),
-                codex_apps_tools_cache_key: codex_apps_tools_cache_key(auth.as_ref()),
-            },
-        )
-        .await;
+    let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+        &mcp_servers,
+        config.mcp_oauth_credentials_store_mode,
+        auth_status_entries.clone(),
+        &config.permissions.approval_policy,
+        tx_event,
+        sandbox_state,
+        config.codex_home.clone(),
+        codex_apps_tools_cache_key(auth.as_ref()),
+    )
+    .await;
 
     let snapshot =
         collect_mcp_snapshot_from_manager(&mcp_connection_manager, auth_status_entries).await;
