@@ -581,6 +581,12 @@ jobs:
           tool: nextest
           version: 0.9.103
 
+      - name: Enable unprivileged user namespaces (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          # Required for bubblewrap to work on GitHub Actions runners.
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+
       - name: tests
         id: test
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
