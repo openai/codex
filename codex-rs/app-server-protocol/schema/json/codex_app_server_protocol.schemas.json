@@ -2693,6 +2693,17 @@
             "message": {
               "type": "string"
             },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/v2/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "type": {
               "enum": [
                 "agent_message"
