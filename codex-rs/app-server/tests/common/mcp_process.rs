@@ -105,10 +105,6 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "debug");
-        // Bazel/Linux workers can run with smaller default thread stacks, which makes
-        // tokio-runtime-worker stack overflows more likely in app-server integration tests.
-        // Pin a larger minimum stack for the spawned test server process.
-        cmd.env("RUST_MIN_STACK", "4194304");
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
 
         for (k, v) in env_overrides {
