@@ -1,0 +1,217 @@
+# Strict session-level governance policy (maximum security)
+#
+# Use this for high-security contexts: CI pipelines, production access,
+# compliance-sensitive sessions. Layer on top of org and repo policies.
+#
+# Usage (full stack):
+#   codex execpolicy check \
+#     --rules ~/.codex/org-policy.codexpolicy \
+#     --rules .codex/repo-policy.codexpolicy \
+#     --rules /tmp/strict-policy.codexpolicy \
+#     <command>
+
+# --- Network Access ---
+
+# Block all outbound network tools
+prefix_rule(
+    pattern = ["curl"],
+    decision = "forbidden",
+    justification = "Network access is disabled in strict mode. Use pre-fetched dependencies.",
+    match = [
+        "curl https://example.com",
+        "curl -X POST https://example.com",
+    ],
+)
+
+prefix_rule(
+    pattern = ["wget"],
+    decision = "forbidden",
+    justification = "Network access is disabled in strict mode. Use pre-fetched dependencies.",
+    match = [
+        "wget https://example.com",
+    ],
+)
+
+prefix_rule(
+    pattern = ["ssh"],
+    decision = "forbidden",
+    justification = "SSH access is disabled in strict mode. Use approved CI/CD pipelines.",
+    match = [
+        "ssh user@host",
+    ],
+)
+
+prefix_rule(
+    pattern = ["scp"],
+    decision = "forbidden",
+    justification = "SCP access is disabled in strict mode. Use approved file transfer mechanisms.",
+    match = [
+        "scp file.txt user@host:/tmp/",
+    ],
+)
+
+# --- Package Installation ---
+
+# Block runtime package installation
+prefix_rule(
+    pattern = ["npm", "install"],
+    decision = "forbidden",
+    justification = "Package installation is disabled in strict mode. Use pre-installed dependencies.",
+    match = [
+        "npm install",
+        "npm install lodash",
+    ],
+)
+
+prefix_rule(
+    pattern = ["pip", "install"],
+    decision = "forbidden",
+    justification = "Package installation is disabled in strict mode. Use pre-installed dependencies.",
+    match = [
+        "pip install requests",
+    ],
+)
+
+prefix_rule(
+    pattern = ["cargo", "install"],
+    decision = "forbidden",
+    justification = "Package installation is disabled in strict mode. Use pre-built binaries.",
+    match = [
+        "cargo install some-crate",
+    ],
+)
+
+# --- Shell Execution ---
+
+# Block all shell interpreters
+prefix_rule(
+    pattern = ["bash", "-c"],
+    decision = "forbidden",
+    justification = "Arbitrary shell execution is disabled in strict mode.",
+    match = [
+        "bash -c echo hello",
+    ],
+    not_match = [
+        "bash --version",
+    ],
+)
+
+prefix_rule(
+    pattern = ["sh", "-c"],
+    decision = "forbidden",
+    justification = "Arbitrary shell execution is disabled in strict mode.",
+    match = [
+        "sh -c echo hello",
+    ],
+    not_match = [
+        "sh --version",
+    ],
+)
+
+prefix_rule(
+    pattern = ["python", "-c"],
+    decision = "forbidden",
+    justification = "Inline Python execution is disabled in strict mode. Use approved scripts.",
+    match = [
+        "python -c print('hello')",
+    ],
+    not_match = [
+        "python --version",
+    ],
+)
+
+prefix_rule(
+    pattern = ["python3", "-c"],
+    decision = "forbidden",
+    justification = "Inline Python execution is disabled in strict mode. Use approved scripts.",
+    match = [
+        "python3 -c print('hello')",
+    ],
+    not_match = [
+        "python3 --version",
+    ],
+)
+
+# --- Encoding/Obfuscation ---
+
+prefix_rule(
+    pattern = ["base64"],
+    decision = "forbidden",
+    justification = "base64 encoding/decoding is disabled in strict mode to prevent payload obfuscation.",
+    match = [
+        "base64 file.txt",
+        "base64 -d encoded.txt",
+    ],
+)
+
+prefix_rule(
+    pattern = ["xxd"],
+    decision = "forbidden",
+    justification = "Hex dump tools are disabled in strict mode.",
+    match = [
+        "xxd file.bin",
+    ],
+)
+
+# --- File Permissions ---
+
+prefix_rule(
+    pattern = ["chmod"],
+    decision = "forbidden",
+    justification = "Changing file permissions is disabled in strict mode.",
+    match = [
+        "chmod 777 script.sh",
+        "chmod +x script.sh",
+    ],
+)
+
+prefix_rule(
+    pattern = ["chown"],
+    decision = "forbidden",
+    justification = "Changing file ownership is disabled in strict mode.",
+    match = [
+        "chown root:root file.txt",
+    ],
+)
+
+# --- Safe Read-Only Operations (still allowed) ---
+
+prefix_rule(
+    pattern = ["ls"],
+    match = ["ls", "ls -la"],
+)
+
+prefix_rule(
+    pattern = ["cat"],
+    match = ["cat README.md"],
+)
+
+prefix_rule(
+    pattern = ["head"],
+    match = ["head README.md"],
+)
+
+prefix_rule(
+    pattern = ["tail"],
+    match = ["tail README.md"],
+)
+
+prefix_rule(
+    pattern = ["pwd"],
+    match = ["pwd"],
+)
+
+prefix_rule(
+    pattern = ["git", "status"],
+    match = ["git status"],
+)
+
+prefix_rule(
+    pattern = ["git", "log"],
+    match = ["git log"],
+)
+
+prefix_rule(
+    pattern = ["git", "diff"],
+    match = ["git diff"],
+)

@@ -1,0 +1,183 @@
+# Repository-level governance policy (overrides)
+#
+# Layer this on top of the organization policy to add project-specific rules.
+# Place in .codex/repo-policy.codexpolicy at the repository root.
+#
+# Usage (with org policy):
+#   codex execpolicy check \
+#     --rules ~/.codex/org-policy.codexpolicy \
+#     --rules .codex/repo-policy.codexpolicy \
+#     <command>
+
+# --- Package Management ---
+
+# Allow npm commands for Node.js projects
+prefix_rule(
+    pattern = ["npm", ["install", "ci", "test", "run", "ls", "outdated", "audit"]],
+    match = [
+        "npm install",
+        "npm ci",
+        "npm test",
+        "npm run build",
+        "npm audit",
+    ],
+    not_match = [
+        "npm whoami",
+    ],
+)
+
+# Prompt before publishing packages
+prefix_rule(
+    pattern = ["npm", "publish"],
+    decision = "prompt",
+    justification = "Publishing packages affects downstream consumers. Verify version and contents.",
+    match = [
+        "npm publish",
+        "npm publish --tag beta",
+    ],
+    not_match = [
+        "npm install",
+    ],
+)
+
+# Allow pnpm for monorepo management
+prefix_rule(
+    pattern = ["pnpm", ["install", "test", "run", "build", "exec"]],
+    match = [
+        "pnpm install",
+        "pnpm test",
+        "pnpm run build",
+    ],
+    not_match = [
+        "pnpm dlx malicious-pkg",
+    ],
+)
+
+# --- Container Operations ---
+
+# Allow building Docker images
+prefix_rule(
+    pattern = ["docker", "build"],
+    match = [
+        "docker build .",
+        "docker build -t myapp .",
+    ],
+    not_match = [
+        "docker push myapp",
+    ],
+)
+
+# Prompt before pushing container images
+prefix_rule(
+    pattern = ["docker", "push"],
+    decision = "prompt",
+    justification = "Pushing container images to a registry. Verify the image tag and registry.",
+    match = [
+        "docker push myapp:latest",
+    ],
+    not_match = [
+        "docker build .",
+    ],
+)
+
+# --- Build System ---
+
+# Allow Bazel commands (common in this monorepo)
+prefix_rule(
+    pattern = ["bazel", ["build", "test", "query", "info", "version"]],
+    match = [
+        "bazel build //...",
+        "bazel test //codex-rs/execpolicy:all",
+        "bazel query //...",
+    ],
+    not_match = [
+        "bazel clean --expunge",
+    ],
+)
+
+# Prompt on Bazel clean with expunge
+prefix_rule(
+    pattern = ["bazel", "clean", "--expunge"],
+    decision = "prompt",
+    justification = "Expunging the Bazel cache is slow to rebuild. Confirm this is necessary.",
+    match = [
+        "bazel clean --expunge",
+    ],
+    not_match = [
+        "bazel clean",
+    ],
+)
+
+# Allow Cargo commands for Rust development
+prefix_rule(
+    pattern = ["cargo", ["build", "test", "check", "clippy", "fmt", "doc"]],
+    match = [
+        "cargo build",
+        "cargo test",
+        "cargo check",
+        "cargo clippy",
+    ],
+    not_match = [
+        "cargo install malicious-crate",
+    ],
+)
+
+# Prompt before cargo publish
+prefix_rule(
+    pattern = ["cargo", "publish"],
+    decision = "prompt",
+    justification = "Publishing a crate to crates.io. Verify version and crate contents.",
+    match = [
+        "cargo publish",
+    ],
+    not_match = [
+        "cargo build",
+    ],
+)
+
+# --- Testing ---
+
+# Allow test runners
+prefix_rule(
+    pattern = ["jest"],
+    match = [
+        "jest",
+        "jest --coverage",
+    ],
+)
+
+prefix_rule(
+    pattern = ["pytest"],
+    match = [
+        "pytest",
+        "pytest -v",
+    ],
+)
+
+# --- Git Operations (project-specific) ---
+
+# Allow standard git workflow
+prefix_rule(
+    pattern = ["git", ["add", "commit", "pull", "fetch", "branch", "checkout", "switch", "stash"]],
+    match = [
+        "git add .",
+        "git commit -m fix: update config",
+        "git pull origin main",
+        "git checkout -b feature/new",
+    ],
+    not_match = [
+        "git push --force",
+    ],
+)
+
+# Allow force-with-lease as safer alternative to force push
+prefix_rule(
+    pattern = ["git", "push", "--force-with-lease"],
+    match = [
+        "git push --force-with-lease",
+        "git push --force-with-lease origin feature",
+    ],
+    not_match = [
+        "git push --force",
+    ],
+)

