@@ -3418,24 +3418,11 @@ mod handlers {
         // Attempt to inject input into current task.
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let previous_model = sess.previous_model().await;
-            let previous_context_item = sess.previous_context_item().await;
-            let update_items = sess.build_settings_update_items(
-                previous_context_item.as_ref(),
-                previous_model.as_deref(),
-                &current_context,
-            );
-            if !update_items.is_empty() {
-                sess.record_conversation_items(&current_context, &update_items)
-                    .await;
-            }
 
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
             sess.spawn_task(Arc::clone(&current_context), items, regular_task)
-                .await;
-            sess.set_previous_context_item(Some(current_context.to_turn_context_item()))
                 .await;
         }
     }
@@ -4282,6 +4269,19 @@ pub(crate) async fn run_turn(
         error!("Failed to run pre-sampling compact");
         return None;
     }
+    let previous_model = sess.previous_model().await;
+    let previous_context_item = sess.previous_context_item().await;
+    let update_items = sess.build_settings_update_items(
+        previous_context_item.as_ref(),
+        previous_model.as_deref(),
+        turn_context.as_ref(),
+    );
+    if !update_items.is_empty() {
+        sess.record_conversation_items(turn_context.as_ref(), &update_items)
+            .await;
+    }
+    sess.set_previous_context_item(Some(turn_context.to_turn_context_item()))
+        .await;
 
     let skills_outcome = Some(
         sess.services
