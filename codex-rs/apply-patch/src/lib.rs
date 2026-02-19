@@ -18,12 +18,18 @@ use similar::TextDiff;
 use thiserror::Error;
 
 pub use invocation::maybe_parse_apply_patch_verified;
+pub use invocation::maybe_parse_apply_patch_verified_with_options;
 pub use standalone_executable::main;
 
 use crate::invocation::ExtractHeredocError;
 
 /// Detailed instructions for gpt-4.1 on how to use the `apply_patch` tool.
 pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_tool_instructions.md");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ApplyPatchOptions {
+    pub preserve_crlf: bool,
+}
 
 /// Special argv[1] flag used when the Codex executable self-invokes to run the
 /// internal `apply_patch` path.
@@ -33,6 +39,9 @@ pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_too
 /// process-invocation contract between the apply-patch runtime and the arg0
 /// dispatcher.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
+
+/// Flag used to preserve CRLF line endings when applying CRLF patches.
+pub const PRESERVE_CRLF_FLAG: &str = "--preserve-crlf";
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
@@ -185,7 +194,21 @@ pub fn apply_patch(
     stdout: &mut impl std::io::Write,
     stderr: &mut impl std::io::Write,
 ) -> Result<(), ApplyPatchError> {
-    let hunks = match parse_patch(patch) {
+    apply_patch_with_options(patch, ApplyPatchOptions::default(), stdout, stderr)
+}
+
+pub fn apply_patch_with_options(
+    patch: &str,
+    options: ApplyPatchOptions,
+    stdout: &mut impl std::io::Write,
+    stderr: &mut impl std::io::Write,
+) -> Result<(), ApplyPatchError> {
+    let patch = if options.preserve_crlf {
+        patch.to_string()
+    } else {
+        patch.replace("\r\n", "\n")
+    };
+    let hunks = match parse_patch(&patch) {
         Ok(source) => source.hunks,
         Err(e) => {
             match &e {
