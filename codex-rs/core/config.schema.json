@@ -29,6 +29,12 @@
         "$ref": "#/definitions/AgentRoleToml"
       },
       "properties": {
+        "max_depth": {
+          "description": "Maximum nesting depth allowed for spawned agent threads. Root sessions start at depth 0.",
+          "format": "int32",
+          "minimum": 1.0,
+          "type": "integer"
+        },
         "max_threads": {
           "description": "Maximum number of agent threads that can be open concurrently. When unset, no limit is enforced.",
           "format": "uint",
@@ -1593,6 +1599,14 @@
       "description": "Token usage threshold triggering auto-compaction of conversation history.",
       "format": "int64",
       "type": "integer"
+    },
+    "model_catalog_json": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Optional path to a JSON file containing a complete model catalog. When set, this replaces the bundled catalog for this process."
     },
     "model_context_window": {
       "description": "Size of the context window for the model, in tokens.",

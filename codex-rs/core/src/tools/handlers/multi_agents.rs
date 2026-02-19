@@ -124,7 +124,7 @@ mod spawn {
         let prompt = input_preview(&input_items);
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
-        if exceeds_thread_spawn_depth_limit(child_depth) {
+        if exceeds_thread_spawn_depth_limit(child_depth, turn.config.agent_max_depth) {
             return Err(FunctionCallError::RespondToModel(
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
@@ -306,7 +306,7 @@ mod resume_agent {
         let args: ResumeAgentArgs = parse_arguments(&arguments)?;
         let receiver_thread_id = agent_id(&args.id)?;
         let child_depth = next_thread_spawn_depth(&turn.session_source);
-        if exceeds_thread_spawn_depth_limit(child_depth) {
+        if exceeds_thread_spawn_depth_limit(child_depth, turn.config.agent_max_depth) {
             return Err(FunctionCallError::RespondToModel(
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
@@ -840,7 +840,7 @@ fn build_agent_shared_config(
 
 fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
     config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    if exceeds_thread_spawn_depth_limit(child_depth + 1) {
+    if exceeds_thread_spawn_depth_limit(child_depth + 1, config.agent_max_depth) {
         config.features.disable(Feature::Collab);
     }
 }
@@ -851,9 +851,9 @@ mod tests {
     use crate::AuthManager;
     use crate::CodexAuth;
     use crate::ThreadManager;
-    use crate::agent::MAX_THREAD_SPAWN_DEPTH;
     use crate::built_in_model_providers;
     use crate::codex::make_session_and_context;
+    use crate::config::DEFAULT_AGENT_MAX_DEPTH;
     use crate::config::types::ShellEnvironmentPolicy;
     use crate::function_tool::FunctionCallError;
     use crate::protocol::AskForApproval;
@@ -1066,7 +1066,7 @@ mod tests {
 
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
-            depth: MAX_THREAD_SPAWN_DEPTH,
+            depth: DEFAULT_AGENT_MAX_DEPTH,
         });
 
         let invocation = invocation(
@@ -1084,6 +1084,49 @@ mod tests {
                 "Agent depth limit reached. Solve the task yourself.".to_string()
             )
         );
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
+        #[derive(Debug, Deserialize)]
+        struct SpawnAgentResult {
+            agent_id: String,
+        }
+
+        let (mut session, mut turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+
+        let mut config = (*turn.config).clone();
+        config.agent_max_depth = DEFAULT_AGENT_MAX_DEPTH + 1;
+        turn.config = Arc::new(config);
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: session.conversation_id,
+            depth: DEFAULT_AGENT_MAX_DEPTH,
+        });
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({"message": "hello"})),
+        );
+        let output = MultiAgentHandler
+            .handle(invocation)
+            .await
+            .expect("spawn should succeed within configured depth");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            success,
+            ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: SpawnAgentResult =
+            serde_json::from_str(&content).expect("spawn_agent result should be json");
+        assert!(!result.agent_id.is_empty());
+        assert_eq!(success, Some(true));
     }
 
     #[tokio::test]
@@ -1442,7 +1485,7 @@ mod tests {
 
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
-            depth: MAX_THREAD_SPAWN_DEPTH,
+            depth: DEFAULT_AGENT_MAX_DEPTH,
         });
 
         let invocation = invocation(
