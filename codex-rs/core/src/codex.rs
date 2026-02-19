@@ -2707,13 +2707,14 @@ impl Session {
         let context_items = if should_inject_full_context {
             let mut initial_context = self.build_initial_context(turn_context).await;
             // Full reinjection bypasses the pure diff item list, so explicitly preserve a
-            // model-switch instruction when one is needed this turn.
+            // model-switch instruction when one is needed this turn. Keep it before the rest
+            // of full context so model-specific guidance is read first.
             if let Some(model_switch_item) = settings_update_items
                 .iter()
                 .find(|item| Session::is_model_switch_developer_message(item))
                 .cloned()
             {
-                initial_context.push(model_switch_item);
+                initial_context.insert(0, model_switch_item);
             }
             initial_context
         } else {
