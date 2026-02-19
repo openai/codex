@@ -3100,10 +3100,12 @@ impl ChatWidget {
             }
             KeyEvent {
                 code: KeyCode::Up,
-                modifiers: KeyModifiers::ALT,
+                modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if !self.queued_user_messages.is_empty() => {
+            } if modifiers.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
+                && !self.queued_user_messages.is_empty() =>
+            {
                 // Prefer the most recently queued item.
                 if let Some(user_message) = self.queued_user_messages.pop_back() {
                     self.restore_user_message_to_composer(user_message);
