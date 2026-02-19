@@ -25,8 +25,9 @@ use tracing::info;
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    reinject_initial_context: bool,
 ) -> CodexResult<()> {
-    run_remote_compact_task_inner(&sess, &turn_context).await?;
+    run_remote_compact_task_inner(&sess, &turn_context, reinject_initial_context).await?;
     Ok(())
 }
 
@@ -41,14 +42,17 @@ pub(crate) async fn run_remote_compact_task(
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_compact_task_inner(&sess, &turn_context).await
+    run_remote_compact_task_inner(&sess, &turn_context, false).await
 }
 
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    reinject_initial_context: bool,
 ) -> CodexResult<()> {
-    if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context).await {
+    if let Err(err) =
+        run_remote_compact_task_inner_impl(sess, turn_context, reinject_initial_context).await
+    {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
         );
@@ -61,6 +65,7 @@ async fn run_remote_compact_task_inner(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    reinject_initial_context: bool,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
@@ -122,9 +127,12 @@ async fn run_remote_compact_task_inner_impl(
             Err(err)
         })
         .await?;
-    new_history = sess
-        .process_compacted_history(turn_context, new_history)
-        .await;
+    if reinject_initial_context {
+        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+        new_history = crate::compact::process_compacted_history(new_history, &initial_context);
+    } else {
+        new_history = crate::compact::process_compacted_history(new_history, &[]);
+    }
     // Reattach the stripped model-switch update only after successful compaction so the model
     // still sees the switch instructions on the next real sampling request.
     if let Some(model_switch_item) = stripped_model_switch_item {
