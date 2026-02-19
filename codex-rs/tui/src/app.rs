@@ -1026,6 +1026,7 @@ impl App {
             config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::Cli,
+            config.model_catalog.clone(),
         ));
         let mut model = thread_manager
             .get_models_manager()

@@ -156,6 +156,8 @@ impl ExecApprovalRequirement {
 
 /// - Never, OnFailure: do not ask
 /// - OnRequest: ask unless sandbox policy is DangerFullAccess
+/// - Reject: ask unless sandbox policy is DangerFullAccess, but auto-reject
+///   when `sandbox_approval` rejection is enabled.
 /// - UnlessTrusted: always ask
 pub(crate) fn default_exec_approval_requirement(
     policy: AskForApproval,
@@ -163,14 +165,23 @@ pub(crate) fn default_exec_approval_requirement(
 ) -> ExecApprovalRequirement {
     let needs_approval = match policy {
         AskForApproval::Never | AskForApproval::OnFailure => false,
-        AskForApproval::OnRequest => !matches!(
+        AskForApproval::OnRequest | AskForApproval::Reject(_) => !matches!(
             sandbox_policy,
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
         ),
         AskForApproval::UnlessTrusted => true,
     };
 
-    if needs_approval {
+    if needs_approval
+        && matches!(
+            policy,
+            AskForApproval::Reject(reject_config) if reject_config.rejects_sandbox_approval()
+        )
+    {
+        ExecApprovalRequirement::Forbidden {
+            reason: "approval policy rejected sandbox approval prompt".to_string(),
+        }
+    } else if needs_approval {
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
             proposed_execpolicy_amendment: None,
@@ -224,7 +235,13 @@ pub(crate) trait Approvable<Req> {
 
     /// Decide we can request an approval for no-sandbox execution.
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
-        !matches!(policy, AskForApproval::Never | AskForApproval::OnRequest)
+        match policy {
+            AskForApproval::OnFailure => true,
+            AskForApproval::UnlessTrusted => true,
+            AskForApproval::Never => false,
+            AskForApproval::OnRequest => false,
+            AskForApproval::Reject(reject_config) => !reject_config.sandbox_approval,
+        }
     }
 
     fn start_approval_async<'a>(
@@ -313,6 +330,7 @@ impl<'a> SandboxAttempt<'a> {
 mod tests {
     use super::*;
     use codex_protocol::protocol::NetworkAccess;
+    use codex_protocol::protocol::RejectConfig;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -338,6 +356,45 @@ mod tests {
                 AskForApproval::OnRequest,
                 &SandboxPolicy::new_read_only_policy()
             ),
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[test]
+    fn default_exec_approval_requirement_rejects_sandbox_prompt_when_configured() {
+        let policy = AskForApproval::Reject(RejectConfig {
+            sandbox_approval: true,
+            rules: false,
+            mcp_elicitations: false,
+        });
+
+        let requirement =
+            default_exec_approval_requirement(policy, &SandboxPolicy::new_read_only_policy());
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Forbidden {
+                reason: "approval policy rejected sandbox approval prompt".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn default_exec_approval_requirement_keeps_prompt_when_sandbox_rejection_is_disabled() {
+        let policy = AskForApproval::Reject(RejectConfig {
+            sandbox_approval: false,
+            rules: true,
+            mcp_elicitations: true,
+        });
+
+        let requirement =
+            default_exec_approval_requirement(policy, &SandboxPolicy::new_read_only_policy());
+
+        assert_eq!(
+            requirement,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
                 proposed_execpolicy_amendment: None,

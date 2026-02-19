@@ -169,6 +169,7 @@ async fn resumed_initial_messages_render_history() {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
+                phase: None,
             }),
         ]),
         network_proxy: None,
@@ -1579,7 +1580,7 @@ async fn make_chatwidget_manual(
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
-    let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone()));
+    let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone(), None));
     let reasoning_effort = None;
     let base_mode = CollaborationMode {
         mode: ModeKind::Default,
@@ -1698,6 +1699,7 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.models_manager = Arc::new(ModelsManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
+        None,
     ));
 }
 
@@ -3322,6 +3324,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
         id: "turn-1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Final response.".into(),
+            phase: None,
         }),
     });
     chat.handle_codex_event(Event {
@@ -7013,6 +7016,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "First message".into(),
+            phase: None,
         }),
     });
 
@@ -7021,6 +7025,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Second message".into(),
+            phase: None,
         }),
     });
 
@@ -7066,6 +7071,7 @@ async fn final_reasoning_then_message_without_deltas_are_rendered() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
+            phase: None,
         }),
     });
 
@@ -7126,6 +7132,7 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
+            phase: None,
         }),
     });
 
@@ -7147,7 +7154,12 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message:
+                "I’m going to search the repo for where “Change Approved” is rendered to update that view."
+                    .into(),
+            phase: None,
+        }),
     });
 
     let command = vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()];
