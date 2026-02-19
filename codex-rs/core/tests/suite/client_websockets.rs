@@ -730,7 +730,8 @@ async fn responses_websocket_turn_metadata_can_appear_after_initial_request() {
 
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
-    let turn_metadata = r#"{"turn_id":"turn-123","sandbox":"workspace-write"}"#;
+    let base_turn_metadata = r#"{"turn_id":"turn-123","sandbox":"workspace-write"}"#;
+    let enriched_turn_metadata = r#"{"turn_id":"turn-123","sandbox":"workspace-write","workspaces":[{"root_path":"/tmp/repo","latest_git_commit_hash":"abc123","associated_remote_urls":["git@github.com:openai/codex.git"],"has_changes":true}]}"#;
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
         message_item("hello"),
@@ -738,13 +739,18 @@ async fn responses_websocket_turn_metadata_can_appear_after_initial_request() {
         message_item("second"),
     ]);
 
-    stream_until_complete_with_turn_metadata(&mut client_session, &harness, &prompt_one, None)
-        .await;
+    stream_until_complete_with_turn_metadata(
+        &mut client_session,
+        &harness,
+        &prompt_one,
+        Some(base_turn_metadata),
+    )
+    .await;
     stream_until_complete_with_turn_metadata(
         &mut client_session,
         &harness,
         &prompt_two,
-        Some(turn_metadata),
+        Some(enriched_turn_metadata),
     )
     .await;
 
@@ -754,11 +760,14 @@ async fn responses_websocket_turn_metadata_can_appear_after_initial_request() {
     let second = connection.get(1).expect("missing request").body_json();
 
     assert_eq!(first["type"].as_str(), Some("response.create"));
-    assert_eq!(first.get("client_metadata"), None);
+    assert_eq!(
+        first["client_metadata"]["x-codex-turn-metadata"].as_str(),
+        Some(base_turn_metadata)
+    );
     assert_eq!(second["type"].as_str(), Some("response.append"));
     assert_eq!(
         second["client_metadata"]["x-codex-turn-metadata"].as_str(),
-        Some(turn_metadata)
+        Some(enriched_turn_metadata)
     );
 
     server.shutdown().await;
