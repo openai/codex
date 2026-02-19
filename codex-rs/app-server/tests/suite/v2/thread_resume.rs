@@ -507,14 +507,19 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
 #[tokio::test]
 async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> Result<()> {
     let server = responses::start_mock_server().await;
-    let first_body = responses::sse(vec![
+    let first_response = responses::sse_response(responses::sse(vec![
         responses::ev_response_created("resp-1"),
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
-    ]);
-    let second_body = responses::sse(vec![responses::ev_response_created("resp-2")]);
+    ]));
+    let second_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]))
+    .set_delay(std::time::Duration::from_millis(500));
     let _response_mock =
-        responses::mount_sse_sequence(&server, vec![first_body, second_body]).await;
+        responses::mount_response_sequence(&server, vec![first_response, second_response]).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
