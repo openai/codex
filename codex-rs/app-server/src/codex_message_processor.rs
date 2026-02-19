@@ -6260,7 +6260,9 @@ async fn handle_pending_thread_resume_request(
             return;
         }
     };
-    thread.status = thread_watch_manager.loaded_status_for_thread(&thread.id).await;
+    thread.status = thread_watch_manager
+        .loaded_status_for_thread(&thread.id)
+        .await;
 
     let ThreadConfigSnapshot {
         model,
