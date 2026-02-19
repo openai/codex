@@ -185,12 +185,25 @@ fn shell_event(
     timeout_ms: u64,
     sandbox_permissions: SandboxPermissions,
 ) -> Result<Value> {
+    shell_event_with_prefix_rule(call_id, command, timeout_ms, sandbox_permissions, None)
+}
+
+fn shell_event_with_prefix_rule(
+    call_id: &str,
+    command: &str,
+    timeout_ms: u64,
+    sandbox_permissions: SandboxPermissions,
+    prefix_rule: Option<Vec<String>>,
+) -> Result<Value> {
     let mut args = json!({
         "command": command,
         "timeout_ms": timeout_ms,
     });
     if sandbox_permissions.requires_escalated_permissions() {
         args["sandbox_permissions"] = json!(sandbox_permissions);
+    }
+    if let Some(prefix_rule) = prefix_rule {
+        args["prefix_rule"] = json!(prefix_rule);
     }
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "shell_command", &args_str))
@@ -1923,6 +1936,61 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
         fs::read_to_string(&allow_prefix_path)?,
         "",
         "unexpected file contents after second run"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn invalid_requested_prefix_rule_falls_back_to_heuristic_execpolicy_amendment() -> Result<()>
+{
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+    });
+    let test = builder.build(&server).await?;
+
+    let call_id = "invalid-prefix-rule";
+    let command = "echo safe && rm -rf /tmp/codex-prefix-fallback";
+    let event = shell_event_with_prefix_rule(
+        call_id,
+        command,
+        1_000,
+        SandboxPermissions::RequireEscalated,
+        Some(vec!["echo".to_string(), "safe".to_string()]),
+    )?;
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-invalid-prefix-1"),
+            event,
+            ev_completed("resp-invalid-prefix-1"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "invalid-prefix-rule",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, command).await;
+    assert_eq!(
+        approval.proposed_execpolicy_amendment,
+        Some(ExecPolicyAmendment::new(vec![
+            "rm".to_string(),
+            "-rf".to_string(),
+            "/tmp/codex-prefix-fallback".to_string(),
+        ]))
     );
 
     Ok(())

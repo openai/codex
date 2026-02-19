@@ -224,7 +224,15 @@ impl ExecPolicyManager {
         let requested_amendment = derive_requested_execpolicy_amendment_from_prefix_rule(
             prefix_rule.as_ref(),
             &evaluation.matched_rules,
-        );
+        )
+        .filter(|amendment| {
+            prefix_rule_would_approve_command(
+                exec_policy.as_ref(),
+                &amendment.command,
+                &commands,
+                &exec_policy_fallback,
+            )
+        });
 
         match evaluation.decision {
             Decision::Forbidden => ExecApprovalRequirement::Forbidden {
@@ -613,6 +621,26 @@ fn derive_requested_execpolicy_amendment_from_prefix_rule(
     }
 
     Some(ExecPolicyAmendment::new(prefix_rule.clone()))
+}
+
+fn prefix_rule_would_approve_command(
+    exec_policy: &Policy,
+    prefix_rule: &[String],
+    commands: &[Vec<String>],
+    exec_policy_fallback: &impl Fn(&[String]) -> Decision,
+) -> bool {
+    let mut policy_with_prefix_rule = exec_policy.clone();
+    if policy_with_prefix_rule
+        .add_prefix_rule(prefix_rule, Decision::Allow)
+        .is_err()
+    {
+        return false;
+    }
+
+    policy_with_prefix_rule
+        .check_multiple(commands.iter(), exec_policy_fallback)
+        .decision
+        == Decision::Allow
 }
 
 /// Only return a reason when a policy rule drove the prompt decision.
@@ -1125,7 +1153,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     }
 
     #[tokio::test]
-    async fn keeps_requested_amendment_for_heredoc_fallback_prompts() {
+    async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_wont_match() {
         let command = vec![
             "bash".to_string(),
             "-lc".to_string(),
@@ -1147,7 +1175,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             requirement,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
-                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(requested_prefix)),
+                proposed_execpolicy_amendment: None,
             }
         );
     }
@@ -1467,6 +1495,38 @@ prefix_rule(
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                     "cargo".to_string(),
                     "install".to_string(),
+                ])),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn request_rule_omits_prefix_rule_when_it_does_not_approve_command() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "cargo install cargo-insta && rm -rf /tmp/codex".to_string(),
+        ];
+        let manager = ExecPolicyManager::default();
+
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
+                prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                    "rm".to_string(),
+                    "-rf".to_string(),
+                    "/tmp/codex".to_string(),
                 ])),
             }
         );
