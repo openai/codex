@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -162,6 +163,15 @@ impl ExecPolicyManager {
         &self,
         req: ExecApprovalRequest<'_>,
     ) -> ExecApprovalRequirement {
+        self.create_exec_approval_requirement_for_command_with_overlay(req, &[])
+            .await
+    }
+
+    pub(crate) async fn create_exec_approval_requirement_for_command_with_overlay(
+        &self,
+        req: ExecApprovalRequest<'_>,
+        overlay_allow_prefixes: &[Vec<String>],
+    ) -> ExecApprovalRequirement {
         let ExecApprovalRequest {
             command,
             approval_policy,
@@ -170,6 +180,12 @@ impl ExecPolicyManager {
             prefix_rule,
         } = req;
         let exec_policy = self.current();
+        let exec_policy = with_overlay_allow_prefixes(exec_policy.as_ref(), overlay_allow_prefixes);
+        let overlay_allow_prefixes = overlay_allow_prefixes
+            .iter()
+            .filter(|prefix| !prefix.is_empty())
+            .cloned()
+            .collect::<HashSet<_>>();
         let (commands, used_complex_parsing) = commands_for_exec_policy(command);
         // Keep heredoc prefix parsing for rule evaluation so existing
         // allow/prompt/forbidden rules still apply, but avoid auto-derived
@@ -218,7 +234,9 @@ impl ExecPolicyManager {
             Decision::Allow => ExecApprovalRequirement::Skip {
                 // Bypass sandbox if execpolicy allows the command
                 bypass_sandbox: evaluation.matched_rules.iter().any(|rule_match| {
-                    is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+                    is_policy_match(rule_match)
+                        && rule_match.decision() == Decision::Allow
+                        && !is_overlay_allow_rule_match(rule_match, &overlay_allow_prefixes)
                 }),
                 proposed_execpolicy_amendment: if auto_amendment_allowed {
                     try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
@@ -252,6 +270,37 @@ impl ExecPolicyManager {
         updated_policy.add_prefix_rule(&prefix, Decision::Allow)?;
         self.policy.store(Arc::new(updated_policy));
         Ok(())
+    }
+}
+
+fn with_overlay_allow_prefixes(policy: &Policy, overlay_allow_prefixes: &[Vec<String>]) -> Policy {
+    if overlay_allow_prefixes.is_empty() {
+        return policy.clone();
+    }
+
+    let mut merged = policy.clone();
+    for prefix in overlay_allow_prefixes {
+        if prefix.is_empty() {
+            continue;
+        }
+        if let Err(err) = merged.add_prefix_rule(prefix, Decision::Allow) {
+            tracing::warn!("failed to append in-memory skill prefix rule {prefix:?}: {err}");
+        }
+    }
+    merged
+}
+
+fn is_overlay_allow_rule_match(
+    rule_match: &RuleMatch,
+    overlay_allow_prefixes: &HashSet<Vec<String>>,
+) -> bool {
+    match rule_match {
+        RuleMatch::PrefixRuleMatch {
+            matched_prefix,
+            decision: Decision::Allow,
+            ..
+        } => overlay_allow_prefixes.contains(matched_prefix),
+        RuleMatch::PrefixRuleMatch { .. } | RuleMatch::HeuristicsRuleMatch { .. } => false,
     }
 }
 
@@ -1708,6 +1757,32 @@ prefix_rule(
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_skill_overlay_allow_rule_does_not_bypass_sandbox() {
+        let command = vec_str(&["skills/demo/scripts/run.sh"]);
+        let manager = ExecPolicyManager::default();
+        let requirement = manager
+            .create_exec_approval_requirement_for_command_with_overlay(
+                ExecApprovalRequest {
+                    command: &command,
+                    approval_policy: AskForApproval::OnRequest,
+                    sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    prefix_rule: None,
+                },
+                std::slice::from_ref(&command),
+            )
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
             }
         );
     }

@@ -9,10 +9,13 @@ use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
+use crate::parse_command::parse_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
+use crate::skills::derive_skill_execpolicy_overlay_prefixes_for_command;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -297,16 +300,35 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 
+        let skills_outcome = session
+            .services
+            .skills_manager
+            .skills_for_cwd(&turn.cwd, false)
+            .await;
+        let shell_zsh_fork_enabled = session.features().enabled(Feature::ShellZshFork);
+        let command_actions = parse_command(&exec_params.command);
+        let skill_execpolicy_overlay_prefixes =
+            derive_skill_execpolicy_overlay_prefixes_for_command(
+                &skills_outcome,
+                shell_zsh_fork_enabled,
+                &exec_params.command,
+                &exec_params.cwd,
+                &command_actions,
+            );
+
         let exec_approval_requirement = session
             .services
             .exec_policy
-            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                command: &exec_params.command,
-                approval_policy: turn.approval_policy,
-                sandbox_policy: &turn.sandbox_policy,
-                sandbox_permissions: exec_params.sandbox_permissions,
-                prefix_rule,
-            })
+            .create_exec_approval_requirement_for_command_with_overlay(
+                ExecApprovalRequest {
+                    command: &exec_params.command,
+                    approval_policy: turn.approval_policy,
+                    sandbox_policy: &turn.sandbox_policy,
+                    sandbox_permissions: exec_params.sandbox_permissions,
+                    prefix_rule,
+                },
+                &skill_execpolicy_overlay_prefixes,
+            )
             .await;
 
         let req = ShellRequest {
