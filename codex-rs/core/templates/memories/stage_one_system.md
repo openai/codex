@@ -109,6 +109,16 @@ Typical real-world signals (use as examples when analyzing the rollout):
 3) User keeps iterating on the same task:
    - Requests for fixes/revisions on the same artifact usually mean partial, not success.
    - Requesting a restart or pointing out contradictions often indicates fail.
+4) Last task in the rollout:
+   - Treat the final task more conservatively than earlier tasks.
+   - If there is no explicit user feedback or environment validation for the final task,
+     prefer `uncertain` (or `partial` if there was obvious progress but no confirmation).
+   - For non-final tasks, switching to another task without unresolved blockers is a stronger
+     positive signal.
+
+Signal priority:
+- Explicit user feedback and explicit environment/test/tool validation outrank all heuristics.
+- If heuristic signals conflict with explicit feedback, follow explicit feedback.
 
 Fallback heuristics:
   - Success: explicit "done/works", tests pass, correct artifact produced, user
@@ -235,12 +245,32 @@ shows or why it matters>:
 
 The schema is below.
 ---
-rollout_summary_file: <file.md>
 description: brief description of the task and outcome
+task: <primary_task_signature>
+task_group: <repo_or_workflow_bucket>
+task_outcome: <success|partial|fail|uncertain>
 keywords: k1, k2, k3, ... <searchable handles (tool names, error names, repo concepts, contracts)>
 ---
-- <Structured memory entries. Use bullets. No bolding text.>
+
+Then write task-grouped body content (required):
+### Task 1: <short task name>
+task: <task signature for this task>
+task_group: <project/workflow topic>
+task_outcome: <success|partial|fail|uncertain>
+- <useful memory bullet>
 - ...
+
+### Task 2: <short task name> (if needed)
+task: ...
+task_group: ...
+task_outcome: ...
+- ...
+
+Task grouping rules (strict):
+- Every distinct user task in the thread must appear as its own `### Task <n>` block.
+- Do not merge unrelated tasks into one block just because they happen in the same thread.
+- If a thread contains only one task, keep exactly one task block.
+- For each task block, keep the outcome tied to evidence relevant to that task.
 
 What to write in memory entries: Extract useful takeaways from the rollout summaries,
 especially from "User preferences", "Reusable knowledge", "References", and

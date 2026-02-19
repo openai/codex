@@ -128,12 +128,15 @@ Rules:
 1) `MEMORY.md` FORMAT (STRICT)
 ============================================================
 
-Clustered schema:
+Memory block schema:
 ---
 rollout_summary_files:
   - <file1.md> (<annotation that includes status/usefulness, cwd, and updated_at, e.g. "success, most useful architecture walkthrough, cwd=/repo/path, updated_at=2026-02-12T10:30:00Z">)
   - <file2.md> (<annotation with cwd=/..., updated_at=...>)
 description: brief description of the shared tasks/outcomes
+task: <task signature for this block; specific and searchable>
+task_group: <project/repo/workflow topic; broad but meaningful>
+task_scope: <what this block covers and when to use it>
 keywords: k1, k2, k3, ... <searchable handles (tool names, error names, repo concepts, contracts)>
 ---
 
@@ -141,8 +144,14 @@ keywords: k1, k2, k3, ... <searchable handles (tool names, error names, repo con
 - ...
 
 Schema rules (strict):
-- Keep entries compact and retrieval-friendly.
-- A single note block may correspond to multiple related tasks; aggregate when tasks and lessons align.
+- Keep entries retrieval-friendly, but not shallow.
+- Default: one rollout summary per MEMORY block.
+- Clustering is allowed only when ALL are true:
+  - similar primary task intent,
+  - similar technical context (repo/workflow),
+  - similar practical outcome pattern.
+- Do not cluster just because of overlapping keywords.
+- Preserve task distinction whenever task objectives differ.
 - In `rollout_summary_files`, each parenthesized annotation must include
   `cwd=<path>` and `updated_at=<timestamp>` copied from that rollout summary metadata.
   If missing from an individual rollout summary, recover them from `raw_memories.md`.
@@ -150,6 +159,7 @@ Schema rules (strict):
   (e.g., "- Related skill: skills/<skill-name>/SKILL.md").
 - Use lowercase, hyphenated skill folder names.
 - Preserve provenance: include the relevant rollout_summary_file(s) for the block.
+- Do not emit placeholder fields (`task: task`, `task_group: misc`, etc.).
 
 What to write in memory entries: Extract the highest-signal takeaways from the rollout
 summaries, especially from "User preferences", "Reusable knowledge", "References", and
@@ -162,6 +172,11 @@ capture them here so they're easy to find and can be reflected in memory_summary
 The goal of MEMORY.md is to support related-but-not-identical future tasks, so keep
 insights slightly more general; when a future task is very similar, expect the agent to
 use the rollout summary for full detail.
+Each block should be detailed enough to be useful on its own:
+- prioritize high-information memory bodies over compactness; memory blocks should be materially richer than summary topics
+- include concrete triggers, validated commands/paths, and failure shields
+- include outcome-specific notes for each task (what worked, what failed, what remains uncertain)
+- include enough operational detail that MEMORY.md is richer than memory_summary.md
 
 ============================================================
 2) `memory_summary.md` FORMAT (STRICT)
@@ -210,17 +225,17 @@ For example, include (when known):
 ## What's in Memory
 This is a compact index to help future agents quickly find details in `MEMORY.md`,
 `skills/`, and `rollout_summaries/`.
-Organize by topic. Each bullet should include: topic, keywords (used to search over
-memory files), and a brief description.
+Organize by topic. Each bullet must include: topic, keywords, and a clear description.
 Ordered by utility - which is the most likely to be useful for a future agent.
 
 Recommended format:
 - <topic>: <keyword1>, <keyword2>, <keyword3>, ...
-  - desc: <brief description>
+  - desc: <clear and specific description of what is inside this topic and when to use it>
 
 Notes:
 - Do not include large snippets; push details into MEMORY.md and rollout summaries.
 - Prefer topics/keywords that help a future agent search MEMORY.md efficiently.
+- Prefer clear topic taxonomy over verbose drill-down pointers.
 
 ============================================================
 3) `skills/` FORMAT (optional)

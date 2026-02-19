@@ -82,10 +82,11 @@ async fn rebuild_raw_memories_file(
         )
         .map_err(raw_memories_format_error)?;
         writeln!(body, "cwd: {}", memory.cwd.display()).map_err(raw_memories_format_error)?;
-        writeln!(body).map_err(raw_memories_format_error)?;
         let rollout_summary_file = format!("{}.md", rollout_summary_file_stem(memory));
-        let raw_memory =
-            replace_rollout_summary_file_in_raw_memory(&memory.raw_memory, &rollout_summary_file);
+        writeln!(body, "rollout_summary_file: {rollout_summary_file}")
+            .map_err(raw_memories_format_error)?;
+        writeln!(body).map_err(raw_memories_format_error)?;
+        let raw_memory = strip_rollout_summary_file_from_raw_memory(&memory.raw_memory);
         body.push_str(raw_memory.trim());
         body.push_str("\n\n");
     }
@@ -161,21 +162,16 @@ fn rollout_summary_format_error(err: std::fmt::Error) -> std::io::Error {
     std::io::Error::other(format!("format rollout summary: {err}"))
 }
 
-fn replace_rollout_summary_file_in_raw_memory(
-    raw_memory: &str,
-    rollout_summary_file: &str,
-) -> String {
-    const ROLLOUT_SUMMARY_PREFIX: &str = "rollout_summary_file: ";
-
-    let replacement = format!("rollout_summary_file: {rollout_summary_file}");
+fn strip_rollout_summary_file_from_raw_memory(raw_memory: &str) -> String {
+    const ROLLOUT_SUMMARY_PREFIXES: [&str; 2] =
+        ["rollout_summary_file:", "rollout_summary_file_name:"];
     raw_memory
         .split('\n')
-        .map(|line| {
-            if line.starts_with(ROLLOUT_SUMMARY_PREFIX) {
-                replacement.as_str()
-            } else {
-                line
-            }
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !ROLLOUT_SUMMARY_PREFIXES
+                .iter()
+                .any(|prefix| trimmed.starts_with(prefix))
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -270,9 +266,9 @@ pub(super) fn rollout_summary_file_stem_from_parts(
 
 #[cfg(test)]
 mod tests {
-    use super::replace_rollout_summary_file_in_raw_memory;
     use super::rollout_summary_file_stem;
     use super::rollout_summary_file_stem_from_parts;
+    use super::strip_rollout_summary_file_from_raw_memory;
     use chrono::TimeZone;
     use chrono::Utc;
     use codex_protocol::ThreadId;
@@ -341,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn replace_rollout_summary_file_in_raw_memory_replaces_existing_value() {
+    fn strip_rollout_summary_file_from_raw_memory_removes_existing_value() {
         let raw_memory = "\
 ---
 rollout_summary_file: wrong.md
@@ -349,16 +345,12 @@ description: demo
 keywords: one, two
 ---
 - body line";
-        let normalized = replace_rollout_summary_file_in_raw_memory(
-            raw_memory,
-            "2025-01-01T00-00-00-abcd-demo.md",
-        );
+        let normalized = strip_rollout_summary_file_from_raw_memory(raw_memory);
 
         assert_eq!(
             normalized,
             "\
 ---
-rollout_summary_file: 2025-01-01T00-00-00-abcd-demo.md
 description: demo
 keywords: one, two
 ---
@@ -367,7 +359,7 @@ keywords: one, two
     }
 
     #[test]
-    fn replace_rollout_summary_file_in_raw_memory_replaces_placeholder() {
+    fn strip_rollout_summary_file_from_raw_memory_removes_placeholder() {
         let raw_memory = "\
 ---
 rollout_summary_file: <system_populated_file.md>
@@ -375,16 +367,12 @@ description: demo
 keywords: one, two
 ---
 - body line";
-        let normalized = replace_rollout_summary_file_in_raw_memory(
-            raw_memory,
-            "2025-01-01T00-00-00-abcd-demo.md",
-        );
+        let normalized = strip_rollout_summary_file_from_raw_memory(raw_memory);
 
         assert_eq!(
             normalized,
             "\
 ---
-rollout_summary_file: 2025-01-01T00-00-00-abcd-demo.md
 description: demo
 keywords: one, two
 ---
@@ -393,17 +381,36 @@ keywords: one, two
     }
 
     #[test]
-    fn replace_rollout_summary_file_in_raw_memory_leaves_text_without_field_unchanged() {
+    fn strip_rollout_summary_file_from_raw_memory_removes_legacy_field_name() {
+        let raw_memory = "\
+---
+rollout_summary_file_name: stale_name.md
+description: demo
+keywords: one, two
+---
+- body line";
+        let normalized = strip_rollout_summary_file_from_raw_memory(raw_memory);
+
+        assert_eq!(
+            normalized,
+            "\
+---
+description: demo
+keywords: one, two
+---
+- body line"
+        );
+    }
+
+    #[test]
+    fn strip_rollout_summary_file_from_raw_memory_leaves_text_without_field_unchanged() {
         let raw_memory = "\
 ---
 description: demo
 keywords: one, two
 ---
 - body line";
-        let normalized = replace_rollout_summary_file_in_raw_memory(
-            raw_memory,
-            "2025-01-01T00-00-00-abcd-demo.md",
-        );
+        let normalized = strip_rollout_summary_file_from_raw_memory(raw_memory);
         assert_eq!(normalized, raw_memory);
     }
 }
