@@ -123,7 +123,7 @@ impl ToolRegistry {
             None => {
                 let message =
                     unsupported_tool_call_message(&invocation.payload, tool_name.as_ref());
-                otel.tool_result_with_context(
+                otel.tool_result_with_tags(
                     tool_name.as_ref(),
                     &call_id_owned,
                     log_payload.as_ref(),
@@ -140,7 +140,7 @@ impl ToolRegistry {
 
         if !handler.matches_kind(&invocation.payload) {
             let message = format!("tool {tool_name} invoked with incompatible payload");
-            otel.tool_result_with_context(
+            otel.tool_result_with_tags(
                 tool_name.as_ref(),
                 &call_id_owned,
                 log_payload.as_ref(),

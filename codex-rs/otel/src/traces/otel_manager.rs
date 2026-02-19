@@ -613,7 +613,7 @@ impl OtelManager {
             Err(error) => (Cow::Owned(error.to_string()), false),
         };
 
-        self.tool_result_with_context(
+        self.tool_result_with_tags(
             tool_name,
             call_id,
             arguments,
@@ -653,22 +653,6 @@ impl OtelManager {
 
     #[allow(clippy::too_many_arguments)]
     pub fn tool_result_with_tags(
-        &self,
-        tool_name: &str,
-        call_id: &str,
-        arguments: &str,
-        duration: Duration,
-        success: bool,
-        output: &str,
-        extra_tags: &[(&str, &str)],
-    ) {
-        self.tool_result_with_context(
-            tool_name, call_id, arguments, duration, success, output, extra_tags, None, None,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn tool_result_with_context(
         &self,
         tool_name: &str,
         call_id: &str,
