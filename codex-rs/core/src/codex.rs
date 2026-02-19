@@ -1288,9 +1288,9 @@ impl Session {
             // before any MCP-related events. It is reasonable to consider
             // changing this to use Option or OnceCell, though the current
             // setup is straightforward enough and performs well.
-            mcp_connection_manager: Arc::new(
-                RwLock::new(McpConnectionManager::new_uninitialized()),
-            ),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
+                &config.permissions.approval_policy,
+            ))),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
@@ -1417,6 +1417,7 @@ impl Session {
             &mcp_servers,
             config.mcp_oauth_credentials_store_mode,
             auth_statuses.clone(),
+            &session_configuration.approval_policy,
             tx_event.clone(),
             sandbox_state,
         )
@@ -1872,6 +1873,11 @@ impl Session {
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
+        self.services
+            .mcp_connection_manager
+            .read()
+            .await
+            .set_approval_policy(&session_configuration.approval_policy);
 
         if sandbox_policy_changed {
             let sandbox_state = SandboxState {
@@ -3059,6 +3065,7 @@ impl Session {
             &mcp_servers,
             store_mode,
             auth_statuses,
+            &turn_context.config.permissions.approval_policy,
             self.get_tx_event(),
             sandbox_state,
         )
@@ -7383,7 +7390,9 @@ mod tests {
         let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(
-                McpConnectionManager::new_mcp_connection_manager_for_tests(),
+                McpConnectionManager::new_mcp_connection_manager_for_tests(
+                    &config.permissions.approval_policy,
+                ),
             )),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
@@ -7537,7 +7546,9 @@ mod tests {
         let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(
-                McpConnectionManager::new_mcp_connection_manager_for_tests(),
+                McpConnectionManager::new_mcp_connection_manager_for_tests(
+                    &config.permissions.approval_policy,
+                ),
             )),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
