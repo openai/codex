@@ -353,22 +353,31 @@ pub(crate) struct McpConnectionManager {
 }
 
 impl McpConnectionManager {
+    pub(crate) fn new_uninitialized() -> Self {
+        Self {
+            clients: HashMap::new(),
+            elicitation_requests: ElicitationRequestManager::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_mcp_connection_manager_for_tests() -> Self {
+        Self::new_uninitialized()
+    }
+
     pub(crate) fn has_servers(&self) -> bool {
         !self.clients.is_empty()
     }
 
-    pub async fn initialize(
-        &mut self,
+    #[allow(clippy::new_ret_no_self)]
+    pub async fn new(
         mcp_servers: &HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         tx_event: Sender<Event>,
-        cancel_token: CancellationToken,
         initial_sandbox_state: SandboxState,
-    ) {
-        if cancel_token.is_cancelled() {
-            return;
-        }
+    ) -> (Self, CancellationToken) {
+        let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::default();
@@ -435,8 +444,10 @@ impl McpConnectionManager {
                 (server_name, outcome)
             });
         }
-        self.clients = clients;
-        self.elicitation_requests = elicitation_requests.clone();
+        let manager = Self {
+            clients,
+            elicitation_requests: elicitation_requests.clone(),
+        };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
             let mut summary = McpStartupCompleteEvent::default();
@@ -459,6 +470,7 @@ impl McpConnectionManager {
                 })
                 .await;
         });
+        (manager, cancel_token)
     }
 
     async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
