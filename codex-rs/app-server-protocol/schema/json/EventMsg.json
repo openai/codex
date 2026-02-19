@@ -649,6 +649,17 @@
             "message": {
               "type": "string"
             },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "type": {
               "enum": [
                 "agent_message"
@@ -5595,6 +5606,17 @@
       "properties": {
         "message": {
           "type": "string"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MessagePhase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "type": {
           "enum": [
