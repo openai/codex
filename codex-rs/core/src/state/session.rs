@@ -28,6 +28,8 @@ pub(crate) struct SessionState {
     pub(crate) initial_context_seeded: bool,
     /// Previous model seen by the session, used for model-switch handling on task start.
     previous_model: Option<String>,
+    /// Forces the next user turn to inject full initial context regardless of context diff state.
+    full_context_reinjection_pending: bool,
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<RegularTask>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
@@ -47,6 +49,7 @@ impl SessionState {
             mcp_dependency_prompted: HashSet::new(),
             initial_context_seeded: false,
             previous_model: None,
+            full_context_reinjection_pending: false,
             startup_regular_task: None,
             active_mcp_tool_selection: None,
             active_connector_selection: HashSet::new(),
@@ -67,6 +70,14 @@ impl SessionState {
     }
     pub(crate) fn set_previous_model(&mut self, previous_model: Option<String>) {
         self.previous_model = previous_model;
+    }
+
+    pub(crate) fn full_context_reinjection_pending(&self) -> bool {
+        self.full_context_reinjection_pending
+    }
+
+    pub(crate) fn set_full_context_reinjection_pending(&mut self, pending: bool) {
+        self.full_context_reinjection_pending = pending;
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {

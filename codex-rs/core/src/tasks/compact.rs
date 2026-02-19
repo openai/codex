@@ -41,7 +41,7 @@ impl SessionTask for CompactTask {
             crate::compact::run_compact_task(session.clone(), ctx, input).await
         };
         if compact_result.is_ok() {
-            session.set_previous_context_item(None).await;
+            session.set_full_context_reinjection_pending(true).await;
         }
 
         None
