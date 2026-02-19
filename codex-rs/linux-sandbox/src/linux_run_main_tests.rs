@@ -15,6 +15,12 @@ fn detects_proc_mount_operation_not_permitted_failure() {
 }
 
 #[test]
+fn detects_proc_mount_permission_denied_failure() {
+    let stderr = "bwrap: Can't mount proc on /newroot/proc: Permission denied";
+    assert_eq!(is_proc_mount_failure(stderr), true);
+}
+
+#[test]
 fn ignores_non_proc_mount_errors() {
     let stderr = "bwrap: Can't bind mount /dev/null: Operation not permitted";
     assert_eq!(is_proc_mount_failure(stderr), false);
@@ -40,9 +46,8 @@ fn inserts_bwrap_argv0_before_command_separator() {
             "--ro-bind".to_string(),
             "/".to_string(),
             "/".to_string(),
-            "--dev-bind".to_string(),
-            "/dev/null".to_string(),
-            "/dev/null".to_string(),
+            "--dev".to_string(),
+            "/dev".to_string(),
             "--unshare-pid".to_string(),
             "--proc".to_string(),
             "/proc".to_string(),

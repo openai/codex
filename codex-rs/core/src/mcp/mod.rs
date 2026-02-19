@@ -14,7 +14,6 @@ use codex_protocol::mcp::Tool;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
 use serde_json::Value;
-use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -191,10 +190,8 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     let auth_status_entries =
         compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode).await;
 
-    let mut mcp_connection_manager = McpConnectionManager::default();
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
-    let cancel_token = CancellationToken::new();
 
     // Use ReadOnly sandbox policy for MCP snapshot collection (safest default)
     let sandbox_state = SandboxState {
@@ -204,16 +201,15 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         use_linux_sandbox_bwrap: config.features.enabled(Feature::UseLinuxSandboxBwrap),
     };
 
-    mcp_connection_manager
-        .initialize(
-            &mcp_servers,
-            config.mcp_oauth_credentials_store_mode,
-            auth_status_entries.clone(),
-            tx_event,
-            cancel_token.clone(),
-            sandbox_state,
-        )
-        .await;
+    let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+        &mcp_servers,
+        config.mcp_oauth_credentials_store_mode,
+        auth_status_entries.clone(),
+        &config.permissions.approval_policy,
+        tx_event,
+        sandbox_state,
+    )
+    .await;
 
     let snapshot =
         collect_mcp_snapshot_from_manager(&mcp_connection_manager, auth_status_entries).await;

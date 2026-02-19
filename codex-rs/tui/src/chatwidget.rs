@@ -249,6 +249,8 @@ use strum::IntoEnumIterator;
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
+    ["model-with-reasoning", "context-remaining", "current-dir"];
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -953,12 +955,11 @@ impl ChatWidget {
 
     /// Applies status-line item selection from the setup view to in-memory config.
     ///
-    /// An empty selection is normalized to `None` so the status line is fully disabled and the
-    /// behavior matches an unset `tui.status_line` config value.
+    /// An empty selection persists as an explicit empty list.
     pub(crate) fn setup_status_line(&mut self, items: Vec<StatusLineItem>) {
         tracing::info!("status line setup confirmed with items: {items:#?}");
         let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
-        self.config.tui_status_line = if ids.is_empty() { None } else { Some(ids) };
+        self.config.tui_status_line = Some(ids);
         self.refresh_status_line();
     }
 
@@ -2692,13 +2693,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget.bottom_pane.set_status_line_enabled(
-            widget
-                .config
-                .tui_status_line
-                .as_ref()
-                .is_some_and(|items| !items.is_empty()),
-        );
+        widget
+            .bottom_pane
+            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -2859,13 +2856,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget.bottom_pane.set_status_line_enabled(
-            widget
-                .config
-                .tui_status_line
-                .as_ref()
-                .is_some_and(|items| !items.is_empty()),
-        );
+        widget
+            .bottom_pane
+            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -3015,13 +3008,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget.bottom_pane.set_status_line_enabled(
-            widget
-                .config
-                .tui_status_line
-                .as_ref()
-                .is_some_and(|items| !items.is_empty()),
-        );
+        widget
+            .bottom_pane
+            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -3997,7 +3986,9 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
-            EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+                self.on_agent_message(message)
+            }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
             }
@@ -4349,8 +4340,9 @@ impl ChatWidget {
     }
 
     fn open_status_line_setup(&mut self) {
+        let configured_status_line_items = self.configured_status_line_items();
         let view = StatusLineSetupView::new(
-            self.config.tui_status_line.as_deref(),
+            Some(configured_status_line_items.as_slice()),
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -4363,10 +4355,7 @@ impl ChatWidget {
         let mut invalid = Vec::new();
         let mut invalid_seen = HashSet::new();
         let mut items = Vec::new();
-        let Some(config_items) = self.config.tui_status_line.as_ref() else {
-            return (items, invalid);
-        };
-        for id in config_items {
+        for id in self.configured_status_line_items() {
             match id.parse::<StatusLineItem>() {
                 Ok(item) => items.push(item),
                 Err(_) => {
@@ -4377,6 +4366,15 @@ impl ChatWidget {
             }
         }
         (items, invalid)
+    }
+
+    fn configured_status_line_items(&self) -> Vec<String> {
+        self.config.tui_status_line.clone().unwrap_or_else(|| {
+            DEFAULT_STATUS_LINE_ITEMS
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        })
     }
 
     fn status_line_cwd(&self) -> &Path {
@@ -6210,10 +6208,7 @@ impl ChatWidget {
         if !config.features.enabled(Feature::CollaborationModes) {
             return None;
         }
-        let mut mask = match config.experimental_mode {
-            Some(kind) => collaboration_modes::mask_for_kind(models_manager, kind)?,
-            None => collaboration_modes::default_mask(models_manager)?,
-        };
+        let mut mask = collaboration_modes::default_mask(models_manager)?;
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }

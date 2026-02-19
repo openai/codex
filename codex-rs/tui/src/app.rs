@@ -1026,6 +1026,7 @@ impl App {
             config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::Cli,
+            config.model_catalog.clone(),
         ));
         let mut model = thread_manager
             .get_models_manager()
@@ -1452,8 +1453,11 @@ impl App {
                         )
                         .await?
                         {
-                            Some(cwd) => cwd,
-                            None => current_cwd.clone(),
+                            crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
+                            crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
+                            crate::ResolveCwdOutcome::Exit => {
+                                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                            }
                         };
                         let mut resume_config = if crate::cwds_differ(&current_cwd, &resume_cwd) {
                             match self.rebuild_config_for_cwd(resume_cwd).await {
@@ -2513,11 +2517,7 @@ impl App {
                     .await;
                 match apply_result {
                     Ok(()) => {
-                        self.config.tui_status_line = if ids.is_empty() {
-                            None
-                        } else {
-                            Some(ids.clone())
-                        };
+                        self.config.tui_status_line = Some(ids.clone());
                         self.chat_widget.setup_status_line(items);
                     }
                     Err(err) => {

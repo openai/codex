@@ -11,6 +11,7 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::tasks::RegularTask;
 use crate::truncate::TruncationPolicy;
+use codex_protocol::protocol::TurnContextItem;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
@@ -78,6 +79,14 @@ impl SessionState {
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         self.history.set_token_info(info);
+    }
+
+    pub(crate) fn set_previous_context_item(&mut self, item: Option<TurnContextItem>) {
+        self.history.set_previous_context_item(item);
+    }
+
+    pub(crate) fn previous_context_item(&self) -> Option<TurnContextItem> {
+        self.history.previous_context_item()
     }
 
     // Token/rate limit helpers
