@@ -14,10 +14,13 @@ use crate::models_manager::model_presets::builtin_model_presets;
 use codex_api::ModelsClient;
 use codex_api::ReqwestTransport;
 use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::default_input_modalities;
 use http::HeaderMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -58,6 +61,14 @@ impl ModelsManager {
     ///
     /// Uses `codex_home` to store cached model metadata and initializes with built-in presets.
     pub fn new(codex_home: PathBuf, auth_manager: Arc<AuthManager>) -> Self {
+        Self::with_provider(codex_home, auth_manager, ModelProviderInfo::create_openai_provider())
+    }
+
+    pub(crate) fn with_provider(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        provider: ModelProviderInfo,
+    ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         Self {
@@ -66,7 +77,7 @@ impl ModelsManager {
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
-            provider: ModelProviderInfo::create_openai_provider(),
+            provider,
         }
     }
 
@@ -288,7 +299,9 @@ impl ModelsManager {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
         let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
-        let existing_presets = self.local_models.clone();
+        let mut existing_presets = self.local_models.clone();
+        let provider_model_presets = self.provider_model_presets(existing_presets.as_slice());
+        existing_presets.extend(provider_model_presets);
         let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
         let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));
         merged_presets = ModelPreset::filter_by_auth(merged_presets, chatgpt_mode);
@@ -308,6 +321,46 @@ impl ModelsManager {
         merged_presets
     }
 
+    fn provider_model_presets(&self, existing_presets: &[ModelPreset]) -> Vec<ModelPreset> {
+        let mut known_models: HashSet<String> = existing_presets
+            .iter()
+            .map(|preset| preset.model.clone())
+            .collect();
+        self.provider
+            .models
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|model| {
+                let trimmed = model.trim();
+                if trimmed.is_empty() {
+                    return None;
+                }
+                if !known_models.insert(trimmed.to_string()) {
+                    return None;
+                }
+                Some(Self::model_preset_from_provider_model(trimmed))
+            })
+            .collect()
+    }
+
+    fn model_preset_from_provider_model(model: &str) -> ModelPreset {
+        ModelPreset {
+            id: model.to_string(),
+            model: model.to_string(),
+            display_name: model.to_string(),
+            description: "Configured model from the active model provider".to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: Vec::new(),
+            supports_personality: false,
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+            supported_in_api: true,
+            input_modalities: default_input_modalities(),
+        }
+    }
+
     async fn get_remote_models(&self) -> Vec<ModelInfo> {
         self.remote_models.read().await.clone()
     }
@@ -322,16 +375,7 @@ impl ModelsManager {
         auth_manager: Arc<AuthManager>,
         provider: ModelProviderInfo,
     ) -> Self {
-        let cache_path = codex_home.join(MODEL_CACHE_FILE);
-        let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
-        Self {
-            local_models: builtin_model_presets(auth_manager.auth_mode()),
-            remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
-            auth_manager,
-            etag: RwLock::new(None),
-            cache_manager,
-            provider,
-        }
+        Self::with_provider(codex_home, auth_manager, provider)
     }
 
     /// Get model identifier without consulting remote state or cache.
@@ -433,6 +477,7 @@ mod tests {
             stream_idle_timeout_ms: Some(5_000),
             requires_openai_auth: false,
             supports_websockets: false,
+            models: None,
         }
     }
 
@@ -817,6 +862,33 @@ mod tests {
         let available = manager.build_available_models(vec![hidden_model, visible_model]);
 
         assert_eq!(available, vec![expected_hidden, expected_visible]);
+    }
+
+    #[test]
+    fn build_available_models_includes_provider_models_from_config() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let mut provider = provider_for("http://example.test".to_string());
+        provider.models = Some(vec![
+            "kimi-k2".to_string(),
+            "deepseek-v3.2".to_string(),
+            "  ".to_string(),
+            "kimi-k2".to_string(),
+        ]);
+
+        let mut manager = ModelsManager::with_provider_for_tests(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            provider,
+        );
+        manager.local_models = Vec::new();
+
+        let available = manager.build_available_models(Vec::new());
+        assert_eq!(available.len(), 2);
+        assert_eq!(available[0].model, "kimi-k2");
+        assert_eq!(available[1].model, "deepseek-v3.2");
+        assert!(available.iter().all(|preset| preset.show_in_picker));
     }
 
     #[test]

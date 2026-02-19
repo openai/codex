@@ -36,6 +36,8 @@ use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
 use codex_api::CompactClient as ApiCompactClient;
+use codex_api::ChatCompletionsClient as ApiChatCompletionsClient;
+use codex_api::ChatCompletionsOptions as ApiChatCompletionsOptions;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::MemoriesClient as ApiMemoriesClient;
 use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
@@ -64,6 +66,7 @@ use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -81,6 +84,7 @@ use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
+use serde_json::json;
 use tracing::trace;
 use tracing::warn;
 
@@ -96,6 +100,7 @@ use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
+use crate::tools::spec::create_tools_json_for_chat_completions;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
@@ -523,6 +528,33 @@ impl ModelClientSession {
         Ok(request)
     }
 
+    fn build_chat_request(&self, prompt: &Prompt, model_info: &ModelInfo) -> Result<serde_json::Value> {
+        let instructions = &prompt.base_instructions.text;
+        let input = prompt.get_formatted_input();
+        let messages = build_chat_messages(instructions, input);
+        let tools = create_tools_json_for_chat_completions(&prompt.tools)?;
+
+        let mut request = json!({
+            "model": model_info.slug.clone(),
+            "messages": messages,
+            "stream": true,
+            "stream_options": {
+                "include_usage": true,
+            }
+        });
+
+        if !tools.is_empty() && let Some(obj) = request.as_object_mut() {
+            obj.insert("tools".to_string(), serde_json::Value::Array(tools));
+            obj.insert("tool_choice".to_string(), serde_json::Value::String("auto".to_string()));
+            obj.insert(
+                "parallel_tool_calls".to_string(),
+                serde_json::Value::Bool(prompt.parallel_tool_calls),
+            );
+        }
+
+        Ok(request)
+    }
+
     #[allow(clippy::too_many_arguments)]
     /// Builds shared Responses API transport options and request-body options.
     ///
@@ -783,6 +815,59 @@ impl ModelClientSession {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn stream_chat_completions(
+        &self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        otel_manager: &OtelManager,
+        _effort: Option<ReasoningEffortConfig>,
+        _summary: ReasoningSummaryConfig,
+        turn_metadata_header: Option<&str>,
+    ) -> Result<ResponseStream> {
+        let auth_manager = self.client.state.auth_manager.clone();
+        let mut auth_recovery = auth_manager
+            .as_ref()
+            .map(super::auth::AuthManager::unauthorized_recovery);
+
+        loop {
+            let client_setup = self.client.current_client_setup().await?;
+            let transport = ReqwestTransport::new(build_reqwest_client());
+            let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(otel_manager);
+            let compression = self.responses_request_compression(client_setup.auth.as_ref());
+            let responses_options = self.build_responses_options(turn_metadata_header, compression);
+
+            let options = ApiChatCompletionsOptions {
+                conversation_id: responses_options.conversation_id,
+                session_source: responses_options.session_source,
+                extra_headers: responses_options.extra_headers,
+                compression: responses_options.compression,
+            };
+            let request = self.build_chat_request(prompt, model_info)?;
+
+            let client = ApiChatCompletionsClient::new(
+                transport,
+                client_setup.api_provider,
+                client_setup.api_auth,
+            )
+            .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+
+            match client.stream_request(request, options).await {
+                Ok(stream) => {
+                    let (stream, _) = map_response_stream(stream, otel_manager.clone());
+                    return Ok(stream);
+                }
+                Err(ApiError::Transport(
+                    unauthorized_transport @ TransportError::Http { status, .. },
+                )) if status == StatusCode::UNAUTHORIZED => {
+                    handle_unauthorized(unauthorized_transport, &mut auth_recovery).await?;
+                    continue;
+                }
+                Err(err) => return Err(map_api_error(err)),
+            }
+        }
+    }
+
     /// Streams a turn via the Responses API over WebSocket transport.
     #[allow(clippy::too_many_arguments)]
     async fn stream_responses_websocket(
@@ -928,6 +1013,17 @@ impl ModelClientSession {
                 )
                 .await
             }
+            WireApi::Chat => {
+                self.stream_chat_completions(
+                    prompt,
+                    model_info,
+                    otel_manager,
+                    effort,
+                    summary,
+                    turn_metadata_header,
+                )
+                .await
+            }
         }
     }
 
@@ -997,6 +1093,136 @@ fn build_responses_headers(
         headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
     }
     headers
+}
+
+fn build_chat_messages(instructions: &str, input: Vec<ResponseItem>) -> Vec<serde_json::Value> {
+    let mut messages = Vec::new();
+
+    if !instructions.trim().is_empty() {
+        messages.push(json!({
+            "role": "system",
+            "content": instructions,
+        }));
+    }
+
+    for item in input {
+        match item {
+            ResponseItem::Message { role, content, .. } => {
+                if let Some(text) = content_items_to_text(&content) {
+                    messages.push(json!({
+                        "role": map_chat_role(&role),
+                        "content": text,
+                    }));
+                }
+            }
+            ResponseItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+                ..
+            } => {
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": arguments,
+                        }
+                    }]
+                }));
+            }
+            ResponseItem::CustomToolCall {
+                call_id,
+                name,
+                input,
+                ..
+            } => {
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": input,
+                        }
+                    }]
+                }));
+            }
+            ResponseItem::LocalShellCall {
+                call_id, id, action, ..
+            } => {
+                if let Some(call_id) = call_id.or(id) {
+                    messages.push(json!({
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": "shell",
+                                "arguments": serde_json::to_string(&action).unwrap_or_else(|_| "{}".to_string()),
+                            }
+                        }]
+                    }));
+                }
+            }
+            ResponseItem::FunctionCallOutput { call_id, output } => {
+                let text = output
+                    .text_content()
+                    .map(ToString::to_string)
+                    .or_else(|| output.body.to_text())
+                    .unwrap_or_default();
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": text,
+                }));
+            }
+            ResponseItem::CustomToolCallOutput { call_id, output } => {
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": output,
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    messages
+}
+
+fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
+    let mut text_parts = Vec::new();
+    for item in content {
+        match item {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                if !text.trim().is_empty() {
+                    text_parts.push(text.clone());
+                }
+            }
+            ContentItem::InputImage { .. } => {}
+        }
+    }
+
+    if text_parts.is_empty() {
+        None
+    } else {
+        Some(text_parts.join("\n"))
+    }
+}
+
+fn map_chat_role(role: &str) -> &str {
+    match role {
+        "developer" => "system",
+        "user" | "assistant" | "system" | "tool" => role,
+        _ => "user",
+    }
 }
 
 fn map_response_stream<S>(
@@ -1164,9 +1390,14 @@ impl WebsocketTelemetry for ApiTelemetry {
 
 #[cfg(test)]
 mod tests {
+    use super::build_chat_messages;
+    use super::map_chat_role;
     use super::ModelClient;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::openai_models::ModelInfo;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
@@ -1259,5 +1490,58 @@ mod tests {
             .await
             .expect("empty summarize request should succeed");
         assert_eq!(output.len(), 0);
+    }
+
+    #[test]
+    fn map_chat_role_handles_known_and_unknown_roles() {
+        assert_eq!(map_chat_role("developer"), "system");
+        assert_eq!(map_chat_role("assistant"), "assistant");
+        assert_eq!(map_chat_role("unknown-role"), "user");
+    }
+
+    #[test]
+    fn build_chat_messages_serializes_tool_roundtrip_items() {
+        let input = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "hello".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "exec_command".to_string(),
+                arguments: r#"{"cmd":"pwd"}"#.to_string(),
+                call_id: "call_1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call_1".to_string(),
+                output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            },
+        ];
+
+        let messages = build_chat_messages("be helpful", input);
+        assert_eq!(
+            messages,
+            vec![
+                json!({"role":"system","content":"be helpful"}),
+                json!({"role":"user","content":"hello"}),
+                json!({
+                    "role":"assistant",
+                    "content":"",
+                    "tool_calls":[
+                        {
+                            "id":"call_1",
+                            "type":"function",
+                            "function":{"name":"exec_command","arguments":"{\"cmd\":\"pwd\"}"}
+                        }
+                    ]
+                }),
+                json!({"role":"tool","tool_call_id":"call_1","content":"ok"}),
+            ]
+        );
     }
 }

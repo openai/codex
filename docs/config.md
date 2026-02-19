@@ -28,6 +28,60 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
 
+## Custom provider models
+
+When you use a custom `model_provider`, you can now define a picker-visible model list with
+`models = [...]` under that provider entry.
+
+```toml
+[model_providers.azure_foundry]
+name = "Azure Foundry"
+base_url = "https://YOUR_RESPONSES_GATEWAY/v1"
+env_key = "FOUNDATION_MODEL_API_KEY"
+wire_api = "responses"
+models = ["kimi-k2", "deepseek-v3.2"]
+```
+
+For Azure AI Foundry chat-completions endpoints:
+
+```toml
+[model_providers.azure_foundry_chat]
+name = "Azure Foundry Chat"
+base_url = "https://YOUR_RESOURCE.services.ai.azure.com/models"
+wire_api = "chat"
+query_params = { api-version = "2024-05-01-preview" }
+env_http_headers = { api-key = "AZURE_FOUNDRY_API_KEY" }
+models = ["kimi-k2.5", "deepseek-v3.2", "gpt-5.2-chat"]
+```
+
+This is useful for providers that do not expose Codex-native model metadata.
+
+Codex supports two wire protocols:
+
+- `wire_api = "responses"` for providers exposing `/v1/responses`
+- `wire_api = "chat"` for providers exposing `/v1/chat/completions`
+
+You can also set up profile-based provider switching so startup command chooses
+OpenAI subscription vs Azure Foundry:
+
+```toml
+model_provider = "openai"
+
+[profiles.openai-subscription]
+model_provider = "openai"
+
+[profiles.azure-foundry]
+model_provider = "azure_foundry_chat"
+model = "deepseek-v3.2"
+```
+
+Run with a specific profile:
+
+```bash
+codex --profile openai-subscription
+codex --profile azure-foundry
+```
+
 ## Notices
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.

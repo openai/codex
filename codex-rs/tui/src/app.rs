@@ -1022,10 +1022,11 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
-        let thread_manager = Arc::new(ThreadManager::new(
+        let thread_manager = Arc::new(ThreadManager::new_with_model_provider(
             config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::Cli,
+            config.model_provider.clone(),
         ));
         let mut model = thread_manager
             .get_models_manager()

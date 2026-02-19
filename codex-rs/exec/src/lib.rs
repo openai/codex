@@ -369,10 +369,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         true,
         config.cli_auth_credentials_store_mode,
     );
-    let thread_manager = Arc::new(ThreadManager::new(
+    let thread_manager = Arc::new(ThreadManager::new_with_model_provider(
         config.codex_home.clone(),
         auth_manager.clone(),
         SessionSource::Exec,
+        config.model_provider.clone(),
     ));
     let default_model = thread_manager
         .get_models_manager()

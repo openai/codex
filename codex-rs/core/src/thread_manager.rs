@@ -142,6 +142,20 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
     ) -> Self {
+        Self::new_with_model_provider(
+            codex_home,
+            auth_manager,
+            session_source,
+            ModelProviderInfo::create_openai_provider(),
+        )
+    }
+
+    pub fn new_with_model_provider(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        session_source: SessionSource,
+        model_provider: ModelProviderInfo,
+    ) -> Self {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
@@ -149,7 +163,11 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager.clone())),
+                models_manager: Arc::new(ModelsManager::with_provider(
+                    codex_home,
+                    auth_manager.clone(),
+                    model_provider,
+                )),
                 skills_manager,
                 file_watcher,
                 auth_manager,

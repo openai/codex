@@ -556,6 +556,13 @@
           "description": "Friendly display name.",
           "type": "string"
         },
+        "models": {
+          "description": "Optional model slugs to surface in the picker when using this provider.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "query_params": {
           "additionalProperties": {
             "type": "string"
@@ -1254,6 +1261,13 @@
           "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
           "enum": [
             "responses"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The Chat Completions API exposed by providers at `/v1/chat/completions`.",
+          "enum": [
+            "chat"
           ],
           "type": "string"
         }

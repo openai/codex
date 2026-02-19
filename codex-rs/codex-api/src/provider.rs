@@ -117,9 +117,10 @@ pub fn is_azure_responses_wire_base_url(name: &str, base_url: Option<&str>) -> b
 }
 
 fn matches_azure_responses_base_url(base_url: &str) -> bool {
-    const AZURE_MARKERS: [&str; 5] = [
+    const AZURE_MARKERS: [&str; 6] = [
         "cognitiveservices.azure.",
         "aoai.azure.",
+        "services.ai.azure.",
         "azure-api.",
         "azurefd.",
         "windows.net/openai",
@@ -138,6 +139,7 @@ mod tests {
             "https://foo.openai.azure.us/openai/deployments/bar",
             "https://foo.cognitiveservices.azure.cn/openai",
             "https://foo.aoai.azure.com/openai",
+            "https://foo.services.ai.azure.com/models",
             "https://foo.openai.azure-api.net/openai",
             "https://foo.z01.azurefd.net/",
         ];
