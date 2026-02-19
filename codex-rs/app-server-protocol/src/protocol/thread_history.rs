@@ -149,9 +149,11 @@ impl ThreadHistoryBuilder {
         }
 
         let id = self.next_item_id();
-        self.ensure_turn()
-            .items
-            .push(ThreadItem::AgentMessage { id, text });
+        self.ensure_turn().items.push(ThreadItem::AgentMessage {
+            id,
+            text,
+            phase: None,
+        });
     }
 
     fn handle_agent_reasoning(&mut self, payload: &AgentReasoningEvent) {
@@ -839,6 +841,7 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "item-2".into(),
                 text: "Hi there".into(),
+                phase: None,
             }
         );
         assert_eq!(
@@ -869,6 +872,7 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "item-5".into(),
                 text: "Reply two".into(),
+                phase: None,
             }
         );
     }
@@ -975,6 +979,7 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "item-2".into(),
                 text: "Working...".into(),
+                phase: None,
             }
         );
 
@@ -996,6 +1001,7 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "item-4".into(),
                 text: "Second attempt complete.".into(),
+                phase: None,
             }
         );
     }
@@ -1057,6 +1063,7 @@ mod tests {
                 ThreadItem::AgentMessage {
                     id: "item-2".into(),
                     text: "A1".into(),
+                    phase: None,
                 },
             ]
         );
@@ -1073,6 +1080,7 @@ mod tests {
                 ThreadItem::AgentMessage {
                     id: "item-4".into(),
                     text: "A3".into(),
+                    phase: None,
                 },
             ]
         );

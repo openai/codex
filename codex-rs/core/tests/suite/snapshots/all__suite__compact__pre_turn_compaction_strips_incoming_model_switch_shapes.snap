@@ -1,0 +1,32 @@
+---
+source: core/tests/suite/compact.rs
+assertion_line: 3152
+expression: "format_labeled_requests_snapshot(\"Pre-turn compaction during model switch (without pre-sampling model-switch compaction): current behavior strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.\",\n&[(\"Initial Request (Previous Model)\", &requests[0]),\n(\"Local Compaction Request\", &requests[1]),\n(\"Local Post-Compaction History Layout\", &requests[2]),])"
+---
+Scenario: Pre-turn compaction during model switch (without pre-sampling model-switch compaction): current behavior strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.
+
+## Initial Request (Previous Model)
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/developer:<PERMISSIONS_INSTRUCTIONS>
+04:message/user:BEFORE_SWITCH_USER
+
+## Local Compaction Request
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/developer:<PERMISSIONS_INSTRUCTIONS>
+04:message/user:BEFORE_SWITCH_USER
+05:message/assistant:BEFORE_SWITCH_REPLY
+06:message/user:<SUMMARIZATION_PROMPT>
+
+## Local Post-Compaction History Layout
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/developer:<personality_spec> The user has requested a new communication st...
+02:message/user:<AGENTS_MD>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+04:message/user:BEFORE_SWITCH_USER
+05:message/user:<COMPACTION_SUMMARY>\nPRETURN_SWITCH_SUMMARY
+06:message/developer:<model_switch>\nThe user was previously using a different model....
+07:message/user:AFTER_SWITCH_USER

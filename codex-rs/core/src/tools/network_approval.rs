@@ -247,6 +247,7 @@ impl NetworkApprovalService {
             .request_command_approval(
                 turn_context.as_ref(),
                 attempt.call_id.clone(),
+                None,
                 attempt.command.clone(),
                 attempt.cwd.clone(),
                 Some(format!(

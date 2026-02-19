@@ -241,6 +241,7 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use crate::zsh_exec_bridge::ZshExecBridge;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
@@ -1191,7 +1192,22 @@ impl Session {
             config.active_profile.clone(),
         );
 
-        let mut default_shell = shell::default_user_shell();
+        let use_zsh_fork_shell = config.features.enabled(Feature::ShellZshFork);
+        let mut default_shell = if use_zsh_fork_shell {
+            let zsh_path = config.zsh_path.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "zsh fork feature enabled, but `zsh_path` is not configured; set `zsh_path` in config.toml"
+                )
+            })?;
+            shell::get_shell(shell::ShellType::Zsh, Some(zsh_path)).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "zsh fork feature enabled, but zsh_path `{}` is not usable; set `zsh_path` to a valid zsh executable",
+                    zsh_path.display()
+                )
+            })?
+        } else {
+            shell::default_user_shell()
+        };
         // Create the mutable state for the Session.
         let shell_snapshot_tx = if config.features.enabled(Feature::ShellSnapshot) {
             ShellSnapshot::start_snapshotting(
@@ -1262,10 +1278,19 @@ impl Session {
                 (None, None)
             };
 
+        let zsh_exec_bridge =
+            ZshExecBridge::new(config.zsh_path.clone(), config.codex_home.clone());
+        zsh_exec_bridge
+            .initialize_for_session(&conversation_id.to_string())
+            .await;
+
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
-            unified_exec_manager: UnifiedExecProcessManager::default(),
+            unified_exec_manager: UnifiedExecProcessManager::new(
+                config.background_terminal_max_timeout,
+            ),
+            zsh_exec_bridge,
             analytics_events_client: AnalyticsEventsClient::new(
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
@@ -1304,7 +1329,7 @@ impl Session {
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
-            config.codex_home.clone(),
+            config.js_repl_node_module_dirs.clone(),
         ));
 
         let prewarm_model_info = models_manager
@@ -1473,6 +1498,11 @@ impl Session {
     pub(crate) async fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
         let state = self.state.lock().await;
         state.history.get_total_token_usage_breakdown()
+    }
+
+    pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
+        let state = self.state.lock().await;
+        state.token_info().map(|info| info.total_token_usage)
     }
 
     pub(crate) async fn get_estimated_token_count(
@@ -2155,7 +2185,7 @@ impl Session {
 
     /// Emit an exec approval request event and await the user's decision.
     ///
-    /// The request is keyed by `call_id` so matching responses are delivered
+    /// The request is keyed by `call_id` + `approval_id` so matching responses are delivered
     /// to the correct in-flight turn. If the task is aborted, this returns the
     /// default `ReviewDecision` (`Denied`).
     #[allow(clippy::too_many_arguments)]
@@ -2163,32 +2193,36 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         call_id: String,
+        approval_id: Option<String>,
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) -> ReviewDecision {
+        //  command-level approvals use `call_id`.
+        // `approval_id` is only present for subcommand callbacks (execve intercept)
+        let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
-        let approval_id = call_id.clone();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
+                    ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
                 }
                 None => None,
             }
         };
         if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for call_id: {approval_id}");
+            warn!("Overwriting existing pending approval for call_id: {effective_approval_id}");
         }
 
         let parsed_cmd = parse_command(&command);
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
+            approval_id,
             turn_id: turn_context.sub_id.clone(),
             command,
             cwd,
@@ -2440,7 +2474,9 @@ impl Session {
         server_model: String,
     ) -> bool {
         let requested_model = turn_context.model_info.slug.clone();
-        if server_model == requested_model {
+        let server_model_normalized = server_model.to_ascii_lowercase();
+        let requested_model_normalized = requested_model.to_ascii_lowercase();
+        if server_model_normalized == requested_model_normalized {
             info!("server reported model {server_model} (matches requested model)");
             return false;
         }
@@ -3963,6 +3999,7 @@ mod handlers {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
+        sess.services.zsh_exec_bridge.shutdown().await;
         info!("Shutting down Codex instance");
         let history = sess.clone_history().await;
         let turn_count = history
@@ -4834,8 +4871,7 @@ async fn run_sampling_request(
 
     let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
 
-    let tools =
-        crate::tools::spec::filter_tools_for_model(router.specs(), &turn_context.tools_config);
+    let tools = router.specs();
     let base_instructions = sess.get_base_instructions().await;
 
     let prompt = Prompt {
@@ -7195,6 +7231,81 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let mut config = build_test_config(codex_home.path()).await;
+        config.features.enable(Feature::ShellZshFork);
+        config.zsh_path = None;
+        let config = Arc::new(config);
+
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let models_manager = Arc::new(ModelsManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+        ));
+        let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model,
+                reasoning_effort: config.model_reasoning_effort,
+                developer_instructions: None,
+            },
+        };
+        let session_configuration = SessionConfiguration {
+            provider: config.model_provider.clone(),
+            collaboration_mode,
+            model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            personality: config.personality,
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            compact_prompt: config.compact_prompt.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
+            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+            cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
+            original_config_do_not_use: Arc::clone(&config),
+            session_source: SessionSource::Exec,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+        };
+
+        let (tx_event, _rx_event) = async_channel::unbounded();
+        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let result = Session::new(
+            session_configuration,
+            Arc::clone(&config),
+            auth_manager,
+            models_manager,
+            ExecPolicyManager::default(),
+            tx_event,
+            agent_status_tx,
+            InitialHistory::New,
+            SessionSource::Exec,
+            Arc::new(SkillsManager::new(config.codex_home.clone())),
+            Arc::new(FileWatcher::noop()),
+            AgentControl::default(),
+        )
+        .await;
+
+        let err = match result {
+            Ok(_) => panic!("expected startup to fail"),
+            Err(err) => err,
+        };
+        let msg = format!("{err:#}");
+        assert!(msg.contains("zsh fork feature enabled, but `zsh_path` is not configured"));
+    }
+
     // todo: use online model info
     pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         let (tx_event, _rx_event) = async_channel::unbounded();
@@ -7267,7 +7378,10 @@ mod tests {
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
-            unified_exec_manager: UnifiedExecProcessManager::default(),
+            unified_exec_manager: UnifiedExecProcessManager::new(
+                config.background_terminal_max_timeout,
+            ),
+            zsh_exec_bridge: ZshExecBridge::default(),
             analytics_events_client: AnalyticsEventsClient::new(
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
@@ -7307,7 +7421,7 @@ mod tests {
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
-            config.codex_home.clone(),
+            config.js_repl_node_module_dirs.clone(),
         ));
 
         let turn_context = Session::make_turn_context(
@@ -7415,7 +7529,10 @@ mod tests {
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
-            unified_exec_manager: UnifiedExecProcessManager::default(),
+            unified_exec_manager: UnifiedExecProcessManager::new(
+                config.background_terminal_max_timeout,
+            ),
+            zsh_exec_bridge: ZshExecBridge::default(),
             analytics_events_client: AnalyticsEventsClient::new(
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
@@ -7455,7 +7572,7 @@ mod tests {
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
-            config.codex_home.clone(),
+            config.js_repl_node_module_dirs.clone(),
         ));
 
         let turn_context = Arc::new(Session::make_turn_context(

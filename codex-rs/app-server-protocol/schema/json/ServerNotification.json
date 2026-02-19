@@ -2268,8 +2268,15 @@
         },
         {
           "properties": {
+            "approval_id": {
+              "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "call_id": {
-              "description": "Identifier for the associated exec call, if available.",
+              "description": "Identifier for the associated command execution item.",
               "type": "string"
             },
             "command": {
@@ -4408,6 +4415,13 @@
       "type": "string"
     },
     "MessagePhase": {
+      "enum": [
+        "commentary",
+        "finalAnswer"
+      ],
+      "type": "string"
+    },
+    "MessagePhase2": {
       "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
       "oneOf": [
         {
@@ -5337,7 +5351,7 @@
             "phase": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/MessagePhase"
+                  "$ref": "#/definitions/MessagePhase2"
                 },
                 {
                   "type": "null"
@@ -6513,6 +6527,14 @@
           ],
           "description": "Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.)."
         },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadStatus"
+            }
+          ],
+          "description": "Current runtime status for the thread."
+        },
         "turns": {
           "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
           "items": {
@@ -6534,8 +6556,27 @@
         "modelProvider",
         "preview",
         "source",
+        "status",
         "turns",
         "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ThreadActiveFlag": {
+      "enum": [
+        "waitingOnApproval",
+        "waitingOnUserInput"
+      ],
+      "type": "string"
+    },
+    "ThreadArchivedNotification": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
       ],
       "type": "object"
     },
@@ -6575,6 +6616,17 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "text": {
               "type": "string"
@@ -7042,6 +7094,96 @@
       ],
       "type": "object"
     },
+    "ThreadStatus": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "notLoaded"
+              ],
+              "title": "NotLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "NotLoadedThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "idle"
+              ],
+              "title": "IdleThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "IdleThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "systemError"
+              ],
+              "title": "SystemErrorThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "SystemErrorThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "activeFlags": {
+              "items": {
+                "$ref": "#/definitions/ThreadActiveFlag"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "active"
+              ],
+              "title": "ActiveThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "activeFlags",
+            "type"
+          ],
+          "title": "ActiveThreadStatus",
+          "type": "object"
+        }
+      ]
+    },
+    "ThreadStatusChangedNotification": {
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/ThreadStatus"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadTokenUsage": {
       "properties": {
         "last": {
@@ -7080,6 +7222,17 @@
         "threadId",
         "tokenUsage",
         "turnId"
+      ],
+      "type": "object"
+    },
+    "ThreadUnarchivedNotification": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
       ],
       "type": "object"
     },
@@ -7354,7 +7507,7 @@
             "phase": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/MessagePhase"
+                  "$ref": "#/definitions/MessagePhase2"
                 },
                 {
                   "type": "null"
@@ -8008,6 +8161,34 @@
         }
       ]
     },
+    "WindowsSandboxSetupCompletedNotification": {
+      "properties": {
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/definitions/WindowsSandboxSetupMode"
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mode",
+        "success"
+      ],
+      "type": "object"
+    },
+    "WindowsSandboxSetupMode": {
+      "enum": [
+        "elevated",
+        "unelevated"
+      ],
+      "type": "string"
+    },
     "WindowsWorldWritableWarningNotification": {
       "properties": {
         "extraCount": {
@@ -8074,6 +8255,66 @@
         "params"
       ],
       "title": "Thread/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/status/changed"
+          ],
+          "title": "Thread/status/changedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadStatusChangedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/status/changedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/archived"
+          ],
+          "title": "Thread/archivedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadArchivedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/archivedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/unarchived"
+          ],
+          "title": "Thread/unarchivedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadUnarchivedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/unarchivedNotification",
       "type": "object"
     },
     {
@@ -8658,6 +8899,26 @@
         "params"
       ],
       "title": "Windows/worldWritableWarningNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "windowsSandbox/setupCompleted"
+          ],
+          "title": "WindowsSandbox/setupCompletedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WindowsSandboxSetupCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "WindowsSandbox/setupCompletedNotification",
       "type": "object"
     },
     {
