@@ -219,9 +219,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+#[cfg(not(target_os = "linux"))]
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+#[cfg(not(target_os = "linux"))]
 use tokio::runtime::Handle;
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
