@@ -189,7 +189,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     if should_reload_tools {
         tools = mcp_connection_manager.list_all_tools().await;
     }
-    cancel_token.cancel();
+    if codex_apps_ready {
+        cancel_token.cancel();
+    }
 
     let accessible_connectors =
         filter_disallowed_connectors(accessible_connectors_from_mcp_tools(&tools));
