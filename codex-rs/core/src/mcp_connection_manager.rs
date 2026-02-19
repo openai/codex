@@ -1279,7 +1279,7 @@ fn transport_origin(transport: &McpServerTransportConfig) -> Option<String> {
             let parsed = Url::parse(url).ok()?;
             Some(parsed.origin().ascii_serialization())
         }
-        McpServerTransportConfig::Stdio { .. } => None,
+        McpServerTransportConfig::Stdio { .. } => Some("stdio".to_string()),
     }
 }
 
@@ -1782,7 +1782,7 @@ mod tests {
     }
 
     #[test]
-    fn transport_origin_is_none_for_stdio() {
+    fn transport_origin_is_stdio_for_stdio_transport() {
         let transport = McpServerTransportConfig::Stdio {
             command: "server".to_string(),
             args: Vec::new(),
@@ -1791,6 +1791,6 @@ mod tests {
             cwd: None,
         };
 
-        assert_eq!(transport_origin(&transport), None);
+        assert_eq!(transport_origin(&transport), Some("stdio".to_string()));
     }
 }
