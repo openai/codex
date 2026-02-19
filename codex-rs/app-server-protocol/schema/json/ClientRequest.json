@@ -3311,6 +3311,24 @@
           "type": "object"
         }
       ]
+    },
+    "WindowsSandboxSetupMode": {
+      "enum": [
+        "elevated",
+        "unelevated"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxSetupStartParams": {
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/WindowsSandboxSetupMode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
     }
   },
   "description": "Request from the client to the server.",
@@ -3937,6 +3955,30 @@
         "params"
       ],
       "title": "McpServerStatus/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "windowsSandbox/setupStart"
+          ],
+          "title": "WindowsSandbox/setupStartRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WindowsSandboxSetupStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "WindowsSandbox/setupStartRequest",
       "type": "object"
     },
     {

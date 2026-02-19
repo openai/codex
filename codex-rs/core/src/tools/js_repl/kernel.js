@@ -4,6 +4,7 @@
 
 const { Buffer } = require("node:buffer");
 const crypto = require("node:crypto");
+const fs = require("node:fs");
 const { builtinModules, createRequire } = require("node:module");
 const { createInterface } = require("node:readline");
 const { performance } = require("node:perf_hooks");
@@ -149,6 +150,14 @@ const moduleSearchBases = (() => {
 const importResolveConditions = new Set(["node", "import"]);
 const requireByBase = new Map();
 
+function canonicalizePath(value) {
+  try {
+    return fs.realpathSync.native(value);
+  } catch {
+    return value;
+  }
+}
+
 function getRequireForBase(base) {
   let req = requireByBase.get(base);
   if (!req) {
@@ -165,8 +174,10 @@ function isModuleNotFoundError(err) {
 }
 
 function isWithinBaseNodeModules(base, resolvedPath) {
-  const nodeModulesRoot = path.resolve(base, "node_modules");
-  const relative = path.relative(nodeModulesRoot, resolvedPath);
+  const canonicalBase = canonicalizePath(base);
+  const canonicalResolved = canonicalizePath(resolvedPath);
+  const nodeModulesRoot = path.resolve(canonicalBase, "node_modules");
+  const relative = path.relative(nodeModulesRoot, canonicalResolved);
   return (
     relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
   );
