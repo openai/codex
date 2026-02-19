@@ -42,14 +42,11 @@ fn extract_log_field(line: &str, key: &str) -> Option<String> {
     }
 
     let bare_prefix = format!("{key}=");
-    if let Some(start) = line.find(&bare_prefix) {
-        let value_start = start + bare_prefix.len();
-        let value = line[value_start..]
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .trim_end_matches(',');
-        return Some(value.to_string());
+    for token in line.split_whitespace() {
+        let trimmed = token.trim_end_matches(',');
+        if let Some(value) = trimmed.strip_prefix(&bare_prefix) {
+            return Some(value.to_string());
+        }
     }
 
     None
@@ -71,6 +68,26 @@ fn assert_empty_mcp_tool_fields(line: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[test]
+fn extract_log_field_handles_empty_bare_values() {
+    let line = "event.name=\"codex.tool_result\" mcp_server= mcp_server_origin=";
+    assert_eq!(extract_log_field(line, "mcp_server"), Some(String::new()));
+    assert_eq!(
+        extract_log_field(line, "mcp_server_origin"),
+        Some(String::new())
+    );
+}
+
+#[test]
+fn extract_log_field_does_not_confuse_similar_keys() {
+    let line = "event.name=\"codex.tool_result\" mcp_server_origin=stdio";
+    assert_eq!(extract_log_field(line, "mcp_server"), None);
+    assert_eq!(
+        extract_log_field(line, "mcp_server_origin"),
+        Some("stdio".to_string())
+    );
 }
 
 #[tokio::test]
