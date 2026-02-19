@@ -26,8 +26,17 @@ pub struct NetworkToml {
     pub dangerously_allow_non_loopback_admin: Option<bool>,
     #[schemars(with = "Option<NetworkModeSchema>")]
     pub mode: Option<NetworkMode>,
+    /// When `requirements.toml` sets `experimental_network.allowed_domains`,
+    /// values here may further narrow access but must stay within the managed
+    /// allowlist (subset semantics).
     pub allowed_domains: Option<Vec<String>>,
+    /// When `requirements.toml` sets `experimental_network.denied_domains`,
+    /// managed entries are always enforced. Values here can add more denied
+    /// domains but cannot remove the managed ones (floor semantics).
     pub denied_domains: Option<Vec<String>>,
+    /// When `requirements.toml` sets `experimental_network.allow_unix_sockets`,
+    /// values here may further narrow access but must stay within the managed
+    /// socket allowlist (subset semantics).
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
 }
