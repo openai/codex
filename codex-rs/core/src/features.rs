@@ -628,13 +628,6 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::VoiceTranscription,
         key: "voice_transcription",
-        #[cfg(not(target_os = "linux"))]
-        stage: Stage::Experimental {
-            name: "Voice transcription",
-            menu_description: "Press and hold Space in the composer to record and transcribe voice input.",
-            announcement: "NEW: Voice transcription is now available in /experimental.",
-        },
-        #[cfg(target_os = "linux")]
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
