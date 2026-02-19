@@ -571,6 +571,9 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
+        ),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         user_input_text_msg("turn 2 user"),
@@ -591,6 +594,9 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
+        ),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
     ];
@@ -610,6 +616,9 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
+        ),
     ];
 
     let mut history = create_history_with_items(vec![
@@ -622,6 +631,9 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
+        ),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         user_input_text_msg("turn 2 user"),
@@ -640,6 +652,9 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
+        ),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         user_input_text_msg("turn 2 user"),

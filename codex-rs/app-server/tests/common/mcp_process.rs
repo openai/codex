@@ -75,7 +75,7 @@ pub struct McpProcess {
     /// not a guarantee. See the `kill_on_drop` documentation for details.
     #[allow(dead_code)]
     process: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     pending_messages: VecDeque<JSONRPCMessage>,
 }
@@ -145,7 +145,7 @@ impl McpProcess {
         Ok(Self {
             next_request_id: AtomicI64::new(0),
             process,
-            stdin,
+            stdin: Some(stdin),
             stdout,
             pending_messages: VecDeque::new(),
         })
@@ -811,10 +811,13 @@ impl McpProcess {
 
     async fn send_jsonrpc_message(&mut self, message: JSONRPCMessage) -> anyhow::Result<()> {
         eprintln!("writing message to stdin: {message:?}");
+        let Some(stdin) = self.stdin.as_mut() else {
+            anyhow::bail!("mcp stdin closed");
+        };
         let payload = serde_json::to_string(&message)?;
-        self.stdin.write_all(payload.as_bytes()).await?;
-        self.stdin.write_all(b"\n").await?;
-        self.stdin.flush().await?;
+        stdin.write_all(payload.as_bytes()).await?;
+        stdin.write_all(b"\n").await?;
+        stdin.flush().await?;
         Ok(())
     }
 
@@ -961,8 +964,22 @@ impl Drop for McpProcess {
         //
         // Drop can't be async, so we do a bounded synchronous cleanup:
         //
-        // 1. Request termination with `start_kill()`.
-        // 2. Poll `try_wait()` until the OS reports the child exited, with a short timeout.
+        // 1. Close stdin to request a graceful shutdown via EOF.
+        // 2. Poll briefly for graceful exit.
+        // 3. If still alive, request termination with `start_kill()`.
+        // 4. Poll `try_wait()` until the OS reports the child exited, with a short timeout.
+        drop(self.stdin.take());
+
+        let graceful_start = std::time::Instant::now();
+        let graceful_timeout = std::time::Duration::from_millis(200);
+        while graceful_start.elapsed() < graceful_timeout {
+            match self.process.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                Err(_) => return,
+            }
+        }
+
         let _ = self.process.start_kill();
 
         let start = std::time::Instant::now();

@@ -307,7 +307,9 @@ fn close_fd_or_panic(fd: libc::c_int, context: &str) {
 fn is_proc_mount_failure(stderr: &str) -> bool {
     stderr.contains("Can't mount proc")
         && stderr.contains("/newroot/proc")
-        && stderr.contains("Invalid argument")
+        && (stderr.contains("Invalid argument")
+            || stderr.contains("Operation not permitted")
+            || stderr.contains("Permission denied"))
 }
 
 /// Build the inner command that applies seccomp after bubblewrap.
@@ -382,6 +384,18 @@ mod tests {
     }
 
     #[test]
+    fn detects_proc_mount_operation_not_permitted_failure() {
+        let stderr = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted";
+        assert_eq!(is_proc_mount_failure(stderr), true);
+    }
+
+    #[test]
+    fn detects_proc_mount_permission_denied_failure() {
+        let stderr = "bwrap: Can't mount proc on /newroot/proc: Permission denied";
+        assert_eq!(is_proc_mount_failure(stderr), true);
+    }
+
+    #[test]
     fn ignores_non_proc_mount_errors() {
         let stderr = "bwrap: Can't bind mount /dev/null: Operation not permitted";
         assert_eq!(is_proc_mount_failure(stderr), false);
@@ -407,9 +421,8 @@ mod tests {
                 "--ro-bind".to_string(),
                 "/".to_string(),
                 "/".to_string(),
-                "--dev-bind".to_string(),
-                "/dev/null".to_string(),
-                "/dev/null".to_string(),
+                "--dev".to_string(),
+                "/dev".to_string(),
                 "--unshare-pid".to_string(),
                 "--proc".to_string(),
                 "/proc".to_string(),

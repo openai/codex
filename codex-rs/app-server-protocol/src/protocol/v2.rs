@@ -37,6 +37,7 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
+use codex_protocol::protocol::RejectConfig as CoreRejectConfig;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
 use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
@@ -162,6 +163,11 @@ pub enum AskForApproval {
     UnlessTrusted,
     OnFailure,
     OnRequest,
+    Reject {
+        sandbox_approval: bool,
+        rules: bool,
+        mcp_elicitations: bool,
+    },
     Never,
 }
 
@@ -171,6 +177,15 @@ impl AskForApproval {
             AskForApproval::UnlessTrusted => CoreAskForApproval::UnlessTrusted,
             AskForApproval::OnFailure => CoreAskForApproval::OnFailure,
             AskForApproval::OnRequest => CoreAskForApproval::OnRequest,
+            AskForApproval::Reject {
+                sandbox_approval,
+                rules,
+                mcp_elicitations,
+            } => CoreAskForApproval::Reject(CoreRejectConfig {
+                sandbox_approval,
+                rules,
+                mcp_elicitations,
+            }),
             AskForApproval::Never => CoreAskForApproval::Never,
         }
     }
@@ -182,6 +197,11 @@ impl From<CoreAskForApproval> for AskForApproval {
             CoreAskForApproval::UnlessTrusted => AskForApproval::UnlessTrusted,
             CoreAskForApproval::OnFailure => AskForApproval::OnFailure,
             CoreAskForApproval::OnRequest => AskForApproval::OnRequest,
+            CoreAskForApproval::Reject(reject_config) => AskForApproval::Reject {
+                sandbox_approval: reject_config.sandbox_approval,
+                rules: reject_config.rules,
+                mcp_elicitations: reject_config.mcp_elicitations,
+            },
             CoreAskForApproval::Never => AskForApproval::Never,
         }
     }

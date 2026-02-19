@@ -33,6 +33,7 @@ use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
+use crate::unified_exec::MIN_YIELD_TIME_MS;
 use crate::unified_exec::ProcessEntry;
 use crate::unified_exec::ProcessStore;
 use crate::unified_exec::UnifiedExecContext;
@@ -351,11 +352,13 @@ impl UnifiedExecProcessManager {
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = {
-            let time_ms = clamp_yield_time(request.yield_time_ms);
+            // Empty polls use configurable background timeout bounds. Non-empty
+            // writes keep a fixed max cap so interactive stdin remains responsive.
+            let time_ms = request.yield_time_ms.max(MIN_YIELD_TIME_MS);
             if request.input.is_empty() {
-                time_ms.clamp(MIN_EMPTY_YIELD_TIME_MS, MAX_YIELD_TIME_MS)
+                time_ms.clamp(MIN_EMPTY_YIELD_TIME_MS, self.max_write_stdin_yield_time_ms)
             } else {
-                time_ms
+                time_ms.min(MAX_YIELD_TIME_MS)
             }
         };
         let start = Instant::now();

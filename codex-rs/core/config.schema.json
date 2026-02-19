@@ -29,6 +29,12 @@
         "$ref": "#/definitions/AgentRoleToml"
       },
       "properties": {
+        "max_depth": {
+          "description": "Maximum nesting depth allowed for spawned agent threads. Root sessions start at depth 0.",
+          "format": "int32",
+          "minimum": 1.0,
+          "type": "integer"
+        },
         "max_threads": {
           "description": "Maximum number of agent threads that can be open concurrently. When unset, no limit is enforced.",
           "format": "uint",
@@ -132,6 +138,19 @@
             "on-request"
           ],
           "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Fine-grained rejection controls for approval prompts.\n\nWhen a field is `true`, prompts of that category are automatically rejected instead of shown to the user.",
+          "properties": {
+            "reject": {
+              "$ref": "#/definitions/RejectConfig"
+            }
+          },
+          "required": [
+            "reject"
+          ],
+          "type": "object"
         },
         {
           "description": "Never ask the user to approve commands. Failures are immediately returned to the model, and never escalated to the user for approval.",
@@ -606,6 +625,70 @@
       ],
       "type": "object"
     },
+    "NetworkModeSchema": {
+      "enum": [
+        "limited",
+        "full"
+      ],
+      "type": "string"
+    },
+    "NetworkToml": {
+      "additionalProperties": false,
+      "properties": {
+        "admin_url": {
+          "type": "string"
+        },
+        "allow_local_binding": {
+          "type": "boolean"
+        },
+        "allow_unix_sockets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allow_upstream_proxy": {
+          "type": "boolean"
+        },
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dangerously_allow_non_loopback_admin": {
+          "type": "boolean"
+        },
+        "dangerously_allow_non_loopback_proxy": {
+          "type": "boolean"
+        },
+        "denied_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enable_socks5": {
+          "type": "boolean"
+        },
+        "enable_socks5_udp": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/definitions/NetworkModeSchema"
+        },
+        "proxy_url": {
+          "type": "string"
+        },
+        "socks_url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Notice": {
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
       "properties": {
@@ -847,6 +930,20 @@
       },
       "type": "object"
     },
+    "PermissionsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/NetworkToml"
+            }
+          ],
+          "description": "Network proxy settings from `[permissions.network]`. User config can enable the proxy; managed requirements may still constrain values."
+        }
+      },
+      "type": "object"
+    },
     "Personality": {
       "enum": [
         "none",
@@ -996,6 +1093,28 @@
           "type": "string"
         }
       ]
+    },
+    "RejectConfig": {
+      "properties": {
+        "mcp_elicitations": {
+          "description": "Reject MCP elicitation prompts.",
+          "type": "boolean"
+        },
+        "rules": {
+          "description": "Reject prompts triggered by execpolicy `prompt` rules.",
+          "type": "boolean"
+        },
+        "sandbox_approval": {
+          "description": "Reject approval prompts related to sandbox escalation.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mcp_elicitations",
+        "rules",
+        "sandbox_approval"
+      ],
+      "type": "object"
     },
     "SandboxMode": {
       "enum": [
@@ -1295,6 +1414,12 @@
       "default": null,
       "description": "Settings for app-specific controls."
     },
+    "background_terminal_timeout": {
+      "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
       "type": "string"
@@ -1554,6 +1679,10 @@
       "minimum": 0.0,
       "type": "integer"
     },
+    "mcp_oauth_callback_url": {
+      "description": "Optional redirect URI to use during MCP OAuth login. When set, this URI is used in the OAuth authorization request instead of the local listener address. The local callback listener still binds to 127.0.0.1 (using `mcp_oauth_callback_port` when provided).",
+      "type": "string"
+    },
     "mcp_oauth_credentials_store": {
       "allOf": [
         {
@@ -1587,6 +1716,14 @@
       "description": "Token usage threshold triggering auto-compaction of conversation history.",
       "format": "int64",
       "type": "integer"
+    },
+    "model_catalog_json": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Optional path to a JSON file containing a complete model catalog. When set, this replaces the bundled catalog for this process."
     },
     "model_context_window": {
       "description": "Size of the context window for the model, in tokens.",
@@ -1658,6 +1795,15 @@
         }
       ],
       "description": "OTEL configuration."
+    },
+    "permissions": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PermissionsToml"
+        }
+      ],
+      "default": null,
+      "description": "Nested permissions settings."
     },
     "personality": {
       "allOf": [

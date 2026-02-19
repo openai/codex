@@ -4,6 +4,8 @@ use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
 
 use codex_core::config::Config;
+use codex_core::default_client::is_first_party_chat_originator;
+use codex_core::default_client::originator;
 use codex_core::features::Feature;
 use codex_core::token_data::TokenData;
 use serde::Deserialize;
@@ -460,23 +462,34 @@ const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
     "connector_69272cb413a081919685ec3c88d1744e",
     "connector_0f9c9d4592e54d0a9a12b3f44a1e2010",
 ];
+const FIRST_PARTY_CHAT_DISALLOWED_CONNECTOR_IDS: &[&str] =
+    &["connector_0f9c9d4592e54d0a9a12b3f44a1e2010"];
 const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
 fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
+    filter_disallowed_connectors_for_originator(connectors, originator().value.as_str())
+}
+
+fn filter_disallowed_connectors_for_originator(
+    connectors: Vec<AppInfo>,
+    originator_value: &str,
+) -> Vec<AppInfo> {
+    let disallowed_connector_ids = if is_first_party_chat_originator(originator_value) {
+        FIRST_PARTY_CHAT_DISALLOWED_CONNECTOR_IDS
+    } else {
+        DISALLOWED_CONNECTOR_IDS
+    };
+
     connectors
         .into_iter()
-        .filter(is_connector_allowed)
+        .filter(|connector| is_connector_allowed(connector, disallowed_connector_ids))
         .collect()
 }
 
-fn is_connector_allowed(connector: &AppInfo) -> bool {
+fn is_connector_allowed(connector: &AppInfo, disallowed_connector_ids: &[&str]) -> bool {
     let connector_id = connector.id.as_str();
-    if connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX)
-        || DISALLOWED_CONNECTOR_IDS.contains(&connector_id)
-    {
-        return false;
-    }
-    true
+    !connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX)
+        && !disallowed_connector_ids.contains(&connector_id)
 }
 
 #[cfg(test)]
@@ -523,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_openai_connectors() {
+    fn filters_openai_prefixed_connectors() {
         let filtered = filter_disallowed_connectors(vec![
             app("connector_openai_foo"),
             app("connector_openai_bar"),
@@ -539,6 +552,22 @@ mod tests {
             app("delta"),
         ]);
         assert_eq!(filtered, vec![app("delta")]);
+    }
+
+    #[test]
+    fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
+        let filtered = filter_disallowed_connectors_for_originator(
+            vec![
+                app("connector_openai_foo"),
+                app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
+                app("connector_0f9c9d4592e54d0a9a12b3f44a1e2010"),
+            ],
+            "codex_atlas",
+        );
+        assert_eq!(
+            filtered,
+            vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c"),]
+        );
     }
 
     fn merged_app(id: &str, is_accessible: bool) -> AppInfo {
