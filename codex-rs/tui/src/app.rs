@@ -158,10 +158,23 @@ fn session_summary(
 }
 
 fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
+    let cwd_canonical = dunce::canonicalize(cwd).ok();
     response
         .skills
         .iter()
-        .find(|entry| entry.cwd.as_path() == cwd)
+        .find(|entry| {
+            if entry.cwd.as_path() == cwd {
+                return true;
+            }
+
+            let Some(cwd_canonical) = cwd_canonical.as_ref() else {
+                return false;
+            };
+            let Ok(entry_canonical) = dunce::canonicalize(&entry.cwd) else {
+                return false;
+            };
+            entry_canonical == *cwd_canonical
+        })
         .map(|entry| entry.errors.clone())
         .unwrap_or_default()
 }
@@ -2945,6 +2958,36 @@ mod tests {
             vec![base_cwd.join("rel")]
         );
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn errors_for_cwd_matches_symlinked_paths() {
+        let temp_dir = tempdir().expect("tempdir");
+        let real_dir = temp_dir.path().join("real");
+        let link_dir = temp_dir.path().join("link");
+        std::fs::create_dir_all(&real_dir).expect("create real dir");
+        std::os::unix::fs::symlink(&real_dir, &link_dir).expect("create symlink");
+
+        let expected_error = SkillErrorInfo {
+            path: real_dir.join("SKILL.md"),
+            message: "invalid frontmatter".to_string(),
+        };
+        let response = ListSkillsResponseEvent {
+            skills: vec![codex_core::protocol::SkillsListEntry {
+                cwd: real_dir,
+                skills: Vec::new(),
+                errors: vec![expected_error.clone()],
+            }],
+        };
+
+        let actual_errors = errors_for_cwd(&link_dir, &response);
+        let actual = actual_errors
+            .into_iter()
+            .map(|error| (error.path, error.message))
+            .collect::<Vec<_>>();
+        let expected = vec![(expected_error.path, expected_error.message)];
+        assert_eq!(actual, expected);
     }
 
     #[test]
