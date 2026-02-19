@@ -145,7 +145,25 @@ async fn setup_turn_one_with_spawned_child(
     test.submit_turn(TURN_1_PROMPT).await?;
     if child_response_delay.is_none() {
         let _ = wait_for_requests(&child_request_log).await?;
-        sleep(Duration::from_millis(50)).await;
+        let rollout_path = test
+            .codex
+            .rollout_path()
+            .ok_or_else(|| anyhow::anyhow!("expected parent rollout path"))?;
+        let deadline = Instant::now() + Duration::from_secs(6);
+        loop {
+            let has_notification = tokio::fs::read_to_string(&rollout_path)
+                .await
+                .is_ok_and(|rollout| rollout.contains("<subagent_notification>"));
+            if has_notification {
+                break;
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!(
+                    "timed out waiting for parent rollout to include subagent notification"
+                );
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
     }
     let spawned_id = wait_for_spawned_thread_id(&test).await?;
 
