@@ -11,10 +11,12 @@ use http::HeaderMap;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tracing::error;
 use tracing::warn;
 
 const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
 const TEXT_IN_QUEUE_CAPACITY: usize = 64;
+const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 
 pub(crate) struct RealtimeConversationManager {
     state: Mutex<Option<ConversationState>>,
@@ -41,7 +43,7 @@ impl RealtimeConversationManager {
         extra_headers: HeaderMap,
         prompt: String,
         session_id: Option<String>,
-    ) -> CodexResult<()> {
+    ) -> CodexResult<mpsc::Receiver<RealtimeEvent>> {
         let previous_state = {
             let mut guard = self.state.lock().await;
             guard.take()
@@ -62,6 +64,7 @@ impl RealtimeConversationManager {
         let events = connection.events();
         let (audio_tx, mut audio_rx) = mpsc::channel::<RealtimeAudioFrame>(AUDIO_IN_QUEUE_CAPACITY);
         let (text_tx, mut text_rx) = mpsc::channel::<String>(TEXT_IN_QUEUE_CAPACITY);
+        let (events_tx, events_rx) = mpsc::channel::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
         let task = tokio::spawn(async move {
             loop {
@@ -83,19 +86,28 @@ impl RealtimeConversationManager {
                     }
                     event = events.next_event() => {
                         match event {
-                            Ok(Some(RealtimeEvent::SessionCreated { .. }))
-                            | Ok(Some(RealtimeEvent::SessionUpdated { .. }))
-                            | Ok(Some(RealtimeEvent::AudioOut(_)))
-                            | Ok(Some(RealtimeEvent::ConversationItemAdded(_))) => {}
-                            Ok(Some(RealtimeEvent::Error(message))) => {
-                                error!("realtime stream error: {message}");
-                                break;
+                            Ok(Some(event)) => {
+                                let should_stop = matches!(&event, RealtimeEvent::Error(_));
+                                if events_tx.send(event).await.is_err() {
+                                    break;
+                                }
+                                if should_stop {
+                                    error!("realtime stream error event received");
+                                    break;
+                                }
                             }
                             Ok(None) => {
                                 break;
                             }
                             Err(err) => {
                                 let mapped_error = map_api_error(err);
+                                if events_tx
+                                    .send(RealtimeEvent::Error(mapped_error.to_string()))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
                                 error!("realtime stream closed: {mapped_error}");
                                 break;
                             }
@@ -125,7 +137,7 @@ impl RealtimeConversationManager {
             text_tx,
             task,
         });
-        Ok(())
+        Ok(events_rx)
     }
 
     pub(crate) async fn audio_in(&self, frame: RealtimeAudioFrame) -> CodexResult<()> {
