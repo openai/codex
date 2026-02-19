@@ -1,9 +1,12 @@
 use crate::agent::AgentStatus;
+use crate::agent::exceeds_thread_spawn_depth_limit;
+use crate::agent::max_thread_spawn_depth;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::error::CodexErr;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -345,7 +348,8 @@ mod resume_agent {
             .await
             .unwrap_or((None, None));
         let child_depth = next_thread_spawn_depth(&turn.session_source);
-        if exceeds_thread_spawn_depth_limit(child_depth, turn.config.agent_max_depth) {
+        let max_depth = max_thread_spawn_depth(turn.config.agent_max_spawn_depth);
+        if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
             return Err(FunctionCallError::RespondToModel(
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
@@ -1692,9 +1696,10 @@ mod tests {
         let manager = thread_manager();
         session.services.agent_control = manager.agent_control();
 
+        let max_depth = max_thread_spawn_depth(turn.config.agent_max_spawn_depth);
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
-            depth: DEFAULT_AGENT_MAX_DEPTH,
+            depth: max_depth,
             agent_nickname: None,
             agent_role: None,
         });

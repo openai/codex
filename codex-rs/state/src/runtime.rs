@@ -212,7 +212,7 @@ WHERE id = 1
 
     /// Load thread metadata by id using the underlying database.
     pub async fn get_thread(&self, id: ThreadId) -> anyhow::Result<Option<crate::ThreadMetadata>> {
-        let row = sqlx::query_as::<_, AgentJobItemRow>(
+        let row = sqlx::query(
             r#"
 SELECT
     id,

@@ -19,6 +19,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -575,11 +576,6 @@ async fn run_agent_job_loop(
     let runtime_timeout = job_runtime_timeout(&job);
     let mut active_items: HashMap<ThreadId, ActiveJobItem> = HashMap::new();
     let mut progress_emitter = JobProgressEmitter::new();
-    let job = db
-        .get_agent_job(job_id.as_str())
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("agent job {job_id} was not found"))?;
-    let runtime_timeout = job_runtime_timeout(&job);
     recover_running_items(
         session.clone(),
         db.clone(),
@@ -607,12 +603,16 @@ async fn run_agent_job_loop(
                 .await?;
             for item in pending_items {
                 let prompt = build_worker_prompt(&job, &item)?;
+                let items = vec![UserInput::Text {
+                    text: prompt,
+                    text_elements: Vec::new(),
+                }];
                 let thread_id = match session
                     .services
                     .agent_control
                     .spawn_agent(
                         options.spawn_config.clone(),
-                        prompt,
+                        items,
                         Some(SessionSource::SubAgent(SubAgentSource::Other(format!(
                             "agent_job:{job_id}"
                         )))),
@@ -759,14 +759,14 @@ async fn recover_running_items(
             let error_message = format!("worker exceeded max runtime of {runtime_timeout:?}");
             db.mark_agent_job_item_failed(job_id, item.item_id.as_str(), error_message.as_str())
                 .await?;
-            if let Some(assigned_thread_id) = item.assigned_thread_id.as_ref() {
-                if let Ok(thread_id) = ThreadId::from_string(assigned_thread_id.as_str()) {
-                    let _ = session
-                        .services
-                        .agent_control
-                        .shutdown_agent(thread_id)
-                        .await;
-                }
+            if let Some(assigned_thread_id) = item.assigned_thread_id.as_ref()
+                && let Ok(thread_id) = ThreadId::from_string(assigned_thread_id.as_str())
+            {
+                let _ = session
+                    .services
+                    .agent_control
+                    .shutdown_agent(thread_id)
+                    .await;
             }
             continue;
         }
@@ -1021,7 +1021,7 @@ fn parse_csv(content: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
     for record in reader.records() {
         let record = record.map_err(|err| err.to_string())?;
         let row: Vec<String> = record.iter().map(str::to_string).collect();
-        if row.iter().all(|value| value.is_empty()) {
+        if row.iter().all(std::string::String::is_empty) {
             continue;
         }
         rows.push(row);
