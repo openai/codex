@@ -47,6 +47,7 @@ pub(crate) struct ThreadState {
     pub(crate) turn_summary: TurnSummary,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
+    pub(crate) listener_generation: u64,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
     listener_thread: Option<Weak<CodexThread>>,
@@ -65,14 +66,15 @@ impl ThreadState {
         &mut self,
         cancel_tx: oneshot::Sender<()>,
         conversation: &Arc<CodexThread>,
-    ) -> mpsc::UnboundedReceiver<ThreadListenerCommand> {
+    ) -> (mpsc::UnboundedReceiver<ThreadListenerCommand>, u64) {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
         }
+        self.listener_generation = self.listener_generation.wrapping_add(1);
         let (listener_command_tx, listener_command_rx) = mpsc::unbounded_channel();
         self.listener_command_tx = Some(listener_command_tx);
         self.listener_thread = Some(Arc::downgrade(conversation));
-        listener_command_rx
+        (listener_command_rx, self.listener_generation)
     }
 
     pub(crate) fn clear_listener(&mut self) {
