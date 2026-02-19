@@ -1265,6 +1265,10 @@ impl ChatComposer {
             // fall through to normal handling of this other key
         }
 
+        if let Some(result) = self.handle_voice_space_key_event(&key_event) {
+            return result;
+        }
+
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
@@ -2655,9 +2659,6 @@ impl ChatComposer {
             }
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
-        if let Some(result) = self.handle_voice_space_key_event(&key_event) {
-            return result;
         }
         match key_event {
             KeyEvent {
