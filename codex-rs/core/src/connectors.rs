@@ -104,6 +104,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries,
+        &config.permissions.approval_policy,
         tx_event,
         sandbox_state,
     )
