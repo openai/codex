@@ -4,8 +4,12 @@ use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
 use std::sync::LazyLock;
+use std::time::Duration;
+use std::time::Instant;
 
 const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
+const POWERSHELL_AST_PARSE_TIMEOUT: Duration = Duration::from_secs(2);
+const POWERSHELL_AST_PARSE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
 /// that match a small safelist. Anything else (including direct CMD commands) is unsafe.
@@ -127,7 +131,7 @@ fn is_powershell_executable(exe: &str) -> bool {
 fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseOutcome {
     let encoded_script = encode_powershell_base64(script);
     let encoded_parser_script = encoded_parser_script();
-    match Command::new(executable)
+    let mut child = match Command::new(executable)
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -136,18 +140,46 @@ fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseO
             encoded_parser_script,
         ])
         .env("CODEX_POWERSHELL_PAYLOAD", &encoded_script)
-        .output()
+        .spawn()
     {
-        Ok(output) if output.status.success() => {
-            if let Ok(result) =
-                serde_json::from_slice::<PowershellParserOutput>(output.stdout.as_slice())
-            {
-                result.into_outcome()
-            } else {
-                PowershellParseOutcome::Failed
+        Ok(child) => child,
+        Err(_) => return PowershellParseOutcome::Failed,
+    };
+    let start = Instant::now();
+    let output = loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                break match child.wait_with_output() {
+                    Ok(output) => output,
+                    Err(_) => return PowershellParseOutcome::Failed,
+                };
+            }
+            Ok(None) => {
+                if start.elapsed() >= POWERSHELL_AST_PARSE_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return PowershellParseOutcome::Failed;
+                }
+                std::thread::sleep(POWERSHELL_AST_PARSE_POLL_INTERVAL);
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return PowershellParseOutcome::Failed;
             }
         }
-        _ => PowershellParseOutcome::Failed,
+    };
+
+    if output.status.success() {
+        if let Ok(result) =
+            serde_json::from_slice::<PowershellParserOutput>(output.stdout.as_slice())
+        {
+            result.into_outcome()
+        } else {
+            PowershellParseOutcome::Failed
+        }
+    } else {
+        PowershellParseOutcome::Failed
     }
 }
 
