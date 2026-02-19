@@ -14,12 +14,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
-use crate::features::Feature;
-use crate::parse_command::parse_command;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
-use crate::sandboxing::extend_sandbox_policy;
-use crate::skills::resolve_skill_sandbox_extension_for_command;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
@@ -610,27 +606,6 @@ impl UnifiedExecProcessManager {
         ));
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
-        let skills_outcome = context
-            .session
-            .services
-            .skills_manager
-            .skills_for_cwd(&context.turn.cwd, false)
-            .await;
-        let shell_zsh_fork_enabled = context.session.features().enabled(Feature::ShellZshFork);
-        let command_actions = parse_command(&request.command);
-        let effective_sandbox_policy = resolve_skill_sandbox_extension_for_command(
-            &skills_outcome,
-            shell_zsh_fork_enabled,
-            &request.command,
-            &cwd,
-            &command_actions,
-        )
-        .map_or_else(
-            || context.turn.sandbox_policy.clone(),
-            |skill_sandbox_policy| {
-                extend_sandbox_policy(&context.turn.sandbox_policy, &skill_sandbox_policy)
-            },
-        );
         let exec_approval_requirement = context
             .session
             .services
@@ -638,7 +613,7 @@ impl UnifiedExecProcessManager {
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &request.command,
                 approval_policy: context.turn.approval_policy,
-                sandbox_policy: &effective_sandbox_policy,
+                sandbox_policy: &context.turn.sandbox_policy,
                 sandbox_permissions: request.sandbox_permissions,
                 prefix_rule: request.prefix_rule.clone(),
             })
@@ -662,13 +637,12 @@ impl UnifiedExecProcessManager {
             network_attempt_id: None,
         };
         orchestrator
-            .run_with_sandbox_policy(
+            .run(
                 &mut runtime,
                 &req,
                 &tool_ctx,
                 context.turn.as_ref(),
                 context.turn.approval_policy,
-                &effective_sandbox_policy,
             )
             .await
             .map(|result| (result.output, result.deferred_network_approval))
