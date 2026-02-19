@@ -1,0 +1,24 @@
+---
+source: core/tests/suite/model_visible_layout.rs
+expression: "format_labeled_requests_snapshot(\"Second turn changes cwd, approval policy, and personality while keeping model constant.\",\n&[(\"First Request (Baseline)\", &requests[0]),\n(\"Second Request (Turn Overrides)\", &requests[1]),])"
+---
+Scenario: Second turn changes cwd, approval policy, and personality while keeping model constant.
+
+## First Request (Baseline)
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/developer:<PERMISSIONS_INSTRUCTIONS>
+04:message/user:first turn
+
+## Second Request (Turn Overrides)
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/developer:<PERMISSIONS_INSTRUCTIONS>
+04:message/user:first turn
+05:message/assistant:turn one complete
+06:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+07:message/developer:<PERMISSIONS_INSTRUCTIONS>
+08:message/developer:<personality_spec> The user has requested a new communication style. Future messages should adhe...
+09:message/user:second turn with context updates

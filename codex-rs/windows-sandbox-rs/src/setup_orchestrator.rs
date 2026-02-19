@@ -62,6 +62,47 @@ pub fn run_setup_refresh(
     env_map: &HashMap<String, String>,
     codex_home: &Path,
 ) -> Result<()> {
+    run_setup_refresh_inner(
+        policy,
+        policy_cwd,
+        command_cwd,
+        env_map,
+        codex_home,
+        None,
+        None,
+    )
+}
+
+pub fn run_setup_refresh_with_extra_read_roots(
+    policy: &SandboxPolicy,
+    policy_cwd: &Path,
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    extra_read_roots: Vec<PathBuf>,
+) -> Result<()> {
+    let mut read_roots = gather_read_roots(command_cwd, policy);
+    read_roots.extend(extra_read_roots);
+    run_setup_refresh_inner(
+        policy,
+        policy_cwd,
+        command_cwd,
+        env_map,
+        codex_home,
+        Some(read_roots),
+        Some(Vec::new()),
+    )
+}
+
+fn run_setup_refresh_inner(
+    policy: &SandboxPolicy,
+    policy_cwd: &Path,
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    read_roots_override: Option<Vec<PathBuf>>,
+    write_roots_override: Option<Vec<PathBuf>>,
+) -> Result<()> {
     // Skip in danger-full-access.
     if matches!(
         policy,
@@ -75,8 +116,8 @@ pub fn run_setup_refresh(
         command_cwd,
         env_map,
         codex_home,
-        None,
-        None,
+        read_roots_override,
+        write_roots_override,
     );
     let payload = ElevationPayload {
         version: SETUP_VERSION,

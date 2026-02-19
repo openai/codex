@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -59,6 +58,7 @@ pub(crate) async fn run_codex_thread_interactive(
         SessionSource::SubAgent(SubAgentSource::Review),
         parent_session.services.agent_control.clone(),
         Vec::new(),
+        false,
     )
     .await?;
     let codex = Arc::new(codex);
@@ -90,7 +90,6 @@ pub(crate) async fn run_codex_thread_interactive(
     });
 
     Ok(Codex {
-        next_id: AtomicU64::new(0),
         tx_sub: tx_ops,
         rx_event: rx_sub,
         agent_status: codex.agent_status.clone(),
@@ -166,7 +165,6 @@ pub(crate) async fn run_codex_thread_one_shot(
     drop(rx_closed);
 
     Ok(Codex {
-        next_id: AtomicU64::new(0),
         rx_event: rx_bridge,
         tx_sub: tx_closed,
         agent_status,
@@ -307,17 +305,20 @@ async fn forward_ops(
 /// Handle an ExecApprovalRequest by consulting the parent session and replying.
 async fn handle_exec_approval(
     codex: &Codex,
-    id: String,
+    turn_id: String,
     parent_session: &Session,
     parent_ctx: &TurnContext,
     event: ExecApprovalRequestEvent,
     cancel_token: &CancellationToken,
 ) {
+    let approval_id_for_op = event.effective_approval_id();
     let ExecApprovalRequestEvent {
         call_id,
+        approval_id,
         command,
         cwd,
         reason,
+        network_approval_context,
         proposed_execpolicy_amendment,
         ..
     } = event;
@@ -325,26 +326,34 @@ async fn handle_exec_approval(
     let approval_fut = parent_session.request_command_approval(
         parent_ctx,
         call_id,
+        approval_id,
         command,
         cwd,
         reason,
+        network_approval_context,
         proposed_execpolicy_amendment,
     );
     let decision = await_approval_with_cancel(
         approval_fut,
         parent_session,
-        &parent_ctx.sub_id,
+        &approval_id_for_op,
         cancel_token,
     )
     .await;
 
-    let _ = codex.submit(Op::ExecApproval { id, decision }).await;
+    let _ = codex
+        .submit(Op::ExecApproval {
+            id: approval_id_for_op,
+            turn_id: Some(turn_id),
+            decision,
+        })
+        .await;
 }
 
 /// Handle an ApplyPatchApprovalRequest by consulting the parent session and replying.
 async fn handle_patch_approval(
     codex: &Codex,
-    id: String,
+    _id: String,
     parent_session: &Session,
     parent_ctx: &TurnContext,
     event: ApplyPatchApprovalRequestEvent,
@@ -357,17 +366,23 @@ async fn handle_patch_approval(
         grant_root,
         ..
     } = event;
+    let approval_id = call_id.clone();
     let decision_rx = parent_session
         .request_patch_approval(parent_ctx, call_id, changes, reason, grant_root)
         .await;
     let decision = await_approval_with_cancel(
         async move { decision_rx.await.unwrap_or_default() },
         parent_session,
-        &parent_ctx.sub_id,
+        &approval_id,
         cancel_token,
     )
     .await;
-    let _ = codex.submit(Op::PatchApproval { id, decision }).await;
+    let _ = codex
+        .submit(Op::PatchApproval {
+            id: approval_id,
+            decision,
+        })
+        .await;
 }
 
 async fn handle_request_user_input(
@@ -423,7 +438,7 @@ where
 async fn await_approval_with_cancel<F>(
     fut: F,
     parent_session: &Session,
-    sub_id: &str,
+    approval_id: &str,
     cancel_token: &CancellationToken,
 ) -> codex_protocol::protocol::ReviewDecision
 where
@@ -433,7 +448,7 @@ where
         biased;
         _ = cancel_token.cancelled() => {
             parent_session
-                .notify_approval(sub_id, codex_protocol::protocol::ReviewDecision::Abort)
+                .notify_approval(approval_id, codex_protocol::protocol::ReviewDecision::Abort)
                 .await;
             codex_protocol::protocol::ReviewDecision::Abort
         }
@@ -462,7 +477,6 @@ mod tests {
         let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
         let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
         let codex = Arc::new(Codex {
-            next_id: AtomicU64::new(0),
             tx_sub,
             rx_event: rx_events,
             agent_status,
@@ -474,6 +488,7 @@ mod tests {
             .send(Event {
                 id: "full".to_string(),
                 msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                    turn_id: Some("turn-1".to_string()),
                     reason: TurnAbortReason::Interrupted,
                 }),
             })

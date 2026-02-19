@@ -57,6 +57,7 @@ pub(crate) async fn handle_exec_approval_request(
     tool_call_id: String,
     event_id: String,
     call_id: String,
+    approval_id: String,
     codex_parsed_cmd: Vec<ParsedCommand>,
     thread_id: ThreadId,
 ) {
@@ -100,14 +101,16 @@ pub(crate) async fn handle_exec_approval_request(
     // Listen for the response on a separate task so we don't block the main agent loop.
     {
         let codex = codex.clone();
+        let approval_id = approval_id.clone();
         let event_id = event_id.clone();
         tokio::spawn(async move {
-            on_exec_approval_response(event_id, on_response, codex).await;
+            on_exec_approval_response(approval_id, event_id, on_response, codex).await;
         });
     }
 }
 
 async fn on_exec_approval_response(
+    approval_id: String,
     event_id: String,
     receiver: tokio::sync::oneshot::Receiver<serde_json::Value>,
     codex: Arc<CodexThread>,
@@ -133,7 +136,8 @@ async fn on_exec_approval_response(
 
     if let Err(err) = codex
         .submit(Op::ExecApproval {
-            id: event_id,
+            id: approval_id,
+            turn_id: Some(event_id),
             decision: response.decision,
         })
         .await

@@ -15,8 +15,10 @@ pub enum SlashCommand {
     Model,
     Approvals,
     Permissions,
-    #[strum(serialize = "setup-elevated-sandbox")]
+    #[strum(serialize = "setup-default-sandbox")]
     ElevateSandbox,
+    #[strum(serialize = "sandbox-add-read-dir")]
+    SandboxReadRoot,
     Experimental,
     Skills,
     Review,
@@ -43,8 +45,14 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
+    Clean,
     Personality,
     TestApproval,
+    // Debugging commands.
+    #[strum(serialize = "debug-m-drop")]
+    MemoryDrop,
+    #[strum(serialize = "debug-m-update")]
+    MemoryUpdate,
 }
 
 impl SlashCommand {
@@ -68,14 +76,20 @@ impl SlashCommand {
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Ps => "list background terminals",
+            SlashCommand::Clean => "stop all background terminals",
+            SlashCommand::MemoryDrop => "DO NOT USE",
+            SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
-            SlashCommand::Approvals => "choose what Codex can do without approval",
+            SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
+            SlashCommand::SandboxReadRoot => {
+                "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
+            }
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Apps => "manage apps",
@@ -95,7 +109,10 @@ impl SlashCommand {
     pub fn supports_inline_args(self) -> bool {
         matches!(
             self,
-            SlashCommand::Review | SlashCommand::Rename | SlashCommand::Plan
+            SlashCommand::Review
+                | SlashCommand::Rename
+                | SlashCommand::Plan
+                | SlashCommand::SandboxReadRoot
         )
     }
 
@@ -113,10 +130,13 @@ impl SlashCommand {
             | SlashCommand::Approvals
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
+            | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Plan
-            | SlashCommand::Logout => false,
+            | SlashCommand::Logout
+            | SlashCommand::MemoryDrop
+            | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
             | SlashCommand::Rename
             | SlashCommand::Mention
@@ -124,6 +144,7 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
+            | SlashCommand::Clean
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Feedback
@@ -139,6 +160,7 @@ impl SlashCommand {
 
     fn is_visible(self) -> bool {
         match self {
+            SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }

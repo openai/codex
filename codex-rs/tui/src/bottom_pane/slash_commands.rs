@@ -3,7 +3,7 @@
 //! The same sandbox- and feature-gating rules are used by both the composer
 //! and the command popup. Centralizing them here keeps those call sites small
 //! and ensures they stay in sync.
-use codex_common::fuzzy_match::fuzzy_match;
+use codex_utils_fuzzy_match::fuzzy_match;
 
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
@@ -62,4 +62,16 @@ pub(crate) fn has_builtin_prefix(
     )
     .into_iter()
     .any(|(command_name, _)| fuzzy_match(command_name, name).is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn debug_command_still_resolves_for_dispatch() {
+        let cmd = find_builtin_command("debug-config", true, true, true, false);
+        assert_eq!(cmd, Some(SlashCommand::DebugConfig));
+    }
 }

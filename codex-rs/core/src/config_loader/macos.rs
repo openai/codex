@@ -1,6 +1,6 @@
-use super::config_requirements::ConfigRequirementsToml;
-use super::config_requirements::ConfigRequirementsWithSources;
-use super::config_requirements::RequirementSource;
+use super::ConfigRequirementsToml;
+use super::ConfigRequirementsWithSources;
+use super::RequirementSource;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use core_foundation::base::TCFType;
@@ -15,6 +15,12 @@ const MANAGED_PREFERENCES_APPLICATION_ID: &str = "com.openai.codex";
 const MANAGED_PREFERENCES_CONFIG_KEY: &str = "config_toml_base64";
 const MANAGED_PREFERENCES_REQUIREMENTS_KEY: &str = "requirements_toml_base64";
 
+#[derive(Debug, Clone)]
+pub(super) struct ManagedAdminConfigLayer {
+    pub config: TomlValue,
+    pub raw_toml: String,
+}
+
 pub(super) fn managed_preferences_requirements_source() -> RequirementSource {
     RequirementSource::MdmManagedPreferences {
         domain: MANAGED_PREFERENCES_APPLICATION_ID.to_string(),
@@ -24,7 +30,7 @@ pub(super) fn managed_preferences_requirements_source() -> RequirementSource {
 
 pub(crate) async fn load_managed_admin_config_layer(
     override_base64: Option<&str>,
-) -> io::Result<Option<TomlValue>> {
+) -> io::Result<Option<ManagedAdminConfigLayer>> {
     if let Some(encoded) = override_base64 {
         let trimmed = encoded.trim();
         return if trimmed.is_empty() {
@@ -47,7 +53,7 @@ pub(crate) async fn load_managed_admin_config_layer(
     }
 }
 
-fn load_managed_admin_config() -> io::Result<Option<TomlValue>> {
+fn load_managed_admin_config() -> io::Result<Option<ManagedAdminConfigLayer>> {
     load_managed_preference(MANAGED_PREFERENCES_CONFIG_KEY)?
         .as_deref()
         .map(str::trim)
@@ -122,9 +128,13 @@ fn load_managed_preference(key_name: &str) -> io::Result<Option<String>> {
     Ok(Some(value))
 }
 
-fn parse_managed_config_base64(encoded: &str) -> io::Result<TomlValue> {
-    match toml::from_str::<TomlValue>(&decode_managed_preferences_base64(encoded)?) {
-        Ok(TomlValue::Table(parsed)) => Ok(TomlValue::Table(parsed)),
+fn parse_managed_config_base64(encoded: &str) -> io::Result<ManagedAdminConfigLayer> {
+    let raw_toml = decode_managed_preferences_base64(encoded)?;
+    match toml::from_str::<TomlValue>(&raw_toml) {
+        Ok(TomlValue::Table(parsed)) => Ok(ManagedAdminConfigLayer {
+            config: TomlValue::Table(parsed),
+            raw_toml,
+        }),
         Ok(other) => {
             tracing::error!("Managed config TOML must have a table at the root, found {other:?}",);
             Err(io::Error::new(

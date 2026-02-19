@@ -59,7 +59,7 @@ Request `newConversation` params (subset):
 - `model`: string model id (e.g. "o3", "gpt-5.1", "gpt-5.1-codex")
 - `profile`: optional named profile
 - `cwd`: optional working directory
-- `approvalPolicy`: `untrusted` | `on-request` | `on-failure` | `never`
+- `approvalPolicy`: `untrusted` | `on-request` | `on-failure` (deprecated) | `never`
 - `sandbox`: `read-only` | `workspace-write` | `external-sandbox` (honors `networkAccess` restricted/enabled) | `danger-full-access`
 - `config`: map of additional config overrides
 - `baseInstructions`: optional instruction override
@@ -81,9 +81,9 @@ Interrupt a running turn: `interruptConversation`.
 
 List/resume/archive: `listConversations`, `resumeConversation`, `archiveConversation`.
 
-For v2 threads, use `thread/list` with `archived: true` to list archived rollouts and
-`thread/unarchive` to restore them to the active sessions directory (it returns the restored
-thread summary).
+For v2 threads, use `thread/list` with filters such as `archived: true` or `cwd: "/path"` to
+narrow results, and `thread/unarchive` to restore archived rollouts to the active sessions
+directory (it returns the restored thread summary).
 
 ## Models
 
@@ -111,6 +111,8 @@ Fetch the built-in collaboration mode presets with `collaborationMode/list`. Thi
 
 - `data` – ordered list of collaboration mode masks (partial settings to apply on top of the base mode)
   - For tri-state fields like `reasoning_effort` and `developer_instructions`, omit the field to keep the current value, set it to `null` to clear it, or set a concrete value to update it.
+
+When sending `turn/start` with `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 
 ## Event stream
 
@@ -144,7 +146,7 @@ Example:
 When Codex needs approval to apply changes or run commands, the server issues JSON‑RPC requests to the client:
 
 - `applyPatchApproval { conversationId, callId, fileChanges, reason?, grantRoot? }`
-- `execCommandApproval { conversationId, callId, command, cwd, reason? }`
+- `execCommandApproval { conversationId, callId, approvalId?, command, cwd, reason? }`
 
 The client must reply with `{ decision: "allow" | "deny" }` for each request.
 

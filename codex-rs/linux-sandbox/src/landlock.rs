@@ -42,22 +42,33 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
     apply_landlock_fs: bool,
+    allow_network_for_proxy: bool,
 ) -> Result<()> {
+    let install_network_seccomp =
+        should_install_network_seccomp(sandbox_policy, allow_network_for_proxy);
+
     // `PR_SET_NO_NEW_PRIVS` is required for seccomp, but it also prevents
     // setuid privilege elevation. Many `bwrap` deployments rely on setuid, so
     // we avoid this unless we need seccomp or we are explicitly using the
     // legacy Landlock filesystem pipeline.
-    if !sandbox_policy.has_full_network_access()
+    if install_network_seccomp
         || (apply_landlock_fs && !sandbox_policy.has_full_disk_write_access())
     {
         set_no_new_privs()?;
     }
 
-    if !sandbox_policy.has_full_network_access() {
+    if install_network_seccomp {
         install_network_seccomp_filter_on_current_thread()?;
     }
 
     if apply_landlock_fs && !sandbox_policy.has_full_disk_write_access() {
+        if !sandbox_policy.has_full_disk_read_access() {
+            return Err(CodexErr::UnsupportedOperation(
+                "Restricted read-only access is not supported by the legacy Linux Landlock filesystem backend."
+                    .to_string(),
+            ));
+        }
+
         let writable_roots = sandbox_policy
             .get_writable_roots_with_cwd(cwd)
             .into_iter()
@@ -66,10 +77,16 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
         install_filesystem_landlock_rules_on_current_thread(writable_roots)?;
     }
 
-    // TODO(ragona): Add appropriate restrictions if
-    // `sandbox_policy.has_full_disk_read_access()` is `false`.
-
     Ok(())
+}
+
+fn should_install_network_seccomp(
+    sandbox_policy: &SandboxPolicy,
+    allow_network_for_proxy: bool,
+) -> bool {
+    // Managed-network sessions should remain fail-closed even for policies that
+    // would normally grant full network access (for example, DangerFullAccess).
+    !sandbox_policy.has_full_network_access() || allow_network_for_proxy
 }
 
 /// Enable `PR_SET_NO_NEW_PRIVS` so seccomp can be applied safely.
@@ -149,6 +166,9 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     deny_syscall(libc::SYS_getsockopt);
     deny_syscall(libc::SYS_setsockopt);
     deny_syscall(libc::SYS_ptrace);
+    deny_syscall(libc::SYS_io_uring_setup);
+    deny_syscall(libc::SYS_io_uring_enter);
+    deny_syscall(libc::SYS_io_uring_register);
 
     // For `socket` we allow AF_UNIX (arg0 == AF_UNIX) and deny everything else.
     let unix_only_rule = SeccompRule::new(vec![SeccompCondition::new(
@@ -179,4 +199,39 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     apply_filter(&prog)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_install_network_seccomp;
+    use codex_core::protocol::SandboxPolicy;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn managed_network_enforces_seccomp_even_for_full_network_policy() {
+        assert_eq!(
+            should_install_network_seccomp(&SandboxPolicy::DangerFullAccess, true),
+            true
+        );
+    }
+
+    #[test]
+    fn full_network_policy_without_managed_network_skips_seccomp() {
+        assert_eq!(
+            should_install_network_seccomp(&SandboxPolicy::DangerFullAccess, false),
+            false
+        );
+    }
+
+    #[test]
+    fn restricted_network_policy_always_installs_seccomp() {
+        assert!(should_install_network_seccomp(
+            &SandboxPolicy::new_read_only_policy(),
+            false
+        ));
+        assert!(should_install_network_seccomp(
+            &SandboxPolicy::new_read_only_policy(),
+            true
+        ));
+    }
 }

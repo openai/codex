@@ -123,7 +123,7 @@ impl ExecTool {
                 .await
                 .clone()
                 .unwrap_or_else(|| SandboxState {
-                    sandbox_policy: SandboxPolicy::ReadOnly,
+                    sandbox_policy: SandboxPolicy::new_read_only_policy(),
                     codex_linux_sandbox_exe: None,
                     sandbox_cwd: PathBuf::from(&params.workdir),
                     use_linux_sandbox_bwrap: false,
@@ -185,7 +185,7 @@ impl ServerHandler for ExecTool {
 
     async fn initialize(
         &self,
-        _request: InitializeRequestParam,
+        _request: InitializeRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         Ok(self.get_info())

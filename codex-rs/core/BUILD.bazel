@@ -3,10 +3,6 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "core",
     crate_name = "codex_core",
-    # TODO(mbolin): Eliminate the use of features in the version of the
-    # rust_library() that is used by rust_binary() rules for release artifacts
-    # such as the Codex CLI.
-    crate_features = ["deterministic_process_ids", "test-support"],
     compile_data = glob(
         include = ["**"],
         exclude = [
@@ -15,7 +11,9 @@ codex_rust_crate(
             "Cargo.toml",
         ],
         allow_empty = True,
-    ),
+    ) + [
+        "//codex-rs:node-version.txt",
+    ],
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
         "models.json",

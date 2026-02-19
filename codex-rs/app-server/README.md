@@ -28,6 +28,12 @@ Supported transports:
 
 Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
+Backpressure behavior:
+
+- The server uses bounded queues between transport ingress, request processing, and outbound writes.
+- When request ingress is saturated, new requests are rejected with a JSON-RPC error code `-32001` and message `"Server overloaded; retry later."`.
+- Clients should treat this as retryable and use exponential backoff with jitter.
+
 ## Message Schema
 
 Currently, you can dump a TypeScript version of the schema using `codex app-server generate-ts`, or a JSON Schema bundle via `codex app-server generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
@@ -59,6 +65,8 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 
 Clients must send a single `initialize` request per transport connection before invoking any other method on that connection, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls on the same connection receive an `"Already initialized"` error.
 
+`initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
+
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If
@@ -81,42 +89,68 @@ Example (from OpenAI's official VSCode extension):
 }
 ```
 
+Example with notification opt-out:
+
+```json
+{
+  "method": "initialize",
+  "id": 1,
+  "params": {
+    "clientInfo": {
+      "name": "my_client",
+      "title": "My Client",
+      "version": "0.1.0"
+    },
+    "capabilities": {
+      "experimentalApi": true,
+      "optOutNotificationMethods": [
+        "codex/event/session_configured",
+        "item/agentMessage/delta"
+      ]
+    }
+  }
+}
+```
+
 ## API Overview
 
 - `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
-- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders` filtering.
+- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, and `cwd` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
-- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
-- `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
+- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
+- `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
 - `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
-- `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success.
+- `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
+- `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
+- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
-- `model/list` — list available models (with reasoning effort options and optional `upgrade` model ids).
+- `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options and optional `upgrade` model ids.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
-- `skills/remote/read` — list public remote skills (**under development; do not call from production clients yet**).
-- `skills/remote/write` — download a public remote skill by `hazelnutId`; `isPreload=true` writes to `.codex/vendor_imports/skills` under `codex_home` (**under development; do not call from production clients yet**).
+- `skills/remote/list` — list public remote skills (**under development; do not call from production clients yet**).
+- `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
+- `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); returns `{ started: true }` immediately and later emits `windowsSandbox/setupCompleted`.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs and conversation_id); returns the tracking thread id.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `config/read` — fetch the effective config on disk after resolving config layering.
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk.
-- `configRequirements/read` — fetch the loaded requirements allow-lists and `enforceResidency` from `requirements.toml` and/or MDM (or `null` if none are configured).
+- `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), `enforceResidency`, and `network` constraints.
 
 ### Example: Start or resume a thread
 
@@ -177,6 +211,8 @@ To branch from a stored session, call `thread/fork` with the `thread.id`. This c
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
+Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `persistExtendedHistory: true` to persist a richer subset of ThreadItems for non-lossy history when calling `thread/read`, `thread/resume`, and `thread/fork` later. This does not backfill events that were not persisted previously.
+
 ### Example: List threads (with pagination & filters)
 
 `thread/list` lets you render a history UI. Results default to `createdAt` (newest first) descending. Pass any combination of:
@@ -187,6 +223,7 @@ To branch from a stored session, call `thread/fork` with the `thread.id`. This c
 - `modelProviders` — restrict results to specific providers; unset, null, or an empty array will include all providers.
 - `sourceKinds` — restrict results to specific sources; omit or pass `[]` for interactive sessions only (`cli`, `vscode`).
 - `archived` — when `true`, list archived threads only. When `false` or `null`, list non-archived threads (default).
+- `cwd` — restrict results to threads whose session cwd exactly matches this path.
 
 Example:
 
@@ -198,8 +235,8 @@ Example:
 } }
 { "id": 20, "result": {
     "data": [
-        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111 },
-        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000 }
+        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111, "status": { "type": "notLoaded" } },
+        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000, "status": { "type": "notLoaded" } }
     ],
     "nextCursor": "opaque-token-or-null"
 } }
@@ -218,18 +255,36 @@ When `nextCursor` is `null`, you’ve reached the final page.
 } }
 ```
 
+### Example: Track thread status changes
+
+`thread/status/changed` is emitted whenever a loaded thread's status changes:
+
+- Includes `threadId` and the new `status`.
+- Status can be `notLoaded`, `idle`, `systemError`, or `active` (with `activeFlags`; `active` implies running).
+
+```json
+{ "method": "thread/status/changed", "params": {
+    "threadId": "thr_123",
+    "status": { "type": "active", "activeFlags": [] }
+} }
+```
+
 ### Example: Read a thread
 
 Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the rollout history loaded into `thread.turns`.
 
 ```json
 { "method": "thread/read", "id": 22, "params": { "threadId": "thr_123" } }
-{ "id": 22, "result": { "thread": { "id": "thr_123", "turns": [] } } }
+{ "id": 22, "result": {
+    "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [] }
+} }
 ```
 
 ```json
 { "method": "thread/read", "id": 23, "params": { "threadId": "thr_123", "includeTurns": true } }
-{ "id": 23, "result": { "thread": { "id": "thr_123", "turns": [ ... ] } } }
+{ "id": 23, "result": {
+    "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [ ... ] }
+} }
 ```
 
 ### Example: Archive a thread
@@ -239,6 +294,7 @@ Use `thread/archive` to move the persisted rollout (stored as a JSONL file on di
 ```json
 { "method": "thread/archive", "id": 21, "params": { "threadId": "thr_b" } }
 { "id": 21, "result": {} }
+{ "method": "thread/archived", "params": { "threadId": "thr_b" } }
 ```
 
 An archived thread will not appear in `thread/list` unless `archived` is set to `true`.
@@ -250,6 +306,7 @@ Use `thread/unarchive` to move an archived rollout back into the sessions direct
 ```json
 { "method": "thread/unarchive", "id": 24, "params": { "threadId": "thr_b" } }
 { "id": 24, "result": { "thread": { "id": "thr_b" } } }
+{ "method": "thread/unarchived", "params": { "threadId": "thr_b" } }
 ```
 
 ### Example: Trigger thread compaction
@@ -364,6 +421,17 @@ You can cancel a running Turn with `turn/interrupt`.
 
 The server requests cancellations for running subprocesses, then emits a `turn/completed` event with `status: "interrupted"`. Rely on the `turn/completed` to know when Codex-side cleanup is done.
 
+### Example: Clean background terminals
+
+Use `thread/backgroundTerminals/clean` to terminate all running background terminals associated with a thread. This method is experimental and requires `capabilities.experimentalApi = true`.
+
+```json
+{ "method": "thread/backgroundTerminals/clean", "id": 35, "params": {
+    "threadId": "thr_123"
+} }
+{ "id": 35, "result": {} }
+```
+
 ### Example: Steer an active turn
 
 Use `turn/steer` to append additional user input to the currently active turn. This does not emit
@@ -473,7 +541,32 @@ Notes:
 
 ## Events
 
-Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `turn/*`, and `item/*` notifications.
+
+### Notification opt-out
+
+Clients can suppress specific notifications per connection by sending exact method names in `initialize.params.capabilities.optOutNotificationMethods`.
+
+- Exact-match only: `item/agentMessage/delta` suppresses only that method.
+- Unknown method names are ignored.
+- Applies to both legacy (`codex/event/*`) and v2 (`thread/*`, `turn/*`, `item/*`, etc.) notifications.
+- Does not apply to requests/responses/errors.
+
+Examples:
+
+- Opt out of legacy session setup event: `codex/event/session_configured`
+- Opt out of streamed agent text deltas: `item/agentMessage/delta`
+
+### Fuzzy file search events (experimental)
+
+The fuzzy file search session API emits per-query notifications:
+
+- `fuzzyFileSearch/sessionUpdated` — `{ sessionId, query, files }` with the current matching files for the active query.
+- `fuzzyFileSearch/sessionCompleted` — `{ sessionId, query }` once indexing/matching for that query has completed.
+
+### Windows sandbox setup events
+
+- `windowsSandbox/setupCompleted` — `{ mode, success, error }` after a `windowsSandbox/setupStart` request finishes.
 
 ### Turn events
 
@@ -483,6 +576,7 @@ The app-server streams JSON-RPC notifications while a turn is running. Each turn
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo?, additionalDetails? } }`.
 - `turn/diff/updated` — `{ threadId, turnId, diff }` represents the up-to-date snapshot of the turn-level unified diff, emitted after every FileChange item. `diff` is the latest aggregated unified diff across every file change in the turn. UIs can render this to show the full "what changed" view without stitching individual `fileChange` items.
 - `turn/plan/updated` — `{ turnId, explanation?, plan }` whenever the agent shares or changes its plan; each `plan` entry is `{ step, status }` with `status` in `pending`, `inProgress`, or `completed`.
+- `model/rerouted` — `{ threadId, turnId, fromModel, toModel, reason }` when the backend reroutes a request to a different model (for example, due to high-risk cyber safety checks).
 
 Today both notifications carry an empty `items` array even when item events were streamed; rely on `item/*` notifications for the canonical item list until this is fixed.
 
@@ -497,7 +591,7 @@ Today both notifications carry an empty `items` array even when item events were
 - `commandExecution` — `{id, command, cwd, status, commandActions, aggregatedOutput?, exitCode?, durationMs?}` for sandboxed commands; `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `fileChange` — `{id, changes, status}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
-- `collabToolCall` — `{id, tool, status, senderThreadId, receiverThreadId?, newThreadId?, prompt?, agentStatus?}` describing collab tool calls (`spawn_agent`, `send_input`, `wait`, `close_agent`); `status` is `inProgress`, `completed`, or `failed`.
+- `collabToolCall` — `{id, tool, status, senderThreadId, receiverThreadId?, newThreadId?, prompt?, agentStatus?}` describing collab tool calls (`spawn_agent`, `send_input`, `resume_agent`, `wait`, `close_agent`); `status` is `inProgress`, `completed`, or `failed`.
 - `webSearch` — `{id, query, action?}` for a web search request issued by the agent; `action` mirrors the Responses API web_search action payload (`search`, `open_page`, `find_in_page`) and may be omitted until completion.
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
 - `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
@@ -567,7 +661,7 @@ Certain actions (shell commands or modifying files) may require explicit user ap
 Order of messages:
 
 1. `item/started` — shows the pending `commandExecution` item with `command`, `cwd`, and other fields so you can render the proposed action.
-2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason`, plus `command`, `cwd`, and `commandActions` for friendly display.
+2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `approvalId` (for subcommand callbacks), `reason`, plus `command`, `cwd`, and `commandActions` for friendly display.
 3. Client response — `{ "decision": "accept", "acceptSettings": { "forSession": false } }` or `{ "decision": "decline" }`.
 4. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
 
@@ -651,11 +745,20 @@ $skill-creator Add a new skill for triaging flaky CI and include step-by-step us
 ```
 
 Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
+You can also add `perCwdExtraUserRoots` to scan additional absolute paths as `user` scope for specific `cwd` entries.
+Entries whose `cwd` is not present in `cwds` are ignored.
+`skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
-    "cwds": ["/Users/me/project"],
-    "forceReload": false
+    "cwds": ["/Users/me/project", "/Users/me/other-project"],
+    "forceReload": true,
+    "perCwdExtraUserRoots": [
+      {
+        "cwd": "/Users/me/project",
+        "extraUserRoots": ["/Users/me/shared-skills"]
+      }
+    ]
 } }
 { "id": 25, "result": {
     "data": [{
@@ -695,12 +798,14 @@ To enable or disable a skill by path:
 
 ## Apps
 
-Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, and whether it is currently accessible.
+Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, `branding`, `appMetadata`, `labels`, whether it is currently accessible, and whether it is enabled in config.
 
 ```json
 { "method": "app/list", "id": 50, "params": {
     "cursor": null,
-    "limit": 50
+    "limit": 50,
+    "threadId": "thr_123",
+    "forceRefetch": false
 } }
 { "id": 50, "result": {
     "data": [
@@ -711,12 +816,46 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
             "logoUrl": "https://example.com/demo-app.png",
             "logoUrlDark": null,
             "distributionChannel": null,
+            "branding": null,
+            "appMetadata": null,
+            "labels": null,
             "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
-            "isAccessible": true
+            "isAccessible": true,
+            "isEnabled": true
         }
     ],
     "nextCursor": null
 } }
+```
+
+When `threadId` is provided, app feature gating (`Feature::Apps`) is evaluated using that thread's config snapshot. When omitted, the latest global config is used.
+
+`app/list` returns after both accessible apps and directory apps are loaded. Set `forceRefetch: true` to bypass app caches and fetch fresh data from sources. Cache entries are only replaced when those refetches succeed.
+
+The server also emits `app/list/updated` notifications whenever either source (accessible apps or directory apps) finishes loading. Each notification includes the latest merged app list.
+
+```json
+{
+  "method": "app/list/updated",
+  "params": {
+    "data": [
+      {
+        "id": "demo-app",
+        "name": "Demo App",
+        "description": "Example connector for documentation.",
+        "logoUrl": "https://example.com/demo-app.png",
+        "logoUrlDark": null,
+        "distributionChannel": null,
+        "branding": null,
+        "appMetadata": null,
+        "labels": null,
+        "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
+        "isAccessible": true,
+        "isEnabled": true
+      }
+    ]
+  }
+}
 ```
 
 Invoke an app by inserting `$<app-slug>` in the text input. The slug is derived from the app name and lowercased with non-alphanumeric characters replaced by `-` (for example, "Demo App" becomes `$demo-app`). Add a `mention` input item (recommended) so the server uses the exact `app://<connector-id>` path rather than guessing by name.

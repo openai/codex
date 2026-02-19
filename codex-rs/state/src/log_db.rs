@@ -20,6 +20,7 @@
 
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -33,6 +34,7 @@ use tracing::span::Id;
 use tracing::span::Record;
 use tracing_subscriber::Layer;
 use tracing_subscriber::registry::LookupSpan;
+use uuid::Uuid;
 
 use crate::LogEntry;
 use crate::StateRuntime;
@@ -44,14 +46,19 @@ const LOG_RETENTION_DAYS: i64 = 90;
 
 pub struct LogDbLayer {
     sender: mpsc::Sender<LogEntry>,
+    process_uuid: String,
 }
 
 pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
+    let process_uuid = current_process_log_uuid().to_string();
     let (sender, receiver) = mpsc::channel(LOG_QUEUE_CAPACITY);
     tokio::spawn(run_inserter(std::sync::Arc::clone(&state_db), receiver));
     tokio::spawn(run_retention_cleanup(state_db));
 
-    LogDbLayer { sender }
+    LogDbLayer {
+        sender,
+        process_uuid,
+    }
 }
 
 impl<S> Layer<S> for LogDbLayer
@@ -118,6 +125,7 @@ where
             target: metadata.target().to_string(),
             message: visitor.message,
             thread_id,
+            process_uuid: Some(self.process_uuid.clone()),
             module_path: metadata.module_path().map(ToString::to_string),
             file: metadata.file().map(ToString::to_string),
             line: metadata.line().map(|line| line as i64),
@@ -194,6 +202,15 @@ where
         }
     }
     thread_id
+}
+
+fn current_process_log_uuid() -> &'static str {
+    static PROCESS_LOG_UUID: OnceLock<String> = OnceLock::new();
+    PROCESS_LOG_UUID.get_or_init(|| {
+        let pid = std::process::id();
+        let process_uuid = Uuid::new_v4();
+        format!("pid:{pid}:{process_uuid}")
+    })
 }
 
 async fn run_inserter(

@@ -9,6 +9,7 @@ use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::SandboxMode;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
@@ -17,6 +18,7 @@ use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::ResidencyRequirement as CoreResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
+use codex_protocol::config_types::WebSearchMode;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -115,9 +117,20 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                 .filter_map(map_sandbox_mode_requirement_to_api)
                 .collect()
         }),
+        allowed_web_search_modes: requirements.allowed_web_search_modes.map(|modes| {
+            let mut normalized = modes
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<WebSearchMode>>();
+            if !normalized.contains(&WebSearchMode::Disabled) {
+                normalized.push(WebSearchMode::Disabled);
+            }
+            normalized
+        }),
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
+        network: requirements.network.map(map_network_requirements_to_api),
     }
 }
 
@@ -135,6 +148,23 @@ fn map_residency_requirement_to_api(
 ) -> codex_app_server_protocol::ResidencyRequirement {
     match residency {
         CoreResidencyRequirement::Us => codex_app_server_protocol::ResidencyRequirement::Us,
+    }
+}
+
+fn map_network_requirements_to_api(
+    network: codex_core::config_loader::NetworkRequirementsToml,
+) -> NetworkRequirements {
+    NetworkRequirements {
+        enabled: network.enabled,
+        http_port: network.http_port,
+        socks_port: network.socks_port,
+        allow_upstream_proxy: network.allow_upstream_proxy,
+        dangerously_allow_non_loopback_proxy: network.dangerously_allow_non_loopback_proxy,
+        dangerously_allow_non_loopback_admin: network.dangerously_allow_non_loopback_admin,
+        allowed_domains: network.allowed_domains,
+        denied_domains: network.denied_domains,
+        allow_unix_sockets: network.allow_unix_sockets,
+        allow_local_binding: network.allow_local_binding,
     }
 }
 
@@ -163,6 +193,7 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
     use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
 
@@ -177,9 +208,24 @@ mod tests {
                 CoreSandboxModeRequirement::ReadOnly,
                 CoreSandboxModeRequirement::ExternalSandbox,
             ]),
+            allowed_web_search_modes: Some(vec![
+                codex_core::config_loader::WebSearchModeRequirement::Cached,
+            ]),
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
+            network: Some(CoreNetworkRequirementsToml {
+                enabled: Some(true),
+                http_port: Some(8080),
+                socks_port: Some(1080),
+                allow_upstream_proxy: Some(false),
+                dangerously_allow_non_loopback_proxy: Some(false),
+                dangerously_allow_non_loopback_admin: Some(false),
+                allowed_domains: Some(vec!["api.openai.com".to_string()]),
+                denied_domains: Some(vec!["example.com".to_string()]),
+                allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
+                allow_local_binding: Some(true),
+            }),
         };
 
         let mapped = map_requirements_toml_to_api(requirements);
@@ -196,8 +242,47 @@ mod tests {
             Some(vec![SandboxMode::ReadOnly]),
         );
         assert_eq!(
+            mapped.allowed_web_search_modes,
+            Some(vec![WebSearchMode::Cached, WebSearchMode::Disabled]),
+        );
+        assert_eq!(
             mapped.enforce_residency,
             Some(codex_app_server_protocol::ResidencyRequirement::Us),
+        );
+        assert_eq!(
+            mapped.network,
+            Some(NetworkRequirements {
+                enabled: Some(true),
+                http_port: Some(8080),
+                socks_port: Some(1080),
+                allow_upstream_proxy: Some(false),
+                dangerously_allow_non_loopback_proxy: Some(false),
+                dangerously_allow_non_loopback_admin: Some(false),
+                allowed_domains: Some(vec!["api.openai.com".to_string()]),
+                denied_domains: Some(vec!["example.com".to_string()]),
+                allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
+                allow_local_binding: Some(true),
+            }),
+        );
+    }
+
+    #[test]
+    fn map_requirements_toml_to_api_normalizes_allowed_web_search_modes() {
+        let requirements = ConfigRequirementsToml {
+            allowed_approval_policies: None,
+            allowed_sandbox_modes: None,
+            allowed_web_search_modes: Some(Vec::new()),
+            mcp_servers: None,
+            rules: None,
+            enforce_residency: None,
+            network: None,
+        };
+
+        let mapped = map_requirements_toml_to_api(requirements);
+
+        assert_eq!(
+            mapped.allowed_web_search_modes,
+            Some(vec![WebSearchMode::Disabled])
         );
     }
 }

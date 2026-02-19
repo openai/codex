@@ -16,6 +16,7 @@ use crate::metrics::names::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_COUNT_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_DURATION_METRIC;
 use crate::otel_provider::traceparent_context_from_env;
+use crate::sanitize_metric_tag_value;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_api::ApiError;
@@ -66,6 +67,7 @@ impl OtelManager {
         account_id: Option<String>,
         account_email: Option<String>,
         auth_mode: Option<TelemetryAuthMode>,
+        originator: String,
         log_user_prompts: bool,
         terminal_type: String,
         session_source: SessionSource,
@@ -76,6 +78,7 @@ impl OtelManager {
                 auth_mode: auth_mode.map(|m| m.to_string()),
                 account_id,
                 account_email,
+                originator: sanitize_metric_tag_value(originator.as_str()),
                 session_source: session_source.to_string(),
                 model: model.to_owned(),
                 slug: slug.to_owned(),
@@ -134,6 +137,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -198,6 +202,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -229,6 +234,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -330,6 +336,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -407,6 +414,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -440,6 +448,7 @@ impl OtelManager {
                 conversation.id = %self.metadata.conversation_id,
                 app.version = %self.metadata.app_version,
                 auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
                 user.account_id = self.metadata.account_id,
                 user.email = self.metadata.account_email,
                 terminal.type = %self.metadata.terminal_type,
@@ -455,6 +464,7 @@ impl OtelManager {
                 conversation.id = %self.metadata.conversation_id,
                 app.version = %self.metadata.app_version,
                 auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
                 user.account_id = self.metadata.account_id,
                 user.email = self.metadata.account_email,
                 terminal.type = %self.metadata.terminal_type,
@@ -478,6 +488,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -503,6 +514,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -538,6 +550,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -562,6 +575,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -617,6 +631,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -654,6 +669,7 @@ impl OtelManager {
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
             auth_mode = self.metadata.auth_mode,
+            originator = %self.metadata.originator,
             user.account_id = self.metadata.account_id,
             user.email = self.metadata.account_email,
             terminal.type = %self.metadata.terminal_type,
@@ -732,6 +748,7 @@ impl OtelManager {
             ResponseEvent::ReasoningSummaryPartAdded { .. } => {
                 "reasoning_summary_part_added".into()
             }
+            ResponseEvent::ServerModel(_) => "server_model".into(),
             ResponseEvent::ServerReasoningIncluded(_) => "server_reasoning_included".into(),
             ResponseEvent::RateLimits(_) => "rate_limits".into(),
             ResponseEvent::ModelsEtag(_) => "models_etag".into(),

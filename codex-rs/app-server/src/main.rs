@@ -2,8 +2,8 @@ use clap::Parser;
 use codex_app_server::AppServerTransport;
 use codex_app_server::run_main_with_transport;
 use codex_arg0::arg0_dispatch_or_else;
-use codex_common::CliConfigOverrides;
 use codex_core::config_loader::LoaderOverrides;
+use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
 // Debug-only test hook: lets integration tests point the server at a temporary
@@ -23,6 +23,9 @@ struct AppServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
+    if codex_core::maybe_run_zsh_exec_wrapper_mode()? {
+        return Ok(());
+    }
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         let args = AppServerArgs::parse();
         let managed_config_path = managed_config_path_from_debug_env();

@@ -1,8 +1,11 @@
 {
+  cmake,
+  llvmPackages,
   openssl,
   rustPlatform,
   pkg-config,
   lib,
+  version ? "0.0.0",
   ...
 }:
 rustPlatform.buildRustPackage (_: {
@@ -10,13 +13,24 @@ rustPlatform.buildRustPackage (_: {
     PKG_CONFIG_PATH = "${openssl.dev}/lib/pkgconfig:$PKG_CONFIG_PATH";
   };
   pname = "codex-rs";
-  version = "0.1.0";
+  inherit version;
   cargoLock.lockFile = ./Cargo.lock;
   doCheck = false;
   src = ./.;
+
+  # Patch the workspace Cargo.toml so that cargo embeds the correct version in
+  # CARGO_PKG_VERSION (which the binary reads via env!("CARGO_PKG_VERSION")).
+  # On release commits the Cargo.toml already contains the real version and
+  # this sed is a no-op.
+  postPatch = ''
+    sed -i 's/^version = "0\.0\.0"$/version = "${version}"/' Cargo.toml
+  '';
   nativeBuildInputs = [
-    pkg-config
+    cmake
+    llvmPackages.clang
+    llvmPackages.libclang.lib
     openssl
+    pkg-config
   ];
 
   cargoLock.outputHashes = {
@@ -25,8 +39,8 @@ rustPlatform.buildRustPackage (_: {
     "nucleo-0.5.0" = "sha256-Hm4SxtTSBrcWpXrtSqeO0TACbUxq3gizg1zD/6Yw/sI=";
     "nucleo-matcher-0.3.1" = "sha256-Hm4SxtTSBrcWpXrtSqeO0TACbUxq3gizg1zD/6Yw/sI=";
     "runfiles-0.1.0" = "sha256-uJpVLcQh8wWZA3GPv9D8Nt43EOirajfDJ7eq/FB+tek=";
-    "tokio-tungstenite-0.28.0" = "sha256-vJZ3S41gHtRt4UAODsjAoSCaTksgzCALiBmbWgyDCi8=";
-    "tungstenite-0.28.0" = "sha256-CyXZp58zGlUhEor7WItjQoS499IoSP55uWqr++ia+0A=";
+    "tokio-tungstenite-0.28.0" = "sha256-hJAkvWxDjB9A9GqansahWhTmj/ekcelslLUTtwqI7lw=";
+    "tungstenite-0.27.0" = "sha256-AN5wql2X2yJnQ7lnDxpljNw0Jua40GtmT+w3wjER010=";
   };
 
   meta = with lib; {

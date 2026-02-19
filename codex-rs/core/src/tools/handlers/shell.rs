@@ -53,6 +53,8 @@ impl ShellHandler {
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
+            network: turn_context.network.clone(),
+            network_attempt_id: None,
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
@@ -81,6 +83,8 @@ impl ShellCommandHandler {
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
+            network: turn_context.network.clone(),
+            network_attempt_id: None,
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
@@ -239,18 +243,17 @@ impl ShellHandler {
             freeform,
         } = args;
 
-        let features = session.features();
-        let request_rule_enabled = features.enabled(crate::features::Feature::RequestRule);
-        let prefix_rule = if request_rule_enabled {
-            prefix_rule
-        } else {
-            None
-        };
-
         let mut exec_params = exec_params;
         let dependency_env = session.dependency_env().await;
         if !dependency_env.is_empty() {
-            exec_params.env.extend(dependency_env);
+            exec_params.env.extend(dependency_env.clone());
+        }
+
+        let mut explicit_env_overrides = turn.shell_environment_policy.r#set.clone();
+        for key in dependency_env.keys() {
+            if let Some(value) = exec_params.env.get(key) {
+                explicit_env_overrides.insert(key.clone(), value.clone());
+            }
         }
 
         // Approval policy guard for explicit escalation in non-OnRequest modes.
@@ -311,6 +314,8 @@ impl ShellHandler {
             cwd: exec_params.cwd.clone(),
             timeout_ms: exec_params.expiration.timeout_ms(),
             env: exec_params.env.clone(),
+            explicit_env_overrides,
+            network: exec_params.network.clone(),
             sandbox_permissions: exec_params.sandbox_permissions,
             justification: exec_params.justification.clone(),
             exec_approval_requirement,
@@ -322,10 +327,12 @@ impl ShellHandler {
             turn: turn.as_ref(),
             call_id: call_id.clone(),
             tool_name,
+            network_attempt_id: None,
         };
         let out = orchestrator
             .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
-            .await;
+            .await
+            .map(|result| result.output);
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;
         Ok(ToolOutput::Function {
@@ -441,6 +448,7 @@ mod tests {
         assert_eq!(exec_params.command, expected_command);
         assert_eq!(exec_params.cwd, expected_cwd);
         assert_eq!(exec_params.env, expected_env);
+        assert_eq!(exec_params.network, turn_context.network);
         assert_eq!(exec_params.expiration.timeout_ms(), timeout_ms);
         assert_eq!(exec_params.sandbox_permissions, sandbox_permissions);
         assert_eq!(exec_params.justification, justification);
@@ -451,6 +459,7 @@ mod tests {
     fn shell_command_handler_respects_explicit_login_flag() {
         let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
             path: PathBuf::from("/tmp/snapshot.sh"),
+            cwd: PathBuf::from("/tmp"),
         })));
         let shell = Shell {
             shell_type: ShellType::Bash,

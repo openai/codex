@@ -30,6 +30,10 @@ use tracing::warn;
 const ROLLOUT_PREFIX: &str = "rollout-";
 const ROLLOUT_SUFFIX: &str = ".jsonl";
 const BACKFILL_BATCH_SIZE: usize = 200;
+#[cfg(not(test))]
+const BACKFILL_LEASE_SECONDS: i64 = 900;
+#[cfg(test)]
+const BACKFILL_LEASE_SECONDS: i64 = 1;
 
 pub(crate) fn builder_from_session_meta(
     session_meta: &SessionMetaLine,
@@ -45,7 +49,7 @@ pub(crate) fn builder_from_session_meta(
     builder.model_provider = session_meta.meta.model_provider.clone();
     builder.cwd = session_meta.meta.cwd.clone();
     builder.cli_version = Some(session_meta.meta.cli_version.clone());
-    builder.sandbox_policy = SandboxPolicy::ReadOnly;
+    builder.sandbox_policy = SandboxPolicy::new_read_only_policy();
     builder.approval_mode = AskForApproval::OnRequest;
     if let Some(git) = session_meta.git.as_ref() {
         builder.git_sha = git.commit_hash.clone();
@@ -133,7 +137,7 @@ pub(crate) async fn backfill_sessions(
     otel: Option<&OtelManager>,
 ) {
     let timer = otel.and_then(|otel| otel.start_timer(DB_METRIC_BACKFILL_DURATION_MS, &[]).ok());
-    let mut backfill_state = match runtime.get_backfill_state().await {
+    let backfill_state = match runtime.get_backfill_state().await {
         Ok(state) => state,
         Err(err) => {
             warn!(
@@ -149,20 +153,66 @@ pub(crate) async fn backfill_sessions(
     if backfill_state.status == BackfillStatus::Complete {
         return;
     }
-    if let Err(err) = runtime.mark_backfill_running().await {
-        warn!(
-            "failed to mark backfill running at {}: {err}",
+    let claimed = match runtime.try_claim_backfill(BACKFILL_LEASE_SECONDS).await {
+        Ok(claimed) => claimed,
+        Err(err) => {
+            warn!(
+                "failed to claim backfill worker at {}: {err}",
+                config.codex_home.display()
+            );
+            if let Some(otel) = otel {
+                otel.counter(
+                    DB_ERROR_METRIC,
+                    1,
+                    &[("stage", "backfill_state_claim_running")],
+                );
+            }
+            return;
+        }
+    };
+    if !claimed {
+        info!(
+            "state db backfill already running at {}; skipping duplicate worker",
             config.codex_home.display()
         );
-        if let Some(otel) = otel {
-            otel.counter(
-                DB_ERROR_METRIC,
-                1,
-                &[("stage", "backfill_state_mark_running")],
+        return;
+    }
+    let mut backfill_state = match runtime.get_backfill_state().await {
+        Ok(state) => state,
+        Err(err) => {
+            warn!(
+                "failed to read claimed backfill state at {}: {err}",
+                config.codex_home.display()
             );
+            if let Some(otel) = otel {
+                otel.counter(
+                    DB_ERROR_METRIC,
+                    1,
+                    &[("stage", "backfill_state_read_claimed")],
+                );
+            }
+            BackfillState {
+                status: BackfillStatus::Running,
+                ..Default::default()
+            }
         }
-    } else {
-        backfill_state.status = BackfillStatus::Running;
+    };
+    if backfill_state.status != BackfillStatus::Running {
+        if let Err(err) = runtime.mark_backfill_running().await {
+            warn!(
+                "failed to mark backfill running at {}: {err}",
+                config.codex_home.display()
+            );
+            if let Some(otel) = otel {
+                otel.counter(
+                    DB_ERROR_METRIC,
+                    1,
+                    &[("stage", "backfill_state_mark_running")],
+                );
+            }
+        } else {
+            backfill_state.status = BackfillStatus::Running;
+        }
     }
 
     let sessions_root = config.codex_home.join(rollout::SESSIONS_SUBDIR);
@@ -550,6 +600,10 @@ mod tests {
             .checkpoint_backfill(first_watermark.as_str())
             .await
             .expect("checkpoint first watermark");
+        tokio::time::sleep(std::time::Duration::from_secs(
+            (BACKFILL_LEASE_SECONDS + 1) as u64,
+        ))
+        .await;
 
         let mut config = crate::config::test_config();
         config.codex_home = codex_home.clone();

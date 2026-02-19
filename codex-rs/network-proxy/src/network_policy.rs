@@ -15,6 +15,53 @@ pub enum NetworkProtocol {
     Socks5Udp,
 }
 
+impl NetworkProtocol {
+    pub const fn as_policy_protocol(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::HttpsConnect => "https_connect",
+            Self::Socks5Tcp => "socks5_tcp",
+            Self::Socks5Udp => "socks5_udp",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkPolicyDecision {
+    Deny,
+    Ask,
+}
+
+impl NetworkPolicyDecision {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+            Self::Ask => "ask",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkDecisionSource {
+    BaselinePolicy,
+    ModeGuard,
+    ProxyState,
+    Decider,
+}
+
+impl NetworkDecisionSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BaselinePolicy => "baseline_policy",
+            Self::ModeGuard => "mode_guard",
+            Self::ProxyState => "proxy_state",
+            Self::Decider => "decider",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct NetworkPolicyRequest {
     pub protocol: NetworkProtocol,
@@ -24,6 +71,7 @@ pub struct NetworkPolicyRequest {
     pub method: Option<String>,
     pub command: Option<String>,
     pub exec_policy_hint: Option<String>,
+    pub attempt_id: Option<String>,
 }
 
 pub struct NetworkPolicyRequestArgs {
@@ -34,6 +82,7 @@ pub struct NetworkPolicyRequestArgs {
     pub method: Option<String>,
     pub command: Option<String>,
     pub exec_policy_hint: Option<String>,
+    pub attempt_id: Option<String>,
 }
 
 impl NetworkPolicyRequest {
@@ -46,6 +95,7 @@ impl NetworkPolicyRequest {
             method,
             command,
             exec_policy_hint,
+            attempt_id,
         } = args;
         Self {
             protocol,
@@ -55,6 +105,7 @@ impl NetworkPolicyRequest {
             method,
             command,
             exec_policy_hint,
+            attempt_id,
         }
     }
 }
@@ -62,18 +113,48 @@ impl NetworkPolicyRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NetworkDecision {
     Allow,
-    Deny { reason: String },
+    Deny {
+        reason: String,
+        source: NetworkDecisionSource,
+        decision: NetworkPolicyDecision,
+    },
 }
 
 impl NetworkDecision {
     pub fn deny(reason: impl Into<String>) -> Self {
+        Self::deny_with_source(reason, NetworkDecisionSource::Decider)
+    }
+
+    pub fn ask(reason: impl Into<String>) -> Self {
+        Self::ask_with_source(reason, NetworkDecisionSource::Decider)
+    }
+
+    pub fn deny_with_source(reason: impl Into<String>, source: NetworkDecisionSource) -> Self {
         let reason = reason.into();
         let reason = if reason.is_empty() {
             REASON_POLICY_DENIED.to_string()
         } else {
             reason
         };
-        Self::Deny { reason }
+        Self::Deny {
+            reason,
+            source,
+            decision: NetworkPolicyDecision::Deny,
+        }
+    }
+
+    pub fn ask_with_source(reason: impl Into<String>, source: NetworkDecisionSource) -> Self {
+        let reason = reason.into();
+        let reason = if reason.is_empty() {
+            REASON_POLICY_DENIED.to_string()
+        } else {
+            reason
+        };
+        Self::Deny {
+            reason,
+            source,
+            decision: NetworkPolicyDecision::Ask,
+        }
     }
 }
 
@@ -114,21 +195,40 @@ pub(crate) async fn evaluate_host_policy(
         HostBlockDecision::Allowed => Ok(NetworkDecision::Allow),
         HostBlockDecision::Blocked(HostBlockReason::NotAllowed) => {
             if let Some(decider) = decider {
-                Ok(decider.decide(request.clone()).await)
+                Ok(map_decider_decision(decider.decide(request.clone()).await))
             } else {
-                Ok(NetworkDecision::deny(HostBlockReason::NotAllowed.as_str()))
+                Ok(NetworkDecision::deny_with_source(
+                    HostBlockReason::NotAllowed.as_str(),
+                    NetworkDecisionSource::BaselinePolicy,
+                ))
             }
         }
-        HostBlockDecision::Blocked(reason) => Ok(NetworkDecision::deny(reason.as_str())),
+        HostBlockDecision::Blocked(reason) => Ok(NetworkDecision::deny_with_source(
+            reason.as_str(),
+            NetworkDecisionSource::BaselinePolicy,
+        )),
+    }
+}
+
+fn map_decider_decision(decision: NetworkDecision) -> NetworkDecision {
+    match decision {
+        NetworkDecision::Allow => NetworkDecision::Allow,
+        NetworkDecision::Deny {
+            reason, decision, ..
+        } => NetworkDecision::Deny {
+            reason,
+            source: NetworkDecisionSource::Decider,
+            decision,
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::config::NetworkPolicy;
+    use crate::config::NetworkProxySettings;
     use crate::reasons::REASON_DENIED;
+    use crate::reasons::REASON_NOT_ALLOWED;
     use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
     use crate::state::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
@@ -138,7 +238,7 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_host_policy_invokes_decider_for_not_allowed() {
-        let state = network_proxy_state_for_policy(NetworkPolicy::default());
+        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
         let calls = Arc::new(AtomicUsize::new(0));
         let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
             let calls = calls.clone();
@@ -158,6 +258,7 @@ mod tests {
             method: Some("GET".to_string()),
             command: None,
             exec_policy_hint: None,
+            attempt_id: None,
         });
 
         let decision = evaluate_host_policy(&state, Some(&decider), &request)
@@ -169,10 +270,10 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_host_policy_skips_decider_for_denied() {
-        let state = network_proxy_state_for_policy(NetworkPolicy {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
             allowed_domains: vec!["example.com".to_string()],
             denied_domains: vec!["blocked.com".to_string()],
-            ..NetworkPolicy::default()
+            ..NetworkProxySettings::default()
         });
         let calls = Arc::new(AtomicUsize::new(0));
         let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
@@ -191,6 +292,7 @@ mod tests {
             method: Some("GET".to_string()),
             command: None,
             exec_policy_hint: None,
+            attempt_id: None,
         });
 
         let decision = evaluate_host_policy(&state, Some(&decider), &request)
@@ -199,7 +301,9 @@ mod tests {
         assert_eq!(
             decision,
             NetworkDecision::Deny {
-                reason: REASON_DENIED.to_string()
+                reason: REASON_DENIED.to_string(),
+                source: NetworkDecisionSource::BaselinePolicy,
+                decision: NetworkPolicyDecision::Deny,
             }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -207,10 +311,10 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_host_policy_skips_decider_for_not_allowed_local() {
-        let state = network_proxy_state_for_policy(NetworkPolicy {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
             allowed_domains: vec!["example.com".to_string()],
             allow_local_binding: false,
-            ..NetworkPolicy::default()
+            ..NetworkProxySettings::default()
         });
         let calls = Arc::new(AtomicUsize::new(0));
         let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
@@ -229,6 +333,7 @@ mod tests {
             method: Some("GET".to_string()),
             command: None,
             exec_policy_hint: None,
+            attempt_id: None,
         });
 
         let decision = evaluate_host_policy(&state, Some(&decider), &request)
@@ -237,9 +342,23 @@ mod tests {
         assert_eq!(
             decision,
             NetworkDecision::Deny {
-                reason: REASON_NOT_ALLOWED_LOCAL.to_string()
+                reason: REASON_NOT_ALLOWED_LOCAL.to_string(),
+                source: NetworkDecisionSource::BaselinePolicy,
+                decision: NetworkPolicyDecision::Deny,
             }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn ask_uses_decider_source_and_ask_decision() {
+        assert_eq!(
+            NetworkDecision::ask(REASON_NOT_ALLOWED),
+            NetworkDecision::Deny {
+                reason: REASON_NOT_ALLOWED.to_string(),
+                source: NetworkDecisionSource::Decider,
+                decision: NetworkPolicyDecision::Ask,
+            }
+        );
     }
 }

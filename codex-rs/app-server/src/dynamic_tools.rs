@@ -7,14 +7,35 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::error;
 
+use crate::outgoing_message::ClientRequestResult;
+
 pub(crate) async fn on_call_response(
     call_id: String,
-    receiver: oneshot::Receiver<serde_json::Value>,
+    receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {
-        Ok(value) => value,
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            let fallback = CoreDynamicToolResponse {
+                content_items: vec![CoreDynamicToolCallOutputContentItem::InputText {
+                    text: "dynamic tool request failed".to_string(),
+                }],
+                success: false,
+            };
+            if let Err(err) = conversation
+                .submit(Op::DynamicToolResponse {
+                    id: call_id.clone(),
+                    response: fallback,
+                })
+                .await
+            {
+                error!("failed to submit DynamicToolResponse: {err}");
+            }
+            return;
+        }
         Err(err) => {
             error!("request failed: {err:?}");
             let fallback = CoreDynamicToolResponse {

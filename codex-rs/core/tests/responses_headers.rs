@@ -1,7 +1,6 @@
 use std::process::Command;
 use std::sync::Arc;
 
-use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ContentItem;
 use codex_core::ModelClient;
@@ -10,7 +9,6 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
-use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -65,14 +63,15 @@ async fn responses_stream_includes_subagent_header_on_review() {
     config.model_provider = provider.clone();
     let effort = config.model_reasoning_effort;
     let summary = config.model_reasoning_summary;
-    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    let model = codex_core::test_support::get_model_offline(config.model.as_deref());
     config.model = Some(model.clone());
     let config = Arc::new(config);
 
     let conversation_id = ThreadId::new();
     let auth_mode = TelemetryAuthMode::Chatgpt;
     let session_source = SessionSource::SubAgent(SubAgentSource::Review);
-    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let model_info =
+        codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
     let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
@@ -80,6 +79,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         None,
         Some("test@test.com".to_string()),
         Some(auth_mode),
+        "test_originator".to_string(),
         false,
         "test".to_string(),
         session_source.clone(),
@@ -91,6 +91,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         provider.clone(),
         session_source,
         config.model_verbosity,
+        false,
         false,
         false,
         false,
@@ -124,6 +125,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         request.header("x-openai-subagent").as_deref(),
         Some("review")
     );
+    assert_eq!(request.header("x-codex-sandbox"), None);
 }
 
 #[tokio::test]
@@ -166,14 +168,15 @@ async fn responses_stream_includes_subagent_header_on_other() {
     config.model_provider = provider.clone();
     let effort = config.model_reasoning_effort;
     let summary = config.model_reasoning_summary;
-    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    let model = codex_core::test_support::get_model_offline(config.model.as_deref());
     config.model = Some(model.clone());
     let config = Arc::new(config);
 
     let conversation_id = ThreadId::new();
     let auth_mode = TelemetryAuthMode::Chatgpt;
     let session_source = SessionSource::SubAgent(SubAgentSource::Other("my-task".to_string()));
-    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let model_info =
+        codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
 
     let otel_manager = OtelManager::new(
         conversation_id,
@@ -182,6 +185,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         None,
         Some("test@test.com".to_string()),
         Some(auth_mode),
+        "test_originator".to_string(),
         false,
         "test".to_string(),
         session_source.clone(),
@@ -193,6 +197,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         provider.clone(),
         session_source,
         config.model_verbosity,
+        false,
         false,
         false,
         false,
@@ -270,12 +275,14 @@ async fn responses_respects_model_info_overrides_from_config() {
     let config = Arc::new(config);
 
     let conversation_id = ThreadId::new();
-    let auth_mode = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"))
-        .auth_mode()
-        .map(TelemetryAuthMode::from);
+    let auth_mode =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"))
+            .auth_mode()
+            .map(TelemetryAuthMode::from);
     let session_source =
         SessionSource::SubAgent(SubAgentSource::Other("override-check".to_string()));
-    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let model_info =
+        codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
     let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
@@ -283,6 +290,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         None,
         Some("test@test.com".to_string()),
         auth_mode,
+        "test_originator".to_string(),
         false,
         "test".to_string(),
         session_source.clone(),
@@ -294,6 +302,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         provider.clone(),
         session_source,
         config.model_verbosity,
+        false,
         false,
         false,
         false,
@@ -360,11 +369,26 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
     test.submit_turn("hello")
         .await
         .expect("submit first turn prompt");
+    let initial_header = first_request
+        .single_request()
+        .header("x-codex-turn-metadata")
+        .expect("x-codex-turn-metadata header should be present");
+    let initial_parsed: serde_json::Value =
+        serde_json::from_str(&initial_header).expect("x-codex-turn-metadata should be valid JSON");
+    let initial_turn_id = initial_parsed
+        .get("turn_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("turn_id should be present")
+        .to_string();
+    assert!(
+        !initial_turn_id.is_empty(),
+        "turn_id should not be empty in x-codex-turn-metadata"
+    );
     assert_eq!(
-        first_request
-            .single_request()
-            .header("x-codex-turn-metadata"),
-        None
+        initial_parsed
+            .get("sandbox")
+            .and_then(serde_json::Value::as_str),
+        Some("none")
     );
 
     let git_config_global = cwd.join("empty-git-config");
@@ -409,51 +433,95 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         .trim()
         .to_string();
 
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let request_recorder = responses::mount_sse_once(&server, response_body.clone()).await;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        test.submit_turn("hello")
-            .await
-            .expect("submit post-git turn prompt");
+    let first_response = responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_reasoning_item("rsn-1", &["thinking"], &[]),
+        responses::ev_shell_command_call("call-1", "echo turn-metadata"),
+        responses::ev_completed("resp-2"),
+    ]);
+    let follow_up_response = responses::sse(vec![
+        responses::ev_response_created("resp-3"),
+        responses::ev_assistant_message("msg-1", "done"),
+        responses::ev_completed("resp-3"),
+    ]);
+    let request_log = responses::mount_response_sequence(
+        &server,
+        vec![
+            responses::sse_response(first_response),
+            responses::sse_response(follow_up_response),
+        ],
+    )
+    .await;
 
-        let maybe_header = request_recorder
-            .single_request()
-            .header("x-codex-turn-metadata");
-        if let Some(header_value) = maybe_header {
-            let parsed: serde_json::Value = serde_json::from_str(&header_value)
-                .expect("x-codex-turn-metadata should be valid JSON");
-            let workspaces = parsed
-                .get("workspaces")
-                .and_then(serde_json::Value::as_object)
-                .expect("metadata should include workspaces");
-            let workspace = workspaces
-                .values()
-                .next()
-                .expect("metadata should include at least one workspace entry");
+    test.submit_turn("hello")
+        .await
+        .expect("submit post-git turn prompt");
 
-            assert_eq!(
-                workspace
-                    .get("latest_git_commit_hash")
-                    .and_then(serde_json::Value::as_str),
-                Some(expected_head.as_str())
-            );
-            assert_eq!(
-                workspace
-                    .get("associated_remote_urls")
-                    .and_then(serde_json::Value::as_object)
-                    .and_then(|remotes| remotes.get("origin"))
-                    .and_then(serde_json::Value::as_str),
-                Some(expected_origin.as_str())
-            );
-            return;
-        }
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2, "expected two requests in one turn");
 
-        if tokio::time::Instant::now() >= deadline {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
+    let first_parsed: serde_json::Value = serde_json::from_str(
+        &requests[0]
+            .header("x-codex-turn-metadata")
+            .expect("first request should include turn metadata"),
+    )
+    .expect("first metadata should be valid json");
+    let second_parsed: serde_json::Value = serde_json::from_str(
+        &requests[1]
+            .header("x-codex-turn-metadata")
+            .expect("second request should include turn metadata"),
+    )
+    .expect("second metadata should be valid json");
 
-    panic!("x-codex-turn-metadata was never observed within 5s after git setup");
+    let first_turn_id = first_parsed
+        .get("turn_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("first turn_id should be present");
+    let second_turn_id = second_parsed
+        .get("turn_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("second turn_id should be present");
+    assert_eq!(
+        first_turn_id, second_turn_id,
+        "requests should share turn_id"
+    );
+    assert_ne!(
+        second_turn_id,
+        initial_turn_id.as_str(),
+        "post-git turn should have a new turn_id"
+    );
+
+    assert_eq!(
+        second_parsed
+            .get("sandbox")
+            .and_then(serde_json::Value::as_str),
+        Some("none")
+    );
+
+    let workspace = second_parsed
+        .get("workspaces")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|workspaces| workspaces.values().next())
+        .cloned()
+        .expect("second request should include git workspace metadata");
+    assert_eq!(
+        workspace
+            .get("latest_git_commit_hash")
+            .and_then(serde_json::Value::as_str),
+        Some(expected_head.as_str())
+    );
+    assert_eq!(
+        workspace
+            .get("associated_remote_urls")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|remotes| remotes.get("origin"))
+            .and_then(serde_json::Value::as_str),
+        Some(expected_origin.as_str())
+    );
+    assert_eq!(
+        workspace
+            .get("has_changes")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
 }

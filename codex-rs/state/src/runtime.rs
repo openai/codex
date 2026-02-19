@@ -2,14 +2,15 @@ use crate::DB_ERROR_METRIC;
 use crate::LogEntry;
 use crate::LogQuery;
 use crate::LogRow;
+use crate::METRIC_DB_INIT;
+use crate::STATE_DB_FILENAME;
+use crate::STATE_DB_VERSION;
 use crate::SortKey;
-use crate::ThreadMemory;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
 use crate::migrations::MIGRATOR;
-use crate::model::ThreadMemoryRow;
 use crate::model::ThreadRow;
 use crate::model::anchor_from_item;
 use crate::model::datetime_to_epoch_seconds;
@@ -26,21 +27,28 @@ use sqlx::ConnectOptions;
 use sqlx::QueryBuilder;
 use sqlx::Row;
 use sqlx::Sqlite;
+use sqlx::SqliteConnection;
 use sqlx::SqlitePool;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::sqlite::SqliteSynchronous;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
+use uuid::Uuid;
 
-pub const STATE_DB_FILENAME: &str = "state";
-pub const STATE_DB_VERSION: u32 = 4;
+mod memories;
+// Memory-specific CRUD and phase job lifecycle methods live in `runtime/memories.rs`.
 
-const METRIC_DB_INIT: &str = "codex.db.init";
+// "Partition" is the retention bucket we cap at 10 MiB:
+// - one bucket per non-null thread_id
+// - one bucket per threadless (thread_id IS NULL) non-null process_uuid
+// - one bucket for threadless rows with process_uuid IS NULL
+const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct StateRuntime {
@@ -104,6 +112,34 @@ WHERE id = 1
         .fetch_one(self.pool.as_ref())
         .await?;
         crate::BackfillState::try_from_row(&row)
+    }
+
+    /// Attempt to claim ownership of rollout metadata backfill.
+    ///
+    /// Returns `true` when this runtime claimed the backfill worker slot.
+    /// Returns `false` if backfill is already complete or currently owned by a
+    /// non-expired worker.
+    pub async fn try_claim_backfill(&self, lease_seconds: i64) -> anyhow::Result<bool> {
+        self.ensure_backfill_state_row().await?;
+        let now = Utc::now().timestamp();
+        let lease_cutoff = now.saturating_sub(lease_seconds.max(0));
+        let result = sqlx::query(
+            r#"
+UPDATE backfill_state
+SET status = ?, updated_at = ?
+WHERE id = 1
+  AND status != ?
+  AND (status != ? OR updated_at <= ?)
+            "#,
+        )
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(now)
+        .bind(crate::BackfillStatus::Complete.as_str())
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(lease_cutoff)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() == 1)
     }
 
     /// Mark rollout metadata backfill as running.
@@ -230,26 +266,6 @@ ORDER BY position ASC
         Ok(Some(tools))
     }
 
-    /// Get memory summaries for a thread, if present.
-    pub async fn get_thread_memory(
-        &self,
-        thread_id: ThreadId,
-    ) -> anyhow::Result<Option<ThreadMemory>> {
-        let row = sqlx::query(
-            r#"
-SELECT thread_id, trace_summary, memory_summary, updated_at
-FROM thread_memory
-WHERE thread_id = ?
-            "#,
-        )
-        .bind(thread_id.to_string())
-        .fetch_optional(self.pool.as_ref())
-        .await?;
-
-        row.map(|row| ThreadMemoryRow::try_from_row(&row).and_then(ThreadMemory::try_from))
-            .transpose()
-    }
-
     /// Find a rollout path by thread id using the underlying database.
     pub async fn find_rollout_path_by_id(
         &self,
@@ -351,21 +367,247 @@ FROM threads
             return Ok(());
         }
 
+        let mut tx = self.pool.begin().await?;
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, module_path, file, line) ",
+            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, process_uuid, module_path, file, line, estimated_bytes) ",
         );
         builder.push_values(entries, |mut row, entry| {
+            let estimated_bytes = entry.message.as_ref().map_or(0, String::len) as i64
+                + entry.level.len() as i64
+                + entry.target.len() as i64
+                + entry.module_path.as_ref().map_or(0, String::len) as i64
+                + entry.file.as_ref().map_or(0, String::len) as i64;
             row.push_bind(entry.ts)
                 .push_bind(entry.ts_nanos)
                 .push_bind(&entry.level)
                 .push_bind(&entry.target)
                 .push_bind(&entry.message)
                 .push_bind(&entry.thread_id)
+                .push_bind(&entry.process_uuid)
                 .push_bind(&entry.module_path)
                 .push_bind(&entry.file)
-                .push_bind(entry.line);
+                .push_bind(entry.line)
+                .push_bind(estimated_bytes);
         });
-        builder.build().execute(self.pool.as_ref()).await?;
+        builder.build().execute(&mut *tx).await?;
+        self.prune_logs_after_insert(entries, &mut tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Enforce per-partition log size caps after a successful batch insert.
+    ///
+    /// We maintain two independent budgets:
+    /// - Thread logs: rows with `thread_id IS NOT NULL`, capped per `thread_id`.
+    /// - Threadless process logs: rows with `thread_id IS NULL` ("threadless"),
+    ///   capped per `process_uuid` (including `process_uuid IS NULL` as its own
+    ///   threadless partition).
+    ///
+    /// "Threadless" means the log row is not associated with any conversation
+    /// thread, so retention is keyed by process identity instead.
+    ///
+    /// This runs inside the same transaction as the insert so callers never
+    /// observe "inserted but not yet pruned" rows.
+    async fn prune_logs_after_insert(
+        &self,
+        entries: &[LogEntry],
+        tx: &mut SqliteConnection,
+    ) -> anyhow::Result<()> {
+        let thread_ids: BTreeSet<&str> = entries
+            .iter()
+            .filter_map(|entry| entry.thread_id.as_deref())
+            .collect();
+        if !thread_ids.is_empty() {
+            // Cheap precheck: only run the heavier window-function prune for
+            // threads that are currently above the cap.
+            let mut over_limit_threads_query =
+                QueryBuilder::<Sqlite>::new("SELECT thread_id FROM logs WHERE thread_id IN (");
+            {
+                let mut separated = over_limit_threads_query.separated(", ");
+                for thread_id in &thread_ids {
+                    separated.push_bind(*thread_id);
+                }
+            }
+            over_limit_threads_query.push(") GROUP BY thread_id HAVING SUM(");
+            over_limit_threads_query.push("estimated_bytes");
+            over_limit_threads_query.push(") > ");
+            over_limit_threads_query.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+            let over_limit_thread_ids: Vec<String> = over_limit_threads_query
+                .build()
+                .fetch_all(&mut *tx)
+                .await?
+                .into_iter()
+                .map(|row| row.try_get("thread_id"))
+                .collect::<Result<_, _>>()?;
+            if !over_limit_thread_ids.is_empty() {
+                // Enforce a strict per-thread cap by deleting every row whose
+                // newest-first cumulative bytes exceed the partition budget.
+                let mut prune_threads = QueryBuilder::<Sqlite>::new(
+                    r#"
+DELETE FROM logs
+WHERE id IN (
+    SELECT id
+    FROM (
+        SELECT
+            id,
+            SUM(
+"#,
+                );
+                prune_threads.push("estimated_bytes");
+                prune_threads.push(
+                    r#"
+            ) OVER (
+                PARTITION BY thread_id
+                ORDER BY ts DESC, ts_nanos DESC, id DESC
+            ) AS cumulative_bytes
+        FROM logs
+        WHERE thread_id IN (
+"#,
+                );
+                {
+                    let mut separated = prune_threads.separated(", ");
+                    for thread_id in &over_limit_thread_ids {
+                        separated.push_bind(thread_id);
+                    }
+                }
+                prune_threads.push(
+                    r#"
+        )
+    )
+    WHERE cumulative_bytes >
+"#,
+                );
+                prune_threads.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+                prune_threads.push("\n)");
+                prune_threads.build().execute(&mut *tx).await?;
+            }
+        }
+
+        let threadless_process_uuids: BTreeSet<&str> = entries
+            .iter()
+            .filter(|entry| entry.thread_id.is_none())
+            .filter_map(|entry| entry.process_uuid.as_deref())
+            .collect();
+        let has_threadless_null_process_uuid = entries
+            .iter()
+            .any(|entry| entry.thread_id.is_none() && entry.process_uuid.is_none());
+        if !threadless_process_uuids.is_empty() {
+            // Threadless logs are budgeted separately per process UUID.
+            let mut over_limit_processes_query = QueryBuilder::<Sqlite>::new(
+                "SELECT process_uuid FROM logs WHERE thread_id IS NULL AND process_uuid IN (",
+            );
+            {
+                let mut separated = over_limit_processes_query.separated(", ");
+                for process_uuid in &threadless_process_uuids {
+                    separated.push_bind(*process_uuid);
+                }
+            }
+            over_limit_processes_query.push(") GROUP BY process_uuid HAVING SUM(");
+            over_limit_processes_query.push("estimated_bytes");
+            over_limit_processes_query.push(") > ");
+            over_limit_processes_query.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+            let over_limit_process_uuids: Vec<String> = over_limit_processes_query
+                .build()
+                .fetch_all(&mut *tx)
+                .await?
+                .into_iter()
+                .map(|row| row.try_get("process_uuid"))
+                .collect::<Result<_, _>>()?;
+            if !over_limit_process_uuids.is_empty() {
+                // Same strict cap policy as thread pruning, but only for
+                // threadless rows in the affected process UUIDs.
+                let mut prune_threadless_process_logs = QueryBuilder::<Sqlite>::new(
+                    r#"
+DELETE FROM logs
+WHERE id IN (
+    SELECT id
+    FROM (
+        SELECT
+            id,
+            SUM(
+"#,
+                );
+                prune_threadless_process_logs.push("estimated_bytes");
+                prune_threadless_process_logs.push(
+                    r#"
+            ) OVER (
+                PARTITION BY process_uuid
+                ORDER BY ts DESC, ts_nanos DESC, id DESC
+            ) AS cumulative_bytes
+        FROM logs
+        WHERE thread_id IS NULL
+          AND process_uuid IN (
+"#,
+                );
+                {
+                    let mut separated = prune_threadless_process_logs.separated(", ");
+                    for process_uuid in &over_limit_process_uuids {
+                        separated.push_bind(process_uuid);
+                    }
+                }
+                prune_threadless_process_logs.push(
+                    r#"
+          )
+    )
+    WHERE cumulative_bytes >
+"#,
+                );
+                prune_threadless_process_logs.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+                prune_threadless_process_logs.push("\n)");
+                prune_threadless_process_logs
+                    .build()
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        if has_threadless_null_process_uuid {
+            // Rows without a process UUID still need a cap; treat NULL as its
+            // own threadless partition.
+            let mut null_process_usage_query = QueryBuilder::<Sqlite>::new("SELECT SUM(");
+            null_process_usage_query.push("estimated_bytes");
+            null_process_usage_query.push(
+                ") AS total_bytes FROM logs WHERE thread_id IS NULL AND process_uuid IS NULL",
+            );
+            let total_null_process_bytes: Option<i64> = null_process_usage_query
+                .build()
+                .fetch_one(&mut *tx)
+                .await?
+                .try_get("total_bytes")?;
+
+            if total_null_process_bytes.unwrap_or(0) > LOG_PARTITION_SIZE_LIMIT_BYTES {
+                let mut prune_threadless_null_process_logs = QueryBuilder::<Sqlite>::new(
+                    r#"
+DELETE FROM logs
+WHERE id IN (
+    SELECT id
+    FROM (
+        SELECT
+            id,
+            SUM(
+"#,
+                );
+                prune_threadless_null_process_logs.push("estimated_bytes");
+                prune_threadless_null_process_logs.push(
+                    r#"
+            ) OVER (
+                PARTITION BY process_uuid
+                ORDER BY ts DESC, ts_nanos DESC, id DESC
+            ) AS cumulative_bytes
+        FROM logs
+        WHERE thread_id IS NULL
+          AND process_uuid IS NULL
+    )
+    WHERE cumulative_bytes >
+"#,
+                );
+                prune_threadless_null_process_logs.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+                prune_threadless_null_process_logs.push("\n)");
+                prune_threadless_null_process_logs
+                    .build()
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
@@ -380,7 +622,7 @@ FROM threads
     /// Query logs with optional filters.
     pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogRow>> {
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT id, ts, ts_nanos, level, target, message, thread_id, file, line FROM logs WHERE 1 = 1",
+            "SELECT id, ts, ts_nanos, level, target, message, thread_id, process_uuid, file, line FROM logs WHERE 1 = 1",
         );
         push_log_filters(&mut builder, query);
         if query.descending {
@@ -504,83 +746,6 @@ ON CONFLICT(id) DO UPDATE SET
         .execute(self.pool.as_ref())
         .await?;
         Ok(())
-    }
-
-    /// Insert or update memory summaries for a thread.
-    ///
-    /// This method always advances `updated_at`, even if summaries are unchanged.
-    pub async fn upsert_thread_memory(
-        &self,
-        thread_id: ThreadId,
-        trace_summary: &str,
-        memory_summary: &str,
-    ) -> anyhow::Result<ThreadMemory> {
-        if self.get_thread(thread_id).await?.is_none() {
-            return Err(anyhow::anyhow!("thread not found: {thread_id}"));
-        }
-
-        let updated_at = Utc::now().timestamp();
-        sqlx::query(
-            r#"
-INSERT INTO thread_memory (
-    thread_id,
-    trace_summary,
-    memory_summary,
-    updated_at
-) VALUES (?, ?, ?, ?)
-ON CONFLICT(thread_id) DO UPDATE SET
-    trace_summary = excluded.trace_summary,
-    memory_summary = excluded.memory_summary,
-    updated_at = CASE
-        WHEN excluded.updated_at <= thread_memory.updated_at THEN thread_memory.updated_at + 1
-        ELSE excluded.updated_at
-    END
-            "#,
-        )
-        .bind(thread_id.to_string())
-        .bind(trace_summary)
-        .bind(memory_summary)
-        .bind(updated_at)
-        .execute(self.pool.as_ref())
-        .await?;
-
-        self.get_thread_memory(thread_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("failed to load upserted thread memory: {thread_id}"))
-    }
-
-    /// Get the last `n` memories for threads with an exact cwd match.
-    pub async fn get_last_n_thread_memories_for_cwd(
-        &self,
-        cwd: &Path,
-        n: usize,
-    ) -> anyhow::Result<Vec<ThreadMemory>> {
-        if n == 0 {
-            return Ok(Vec::new());
-        }
-
-        let rows = sqlx::query(
-            r#"
-SELECT
-    m.thread_id,
-    m.trace_summary,
-    m.memory_summary,
-    m.updated_at
-FROM thread_memory AS m
-INNER JOIN threads AS t ON t.id = m.thread_id
-WHERE t.cwd = ?
-ORDER BY m.updated_at DESC, m.thread_id DESC
-LIMIT ?
-            "#,
-        )
-        .bind(cwd.display().to_string())
-        .bind(n as i64)
-        .fetch_all(self.pool.as_ref())
-        .await?;
-
-        rows.into_iter()
-            .map(|row| ThreadMemoryRow::try_from_row(&row).and_then(ThreadMemory::try_from))
-            .collect()
     }
 
     /// Persist dynamic tools for a thread if none have been stored yet.
@@ -717,6 +882,15 @@ ON CONFLICT(thread_id, position) DO NOTHING
         self.upsert_thread(&metadata).await
     }
 
+    /// Delete a thread metadata row by id.
+    pub async fn delete_thread(&self, thread_id: ThreadId) -> anyhow::Result<u64> {
+        let result = sqlx::query("DELETE FROM threads WHERE id = ?")
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected())
+    }
+
     async fn ensure_backfill_state_row(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
@@ -769,6 +943,11 @@ fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQu
     }
     if let Some(after_id) = query.after_id {
         builder.push(" AND id > ").push_bind(after_id);
+    }
+    if let Some(search) = query.search.as_ref() {
+        builder.push(" AND INSTR(message, ");
+        builder.push_bind(search.as_str());
+        builder.push(") > 0");
     }
 }
 
@@ -962,12 +1141,18 @@ fn push_thread_order_and_limit(
 
 #[cfg(test)]
 mod tests {
-    use super::STATE_DB_FILENAME;
-    use super::STATE_DB_VERSION;
     use super::StateRuntime;
     use super::ThreadMetadata;
     use super::state_db_filename;
+    use crate::LogEntry;
+    use crate::LogQuery;
+    use crate::STATE_DB_FILENAME;
+    use crate::STATE_DB_VERSION;
+    use crate::model::Phase2JobClaimOutcome;
+    use crate::model::Stage1JobClaimOutcome;
+    use crate::model::Stage1StartupClaimParams;
     use chrono::DateTime;
+    use chrono::Duration;
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::AskForApproval;
@@ -976,6 +1161,7 @@ mod tests {
     use sqlx::Row;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
     use uuid::Uuid;
@@ -1119,7 +1305,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upsert_and_get_thread_memory() {
+    async fn backfill_claim_is_singleton_until_stale_and_blocked_when_complete() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let claimed = runtime
+            .try_claim_backfill(3600)
+            .await
+            .expect("initial backfill claim");
+        assert_eq!(claimed, true);
+
+        let duplicate_claim = runtime
+            .try_claim_backfill(3600)
+            .await
+            .expect("duplicate backfill claim");
+        assert_eq!(duplicate_claim, false);
+
+        let stale_updated_at = Utc::now().timestamp().saturating_sub(10_000);
+        sqlx::query(
+            r#"
+UPDATE backfill_state
+SET status = ?, updated_at = ?
+WHERE id = 1
+            "#,
+        )
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(stale_updated_at)
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("force stale backfill lease");
+
+        let stale_claim = runtime
+            .try_claim_backfill(10)
+            .await
+            .expect("stale backfill claim");
+        assert_eq!(stale_claim, true);
+
+        runtime
+            .mark_backfill_complete(None)
+            .await
+            .expect("mark complete");
+        let claim_after_complete = runtime
+            .try_claim_backfill(3600)
+            .await
+            .expect("claim after complete");
+        assert_eq!(claim_after_complete, false);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn stage1_claim_skips_when_up_to_date() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
@@ -1132,222 +1370,667 @@ mod tests {
             .await
             .expect("upsert thread");
 
-        assert_eq!(
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id, owner_a, 100, 3600, 64)
+            .await
+            .expect("claim stage1 job");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected claim outcome: {other:?}"),
+        };
+
+        assert!(
             runtime
-                .get_thread_memory(thread_id)
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    ownership_token.as_str(),
+                    100,
+                    "raw",
+                    "sum",
+                    None,
+                )
                 .await
-                .expect("get memory before insert"),
-            None
+                .expect("mark stage1 succeeded"),
+            "stage1 success should finalize for current token"
         );
 
-        let inserted = runtime
-            .upsert_thread_memory(thread_id, "trace one", "memory one")
+        let up_to_date = runtime
+            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
             .await
-            .expect("upsert memory");
-        assert_eq!(inserted.thread_id, thread_id);
-        assert_eq!(inserted.trace_summary, "trace one");
-        assert_eq!(inserted.memory_summary, "memory one");
+            .expect("claim stage1 up-to-date");
+        assert_eq!(up_to_date, Stage1JobClaimOutcome::SkippedUpToDate);
 
-        let updated = runtime
-            .upsert_thread_memory(thread_id, "trace two", "memory two")
+        let needs_rerun = runtime
+            .try_claim_stage1_job(thread_id, owner_b, 101, 3600, 64)
             .await
-            .expect("update memory");
-        assert_eq!(updated.thread_id, thread_id);
-        assert_eq!(updated.trace_summary, "trace two");
-        assert_eq!(updated.memory_summary, "memory two");
+            .expect("claim stage1 newer source");
         assert!(
-            updated.updated_at >= inserted.updated_at,
-            "updated_at should not move backward"
+            matches!(needs_rerun, Stage1JobClaimOutcome::Claimed { .. }),
+            "newer source_updated_at should be claimable"
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 
     #[tokio::test]
-    async fn get_last_n_thread_memories_for_cwd_matches_exactly() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
-            .await
-            .expect("initialize runtime");
-
-        let cwd_a = codex_home.join("workspace-a");
-        let cwd_b = codex_home.join("workspace-b");
-        let t1 = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let t2 = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let t3 = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        runtime
-            .upsert_thread(&test_thread_metadata(&codex_home, t1, cwd_a.clone()))
-            .await
-            .expect("upsert thread t1");
-        runtime
-            .upsert_thread(&test_thread_metadata(&codex_home, t2, cwd_a.clone()))
-            .await
-            .expect("upsert thread t2");
-        runtime
-            .upsert_thread(&test_thread_metadata(&codex_home, t3, cwd_b.clone()))
-            .await
-            .expect("upsert thread t3");
-
-        let first = runtime
-            .upsert_thread_memory(t1, "trace-1", "memory-1")
-            .await
-            .expect("upsert t1 memory");
-        runtime
-            .upsert_thread_memory(t2, "trace-2", "memory-2")
-            .await
-            .expect("upsert t2 memory");
-        runtime
-            .upsert_thread_memory(t3, "trace-3", "memory-3")
-            .await
-            .expect("upsert t3 memory");
-        // Ensure deterministic ordering even when updates happen in the same second.
-        runtime
-            .upsert_thread_memory(t1, "trace-1b", "memory-1b")
-            .await
-            .expect("upsert t1 memory again");
-
-        let cwd_a_memories = runtime
-            .get_last_n_thread_memories_for_cwd(cwd_a.as_path(), 2)
-            .await
-            .expect("list cwd a memories");
-        assert_eq!(cwd_a_memories.len(), 2);
-        assert_eq!(cwd_a_memories[0].thread_id, t1);
-        assert_eq!(cwd_a_memories[0].trace_summary, "trace-1b");
-        assert_eq!(cwd_a_memories[0].memory_summary, "memory-1b");
-        assert_eq!(cwd_a_memories[1].thread_id, t2);
-        assert!(cwd_a_memories[0].updated_at >= first.updated_at);
-
-        let cwd_b_memories = runtime
-            .get_last_n_thread_memories_for_cwd(cwd_b.as_path(), 10)
-            .await
-            .expect("list cwd b memories");
-        assert_eq!(cwd_b_memories.len(), 1);
-        assert_eq!(cwd_b_memories[0].thread_id, t3);
-
-        let none = runtime
-            .get_last_n_thread_memories_for_cwd(codex_home.join("missing").as_path(), 10)
-            .await
-            .expect("list missing cwd memories");
-        assert_eq!(none, Vec::new());
-
-        let _ = tokio::fs::remove_dir_all(codex_home).await;
-    }
-
-    #[tokio::test]
-    async fn upsert_thread_memory_errors_for_unknown_thread() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
-            .await
-            .expect("initialize runtime");
-
-        let unknown_thread_id =
-            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let err = runtime
-            .upsert_thread_memory(unknown_thread_id, "trace", "memory")
-            .await
-            .expect_err("unknown thread should fail");
-        assert!(
-            err.to_string().contains("thread not found"),
-            "error should mention missing thread: {err}"
-        );
-
-        let _ = tokio::fs::remove_dir_all(codex_home).await;
-    }
-
-    #[tokio::test]
-    async fn get_last_n_thread_memories_for_cwd_zero_returns_empty() {
+    async fn stage1_running_stale_can_be_stolen_but_fresh_running_is_skipped() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
             .expect("initialize runtime");
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let cwd = codex_home.join("workspace");
-        runtime
-            .upsert_thread(&test_thread_metadata(&codex_home, thread_id, cwd.clone()))
-            .await
-            .expect("upsert thread");
-        runtime
-            .upsert_thread_memory(thread_id, "trace", "memory")
-            .await
-            .expect("upsert memory");
-
-        let memories = runtime
-            .get_last_n_thread_memories_for_cwd(cwd.as_path(), 0)
-            .await
-            .expect("query memories");
-        assert_eq!(memories, Vec::new());
-
-        let _ = tokio::fs::remove_dir_all(codex_home).await;
-    }
-
-    #[tokio::test]
-    async fn get_last_n_thread_memories_for_cwd_does_not_prefix_match() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
-            .await
-            .expect("initialize runtime");
-
-        let cwd_exact = codex_home.join("workspace");
-        let cwd_prefix = codex_home.join("workspace-child");
-        let t_exact = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        let t_prefix = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
-        runtime
-            .upsert_thread(&test_thread_metadata(
-                &codex_home,
-                t_exact,
-                cwd_exact.clone(),
-            ))
-            .await
-            .expect("upsert exact thread");
-        runtime
-            .upsert_thread(&test_thread_metadata(
-                &codex_home,
-                t_prefix,
-                cwd_prefix.clone(),
-            ))
-            .await
-            .expect("upsert prefix thread");
-        runtime
-            .upsert_thread_memory(t_exact, "trace-exact", "memory-exact")
-            .await
-            .expect("upsert exact memory");
-        runtime
-            .upsert_thread_memory(t_prefix, "trace-prefix", "memory-prefix")
-            .await
-            .expect("upsert prefix memory");
-
-        let exact_only = runtime
-            .get_last_n_thread_memories_for_cwd(cwd_exact.as_path(), 10)
-            .await
-            .expect("query exact cwd");
-        assert_eq!(exact_only.len(), 1);
-        assert_eq!(exact_only[0].thread_id, t_exact);
-        assert_eq!(exact_only[0].memory_summary, "memory-exact");
-
-        let _ = tokio::fs::remove_dir_all(codex_home).await;
-    }
-
-    #[tokio::test]
-    async fn deleting_thread_cascades_thread_memory() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
-            .await
-            .expect("initialize runtime");
-
-        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
         let cwd = codex_home.join("workspace");
         runtime
             .upsert_thread(&test_thread_metadata(&codex_home, thread_id, cwd))
             .await
             .expect("upsert thread");
-        runtime
-            .upsert_thread_memory(thread_id, "trace", "memory")
+
+        let claim_a = runtime
+            .try_claim_stage1_job(thread_id, owner_a, 100, 3600, 64)
             .await
-            .expect("upsert memory");
+            .expect("claim a");
+        assert!(matches!(claim_a, Stage1JobClaimOutcome::Claimed { .. }));
+
+        let claim_b_fresh = runtime
+            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
+            .await
+            .expect("claim b fresh");
+        assert_eq!(claim_b_fresh, Stage1JobClaimOutcome::SkippedRunning);
+
+        sqlx::query("UPDATE jobs SET lease_until = 0 WHERE kind = 'memory_stage1' AND job_key = ?")
+            .bind(thread_id.to_string())
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("force stale lease");
+
+        let claim_b_stale = runtime
+            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
+            .await
+            .expect("claim b stale");
+        assert!(matches!(
+            claim_b_stale,
+            Stage1JobClaimOutcome::Claimed { .. }
+        ));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn stage1_concurrent_claim_for_same_thread_is_conflict_safe() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join("workspace"),
+            ))
+            .await
+            .expect("upsert thread");
+
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let thread_id_a = thread_id;
+        let thread_id_b = thread_id;
+        let runtime_a = Arc::clone(&runtime);
+        let runtime_b = Arc::clone(&runtime);
+        let claim_with_retry = |runtime: Arc<StateRuntime>,
+                                thread_id: ThreadId,
+                                owner: ThreadId| async move {
+            for attempt in 0..5 {
+                match runtime
+                    .try_claim_stage1_job(thread_id, owner, 100, 3_600, 64)
+                    .await
+                {
+                    Ok(outcome) => return outcome,
+                    Err(err) if err.to_string().contains("database is locked") && attempt < 4 => {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    Err(err) => panic!("claim stage1 should not fail: {err}"),
+                }
+            }
+            panic!("claim stage1 should have returned within retry budget")
+        };
+
+        let (claim_a, claim_b) = tokio::join!(
+            claim_with_retry(runtime_a, thread_id_a, owner_a),
+            claim_with_retry(runtime_b, thread_id_b, owner_b),
+        );
+
+        let claim_outcomes = vec![claim_a, claim_b];
+        let claimed_count = claim_outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, Stage1JobClaimOutcome::Claimed { .. }))
+            .count();
+        assert_eq!(claimed_count, 1);
+        assert!(
+            claim_outcomes.iter().all(|outcome| {
+                matches!(
+                    outcome,
+                    Stage1JobClaimOutcome::Claimed { .. } | Stage1JobClaimOutcome::SkippedRunning
+                )
+            }),
+            "unexpected claim outcomes: {claim_outcomes:?}"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn stage1_concurrent_claims_respect_running_cap() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_a,
+                codex_home.join("workspace-a"),
+            ))
+            .await
+            .expect("upsert thread a");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_b,
+                codex_home.join("workspace-b"),
+            ))
+            .await
+            .expect("upsert thread b");
+
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let runtime_a = Arc::clone(&runtime);
+        let runtime_b = Arc::clone(&runtime);
+
+        let (claim_a, claim_b) = tokio::join!(
+            async move {
+                runtime_a
+                    .try_claim_stage1_job(thread_a, owner_a, 100, 3_600, 1)
+                    .await
+                    .expect("claim stage1 thread a")
+            },
+            async move {
+                runtime_b
+                    .try_claim_stage1_job(thread_b, owner_b, 101, 3_600, 1)
+                    .await
+                    .expect("claim stage1 thread b")
+            },
+        );
+
+        let claim_outcomes = vec![claim_a, claim_b];
+        let claimed_count = claim_outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, Stage1JobClaimOutcome::Claimed { .. }))
+            .count();
+        assert_eq!(claimed_count, 1);
+        assert!(
+            claim_outcomes
+                .iter()
+                .any(|outcome| { matches!(outcome, Stage1JobClaimOutcome::SkippedRunning) }),
+            "one concurrent claim should be throttled by running cap: {claim_outcomes:?}"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn claim_stage1_jobs_filters_by_age_idle_and_current_thread() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let now = Utc::now();
+        let fresh_at = now - Duration::hours(1);
+        let just_under_idle_at = now - Duration::hours(12) + Duration::minutes(1);
+        let eligible_idle_at = now - Duration::hours(12) - Duration::minutes(1);
+        let old_at = now - Duration::days(31);
+
+        let current_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
+        let fresh_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("fresh thread id");
+        let just_under_idle_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("just under idle thread id");
+        let eligible_idle_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("eligible idle thread id");
+        let old_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("old thread id");
+
+        let mut current =
+            test_thread_metadata(&codex_home, current_thread_id, codex_home.join("current"));
+        current.created_at = now;
+        current.updated_at = now;
+        runtime
+            .upsert_thread(&current)
+            .await
+            .expect("upsert current");
+
+        let mut fresh =
+            test_thread_metadata(&codex_home, fresh_thread_id, codex_home.join("fresh"));
+        fresh.created_at = fresh_at;
+        fresh.updated_at = fresh_at;
+        runtime.upsert_thread(&fresh).await.expect("upsert fresh");
+
+        let mut just_under_idle = test_thread_metadata(
+            &codex_home,
+            just_under_idle_thread_id,
+            codex_home.join("just-under-idle"),
+        );
+        just_under_idle.created_at = just_under_idle_at;
+        just_under_idle.updated_at = just_under_idle_at;
+        runtime
+            .upsert_thread(&just_under_idle)
+            .await
+            .expect("upsert just-under-idle");
+
+        let mut eligible_idle = test_thread_metadata(
+            &codex_home,
+            eligible_idle_thread_id,
+            codex_home.join("eligible-idle"),
+        );
+        eligible_idle.created_at = eligible_idle_at;
+        eligible_idle.updated_at = eligible_idle_at;
+        runtime
+            .upsert_thread(&eligible_idle)
+            .await
+            .expect("upsert eligible-idle");
+
+        let mut old = test_thread_metadata(&codex_home, old_thread_id, codex_home.join("old"));
+        old.created_at = old_at;
+        old.updated_at = old_at;
+        runtime.upsert_thread(&old).await.expect("upsert old");
+
+        let allowed_sources = vec!["cli".to_string()];
+        let claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 1,
+                    max_claimed: 5,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3600,
+                },
+            )
+            .await
+            .expect("claim stage1 jobs");
+
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].thread.id, eligible_idle_thread_id);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn claim_stage1_jobs_prefilters_threads_with_up_to_date_memory() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let now = Utc::now();
+        let eligible_newer_at = now - Duration::hours(13);
+        let eligible_older_at = now - Duration::hours(14);
+
+        let current_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
+        let up_to_date_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("up-to-date thread id");
+        let stale_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("stale thread id");
+        let worker_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("worker id");
+
+        let mut current =
+            test_thread_metadata(&codex_home, current_thread_id, codex_home.join("current"));
+        current.created_at = now;
+        current.updated_at = now;
+        runtime
+            .upsert_thread(&current)
+            .await
+            .expect("upsert current thread");
+
+        let mut up_to_date = test_thread_metadata(
+            &codex_home,
+            up_to_date_thread_id,
+            codex_home.join("up-to-date"),
+        );
+        up_to_date.created_at = eligible_newer_at;
+        up_to_date.updated_at = eligible_newer_at;
+        runtime
+            .upsert_thread(&up_to_date)
+            .await
+            .expect("upsert up-to-date thread");
+
+        let up_to_date_claim = runtime
+            .try_claim_stage1_job(
+                up_to_date_thread_id,
+                worker_id,
+                up_to_date.updated_at.timestamp(),
+                3600,
+                64,
+            )
+            .await
+            .expect("claim up-to-date thread for seed");
+        let up_to_date_token = match up_to_date_claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected seed claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    up_to_date_thread_id,
+                    up_to_date_token.as_str(),
+                    up_to_date.updated_at.timestamp(),
+                    "raw",
+                    "summary",
+                    None,
+                )
+                .await
+                .expect("mark up-to-date thread succeeded"),
+            "seed stage1 success should complete for up-to-date thread"
+        );
+
+        let mut stale =
+            test_thread_metadata(&codex_home, stale_thread_id, codex_home.join("stale"));
+        stale.created_at = eligible_older_at;
+        stale.updated_at = eligible_older_at;
+        runtime
+            .upsert_thread(&stale)
+            .await
+            .expect("upsert stale thread");
+
+        let allowed_sources = vec!["cli".to_string()];
+        let claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 1,
+                    max_claimed: 1,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3600,
+                },
+            )
+            .await
+            .expect("claim stage1 startup jobs");
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].thread.id, stale_thread_id);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn claim_stage1_jobs_enforces_global_running_cap() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let current_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                current_thread_id,
+                codex_home.join("current"),
+            ))
+            .await
+            .expect("upsert current");
+
+        let now = Utc::now();
+        let started_at = now.timestamp();
+        let lease_until = started_at + 3600;
+        let eligible_at = now - Duration::hours(13);
+        let existing_running = 10usize;
+        let total_candidates = 80usize;
+
+        for idx in 0..total_candidates {
+            let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+            let mut metadata = test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join(format!("thread-{idx}")),
+            );
+            metadata.created_at = eligible_at - Duration::seconds(idx as i64);
+            metadata.updated_at = eligible_at - Duration::seconds(idx as i64);
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("upsert thread");
+
+            if idx < existing_running {
+                sqlx::query(
+                    r#"
+INSERT INTO jobs (
+    kind,
+    job_key,
+    status,
+    worker_id,
+    ownership_token,
+    started_at,
+    finished_at,
+    lease_until,
+    retry_at,
+    retry_remaining,
+    last_error,
+    input_watermark,
+    last_success_watermark
+) VALUES (?, ?, 'running', ?, ?, ?, NULL, ?, NULL, ?, NULL, ?, NULL)
+                    "#,
+                )
+                .bind("memory_stage1")
+                .bind(thread_id.to_string())
+                .bind(current_thread_id.to_string())
+                .bind(Uuid::new_v4().to_string())
+                .bind(started_at)
+                .bind(lease_until)
+                .bind(3)
+                .bind(metadata.updated_at.timestamp())
+                .execute(runtime.pool.as_ref())
+                .await
+                .expect("seed running stage1 job");
+            }
+        }
+
+        let allowed_sources = vec!["cli".to_string()];
+        let claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 200,
+                    max_claimed: 64,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3600,
+                },
+            )
+            .await
+            .expect("claim stage1 jobs");
+        assert_eq!(claims.len(), 54);
+
+        let running_count = sqlx::query(
+            r#"
+SELECT COUNT(*) AS count
+FROM jobs
+WHERE kind = 'memory_stage1'
+  AND status = 'running'
+  AND lease_until IS NOT NULL
+  AND lease_until > ?
+            "#,
+        )
+        .bind(Utc::now().timestamp())
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("count running stage1 jobs")
+        .try_get::<i64, _>("count")
+        .expect("running count value");
+        assert_eq!(running_count, 64);
+
+        let more_claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 200,
+                    max_claimed: 64,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3600,
+                },
+            )
+            .await
+            .expect("claim stage1 jobs with cap reached");
+        assert_eq!(more_claims.len(), 0);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn claim_stage1_jobs_processes_two_full_batches_across_startup_passes() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let current_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
+        let mut current =
+            test_thread_metadata(&codex_home, current_thread_id, codex_home.join("current"));
+        current.created_at = Utc::now();
+        current.updated_at = Utc::now();
+        runtime
+            .upsert_thread(&current)
+            .await
+            .expect("upsert current");
+
+        let eligible_at = Utc::now() - Duration::hours(13);
+        for idx in 0..200 {
+            let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+            let mut metadata = test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join(format!("thread-{idx}")),
+            );
+            metadata.created_at = eligible_at - Duration::seconds(idx as i64);
+            metadata.updated_at = eligible_at - Duration::seconds(idx as i64);
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("upsert eligible thread");
+        }
+
+        let allowed_sources = vec!["cli".to_string()];
+        let first_claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 5_000,
+                    max_claimed: 64,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3_600,
+                },
+            )
+            .await
+            .expect("first stage1 startup claim");
+        assert_eq!(first_claims.len(), 64);
+
+        for claim in first_claims {
+            assert!(
+                runtime
+                    .mark_stage1_job_succeeded(
+                        claim.thread.id,
+                        claim.ownership_token.as_str(),
+                        claim.thread.updated_at.timestamp(),
+                        "raw",
+                        "summary",
+                        None,
+                    )
+                    .await
+                    .expect("mark first-batch stage1 success"),
+                "first batch stage1 completion should succeed"
+            );
+        }
+
+        let second_claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 5_000,
+                    max_claimed: 64,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3_600,
+                },
+            )
+            .await
+            .expect("second stage1 startup claim");
+        assert_eq!(second_claims.len(), 64);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn stage1_output_cascades_on_thread_delete() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let cwd = codex_home.join("workspace");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, thread_id, cwd))
+            .await
+            .expect("upsert thread");
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .await
+            .expect("claim stage1");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    ownership_token.as_str(),
+                    100,
+                    "raw",
+                    "sum",
+                    None,
+                )
+                .await
+                .expect("mark stage1 succeeded"),
+            "mark stage1 succeeded should write stage1_outputs"
+        );
 
         let count_before =
-            sqlx::query("SELECT COUNT(*) AS count FROM thread_memory WHERE thread_id = ?")
+            sqlx::query("SELECT COUNT(*) AS count FROM stage1_outputs WHERE thread_id = ?")
                 .bind(thread_id.to_string())
                 .fetch_one(runtime.pool.as_ref())
                 .await
@@ -1363,7 +2046,7 @@ mod tests {
             .expect("delete thread");
 
         let count_after =
-            sqlx::query("SELECT COUNT(*) AS count FROM thread_memory WHERE thread_id = ?")
+            sqlx::query("SELECT COUNT(*) AS count FROM stage1_outputs WHERE thread_id = ?")
                 .bind(thread_id.to_string())
                 .fetch_one(runtime.pool.as_ref())
                 .await
@@ -1371,13 +2054,1028 @@ mod tests {
                 .try_get::<i64, _>("count")
                 .expect("count value");
         assert_eq!(count_after, 0);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn mark_stage1_job_succeeded_no_output_tracks_watermark_without_persisting_output() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join("workspace"),
+            ))
+            .await
+            .expect("upsert thread");
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .await
+            .expect("claim stage1");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded_no_output(thread_id, ownership_token.as_str())
+                .await
+                .expect("mark stage1 succeeded without output"),
+            "stage1 no-output success should complete the job"
+        );
+
+        let output_row_count =
+            sqlx::query("SELECT COUNT(*) AS count FROM stage1_outputs WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("load stage1 output count")
+                .try_get::<i64, _>("count")
+                .expect("stage1 output count");
+        assert_eq!(
+            output_row_count, 0,
+            "stage1 no-output success should not persist empty stage1 outputs"
+        );
+
+        let up_to_date = runtime
+            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
+            .await
+            .expect("claim stage1 up-to-date");
+        assert_eq!(up_to_date, Stage1JobClaimOutcome::SkippedUpToDate);
+
+        let claim_phase2 = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2");
+        let (phase2_token, phase2_input_watermark) = match claim_phase2 {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected phase2 claim outcome after no-output success: {other:?}"),
+        };
+        assert_eq!(phase2_input_watermark, 100);
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(phase2_token.as_str(), phase2_input_watermark,)
+                .await
+                .expect("mark phase2 succeeded after no-output")
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn stage1_retry_exhaustion_does_not_block_newer_watermark() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join("workspace"),
+            ))
+            .await
+            .expect("upsert thread");
+
+        for attempt in 0..3 {
+            let claim = runtime
+                .try_claim_stage1_job(thread_id, owner, 100, 3_600, 64)
+                .await
+                .expect("claim stage1 for retry exhaustion");
+            let ownership_token = match claim {
+                Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+                other => panic!(
+                    "attempt {} should claim stage1 before retries are exhausted: {other:?}",
+                    attempt + 1
+                ),
+            };
+            assert!(
+                runtime
+                    .mark_stage1_job_failed(thread_id, ownership_token.as_str(), "boom", 0)
+                    .await
+                    .expect("mark stage1 failed"),
+                "attempt {} should decrement retry budget",
+                attempt + 1
+            );
+        }
+
+        let exhausted_claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 100, 3_600, 64)
+            .await
+            .expect("claim stage1 after retry exhaustion");
+        assert_eq!(
+            exhausted_claim,
+            Stage1JobClaimOutcome::SkippedRetryExhausted
+        );
+
+        let newer_source_claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 101, 3_600, 64)
+            .await
+            .expect("claim stage1 with newer source watermark");
+        assert!(
+            matches!(newer_source_claim, Stage1JobClaimOutcome::Claimed { .. }),
+            "newer source watermark should reset retry budget and be claimable"
+        );
+
+        let job_row = sqlx::query(
+            "SELECT retry_remaining, input_watermark FROM jobs WHERE kind = ? AND job_key = ?",
+        )
+        .bind("memory_stage1")
+        .bind(thread_id.to_string())
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("load stage1 job row after newer-source claim");
+        assert_eq!(
+            job_row
+                .try_get::<i64, _>("retry_remaining")
+                .expect("retry_remaining"),
+            3
+        );
+        assert_eq!(
+            job_row
+                .try_get::<i64, _>("input_watermark")
+                .expect("input_watermark"),
+            101
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase2_global_consolidation_reruns_when_watermark_advances() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+
+        runtime
+            .enqueue_global_consolidation(100)
+            .await
+            .expect("enqueue global consolidation");
+
+        let claim = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2");
+        let (ownership_token, input_watermark) = match claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected phase2 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(ownership_token.as_str(), input_watermark)
+                .await
+                .expect("mark phase2 succeeded"),
+            "phase2 success should finalize for current token"
+        );
+
+        let claim_up_to_date = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2 up-to-date");
+        assert_eq!(claim_up_to_date, Phase2JobClaimOutcome::SkippedNotDirty);
+
+        runtime
+            .enqueue_global_consolidation(101)
+            .await
+            .expect("enqueue global consolidation again");
+
+        let claim_rerun = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2 rerun");
+        assert!(
+            matches!(claim_rerun, Phase2JobClaimOutcome::Claimed { .. }),
+            "advanced watermark should be claimable"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn list_stage1_outputs_for_global_returns_latest_outputs() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id_a,
+                codex_home.join("workspace-a"),
+            ))
+            .await
+            .expect("upsert thread a");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id_b,
+                codex_home.join("workspace-b"),
+            ))
+            .await
+            .expect("upsert thread b");
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id_a, owner, 100, 3600, 64)
+            .await
+            .expect("claim stage1 a");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id_a,
+                    ownership_token.as_str(),
+                    100,
+                    "raw memory a",
+                    "summary a",
+                    None,
+                )
+                .await
+                .expect("mark stage1 succeeded a"),
+            "stage1 success should persist output a"
+        );
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id_b, owner, 101, 3600, 64)
+            .await
+            .expect("claim stage1 b");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id_b,
+                    ownership_token.as_str(),
+                    101,
+                    "raw memory b",
+                    "summary b",
+                    Some("rollout-b"),
+                )
+                .await
+                .expect("mark stage1 succeeded b"),
+            "stage1 success should persist output b"
+        );
+
+        let outputs = runtime
+            .list_stage1_outputs_for_global(10)
+            .await
+            .expect("list stage1 outputs for global");
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].thread_id, thread_id_b);
+        assert_eq!(outputs[0].rollout_summary, "summary b");
+        assert_eq!(outputs[0].rollout_slug.as_deref(), Some("rollout-b"));
+        assert_eq!(outputs[0].cwd, codex_home.join("workspace-b"));
+        assert_eq!(outputs[1].thread_id, thread_id_a);
+        assert_eq!(outputs[1].rollout_summary, "summary a");
+        assert_eq!(outputs[1].rollout_slug, None);
+        assert_eq!(outputs[1].cwd, codex_home.join("workspace-a"));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn list_stage1_outputs_for_global_skips_empty_payloads() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id_non_empty =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_empty =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id_non_empty,
+                codex_home.join("workspace-non-empty"),
+            ))
+            .await
+            .expect("upsert non-empty thread");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id_empty,
+                codex_home.join("workspace-empty"),
+            ))
+            .await
+            .expect("upsert empty thread");
+
+        sqlx::query(
+            r#"
+INSERT INTO stage1_outputs (thread_id, source_updated_at, raw_memory, rollout_summary, generated_at)
+VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(thread_id_non_empty.to_string())
+        .bind(100_i64)
+        .bind("raw memory")
+        .bind("summary")
+        .bind(100_i64)
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("insert non-empty stage1 output");
+        sqlx::query(
+            r#"
+INSERT INTO stage1_outputs (thread_id, source_updated_at, raw_memory, rollout_summary, generated_at)
+VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(thread_id_empty.to_string())
+        .bind(101_i64)
+        .bind("")
+        .bind("")
+        .bind(101_i64)
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("insert empty stage1 output");
+
+        let outputs = runtime
+            .list_stage1_outputs_for_global(1)
+            .await
+            .expect("list stage1 outputs for global");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].thread_id, thread_id_non_empty);
+        assert_eq!(outputs[0].rollout_summary, "summary");
+        assert_eq!(outputs[0].cwd, codex_home.join("workspace-non-empty"));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn mark_stage1_job_succeeded_enqueues_global_consolidation() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
+        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_a,
+                codex_home.join("workspace-a"),
+            ))
+            .await
+            .expect("upsert thread a");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_b,
+                codex_home.join("workspace-b"),
+            ))
+            .await
+            .expect("upsert thread b");
+
+        let claim_a = runtime
+            .try_claim_stage1_job(thread_a, owner, 100, 3600, 64)
+            .await
+            .expect("claim stage1 a");
+        let token_a = match claim_a {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome for thread a: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_a,
+                    token_a.as_str(),
+                    100,
+                    "raw-a",
+                    "summary-a",
+                    None,
+                )
+                .await
+                .expect("mark stage1 succeeded a"),
+            "stage1 success should persist output for thread a"
+        );
+
+        let claim_b = runtime
+            .try_claim_stage1_job(thread_b, owner, 101, 3600, 64)
+            .await
+            .expect("claim stage1 b");
+        let token_b = match claim_b {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome for thread b: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_b,
+                    token_b.as_str(),
+                    101,
+                    "raw-b",
+                    "summary-b",
+                    None,
+                )
+                .await
+                .expect("mark stage1 succeeded b"),
+            "stage1 success should persist output for thread b"
+        );
+
+        let claim = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim global consolidation");
+        let input_watermark = match claim {
+            Phase2JobClaimOutcome::Claimed {
+                input_watermark, ..
+            } => input_watermark,
+            other => panic!("unexpected global consolidation claim outcome: {other:?}"),
+        };
+        assert_eq!(input_watermark, 101);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase2_global_lock_allows_only_one_fresh_runner() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .enqueue_global_consolidation(200)
+            .await
+            .expect("enqueue global consolidation");
+
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner a");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
+
+        let running_claim = runtime
+            .try_claim_global_phase2_job(owner_a, 3600)
+            .await
+            .expect("claim global lock");
+        assert!(
+            matches!(running_claim, Phase2JobClaimOutcome::Claimed { .. }),
+            "first owner should claim global lock"
+        );
+
+        let second_claim = runtime
+            .try_claim_global_phase2_job(owner_b, 3600)
+            .await
+            .expect("claim global lock from second owner");
+        assert_eq!(second_claim, Phase2JobClaimOutcome::SkippedRunning);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase2_global_lock_stale_lease_allows_takeover() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .enqueue_global_consolidation(300)
+            .await
+            .expect("enqueue global consolidation");
+
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner a");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
+
+        let initial_claim = runtime
+            .try_claim_global_phase2_job(owner_a, 3600)
+            .await
+            .expect("claim initial global lock");
+        let token_a = match initial_claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token, ..
+            } => ownership_token,
+            other => panic!("unexpected initial claim outcome: {other:?}"),
+        };
+
+        sqlx::query("UPDATE jobs SET lease_until = ? WHERE kind = ? AND job_key = ?")
+            .bind(Utc::now().timestamp() - 1)
+            .bind("memory_consolidate_global")
+            .bind("global")
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("expire global consolidation lease");
+
+        let takeover_claim = runtime
+            .try_claim_global_phase2_job(owner_b, 3600)
+            .await
+            .expect("claim stale global lock");
+        let (token_b, input_watermark) = match takeover_claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected takeover claim outcome: {other:?}"),
+        };
+        assert_ne!(token_a, token_b);
+        assert_eq!(input_watermark, 300);
+
         assert_eq!(
             runtime
-                .get_thread_memory(thread_id)
+                .mark_global_phase2_job_succeeded(token_a.as_str(), 300)
                 .await
-                .expect("get memory after delete"),
-            None
+                .expect("mark stale owner success result"),
+            false,
+            "stale owner should lose finalization ownership after takeover"
         );
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(token_b.as_str(), 300)
+                .await
+                .expect("mark takeover owner success"),
+            "takeover owner should finalize consolidation"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase2_backfilled_inputs_below_last_success_still_become_dirty() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .enqueue_global_consolidation(500)
+            .await
+            .expect("enqueue initial consolidation");
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner a");
+        let claim_a = runtime
+            .try_claim_global_phase2_job(owner_a, 3_600)
+            .await
+            .expect("claim initial consolidation");
+        let token_a = match claim_a {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => {
+                assert_eq!(input_watermark, 500);
+                ownership_token
+            }
+            other => panic!("unexpected initial phase2 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(token_a.as_str(), 500)
+                .await
+                .expect("mark initial phase2 success"),
+            "initial phase2 success should finalize"
+        );
+
+        runtime
+            .enqueue_global_consolidation(400)
+            .await
+            .expect("enqueue backfilled consolidation");
+
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
+        let claim_b = runtime
+            .try_claim_global_phase2_job(owner_b, 3_600)
+            .await
+            .expect("claim backfilled consolidation");
+        match claim_b {
+            Phase2JobClaimOutcome::Claimed {
+                input_watermark, ..
+            } => {
+                assert!(
+                    input_watermark > 500,
+                    "backfilled enqueue should advance dirty watermark beyond last success"
+                );
+            }
+            other => panic!("unexpected backfilled phase2 claim outcome: {other:?}"),
+        }
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase2_failure_fallback_updates_unowned_running_job() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .enqueue_global_consolidation(400)
+            .await
+            .expect("enqueue global consolidation");
+
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner");
+        let claim = runtime
+            .try_claim_global_phase2_job(owner, 3_600)
+            .await
+            .expect("claim global consolidation");
+        let ownership_token = match claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token, ..
+            } => ownership_token,
+            other => panic!("unexpected claim outcome: {other:?}"),
+        };
+
+        sqlx::query("UPDATE jobs SET ownership_token = NULL WHERE kind = ? AND job_key = ?")
+            .bind("memory_consolidate_global")
+            .bind("global")
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("clear ownership token");
+
+        assert_eq!(
+            runtime
+                .mark_global_phase2_job_failed(ownership_token.as_str(), "lost", 3_600)
+                .await
+                .expect("mark phase2 failed with strict ownership"),
+            false,
+            "strict failure update should not match unowned running job"
+        );
+        assert!(
+            runtime
+                .mark_global_phase2_job_failed_if_unowned(ownership_token.as_str(), "lost", 3_600)
+                .await
+                .expect("fallback failure update should match unowned running job"),
+            "fallback failure update should transition the unowned running job"
+        );
+
+        let claim = runtime
+            .try_claim_global_phase2_job(ThreadId::new(), 3_600)
+            .await
+            .expect("claim after fallback failure");
+        assert_eq!(claim, Phase2JobClaimOutcome::SkippedNotDirty);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn query_logs_with_search_matches_substring() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1_700_000_001,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("alpha".to_string()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(42),
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 1_700_000_002,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("alphabet".to_string()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(43),
+                    module_path: None,
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                search: Some("alphab".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("query matching logs");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message.as_deref(), Some("alphabet"));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_old_rows_when_thread_exceeds_size_limit() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let six_mebibytes = "a".repeat(6 * 1024 * 1024);
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(1),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(2),
+                    module_path: Some("mod".to_string()),
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                thread_ids: vec!["thread-1".to_string()],
+                ..Default::default()
+            })
+            .await
+            .expect("query thread logs");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].ts, 2);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_single_thread_row_when_it_exceeds_size_limit() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let eleven_mebibytes = "d".repeat(11 * 1024 * 1024);
+        runtime
+            .insert_logs(&[LogEntry {
+                ts: 1,
+                ts_nanos: 0,
+                level: "INFO".to_string(),
+                target: "cli".to_string(),
+                message: Some(eleven_mebibytes),
+                thread_id: Some("thread-oversized".to_string()),
+                process_uuid: Some("proc-1".to_string()),
+                file: Some("main.rs".to_string()),
+                line: Some(1),
+                module_path: Some("mod".to_string()),
+            }])
+            .await
+            .expect("insert test log");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                thread_ids: vec!["thread-oversized".to_string()],
+                ..Default::default()
+            })
+            .await
+            .expect("query thread logs");
+
+        assert!(rows.is_empty());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_threadless_rows_per_process_uuid_only() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let six_mebibytes = "b".repeat(6 * 1024 * 1024);
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: None,
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(1),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: None,
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(2),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 3,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(3),
+                    module_path: Some("mod".to_string()),
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                thread_ids: vec!["thread-1".to_string()],
+                include_threadless: true,
+                ..Default::default()
+            })
+            .await
+            .expect("query thread and threadless logs");
+
+        let mut timestamps: Vec<i64> = rows.into_iter().map(|row| row.ts).collect();
+        timestamps.sort_unstable();
+        assert_eq!(timestamps, vec![2, 3]);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_single_threadless_process_row_when_it_exceeds_size_limit() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let eleven_mebibytes = "e".repeat(11 * 1024 * 1024);
+        runtime
+            .insert_logs(&[LogEntry {
+                ts: 1,
+                ts_nanos: 0,
+                level: "INFO".to_string(),
+                target: "cli".to_string(),
+                message: Some(eleven_mebibytes),
+                thread_id: None,
+                process_uuid: Some("proc-oversized".to_string()),
+                file: Some("main.rs".to_string()),
+                line: Some(1),
+                module_path: Some("mod".to_string()),
+            }])
+            .await
+            .expect("insert test log");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                include_threadless: true,
+                ..Default::default()
+            })
+            .await
+            .expect("query threadless logs");
+
+        assert!(rows.is_empty());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_threadless_rows_with_null_process_uuid() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let six_mebibytes = "c".repeat(6 * 1024 * 1024);
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: None,
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(1),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes),
+                    thread_id: None,
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(2),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 3,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("small".to_string()),
+                    thread_id: None,
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(3),
+                    module_path: Some("mod".to_string()),
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                include_threadless: true,
+                ..Default::default()
+            })
+            .await
+            .expect("query threadless logs");
+
+        let mut timestamps: Vec<i64> = rows.into_iter().map(|row| row.ts).collect();
+        timestamps.sort_unstable();
+        assert_eq!(timestamps, vec![2, 3]);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_single_threadless_null_process_row_when_it_exceeds_limit() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let eleven_mebibytes = "f".repeat(11 * 1024 * 1024);
+        runtime
+            .insert_logs(&[LogEntry {
+                ts: 1,
+                ts_nanos: 0,
+                level: "INFO".to_string(),
+                target: "cli".to_string(),
+                message: Some(eleven_mebibytes),
+                thread_id: None,
+                process_uuid: None,
+                file: Some("main.rs".to_string()),
+                line: Some(1),
+                module_path: Some("mod".to_string()),
+            }])
+            .await
+            .expect("insert test log");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                include_threadless: true,
+                ..Default::default()
+            })
+            .await
+            .expect("query threadless logs");
+
+        assert!(rows.is_empty());
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -1398,7 +3096,7 @@ mod tests {
             cwd,
             cli_version: "0.0.0".to_string(),
             title: String::new(),
-            sandbox_policy: crate::extract::enum_to_string(&SandboxPolicy::ReadOnly),
+            sandbox_policy: crate::extract::enum_to_string(&SandboxPolicy::new_read_only_policy()),
             approval_mode: crate::extract::enum_to_string(&AskForApproval::OnRequest),
             tokens_used: 0,
             first_user_message: Some("hello".to_string()),

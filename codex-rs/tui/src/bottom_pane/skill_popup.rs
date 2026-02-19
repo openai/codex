@@ -15,7 +15,7 @@ use crate::key_hint;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::text_formatting::truncate_text;
-use codex_common::fuzzy_match::fuzzy_match;
+use codex_utils_fuzzy_match::fuzzy_match;
 
 #[derive(Clone, Debug)]
 pub(crate) struct MentionItem {
@@ -24,7 +24,10 @@ pub(crate) struct MentionItem {
     pub(crate) insert_text: String,
     pub(crate) search_terms: Vec<String>,
     pub(crate) path: Option<String>,
+    pub(crate) category_tag: Option<String>,
 }
+
+const MENTION_NAME_TRUNCATE_LEN: usize = 24;
 
 pub(crate) struct SkillPopup {
     query: String,
@@ -94,13 +97,14 @@ impl SkillPopup {
             .into_iter()
             .map(|(idx, indices, _score)| {
                 let mention = &self.mentions[idx];
-                let name = truncate_text(&mention.display_name, 21);
+                let name = truncate_text(&mention.display_name, MENTION_NAME_TRUNCATE_LEN);
                 let description = mention.description.clone().unwrap_or_default();
                 GenericDisplayRow {
                     name,
                     match_indices: indices,
                     display_shortcut: None,
                     description: Some(description).filter(|desc| !desc.is_empty()),
+                    category_tag: mention.category_tag.clone(),
                     is_disabled: false,
                     disabled_reason: None,
                     wrap_indent: None,

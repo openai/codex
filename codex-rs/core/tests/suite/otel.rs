@@ -964,8 +964,9 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-            config.sandbox_policy = Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.permissions.sandbox_policy =
+                Constrained::allow_any(SandboxPolicy::DangerFullAccess);
         })
         .build(&server)
         .await
@@ -1015,7 +1016,8 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+            config.permissions.approval_policy =
+                Constrained::allow_any(AskForApproval::UnlessTrusted);
         })
         .build(&server)
         .await
@@ -1032,11 +1034,16 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let approval_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected ExecApprovalRequest event");
+    };
 
     codex
         .submit(Op::ExecApproval {
-            id: "0".into(),
+            id: approval.effective_approval_id(),
+            turn_id: None,
             decision: ReviewDecision::Approved,
         })
         .await
@@ -1075,7 +1082,8 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+            config.permissions.approval_policy =
+                Constrained::allow_any(AskForApproval::UnlessTrusted);
         })
         .build(&server)
         .await
@@ -1092,11 +1100,16 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let approval_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected ExecApprovalRequest event");
+    };
 
     codex
         .submit(Op::ExecApproval {
-            id: "0".into(),
+            id: approval.effective_approval_id(),
+            turn_id: None,
             decision: ReviewDecision::ApprovedForSession,
         })
         .await
@@ -1135,7 +1148,8 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+            config.permissions.approval_policy =
+                Constrained::allow_any(AskForApproval::UnlessTrusted);
         })
         .build(&server)
         .await
@@ -1152,11 +1166,16 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let approval_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected ExecApprovalRequest event");
+    };
 
     codex
         .submit(Op::ExecApproval {
-            id: "0".into(),
+            id: approval.effective_approval_id(),
+            turn_id: None,
             decision: ReviewDecision::Approved,
         })
         .await
@@ -1195,7 +1214,8 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
     .await;
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+            config.permissions.approval_policy =
+                Constrained::allow_any(AskForApproval::UnlessTrusted);
         })
         .build(&server)
         .await
@@ -1212,11 +1232,16 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let approval_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected ExecApprovalRequest event");
+    };
 
     codex
         .submit(Op::ExecApproval {
-            id: "0".into(),
+            id: approval.effective_approval_id(),
+            turn_id: None,
             decision: ReviewDecision::Denied,
         })
         .await
@@ -1255,7 +1280,8 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+            config.permissions.approval_policy =
+                Constrained::allow_any(AskForApproval::UnlessTrusted);
         })
         .build(&server)
         .await
@@ -1272,11 +1298,16 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let approval_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected ExecApprovalRequest event");
+    };
 
     codex
         .submit(Op::ExecApproval {
-            id: "0".into(),
+            id: approval.effective_approval_id(),
+            turn_id: None,
             decision: ReviewDecision::ApprovedForSession,
         })
         .await
@@ -1316,7 +1347,8 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+            config.permissions.approval_policy =
+                Constrained::allow_any(AskForApproval::UnlessTrusted);
         })
         .build(&server)
         .await
@@ -1333,11 +1365,16 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let approval_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected ExecApprovalRequest event");
+    };
 
     codex
         .submit(Op::ExecApproval {
-            id: "0".into(),
+            id: approval.effective_approval_id(),
+            turn_id: None,
             decision: ReviewDecision::Denied,
         })
         .await

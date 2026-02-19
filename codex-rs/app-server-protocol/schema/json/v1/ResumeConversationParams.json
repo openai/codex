@@ -12,7 +12,7 @@
           "type": "string"
         },
         {
-          "description": "*All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox.",
+          "description": "DEPRECATED: *All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox. Prefer `OnRequest` for interactive runs or `Never` for non-interactive runs.",
           "enum": [
             "on-failure"
           ],
@@ -271,11 +271,23 @@
       "type": "string"
     },
     "MessagePhase": {
-      "enum": [
-        "commentary",
-        "final_answer"
-      ],
-      "type": "string"
+      "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+      "oneOf": [
+        {
+          "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
+          "enum": [
+            "commentary"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The assistant's terminal answer text for the current turn.",
+          "enum": [
+            "final_answer"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "NewConversationParams": {
       "properties": {

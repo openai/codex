@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
+use codex_utils_cli::CliConfigOverrides;
 
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
 use crate::get_task::GetTaskResponse;
