@@ -2674,19 +2674,55 @@ impl Session {
         state.previous_context_item()
     }
 
-    pub(crate) async fn full_context_reinjection_pending(&self) -> bool {
-        let state = self.state.lock().await;
-        state.full_context_reinjection_pending()
+    pub(crate) async fn seed_previous_context_item(&self, item: TurnContextItem) {
+        let mut state = self.state.lock().await;
+        state.set_previous_context_item(Some(item));
     }
 
-    pub(crate) async fn set_full_context_reinjection_pending(&self, pending: bool) {
+    pub(crate) async fn clear_previous_context_item(&self) {
         let mut state = self.state.lock().await;
-        state.set_full_context_reinjection_pending(pending);
+        state.set_previous_context_item(None);
     }
 
-    pub(crate) async fn set_previous_context_item(&self, item: Option<TurnContextItem>) {
+    pub(crate) async fn set_previous_context_item(
+        &self,
+        turn_context: &TurnContext,
+        resumed_model: Option<&str>,
+        force_full_context_injection: bool,
+        emit_raw_events: bool,
+    ) {
+        let previous_context_item = self.previous_context_item().await;
+        let settings_update_items = self.build_settings_update_items(
+            previous_context_item.as_ref(),
+            resumed_model,
+            turn_context,
+        );
+        let should_inject_full_context =
+            force_full_context_injection || previous_context_item.is_none();
+        let context_items = if should_inject_full_context {
+            let mut initial_context = self.build_initial_context(turn_context).await;
+            if let Some(model_switch_item) = settings_update_items
+                .iter()
+                .find(|item| Session::is_model_switch_developer_message(item))
+                .cloned()
+            {
+                initial_context.push(model_switch_item);
+            }
+            initial_context
+        } else {
+            settings_update_items
+        };
+        if !context_items.is_empty() {
+            self.record_into_history(&context_items, turn_context).await;
+            self.persist_rollout_response_items(&context_items).await;
+            if emit_raw_events {
+                self.send_raw_response_items(turn_context, &context_items)
+                    .await;
+            }
+        }
+
         let mut state = self.state.lock().await;
-        state.set_previous_context_item(item);
+        state.set_previous_context_item(Some(turn_context.to_turn_context_item()));
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -3156,7 +3192,7 @@ impl Session {
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
     // Seed with context in case there is an OverrideTurnContext first.
     let initial_context = sess.new_default_turn().await;
-    sess.set_previous_context_item(Some(initial_context.to_turn_context_item()))
+    sess.seed_previous_context_item(initial_context.to_turn_context_item())
         .await;
 
     // To break out of this loop, send Op::Shutdown.
@@ -3482,7 +3518,7 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
-        sess.set_previous_context_item(Some(turn_context.to_turn_context_item()))
+        sess.set_previous_context_item(turn_context.as_ref(), None, false, false)
             .await;
     }
 
@@ -4301,38 +4337,13 @@ pub(crate) async fn run_turn(
     };
 
     let previous_model = sess.previous_model().await;
-    let previous_context_item = sess.previous_context_item().await;
-    let full_context_reinjection_pending = sess.full_context_reinjection_pending().await;
-    let settings_update_items = sess.build_settings_update_items(
-        previous_context_item.as_ref(),
-        previous_model.as_deref(),
+    sess.set_previous_context_item(
         turn_context.as_ref(),
-    );
-    let should_inject_full_context = pre_sampling_compacted
-        || previous_context_item.is_none()
-        || full_context_reinjection_pending;
-    let context_items = if should_inject_full_context {
-        let mut initial_context = sess.build_initial_context(turn_context.as_ref()).await;
-        if let Some(model_switch_item) = settings_update_items
-            .iter()
-            .find(|item| Session::is_model_switch_developer_message(item))
-            .cloned()
-        {
-            initial_context.push(model_switch_item);
-        }
-        initial_context
-    } else {
-        settings_update_items
-    };
-    if !context_items.is_empty() {
-        sess.record_conversation_items(&turn_context, &context_items)
-            .await;
-    }
-    sess.set_previous_context_item(Some(turn_context.to_turn_context_item()))
-        .await;
-    if should_inject_full_context && full_context_reinjection_pending {
-        sess.set_full_context_reinjection_pending(false).await;
-    }
+        previous_model.as_deref(),
+        pre_sampling_compacted,
+        true,
+    )
+    .await;
 
     let skills_outcome = Some(
         sess.services
@@ -7826,17 +7837,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn full_context_reinjection_flag_survives_previous_context_updates() {
+    async fn set_previous_context_item_injects_full_context_when_baseline_missing() {
         let (session, turn_context) = make_session_and_context().await;
-
-        session.set_full_context_reinjection_pending(true).await;
         session
-            .set_previous_context_item(Some(turn_context.to_turn_context_item()))
+            .set_previous_context_item(&turn_context, None, false, false)
             .await;
-        assert!(session.full_context_reinjection_pending().await);
+        let history = session.clone_history().await;
+        let initial_context = session.build_initial_context(&turn_context).await;
+        assert_eq!(history.raw_items().to_vec(), initial_context);
 
-        session.set_full_context_reinjection_pending(false).await;
-        assert!(!session.full_context_reinjection_pending().await);
+        let current_context = session.previous_context_item().await;
+        assert_eq!(
+            serde_json::to_value(current_context).expect("serialize current context item"),
+            serde_json::to_value(Some(turn_context.to_turn_context_item()))
+                .expect("serialize expected context item")
+        );
+    }
+
+    #[tokio::test]
+    async fn set_previous_context_item_reinjects_full_context_after_clear() {
+        let (session, turn_context) = make_session_and_context().await;
+        let compacted_summary = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!("{}\nsummary", crate::compact::SUMMARY_PREFIX),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+        session
+            .record_into_history(std::slice::from_ref(&compacted_summary), &turn_context)
+            .await;
+        session
+            .seed_previous_context_item(turn_context.to_turn_context_item())
+            .await;
+        session.clear_previous_context_item().await;
+
+        session
+            .set_previous_context_item(&turn_context, None, false, false)
+            .await;
+
+        let history = session.clone_history().await;
+        let mut expected_history = vec![compacted_summary];
+        expected_history.extend(session.build_initial_context(&turn_context).await);
+        assert_eq!(history.raw_items().to_vec(), expected_history);
     }
 
     #[derive(Clone, Copy)]
