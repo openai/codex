@@ -1,4 +1,5 @@
 # Security Policy
+
 Thank you for helping us keep Codex secure!
 
 ## Reporting Security Issues
