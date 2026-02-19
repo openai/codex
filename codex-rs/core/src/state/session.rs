@@ -81,8 +81,12 @@ impl SessionState {
         self.history.set_token_info(info);
     }
 
-    pub(crate) fn set_previous_context_item(&mut self, item: Option<TurnContextItem>) {
-        self.history.set_previous_context_item(item);
+    /// Storage-only setter for the previous context snapshot.
+    ///
+    /// Most callers should use
+    /// `Session::record_context_updates_and_set_previous_context_item`.
+    pub(crate) fn set_previous_context_item_raw(&mut self, item: Option<TurnContextItem>) {
+        self.history.set_previous_context_item_raw(item);
     }
 
     pub(crate) fn previous_context_item(&self) -> Option<TurnContextItem> {

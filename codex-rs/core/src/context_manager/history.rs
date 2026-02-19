@@ -60,7 +60,11 @@ impl ContextManager {
         self.token_info = info;
     }
 
-    pub(crate) fn set_previous_context_item(&mut self, item: Option<TurnContextItem>) {
+    /// Storage-only setter for the previous context snapshot.
+    ///
+    /// Callers that want model-visible context updates should go through
+    /// `Session::record_context_updates_and_set_previous_context_item`.
+    pub(crate) fn set_previous_context_item_raw(&mut self, item: Option<TurnContextItem>) {
         self.previous_context_item = item;
     }
 

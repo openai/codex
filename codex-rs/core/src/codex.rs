@@ -2676,7 +2676,7 @@ impl Session {
 
     pub(crate) async fn clear_previous_context_item(&self) {
         let mut state = self.state.lock().await;
-        state.set_previous_context_item(None);
+        state.set_previous_context_item_raw(None);
     }
 
     /// Persist the latest turn context snapshot and emit any required model-visible context updates.
@@ -2686,6 +2686,9 @@ impl Session {
     ///
     /// If full context is injected and a model switch occurred, this appends the `<model_switch>`
     /// developer message so model-specific instructions are not lost.
+    ///
+    /// Invariant: this is the only runtime path that writes a non-`None`
+    /// `previous_context_item`.
     pub(crate) async fn record_context_updates_and_set_previous_context_item(
         &self,
         turn_context: &TurnContext,
@@ -2727,7 +2730,7 @@ impl Session {
         }
 
         let mut state = self.state.lock().await;
-        state.set_previous_context_item(Some(turn_context.to_turn_context_item()));
+        state.set_previous_context_item_raw(Some(turn_context.to_turn_context_item()));
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -3196,10 +3199,11 @@ impl Session {
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
     // Seed with context in case there is an OverrideTurnContext first.
+    // Bootstrap-only write: this should not emit model-visible context updates.
     let initial_context = sess.new_default_turn().await;
     {
         let mut state = sess.state.lock().await;
-        state.set_previous_context_item(Some(initial_context.to_turn_context_item()));
+        state.set_previous_context_item_raw(Some(initial_context.to_turn_context_item()));
     }
 
     // To break out of this loop, send Op::Shutdown.
@@ -7880,11 +7884,12 @@ mod tests {
             .record_into_history(std::slice::from_ref(&compacted_summary), &turn_context)
             .await;
         session
-            .state
-            .lock()
-            .await
-            .set_previous_context_item(Some(turn_context.to_turn_context_item()));
+            .record_context_updates_and_set_previous_context_item(&turn_context, None, false, false)
+            .await;
         session.clear_previous_context_item().await;
+        session
+            .replace_history(vec![compacted_summary.clone()])
+            .await;
 
         session
             .record_context_updates_and_set_previous_context_item(&turn_context, None, false, false)
