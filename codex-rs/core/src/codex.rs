@@ -3074,6 +3074,7 @@ impl Session {
             .await;
     }
 
+    #[cfg(test)]
     async fn mcp_startup_cancellation_token(&self) -> CancellationToken {
         self.services
             .mcp_startup_cancellation_token
