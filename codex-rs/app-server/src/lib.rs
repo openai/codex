@@ -11,12 +11,14 @@ use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
+use tracing::level_filters::LevelFilter;
 
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
@@ -48,6 +50,7 @@ use tracing::info;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -346,7 +349,11 @@ pub async fn run_main_with_transport(
     let stderr_fmt = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-        .with_filter(EnvFilter::from_default_env());
+        .with_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::TRACE.into())
+                .from_env_lossy(),
+        );
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
@@ -355,13 +362,81 @@ pub async fn run_main_with_transport(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
+    let mut trace_log_setup_warning = None;
+    let mut trace_log_path = None;
+    let trace_log_tempfile = match std::env::var_os("HOME") {
+        Some(home) => {
+            let trace_log_dir = PathBuf::from(home).join(".codex").join("log");
+            match std::fs::create_dir_all(&trace_log_dir) {
+                Ok(()) => match tempfile::Builder::new()
+                    .prefix("app-server-")
+                    .suffix(".log")
+                    .tempfile_in(&trace_log_dir)
+                {
+                    Ok(file) => {
+                        trace_log_path = Some(file.path().to_path_buf());
+                        Some(file)
+                    }
+                    Err(err) => {
+                        trace_log_setup_warning = Some(format!(
+                            "failed to create app-server trace log file in {}: {err}",
+                            trace_log_dir.display()
+                        ));
+                        None
+                    }
+                },
+                Err(err) => {
+                    trace_log_setup_warning = Some(format!(
+                        "failed to create app-server trace log directory {}: {err}",
+                        trace_log_dir.display()
+                    ));
+                    None
+                }
+            }
+        }
+        None => {
+            trace_log_setup_warning =
+                Some("HOME is not set; app-server trace log file disabled".to_string());
+            None
+        }
+    };
+
+    let trace_file_fmt = trace_log_path.clone().map(|path| {
+        let writer = BoxMakeWriter::new(move || {
+            let writer: Box<dyn std::io::Write + Send> =
+                match OpenOptions::new().create(true).append(true).open(&path) {
+                    Ok(file) => Box::new(file),
+                    Err(_) => Box::new(std::io::sink()),
+                };
+            writer
+        });
+
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(writer)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+            .with_filter(
+                EnvFilter::builder()
+                    .with_default_directive(LevelFilter::TRACE.into())
+                    .from_env_lossy(),
+            )
+    });
+
     let _ = tracing_subscriber::registry()
         .with(stderr_fmt)
+        .with(trace_file_fmt)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
+    if let Some(path) = &trace_log_path {
+        let path = path.display().to_string();
+        info!(path, "app-server trace log file enabled");
+    }
+    if let Some(warning) = trace_log_setup_warning {
+        warn!("{warning}");
+    }
     for warning in &config_warnings {
         match &warning.details {
             Some(details) => error!("{} {}", warning.summary, details),
@@ -581,6 +656,7 @@ pub async fn run_main_with_transport(
 
     let _ = processor_handle.await;
     let _ = outbound_handle.await;
+    drop(trace_log_tempfile);
 
     if let Some(handle) = websocket_accept_handle {
         handle.abort();
