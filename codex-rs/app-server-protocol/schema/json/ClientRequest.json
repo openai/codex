@@ -69,13 +69,46 @@
       "type": "object"
     },
     "AskForApproval": {
-      "enum": [
-        "untrusted",
-        "on-failure",
-        "on-request",
-        "never"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "untrusted",
+            "on-failure",
+            "on-request",
+            "never"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "reject": {
+              "properties": {
+                "mcp_elicitations": {
+                  "type": "boolean"
+                },
+                "rules": {
+                  "type": "boolean"
+                },
+                "sandbox_approval": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "mcp_elicitations",
+                "rules",
+                "sandbox_approval"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reject"
+          ],
+          "title": "RejectAskForApproval",
+          "type": "object"
+        }
+      ]
     },
     "AskForApproval2": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
@@ -100,6 +133,20 @@
             "on-request"
           ],
           "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Fine-grained rejection controls for approval prompts.\n\nWhen a field is `true`, prompts of that category are automatically rejected instead of shown to the user.",
+          "properties": {
+            "reject": {
+              "$ref": "#/definitions/RejectConfig"
+            }
+          },
+          "required": [
+            "reject"
+          ],
+          "title": "RejectAskForApproval2",
+          "type": "object"
         },
         {
           "description": "Never ask the user to approve commands. Failures are immediately returned to the model, and never escalated to the user for approval.",
@@ -711,6 +758,15 @@
       ],
       "type": "object"
     },
+    "HazelnutScope": {
+      "enum": [
+        "example",
+        "workspace-shared",
+        "all-shared",
+        "personal"
+      ],
+      "type": "string"
+    },
     "InitializeCapabilities": {
       "description": "Client-declared capabilities negotiated during initialize.",
       "properties": {
@@ -1250,6 +1306,15 @@
       ],
       "type": "string"
     },
+    "ProductSurface": {
+      "enum": [
+        "chatgpt",
+        "codex",
+        "api",
+        "atlas"
+      ],
+      "type": "string"
+    },
     "ReadOnlyAccess": {
       "oneOf": [
         {
@@ -1447,6 +1512,28 @@
           "type": "string"
         }
       ]
+    },
+    "RejectConfig": {
+      "properties": {
+        "mcp_elicitations": {
+          "description": "Reject MCP elicitation prompts.",
+          "type": "boolean"
+        },
+        "rules": {
+          "description": "Reject prompts triggered by execpolicy `prompt` rules.",
+          "type": "boolean"
+        },
+        "sandbox_approval": {
+          "description": "Reject approval prompts related to sandbox escalation.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mcp_elicitations",
+        "rules",
+        "sandbox_approval"
+      ],
+      "type": "object"
     },
     "RemoveConversationListenerParams": {
       "properties": {
@@ -2421,20 +2508,38 @@
       "type": "object"
     },
     "SkillsRemoteReadParams": {
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "hazelnutScope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/HazelnutScope"
+            }
+          ],
+          "default": "example"
+        },
+        "productSurface": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProductSurface"
+            }
+          ],
+          "default": "codex"
+        }
+      },
       "type": "object"
     },
     "SkillsRemoteWriteParams": {
       "properties": {
         "hazelnutId": {
           "type": "string"
-        },
-        "isPreload": {
-          "type": "boolean"
         }
       },
       "required": [
-        "hazelnutId",
-        "isPreload"
+        "hazelnutId"
       ],
       "type": "object"
     },
@@ -3275,6 +3380,24 @@
           "type": "object"
         }
       ]
+    },
+    "WindowsSandboxSetupMode": {
+      "enum": [
+        "elevated",
+        "unelevated"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxSetupStartParams": {
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/WindowsSandboxSetupMode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
     }
   },
   "description": "Request from the client to the server.",
@@ -3599,9 +3722,9 @@
         },
         "method": {
           "enum": [
-            "skills/remote/read"
+            "skills/remote/list"
           ],
-          "title": "Skills/remote/readRequestMethod",
+          "title": "Skills/remote/listRequestMethod",
           "type": "string"
         },
         "params": {
@@ -3613,7 +3736,7 @@
         "method",
         "params"
       ],
-      "title": "Skills/remote/readRequest",
+      "title": "Skills/remote/listRequest",
       "type": "object"
     },
     {
@@ -3623,9 +3746,9 @@
         },
         "method": {
           "enum": [
-            "skills/remote/write"
+            "skills/remote/export"
           ],
-          "title": "Skills/remote/writeRequestMethod",
+          "title": "Skills/remote/exportRequestMethod",
           "type": "string"
         },
         "params": {
@@ -3637,7 +3760,7 @@
         "method",
         "params"
       ],
-      "title": "Skills/remote/writeRequest",
+      "title": "Skills/remote/exportRequest",
       "type": "object"
     },
     {
@@ -3901,6 +4024,30 @@
         "params"
       ],
       "title": "McpServerStatus/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "windowsSandbox/setupStart"
+          ],
+          "title": "WindowsSandbox/setupStartRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WindowsSandboxSetupStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "WindowsSandbox/setupStartRequest",
       "type": "object"
     },
     {

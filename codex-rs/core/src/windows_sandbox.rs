@@ -1,16 +1,20 @@
 use crate::config::Config;
 use crate::config::ConfigToml;
+use crate::config::edit::ConfigEditsBuilder;
 use crate::config::profile::ConfigProfile;
 use crate::config::types::WindowsSandboxModeToml;
+use crate::default_client::originator;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::features::FeaturesToml;
 use crate::protocol::SandboxPolicy;
+use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Instant;
 
 /// Kill switch for the elevated sandbox NUX on Windows.
 ///
@@ -241,6 +245,185 @@ pub fn run_setup_refresh_with_extra_read_roots(
     _extra_read_roots: Vec<PathBuf>,
 ) -> anyhow::Result<()> {
     anyhow::bail!("Windows sandbox read-root refresh is only supported on Windows")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsSandboxSetupMode {
+    Elevated,
+    Unelevated,
+}
+
+#[derive(Debug, Clone)]
+pub struct WindowsSandboxSetupRequest {
+    pub mode: WindowsSandboxSetupMode,
+    pub policy: SandboxPolicy,
+    pub policy_cwd: PathBuf,
+    pub command_cwd: PathBuf,
+    pub env_map: HashMap<String, String>,
+    pub codex_home: PathBuf,
+    pub active_profile: Option<String>,
+}
+
+pub async fn run_windows_sandbox_setup(request: WindowsSandboxSetupRequest) -> anyhow::Result<()> {
+    let start = Instant::now();
+    let mode = request.mode;
+    let originator_tag = sanitize_metric_tag_value(originator().value.as_str());
+    let result = run_windows_sandbox_setup_and_persist(request).await;
+
+    match result {
+        Ok(()) => {
+            emit_windows_sandbox_setup_success_metrics(
+                mode,
+                originator_tag.as_str(),
+                start.elapsed(),
+            );
+            Ok(())
+        }
+        Err(err) => {
+            emit_windows_sandbox_setup_failure_metrics(
+                mode,
+                originator_tag.as_str(),
+                start.elapsed(),
+                &err,
+            );
+            Err(err)
+        }
+    }
+}
+
+async fn run_windows_sandbox_setup_and_persist(
+    request: WindowsSandboxSetupRequest,
+) -> anyhow::Result<()> {
+    let mode = request.mode;
+    let policy = request.policy;
+    let policy_cwd = request.policy_cwd;
+    let command_cwd = request.command_cwd;
+    let env_map = request.env_map;
+    let codex_home = request.codex_home;
+    let active_profile = request.active_profile;
+    let setup_codex_home = codex_home.clone();
+
+    let setup_result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        match mode {
+            WindowsSandboxSetupMode::Elevated => {
+                if !sandbox_setup_is_complete(setup_codex_home.as_path()) {
+                    run_elevated_setup(
+                        &policy,
+                        policy_cwd.as_path(),
+                        command_cwd.as_path(),
+                        &env_map,
+                        setup_codex_home.as_path(),
+                    )?;
+                }
+            }
+            WindowsSandboxSetupMode::Unelevated => {
+                run_legacy_setup_preflight(
+                    &policy,
+                    policy_cwd.as_path(),
+                    command_cwd.as_path(),
+                    &env_map,
+                    setup_codex_home.as_path(),
+                )?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|join_err| anyhow::anyhow!("windows sandbox setup task failed: {join_err}"))?;
+
+    setup_result?;
+
+    ConfigEditsBuilder::new(codex_home.as_path())
+        .with_profile(active_profile.as_deref())
+        .set_windows_sandbox_mode(windows_sandbox_setup_mode_tag(mode))
+        .clear_legacy_windows_sandbox_keys()
+        .apply()
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to persist windows sandbox mode: {err}"))
+}
+
+fn emit_windows_sandbox_setup_success_metrics(
+    mode: WindowsSandboxSetupMode,
+    originator_tag: &str,
+    duration: std::time::Duration,
+) {
+    let Some(metrics) = codex_otel::metrics::global() else {
+        return;
+    };
+    let mode_tag = windows_sandbox_setup_mode_tag(mode);
+    let _ = metrics.record_duration(
+        "codex.windows_sandbox.setup_duration_ms",
+        duration,
+        &[
+            ("result", "success"),
+            ("originator", originator_tag),
+            ("mode", mode_tag),
+        ],
+    );
+    let _ = metrics.counter(
+        "codex.windows_sandbox.setup_success",
+        1,
+        &[("originator", originator_tag), ("mode", mode_tag)],
+    );
+}
+
+fn emit_windows_sandbox_setup_failure_metrics(
+    mode: WindowsSandboxSetupMode,
+    originator_tag: &str,
+    duration: std::time::Duration,
+    _err: &anyhow::Error,
+) {
+    let Some(metrics) = codex_otel::metrics::global() else {
+        return;
+    };
+    let mode_tag = windows_sandbox_setup_mode_tag(mode);
+    let _ = metrics.record_duration(
+        "codex.windows_sandbox.setup_duration_ms",
+        duration,
+        &[
+            ("result", "failure"),
+            ("originator", originator_tag),
+            ("mode", mode_tag),
+        ],
+    );
+    let _ = metrics.counter(
+        "codex.windows_sandbox.setup_failure",
+        1,
+        &[("originator", originator_tag), ("mode", mode_tag)],
+    );
+
+    if matches!(mode, WindowsSandboxSetupMode::Elevated) {
+        #[cfg(target_os = "windows")]
+        {
+            let mut failure_tags: Vec<(&str, &str)> = vec![("originator", originator_tag)];
+            let mut code_tag: Option<String> = None;
+            let mut message_tag: Option<String> = None;
+            if let Some((code, message)) = elevated_setup_failure_details(_err) {
+                code_tag = Some(code);
+                message_tag = Some(message);
+            }
+            if let Some(code) = code_tag.as_deref() {
+                failure_tags.push(("code", code));
+            }
+            if let Some(message) = message_tag.as_deref() {
+                failure_tags.push(("message", message));
+            }
+            let _ = metrics.counter(elevated_setup_failure_metric_name(_err), 1, &failure_tags);
+        }
+    } else {
+        let _ = metrics.counter(
+            "codex.windows_sandbox.legacy_setup_preflight_failed",
+            1,
+            &[("originator", originator_tag)],
+        );
+    }
+}
+
+fn windows_sandbox_setup_mode_tag(mode: WindowsSandboxSetupMode) -> &'static str {
+    match mode {
+        WindowsSandboxSetupMode::Elevated => "elevated",
+        WindowsSandboxSetupMode::Unelevated => "unelevated",
+    }
 }
 
 #[cfg(test)]
