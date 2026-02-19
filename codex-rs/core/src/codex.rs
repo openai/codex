@@ -1263,7 +1263,9 @@ impl Session {
             };
 
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_connection_manager: Arc::new(
+                RwLock::new(McpConnectionManager::new_uninitialized()),
+            ),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             analytics_events_client: AnalyticsEventsClient::new(
@@ -1364,7 +1366,7 @@ impl Session {
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_file_watcher_listener();
 
-        // Construct sandbox_state before initialize() so it can be sent to each
+        // Construct sandbox_state before MCP startup so it can be sent to each
         // MCP server immediately after it becomes ready (avoiding blocking).
         let sandbox_state = SandboxState {
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
@@ -1378,21 +1380,30 @@ impl Session {
             .map(|(name, _)| name.clone())
             .collect();
         required_mcp_servers.sort();
-        let cancel_token = sess.mcp_startup_cancellation_token().await;
-
-        sess.services
-            .mcp_connection_manager
-            .write()
-            .await
-            .initialize(
-                &mcp_servers,
-                config.mcp_oauth_credentials_store_mode,
-                auth_statuses.clone(),
-                tx_event.clone(),
-                cancel_token,
-                sandbox_state,
-            )
-            .await;
+        {
+            let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
+            cancel_guard.cancel();
+            *cancel_guard = CancellationToken::new();
+        }
+        let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+            &mcp_servers,
+            config.mcp_oauth_credentials_store_mode,
+            auth_statuses.clone(),
+            tx_event.clone(),
+            sandbox_state,
+        )
+        .await;
+        {
+            let mut manager_guard = sess.services.mcp_connection_manager.write().await;
+            *manager_guard = mcp_connection_manager;
+        }
+        {
+            let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
+            if cancel_guard.is_cancelled() {
+                cancel_token.cancel();
+            }
+            *cancel_guard = cancel_token;
+        }
         if !required_mcp_servers.is_empty() {
             let failures = sess
                 .services
@@ -2995,19 +3006,26 @@ impl Session {
             sandbox_cwd: turn_context.cwd.clone(),
             use_linux_sandbox_bwrap: turn_context.features.enabled(Feature::UseLinuxSandboxBwrap),
         };
-        let cancel_token = self.reset_mcp_startup_cancellation_token().await;
-
-        let mut refreshed_manager = McpConnectionManager::default();
-        refreshed_manager
-            .initialize(
-                &mcp_servers,
-                store_mode,
-                auth_statuses,
-                self.get_tx_event(),
-                cancel_token,
-                sandbox_state,
-            )
-            .await;
+        {
+            let mut cancel_guard = self.services.mcp_startup_cancellation_token.lock().await;
+            cancel_guard.cancel();
+            *cancel_guard = CancellationToken::new();
+        }
+        let (refreshed_manager, cancel_token) = McpConnectionManager::new(
+            &mcp_servers,
+            store_mode,
+            auth_statuses,
+            self.get_tx_event(),
+            sandbox_state,
+        )
+        .await;
+        {
+            let mut cancel_guard = self.services.mcp_startup_cancellation_token.lock().await;
+            if cancel_guard.is_cancelled() {
+                cancel_token.cancel();
+            }
+            *cancel_guard = cancel_token;
+        }
 
         let mut manager = self.services.mcp_connection_manager.write().await;
         *manager = refreshed_manager;
@@ -3062,14 +3080,6 @@ impl Session {
             .lock()
             .await
             .clone()
-    }
-
-    async fn reset_mcp_startup_cancellation_token(&self) -> CancellationToken {
-        let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-        guard.cancel();
-        let cancel_token = CancellationToken::new();
-        *guard = cancel_token.clone();
-        cancel_token
     }
 
     fn show_raw_agent_reasoning(&self) -> bool {
@@ -7265,7 +7275,9 @@ mod tests {
 
         let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_connection_manager: Arc::new(RwLock::new(
+                McpConnectionManager::new_mcp_connection_manager_for_tests(),
+            )),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             analytics_events_client: AnalyticsEventsClient::new(
@@ -7413,7 +7425,9 @@ mod tests {
 
         let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_connection_manager: Arc::new(RwLock::new(
+                McpConnectionManager::new_mcp_connection_manager_for_tests(),
+            )),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             analytics_events_client: AnalyticsEventsClient::new(
