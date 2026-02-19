@@ -1288,7 +1288,7 @@ impl Session {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
-                config.background_terminal_timeout,
+                config.background_terminal_max_timeout,
             ),
             zsh_exec_bridge,
             analytics_events_client: AnalyticsEventsClient::new(
@@ -7379,7 +7379,7 @@ mod tests {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
-                config.background_terminal_timeout,
+                config.background_terminal_max_timeout,
             ),
             zsh_exec_bridge: ZshExecBridge::default(),
             analytics_events_client: AnalyticsEventsClient::new(
@@ -7530,7 +7530,7 @@ mod tests {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
-                config.background_terminal_timeout,
+                config.background_terminal_max_timeout,
             ),
             zsh_exec_bridge: ZshExecBridge::default(),
             analytics_events_client: AnalyticsEventsClient::new(

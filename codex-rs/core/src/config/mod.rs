@@ -384,7 +384,7 @@ pub struct Config {
 
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
-    pub background_terminal_timeout: u64,
+    pub background_terminal_max_timeout: u64,
 
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
@@ -1685,7 +1685,7 @@ impl Config {
             })
             .transpose()?
             .unwrap_or_default();
-        let background_terminal_timeout = cfg
+        let background_terminal_max_timeout = cfg
             .background_terminal_timeout
             .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
             .max(MIN_EMPTY_YIELD_TIME_MS);
@@ -1939,7 +1939,7 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
             use_experimental_unified_exec_tool,
-            background_terminal_timeout,
+            background_terminal_max_timeout,
             ghost_snapshot,
             features,
             suppress_unstable_features_warning: cfg
@@ -4361,7 +4361,7 @@ model_verbosity = "high"
                 include_apply_patch_tool: false,
                 web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
                 use_experimental_unified_exec_tool: !cfg!(windows),
-                background_terminal_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
+                background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
                 suppress_unstable_features_warning: false,
@@ -4476,7 +4476,7 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             use_experimental_unified_exec_tool: !cfg!(windows),
-            background_terminal_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
+            background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             suppress_unstable_features_warning: false,
@@ -4589,7 +4589,7 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             use_experimental_unified_exec_tool: !cfg!(windows),
-            background_terminal_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
+            background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             suppress_unstable_features_warning: false,
@@ -4688,7 +4688,7 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             use_experimental_unified_exec_tool: !cfg!(windows),
-            background_terminal_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
+            background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             suppress_unstable_features_warning: false,
