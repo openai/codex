@@ -912,6 +912,11 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
+            // This test seeds OAuth tokens in CODEX_HOME/.credentials.json and
+            // validates file-backed OAuth loading. Force file mode so Linux
+            // keyring backend quirks do not affect this test.
+            config.mcp_oauth_credentials_store_mode = serde_json::from_value(json!("file"))
+                .expect("`file` should deserialize as OAuthCredentialsStoreMode");
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 server_name.to_string(),
