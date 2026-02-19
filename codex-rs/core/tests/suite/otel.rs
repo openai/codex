@@ -32,6 +32,47 @@ use tracing_test::traced_test;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_test::internal::MockWriter;
 
+fn extract_log_field(line: &str, key: &str) -> Option<String> {
+    let quoted_prefix = format!("{key}=\"");
+    if let Some(start) = line.find(&quoted_prefix) {
+        let value_start = start + quoted_prefix.len();
+        if let Some(end_rel) = line[value_start..].find('"') {
+            return Some(line[value_start..value_start + end_rel].to_string());
+        }
+    }
+
+    let bare_prefix = format!("{key}=");
+    if let Some(start) = line.find(&bare_prefix) {
+        let value_start = start + bare_prefix.len();
+        let value = line[value_start..]
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(',');
+        return Some(value.to_string());
+    }
+
+    None
+}
+
+fn assert_empty_mcp_tool_fields(line: &str) -> Result<(), String> {
+    let mcp_server = extract_log_field(line, "mcp_server")
+        .ok_or_else(|| "missing mcp_server field".to_string())?;
+    if !mcp_server.is_empty() {
+        return Err(format!("expected empty mcp_server, got {mcp_server}"));
+    }
+
+    let mcp_server_origin = extract_log_field(line, "mcp_server_origin")
+        .ok_or_else(|| "missing mcp_server_origin field".to_string())?;
+    if !mcp_server_origin.is_empty() {
+        return Err(format!(
+            "expected empty mcp_server_origin, got {mcp_server_origin}"
+        ));
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 #[traced_test]
 async fn responses_api_emits_api_request_event() {
@@ -687,6 +728,7 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
         if !line.contains("success=false") {
             return Err("missing success field".to_string());
         }
+        assert_empty_mcp_tool_fields(line)?;
 
         Ok(())
     });
@@ -756,6 +798,7 @@ async fn handle_response_item_records_tool_result_for_function_call() {
         if !line.contains("success=false") {
             return Err("missing success field".to_string());
         }
+        assert_empty_mcp_tool_fields(line)?;
 
         Ok(())
     });
@@ -828,6 +871,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
         if !line.contains("success=false") {
             return Err("missing success field".to_string());
         }
+        assert_empty_mcp_tool_fields(line)?;
 
         Ok(())
     });
@@ -899,6 +943,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
         if !line.contains("success=false") {
             return Err("missing success field".to_string());
         }
+        assert_empty_mcp_tool_fields(line)?;
 
         Ok(())
     });

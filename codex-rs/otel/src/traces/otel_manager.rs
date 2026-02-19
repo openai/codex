@@ -601,6 +601,26 @@ impl OtelManager {
         Fut: Future<Output = Result<(String, bool), E>>,
         E: Display,
     {
+        self.log_tool_result_with_context(tool_name, call_id, arguments, extra_tags, None, None, f)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_tool_result_with_context<F, Fut, E>(
+        &self,
+        tool_name: &str,
+        call_id: &str,
+        arguments: &str,
+        extra_tags: &[(&str, &str)],
+        mcp_server: Option<&str>,
+        mcp_server_origin: Option<&str>,
+        f: F,
+    ) -> Result<(String, bool), E>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<(String, bool), E>>,
+        E: Display,
+    {
         let start = Instant::now();
         let result = f().await;
         let duration = start.elapsed();
@@ -610,7 +630,7 @@ impl OtelManager {
             Err(error) => (Cow::Owned(error.to_string()), false),
         };
 
-        self.tool_result_with_tags(
+        self.tool_result_with_context(
             tool_name,
             call_id,
             arguments,
@@ -618,6 +638,8 @@ impl OtelManager {
             success,
             output.as_ref(),
             extra_tags,
+            mcp_server,
+            mcp_server_origin,
         );
 
         result
@@ -641,6 +663,8 @@ impl OtelManager {
             duration_ms = %Duration::ZERO.as_millis(),
             success = %false,
             output = %error,
+            mcp_server = "",
+            mcp_server_origin = "",
         );
     }
 
@@ -655,6 +679,24 @@ impl OtelManager {
         output: &str,
         extra_tags: &[(&str, &str)],
     ) {
+        self.tool_result_with_context(
+            tool_name, call_id, arguments, duration, success, output, extra_tags, None, None,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn tool_result_with_context(
+        &self,
+        tool_name: &str,
+        call_id: &str,
+        arguments: &str,
+        duration: Duration,
+        success: bool,
+        output: &str,
+        extra_tags: &[(&str, &str)],
+        mcp_server: Option<&str>,
+        mcp_server_origin: Option<&str>,
+    ) {
         let success_str = if success { "true" } else { "false" };
         let mut tags = Vec::with_capacity(2 + extra_tags.len());
         tags.push(("tool", tool_name));
@@ -662,6 +704,8 @@ impl OtelManager {
         tags.extend_from_slice(extra_tags);
         self.counter(TOOL_CALL_COUNT_METRIC, 1, &tags);
         self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
+        let mcp_server = mcp_server.unwrap_or("");
+        let mcp_server_origin = mcp_server_origin.unwrap_or("");
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.tool_result",
@@ -681,6 +725,8 @@ impl OtelManager {
             duration_ms = %duration.as_millis(),
             success = %success_str,
             output = %output,
+            mcp_server = %mcp_server,
+            mcp_server_origin = %mcp_server_origin,
         );
     }
 

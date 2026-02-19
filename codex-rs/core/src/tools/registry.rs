@@ -4,6 +4,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::client_common::tools::ToolSpec;
+use crate::codex::Session;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::memories::usage::emit_metric_for_tool_read;
@@ -102,13 +103,17 @@ impl ToolRegistry {
                 sandbox_policy_tag(&invocation.turn.sandbox_policy),
             ),
         ];
+        let (mcp_server, mcp_server_origin) =
+            resolve_mcp_tool_result_fields(invocation.session.as_ref(), &invocation.payload).await;
+        let mcp_server_ref = mcp_server.as_deref();
+        let mcp_server_origin_ref = mcp_server_origin.as_deref();
 
         let handler = match self.handler(tool_name.as_ref()) {
             Some(handler) => handler,
             None => {
                 let message =
                     unsupported_tool_call_message(&invocation.payload, tool_name.as_ref());
-                otel.tool_result_with_tags(
+                otel.tool_result_with_context(
                     tool_name.as_ref(),
                     &call_id_owned,
                     log_payload.as_ref(),
@@ -116,6 +121,8 @@ impl ToolRegistry {
                     false,
                     &message,
                     &metric_tags,
+                    mcp_server_ref,
+                    mcp_server_origin_ref,
                 );
                 return Err(FunctionCallError::RespondToModel(message));
             }
@@ -123,7 +130,7 @@ impl ToolRegistry {
 
         if !handler.matches_kind(&invocation.payload) {
             let message = format!("tool {tool_name} invoked with incompatible payload");
-            otel.tool_result_with_tags(
+            otel.tool_result_with_context(
                 tool_name.as_ref(),
                 &call_id_owned,
                 log_payload.as_ref(),
@@ -131,6 +138,8 @@ impl ToolRegistry {
                 false,
                 &message,
                 &metric_tags,
+                mcp_server_ref,
+                mcp_server_origin_ref,
             );
             return Err(FunctionCallError::Fatal(message));
         }
@@ -141,11 +150,13 @@ impl ToolRegistry {
 
         let started = Instant::now();
         let result = otel
-            .log_tool_result_with_tags(
+            .log_tool_result_with_context(
                 tool_name.as_ref(),
                 &call_id_owned,
                 log_payload.as_ref(),
                 &metric_tags,
+                mcp_server_ref,
+                mcp_server_origin_ref,
                 || {
                     let handler = handler.clone();
                     let output_cell = &output_cell;
@@ -291,6 +302,20 @@ fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
         SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
         SandboxPolicy::DangerFullAccess => "danger-full-access",
         SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
+    }
+}
+
+async fn resolve_mcp_tool_result_fields(
+    session: &Session,
+    payload: &ToolPayload,
+) -> (Option<String>, Option<String>) {
+    match payload {
+        ToolPayload::Mcp { server, .. } => {
+            let manager = session.services.mcp_connection_manager.read().await;
+            let origin = manager.server_origin(server).map(ToOwned::to_owned);
+            (Some(server.clone()), origin)
+        }
+        _ => (None, None),
     }
 }
 
