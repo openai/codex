@@ -234,7 +234,7 @@ mod tests {
     use crate::agent::agent_status_from_event;
     use crate::config::Config;
     use crate::config::ConfigBuilder;
-    use crate::session_prefix::parse_subagent_notification;
+    use crate::session_prefix::SUBAGENT_NOTIFICATION_OPEN_TAG;
     use assert_matches::assert_matches;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::models::ContentItem;
@@ -322,7 +322,7 @@ mod tests {
             }
             content.iter().any(|content_item| match content_item {
                 ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                    parse_subagent_notification(text).is_some()
+                    text.contains(SUBAGENT_NOTIFICATION_OPEN_TAG)
                 }
                 ContentItem::InputImage { .. } => false,
             })

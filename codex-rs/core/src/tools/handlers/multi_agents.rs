@@ -430,7 +430,6 @@ mod resume_agent {
 pub(crate) mod wait {
     use super::*;
     use crate::agent::status::is_final;
-    use codex_protocol::models::FunctionCallOutputPayload;
     use futures::FutureExt;
     use futures::StreamExt;
     use futures::stream::FuturesUnordered;
@@ -452,14 +451,6 @@ pub(crate) mod wait {
     pub(crate) struct WaitResult {
         pub(crate) status: HashMap<ThreadId, AgentStatus>,
         pub(crate) timed_out: bool,
-    }
-
-    pub(crate) fn parse_wait_output_statuses(
-        output: &FunctionCallOutputPayload,
-    ) -> Option<HashMap<ThreadId, AgentStatus>> {
-        let output_text = output.text_content()?;
-        let wait_result = serde_json::from_str::<WaitResult>(output_text).ok()?;
-        Some(wait_result.status)
     }
 
     pub async fn handle(
