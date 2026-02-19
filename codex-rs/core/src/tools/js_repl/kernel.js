@@ -4,7 +4,8 @@
 
 const { Buffer } = require("node:buffer");
 const crypto = require("node:crypto");
-const { builtinModules } = require("node:module");
+const fs = require("node:fs");
+const { builtinModules, createRequire } = require("node:module");
 const { createInterface } = require("node:readline");
 const { performance } = require("node:perf_hooks");
 const path = require("node:path");
@@ -13,7 +14,9 @@ const { inspect, TextDecoder, TextEncoder } = require("node:util");
 const vm = require("node:vm");
 
 const { SourceTextModule, SyntheticModule } = vm;
-const meriyahPromise = import("./meriyah.umd.min.js").then((m) => m.default ?? m);
+const meriyahPromise = import("./meriyah.umd.min.js").then(
+  (m) => m.default ?? m,
+);
 
 // vm contexts start with very few globals. Populate common Node/web globals
 // so snippets and dependencies behave like a normal modern JS runtime.
@@ -100,8 +103,12 @@ function toNodeBuiltinSpecifier(specifier) {
 }
 
 function isDeniedBuiltin(specifier) {
-  const normalized = specifier.startsWith("node:") ? specifier.slice(5) : specifier;
-  return deniedBuiltinModules.has(specifier) || deniedBuiltinModules.has(normalized);
+  const normalized = specifier.startsWith("node:")
+    ? specifier.slice(5)
+    : specifier;
+  return (
+    deniedBuiltinModules.has(specifier) || deniedBuiltinModules.has(normalized)
+  );
 }
 
 /** @type {Map<string, (msg: any) => void>} */
@@ -111,38 +118,155 @@ const tmpDir = process.env.CODEX_JS_TMP_DIR || process.cwd();
 // Explicit long-lived mutable store exposed as `codex.state`. This is useful
 // when callers want shared state without relying on lexical binding carry-over.
 const state = {};
+const nodeModuleDirEnv = process.env.CODEX_JS_REPL_NODE_MODULE_DIRS ?? "";
+const moduleSearchBases = (() => {
+  const bases = [];
+  const seen = new Set();
+  for (const entry of nodeModuleDirEnv.split(path.delimiter)) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const resolved = path.isAbsolute(trimmed)
+      ? trimmed
+      : path.resolve(process.cwd(), trimmed);
+    const base =
+      path.basename(resolved) === "node_modules"
+        ? path.dirname(resolved)
+        : resolved;
+    if (seen.has(base)) {
+      continue;
+    }
+    seen.add(base);
+    bases.push(base);
+  }
+  const cwd = process.cwd();
+  if (!seen.has(cwd)) {
+    bases.push(cwd);
+  }
+  return bases;
+})();
+
+const importResolveConditions = new Set(["node", "import"]);
+const requireByBase = new Map();
+
+function canonicalizePath(value) {
+  try {
+    return fs.realpathSync.native(value);
+  } catch {
+    return value;
+  }
+}
+
+function getRequireForBase(base) {
+  let req = requireByBase.get(base);
+  if (!req) {
+    req = createRequire(path.join(base, "__codex_js_repl__.cjs"));
+    requireByBase.set(base, req);
+  }
+  return req;
+}
+
+function isModuleNotFoundError(err) {
+  return (
+    err?.code === "MODULE_NOT_FOUND" || err?.code === "ERR_MODULE_NOT_FOUND"
+  );
+}
+
+function isWithinBaseNodeModules(base, resolvedPath) {
+  const canonicalBase = canonicalizePath(base);
+  const canonicalResolved = canonicalizePath(resolvedPath);
+  const nodeModulesRoot = path.resolve(canonicalBase, "node_modules");
+  const relative = path.relative(nodeModulesRoot, canonicalResolved);
+  return (
+    relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
+  );
+}
+
+function isBarePackageSpecifier(specifier) {
+  if (
+    typeof specifier !== "string" ||
+    !specifier ||
+    specifier.trim() !== specifier
+  ) {
+    return false;
+  }
+  if (specifier.startsWith("./") || specifier.startsWith("../")) {
+    return false;
+  }
+  if (specifier.startsWith("/") || specifier.startsWith("\\")) {
+    return false;
+  }
+  if (path.isAbsolute(specifier)) {
+    return false;
+  }
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(specifier)) {
+    return false;
+  }
+  if (specifier.includes("\\")) {
+    return false;
+  }
+  return true;
+}
+
+function resolveBareSpecifier(specifier) {
+  let firstResolutionError = null;
+
+  for (const base of moduleSearchBases) {
+    try {
+      const resolved = getRequireForBase(base).resolve(specifier, {
+        conditions: importResolveConditions,
+      });
+      if (isWithinBaseNodeModules(base, resolved)) {
+        return resolved;
+      }
+      // Ignore resolutions that escape this base via parent node_modules lookup.
+    } catch (err) {
+      if (isModuleNotFoundError(err)) {
+        continue;
+      }
+      if (!firstResolutionError) {
+        firstResolutionError = err;
+      }
+    }
+  }
+
+  if (firstResolutionError) {
+    throw firstResolutionError;
+  }
+  return null;
+}
 
 function resolveSpecifier(specifier) {
   if (specifier.startsWith("node:") || builtinModuleSet.has(specifier)) {
     if (isDeniedBuiltin(specifier)) {
-      throw new Error(`Importing module "${specifier}" is not allowed in js_repl`);
+      throw new Error(
+        `Importing module "${specifier}" is not allowed in js_repl`,
+      );
     }
     return { kind: "builtin", specifier: toNodeBuiltinSpecifier(specifier) };
   }
 
-  if (specifier.startsWith("file:")) {
-    return { kind: "url", url: specifier };
+  if (!isBarePackageSpecifier(specifier)) {
+    throw new Error(
+      `Unsupported import specifier "${specifier}" in js_repl. Use a package name like "lodash" or "@scope/pkg".`,
+    );
   }
 
-  if (specifier.startsWith("./") || specifier.startsWith("../") || path.isAbsolute(specifier)) {
-    return { kind: "path", path: path.resolve(process.cwd(), specifier) };
+  const resolvedBare = resolveBareSpecifier(specifier);
+  if (!resolvedBare) {
+    throw new Error(`Module not found: ${specifier}`);
   }
 
-  return { kind: "bare", specifier };
+  return { kind: "path", path: resolvedBare };
 }
 
 function importResolved(resolved) {
   if (resolved.kind === "builtin") {
     return import(resolved.specifier);
   }
-  if (resolved.kind === "url") {
-    return import(resolved.url);
-  }
   if (resolved.kind === "path") {
     return import(pathToFileURL(resolved.path).href);
-  }
-  if (resolved.kind === "bare") {
-    return import(resolved.specifier);
   }
   throw new Error(`Unsupported module resolution kind: ${resolved.kind}`);
 }
@@ -196,13 +320,24 @@ function collectBindings(ast) {
     } else if (stmt.type === "ClassDeclaration" && stmt.id) {
       map.set(stmt.id.name, "class");
     } else if (stmt.type === "ForStatement") {
-      if (stmt.init && stmt.init.type === "VariableDeclaration" && stmt.init.kind === "var") {
+      if (
+        stmt.init &&
+        stmt.init.type === "VariableDeclaration" &&
+        stmt.init.kind === "var"
+      ) {
         for (const decl of stmt.init.declarations) {
           collectPatternNames(decl.id, "var", map);
         }
       }
-    } else if (stmt.type === "ForInStatement" || stmt.type === "ForOfStatement") {
-      if (stmt.left && stmt.left.type === "VariableDeclaration" && stmt.left.kind === "var") {
+    } else if (
+      stmt.type === "ForInStatement" ||
+      stmt.type === "ForOfStatement"
+    ) {
+      if (
+        stmt.left &&
+        stmt.left.type === "VariableDeclaration" &&
+        stmt.left.kind === "var"
+      ) {
         for (const decl of stmt.left.declarations) {
           collectPatternNames(decl.id, "var", map);
         }
@@ -230,7 +365,8 @@ async function buildModuleSource(code) {
     prelude += 'import * as __prev from "@prev";\n';
     prelude += priorBindings
       .map((b) => {
-        const keyword = b.kind === "var" ? "var" : b.kind === "const" ? "const" : "let";
+        const keyword =
+          b.kind === "var" ? "var" : b.kind === "const" ? "const" : "let";
         return `${keyword} ${b.name} = __prev.${b.name};`;
       })
       .join("\n");
@@ -246,9 +382,14 @@ async function buildModuleSource(code) {
   }
   // Export the merged binding set so the next cell can import it through @prev.
   const exportNames = Array.from(mergedBindings.keys());
-  const exportStmt = exportNames.length ? `\nexport { ${exportNames.join(", ")} };` : "";
+  const exportStmt = exportNames.length
+    ? `\nexport { ${exportNames.join(", ")} };`
+    : "";
 
-  const nextBindings = Array.from(mergedBindings, ([name, kind]) => ({ name, kind }));
+  const nextBindings = Array.from(mergedBindings, ([name, kind]) => ({
+    name,
+    kind,
+  }));
   return { source: `${prelude}${code}${exportStmt}`, nextBindings };
 }
 
@@ -259,7 +400,9 @@ function send(message) {
 
 function formatLog(args) {
   return args
-    .map((arg) => (typeof arg === "string" ? arg : inspect(arg, { depth: 4, colors: false })))
+    .map((arg) =>
+      typeof arg === "string" ? arg : inspect(arg, { depth: 4, colors: false }),
+    )
     .join(" ");
 }
 
@@ -352,7 +495,10 @@ async function handleExec(message) {
             exportNames,
             function initSynthetic() {
               for (const binding of previousBindings) {
-                this.setExport(binding.name, previousModule.namespace[binding.name]);
+                this.setExport(
+                  binding.name,
+                  previousModule.namespace[binding.name],
+                );
               }
             },
             { context },

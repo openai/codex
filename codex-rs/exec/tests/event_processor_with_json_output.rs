@@ -738,6 +738,7 @@ fn agent_message_produces_item_completed_agent_message() {
         "e1",
         EventMsg::AgentMessage(AgentMessageEvent {
             message: "hello".to_string(),
+            phase: None,
         }),
     );
     let out = ep.collect_thread_events(&ev);

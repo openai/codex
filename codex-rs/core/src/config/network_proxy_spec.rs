@@ -1,4 +1,3 @@
-use crate::config;
 use crate::config_loader::NetworkConstraints;
 use async_trait::async_trait;
 use codex_network_proxy::BlockedRequestObserver;
@@ -68,6 +67,10 @@ impl ConfigReloader for StaticNetworkProxyReloader {
 }
 
 impl NetworkProxySpec {
+    pub(crate) fn enabled(&self) -> bool {
+        self.config.network.enabled
+    }
+
     pub fn proxy_host_and_port(&self) -> String {
         host_and_port_from_network_addr(&self.config.network.proxy_url, 3128)
     }
@@ -76,14 +79,15 @@ impl NetworkProxySpec {
         self.config.network.enable_socks5
     }
 
-    pub(crate) fn from_constraints(
-        _config_layer_stack: &config::ConfigLayerStack,
-        requirements: NetworkConstraints,
+    pub(crate) fn from_config_and_constraints(
+        config: NetworkProxyConfig,
+        requirements: Option<NetworkConstraints>,
     ) -> std::io::Result<Self> {
-        // TODO(mbolin): Use ConfigLayerStack once we are ready to start
-        // honoring network configuration in config.toml.
-        let config = NetworkProxyConfig::default();
-        let (config, constraints) = Self::apply_requirements(config, &requirements);
+        let (config, constraints) = if let Some(requirements) = requirements {
+            Self::apply_requirements(config, &requirements)
+        } else {
+            (config, NetworkProxyConstraints::default())
+        };
         validate_policy_against_constraints(&config, &constraints).map_err(|err| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,

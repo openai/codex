@@ -105,8 +105,28 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
     .await
     .expect("rebuild raw memories");
 
-    assert!(keep_path.is_file());
-    assert!(!drop_path.exists());
+    assert!(
+        !tokio::fs::try_exists(&keep_path)
+            .await
+            .expect("check stale keep path"),
+        "sync should prune stale filename that used thread id only"
+    );
+    assert!(
+        !tokio::fs::try_exists(&drop_path)
+            .await
+            .expect("check stale drop path"),
+        "sync should prune stale filename for dropped thread"
+    );
+
+    let mut dir = tokio::fs::read_dir(rollout_summaries_dir(&root))
+        .await
+        .expect("open rollout summaries dir");
+    let mut files = Vec::new();
+    while let Some(entry) = dir.next_entry().await.expect("read dir entry") {
+        files.push(entry.file_name().to_string_lossy().to_string());
+    }
+    files.sort_unstable();
+    assert_eq!(files.len(), 1);
 
     let raw_memories = tokio::fs::read_to_string(raw_memories_file(&root))
         .await
@@ -117,7 +137,7 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
 }
 
 #[tokio::test]
-async fn sync_rollout_summaries_uses_thread_id_and_sanitized_slug_filename() {
+async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path().join("memory");
     ensure_layout(&root).await.expect("ensure layout");
@@ -165,10 +185,25 @@ async fn sync_rollout_summaries_uses_thread_id_and_sanitized_slug_filename() {
     let stem = file_name
         .strip_suffix(".md")
         .expect("rollout summary file should end with .md");
-    let slug = stem
-        .strip_prefix(&format!("{thread_id}-"))
-        .expect("rollout summary filename should include thread id and slug");
-    assert!(slug.len() <= 20, "slug should be capped at 20 chars");
+    let (prefix, slug) = stem
+        .rsplit_once('-')
+        .expect("rollout summary filename should include slug");
+    let (timestamp, short_hash) = prefix
+        .rsplit_once('-')
+        .expect("rollout summary filename should include short hash");
+
+    assert_eq!(timestamp.len(), 19, "timestamp should be second precision");
+    let parsed_timestamp = chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%dT%H-%M-%S");
+    assert!(
+        parsed_timestamp.is_ok(),
+        "timestamp should use YYYY-MM-DDThh-mm-ss"
+    );
+    assert_eq!(short_hash.len(), 4, "short hash should be exactly 4 chars");
+    assert!(
+        short_hash.chars().all(|ch| ch.is_ascii_alphanumeric()),
+        "short hash should use only alphanumeric chars"
+    );
+    assert!(slug.len() <= 60, "slug should be capped at 60 chars");
     assert!(
         slug.chars()
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_'),
@@ -191,6 +226,67 @@ async fn sync_rollout_summaries_uses_thread_id_and_sanitized_slug_filename() {
             .expect("check stale old slug path"),
         "slugged sync should prune stale slugged filename for same thread"
     );
+}
+
+#[tokio::test]
+async fn rebuild_raw_memories_file_rewrites_rollout_summary_file_to_canonical_filename() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().join("memory");
+    ensure_layout(&root).await.expect("ensure layout");
+
+    let thread_id =
+        ThreadId::try_from("0194f5a6-89ab-7cde-8123-456789abcdef").expect("valid thread id");
+    let memories = vec![Stage1Output {
+        thread_id,
+        source_updated_at: Utc.timestamp_opt(200, 0).single().expect("timestamp"),
+        raw_memory: "\
+---
+rollout_summary_file: state_migration_uniqueness_test.md
+description: Added a migration test
+keywords: codex-state, migrations
+---
+- Kept details."
+            .to_string(),
+        rollout_summary: "short summary".to_string(),
+        rollout_slug: Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345".to_string()),
+        cwd: PathBuf::from("/tmp/workspace"),
+        generated_at: Utc.timestamp_opt(201, 0).single().expect("timestamp"),
+    }];
+
+    sync_rollout_summaries_from_memories(
+        &root,
+        &memories,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+    )
+    .await
+    .expect("sync rollout summaries");
+    rebuild_raw_memories_file_from_memories(
+        &root,
+        &memories,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+    )
+    .await
+    .expect("rebuild raw memories");
+
+    let mut dir = tokio::fs::read_dir(rollout_summaries_dir(&root))
+        .await
+        .expect("open rollout summaries dir");
+    let mut files = Vec::new();
+    while let Some(entry) = dir.next_entry().await.expect("read dir entry") {
+        files.push(entry.file_name().to_string_lossy().to_string());
+    }
+    files.sort_unstable();
+    assert_eq!(files.len(), 1);
+    let canonical_rollout_summary_file = &files[0];
+
+    let raw_memories = tokio::fs::read_to_string(raw_memories_file(&root))
+        .await
+        .expect("read raw memories");
+    assert!(raw_memories.contains(&format!(
+        "rollout_summary_file: {canonical_rollout_summary_file}"
+    )));
+    assert!(!raw_memories.contains("rollout_summary_file: state_migration_uniqueness_test.md"));
+    assert!(raw_memories.contains("description: Added a migration test"));
 }
 
 mod phase2 {

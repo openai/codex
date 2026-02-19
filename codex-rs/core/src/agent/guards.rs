@@ -21,9 +21,6 @@ pub(crate) struct Guards {
     total_count: AtomicUsize,
 }
 
-/// Initial agent is depth 0.
-pub(crate) const MAX_THREAD_SPAWN_DEPTH: i32 = 1;
-
 fn session_depth(session_source: &SessionSource) -> i32 {
     match session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) => *depth,
@@ -36,8 +33,8 @@ pub(crate) fn next_thread_spawn_depth(session_source: &SessionSource) -> i32 {
     session_depth(session_source).saturating_add(1)
 }
 
-pub(crate) fn exceeds_thread_spawn_depth_limit(depth: i32) -> bool {
-    depth > MAX_THREAD_SPAWN_DEPTH
+pub(crate) fn exceeds_thread_spawn_depth_limit(depth: i32, max_depth: i32) -> bool {
+    depth > max_depth
 }
 
 impl Guards {
@@ -136,7 +133,7 @@ mod tests {
         });
         let child_depth = next_thread_spawn_depth(&session_source);
         assert_eq!(child_depth, 2);
-        assert!(exceeds_thread_spawn_depth_limit(child_depth));
+        assert!(exceeds_thread_spawn_depth_limit(child_depth, 1));
     }
 
     #[test]
@@ -144,7 +141,7 @@ mod tests {
         let session_source = SessionSource::SubAgent(SubAgentSource::Review);
         assert_eq!(session_depth(&session_source), 0);
         assert_eq!(next_thread_spawn_depth(&session_source), 1);
-        assert!(!exceeds_thread_spawn_depth_limit(1));
+        assert!(!exceeds_thread_spawn_depth_limit(1, 1));
     }
 
     #[test]

@@ -298,6 +298,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         ExecCommandApprovalParams {
             conversation_id,
             call_id: "call1".to_string(),
+            approval_id: None,
             command: format_with_current_shell("python3 -c 'print(42)'"),
             cwd: working_directory.clone(),
             reason: None,
