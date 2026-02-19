@@ -2730,7 +2730,7 @@ impl ChatComposer {
     #[cfg(target_os = "linux")]
     fn handle_voice_space_key_event(
         &mut self,
-        key_event: &KeyEvent,
+        _key_event: &KeyEvent,
     ) -> Option<(InputResult, bool)> {
         None
     }
@@ -2746,7 +2746,7 @@ impl ChatComposer {
         match key_event.kind {
             KeyEventKind::Press => {
                 if self.paste_burst.is_active() {
-                    return Some(self.handle_input_basic(*key_event));
+                    return None;
                 }
 
                 // If textarea is empty, start recording immediately without inserting a space.
@@ -2754,7 +2754,7 @@ impl ChatComposer {
                     if self.start_recording_with_placeholder() {
                         return Some((InputResult::None, true));
                     }
-                    return Some(self.handle_input_basic(*key_event));
+                    return None;
                 }
 
                 // If a hold is already pending, swallow further press events to
@@ -2794,7 +2794,7 @@ impl ChatComposer {
                     return Some((InputResult::None, false));
                 }
                 // Fallback: if no pending hold, treat as normal input.
-                Some(self.handle_input_basic(*key_event))
+                None
             }
             // Space release without pending (fallback): treat as normal input.
             KeyEventKind::Release => {
