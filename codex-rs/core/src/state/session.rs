@@ -83,8 +83,8 @@ impl SessionState {
 
     /// Storage-only setter for the previous context snapshot.
     ///
-    /// Most callers should use
-    /// `Session::record_context_updates_and_set_previous_context_item`.
+    /// When setting `Some(...)`, callers should take care to persist the
+    /// appropriate model-visible context diff items.
     pub(crate) fn set_previous_context_item_raw(&mut self, item: Option<TurnContextItem>) {
         self.history.set_previous_context_item_raw(item);
     }
