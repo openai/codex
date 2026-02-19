@@ -47,6 +47,7 @@ pub enum RefreshStrategy {
 pub struct ModelsManager {
     local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
+    has_custom_model_catalog: bool,
     auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
@@ -57,12 +58,23 @@ impl ModelsManager {
     /// Construct a manager scoped to the provided `AuthManager`.
     ///
     /// Uses `codex_home` to store cached model metadata and initializes with built-in presets.
-    pub fn new(codex_home: PathBuf, auth_manager: Arc<AuthManager>) -> Self {
+    /// When `model_catalog` is provided, it becomes the authoritative remote model list and
+    /// background refreshes from `/models` are disabled.
+    pub fn new(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        model_catalog: Option<ModelsResponse>,
+    ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
+        let has_custom_model_catalog = model_catalog.is_some();
+        let remote_models = model_catalog
+            .map(|catalog| catalog.models)
+            .unwrap_or_else(|| Self::load_remote_models_from_file().unwrap_or_default());
         Self {
             local_models: builtin_model_presets(auth_manager.auth_mode()),
-            remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
+            remote_models: RwLock::new(remote_models),
+            has_custom_model_catalog,
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
@@ -77,9 +89,6 @@ impl ModelsManager {
         if let Err(err) = self.refresh_available_models(refresh_strategy).await {
             error!("failed to refresh available models: {err}");
         }
-        // todo(sayan): Make preset/list/default-model flows config-aware so
-        // `model_catalog` is reflected in picker/app-server model metadata
-        // as well (today only get_model_info uses it).
         let remote_models = self.get_remote_models().await;
         self.build_available_models(remote_models)
     }
@@ -128,7 +137,7 @@ impl ModelsManager {
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
-        let remote_models = self.get_effective_remote_models(config).await;
+        let remote_models = self.get_remote_models().await;
         Self::construct_model_info_from_candidates(model, &remote_models, config)
     }
 
@@ -186,6 +195,11 @@ impl ModelsManager {
 
     /// Refresh available models according to the specified strategy.
     async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
+        // don't override the custom model catalog if one was provided by the user
+        if self.has_custom_model_catalog {
+            return Ok(());
+        }
+
         if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt) {
             if matches!(
                 refresh_strategy,
@@ -324,23 +338,6 @@ impl ModelsManager {
         self.remote_models.read().await.clone()
     }
 
-    async fn get_effective_remote_models(&self, config: &Config) -> Vec<ModelInfo> {
-        let mut remote_models = self.get_remote_models().await;
-        if let Some(model_catalog) = config.model_catalog.as_ref() {
-            for model in &model_catalog.models {
-                if let Some(existing_index) = remote_models
-                    .iter()
-                    .position(|existing| existing.slug == model.slug)
-                {
-                    remote_models[existing_index] = model.clone();
-                } else {
-                    remote_models.push(model.clone());
-                }
-            }
-        }
-        remote_models
-    }
-
     fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError> {
         Ok(self.remote_models.try_read()?.clone())
     }
@@ -356,6 +353,7 @@ impl ModelsManager {
         Self {
             local_models: builtin_model_presets(auth_manager.auth_mode()),
             remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
+            has_custom_model_catalog: false,
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
@@ -480,7 +478,7 @@ mod tests {
             .expect("load default test config");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager);
+        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None);
         let known_slug = manager
             .get_remote_models()
             .await
@@ -501,20 +499,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_model_info_applies_catalog_overlay() {
+    async fn get_model_info_uses_custom_catalog() {
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
+        let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
-        config.model_catalog = Some(ModelsResponse {
-            models: vec![remote_model("gpt-overlay", "Overlay", 0)],
-        });
 
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager);
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            Some(ModelsResponse {
+                models: vec![remote_model("gpt-overlay", "Overlay", 0)],
+            }),
+        );
 
         let model_info = manager
             .get_model_info("gpt-overlay-experiment", &config)

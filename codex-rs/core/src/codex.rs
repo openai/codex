@@ -7242,6 +7242,7 @@ mod tests {
         let models_manager = Arc::new(ModelsManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
+            None,
         ));
         let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
         let model_info =
@@ -7316,6 +7317,7 @@ mod tests {
         let models_manager = Arc::new(ModelsManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
+            None,
         ));
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
@@ -7465,6 +7467,7 @@ mod tests {
         let models_manager = Arc::new(ModelsManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
+            None,
         ));
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();

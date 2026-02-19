@@ -1594,7 +1594,7 @@
           "$ref": "#/definitions/AbsolutePathBuf"
         }
       ],
-      "description": "Optional path to a JSON file containing a model catalog override."
+      "description": "Optional path to a JSON file containing a complete model catalog. When set, this replaces the bundled catalog for this process."
     },
     "model_context_window": {
       "description": "Size of the context window for the model, in tokens.",

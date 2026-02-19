@@ -358,7 +358,8 @@ pub struct Config {
     /// Optional override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
-    /// Optional model catalog override.
+    /// Optional full model catalog loaded from `model_catalog_json`.
+    /// When set, this replaces the bundled catalog for the current process.
     pub model_catalog: Option<ModelsResponse>,
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
@@ -1054,7 +1055,8 @@ pub struct ConfigToml {
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
-    /// Optional path to a JSON file with a model catalog override.
+    /// Optional path to a JSON file containing a complete model catalog.
+    /// When set, this replaces the bundled catalog for this process.
     pub model_catalog_json: Option<AbsolutePathBuf>,
 
     /// Optionally specify a personality for the model
