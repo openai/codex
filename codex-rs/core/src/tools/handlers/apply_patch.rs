@@ -11,6 +11,7 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
@@ -30,6 +31,7 @@ use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_apply_patch::ApplyPatchOptions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub struct ApplyPatchHandler;
@@ -103,8 +105,15 @@ impl ToolHandler for ApplyPatchHandler {
         // Re-parse and verify the patch so we can compute changes and approval.
         // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
         let cwd = turn.cwd.clone();
+        let apply_patch_options = ApplyPatchOptions {
+            preserve_crlf: turn.features.enabled(Feature::ApplyPatchCrlf),
+        };
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
-        match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
+        match codex_apply_patch::maybe_parse_apply_patch_verified_with_options(
+            &command,
+            &cwd,
+            apply_patch_options,
+        ) {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 match apply_patch::apply_patch(turn.as_ref(), changes).await {
                     InternalApplyPatchInvocation::Output(item) => {
@@ -129,6 +138,7 @@ impl ToolHandler for ApplyPatchHandler {
 
                         let req = ApplyPatchRequest {
                             action: apply.action,
+                            preserve_crlf: turn.features.enabled(Feature::ApplyPatchCrlf),
                             file_paths,
                             changes,
                             exec_approval_requirement: apply.exec_approval_requirement,
@@ -194,7 +204,14 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<ToolOutput>, FunctionCallError> {
-    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
+    let apply_patch_options = ApplyPatchOptions {
+        preserve_crlf: turn.features.enabled(Feature::ApplyPatchCrlf),
+    };
+    match codex_apply_patch::maybe_parse_apply_patch_verified_with_options(
+        command,
+        cwd,
+        apply_patch_options,
+    ) {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
                 .record_model_warning(
@@ -220,6 +237,7 @@ pub(crate) async fn intercept_apply_patch(
 
                     let req = ApplyPatchRequest {
                         action: apply.action,
+                        preserve_crlf: turn.features.enabled(Feature::ApplyPatchCrlf),
                         file_paths: approval_keys,
                         changes,
                         exec_approval_requirement: apply.exec_approval_requirement,

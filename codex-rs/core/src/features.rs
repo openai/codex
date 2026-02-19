@@ -88,6 +88,8 @@ pub enum Feature {
     ShellZshFork,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
+    /// Preserve CRLF line endings when applying CRLF patches.
+    ApplyPatchCrlf,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
@@ -509,6 +511,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ApplyPatchCrlf,
+        key: "apply_patch_crlf",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

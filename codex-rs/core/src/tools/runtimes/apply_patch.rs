@@ -20,6 +20,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::PRESERVE_CRLF_FLAG;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
@@ -31,6 +32,7 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
     pub action: ApplyPatchAction,
+    pub preserve_crlf: bool,
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
     pub exec_approval_requirement: ExecApprovalRequirement,
@@ -55,9 +57,14 @@ impl ApplyPatchRuntime {
                 .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?
         };
         let program = exe.to_string_lossy().to_string();
+        let mut args = vec![CODEX_APPLY_PATCH_ARG1.to_string()];
+        if req.preserve_crlf {
+            args.push(PRESERVE_CRLF_FLAG.to_string());
+        }
+        args.push(req.action.patch.clone());
         Ok(CommandSpec {
             program,
-            args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.action.patch.clone()],
+            args,
             cwd: req.action.cwd.clone(),
             expiration: req.timeout_ms.into(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
@@ -157,5 +164,82 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CODEX_APPLY_PATCH_ARG1;
+    use codex_apply_patch::PRESERVE_CRLF_FLAG;
+    use codex_protocol::protocol::FileChange;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    use tempfile::tempdir;
+
+    #[test]
+    fn build_command_spec_omits_crlf_flag_by_default() {
+        let dir = tempdir().expect("tmp");
+        let path = dir.path().join("a.txt");
+        let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
+        let req = ApplyPatchRequest {
+            action,
+            preserve_crlf: false,
+            file_paths: vec![AbsolutePathBuf::try_from(path.clone()).expect("abs path")],
+            changes: HashMap::from([(
+                path.clone(),
+                FileChange::Add {
+                    content: "hello".to_string(),
+                },
+            )]),
+            exec_approval_requirement: ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+            timeout_ms: None,
+            codex_exe: Some(path),
+        };
+
+        let spec = ApplyPatchRuntime::build_command_spec(&req).expect("command spec");
+        assert_eq!(
+            spec.args.first().map(String::as_str),
+            Some(CODEX_APPLY_PATCH_ARG1)
+        );
+        assert_eq!(spec.args.len(), 2);
+    }
+
+    #[test]
+    fn build_command_spec_includes_crlf_flag_when_requested() {
+        let dir = tempdir().expect("tmp");
+        let path = dir.path().join("a.txt");
+        let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
+        let req = ApplyPatchRequest {
+            action,
+            preserve_crlf: true,
+            file_paths: vec![AbsolutePathBuf::try_from(path.clone()).expect("abs path")],
+            changes: HashMap::from([(
+                path.clone(),
+                FileChange::Add {
+                    content: "hello".to_string(),
+                },
+            )]),
+            exec_approval_requirement: ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+            timeout_ms: None,
+            codex_exe: Some(path),
+        };
+
+        let spec = ApplyPatchRuntime::build_command_spec(&req).expect("command spec");
+        assert_eq!(
+            spec.args,
+            vec![
+                CODEX_APPLY_PATCH_ARG1.to_string(),
+                PRESERVE_CRLF_FLAG.to_string(),
+                req.action.patch
+            ]
+        );
     }
 }

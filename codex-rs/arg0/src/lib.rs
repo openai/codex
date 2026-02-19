@@ -48,15 +48,33 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 
     let argv1 = args.next().unwrap_or_default();
     if argv1 == CODEX_APPLY_PATCH_ARG1 {
-        let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
+        let mut preserve_crlf = false;
+        let patch_arg = match args.next() {
+            Some(arg) if arg.to_str() == Some(codex_apply_patch::PRESERVE_CRLF_FLAG) => {
+                preserve_crlf = true;
+                args.next().and_then(|s| s.to_str().map(str::to_owned))
+            }
+            Some(arg) => arg.to_str().map(str::to_owned),
+            None => None,
+        };
         let exit_code = match patch_arg {
-            Some(patch_arg) => {
+            Some(patch_arg) if args.next().is_none() => {
                 let mut stdout = std::io::stdout();
                 let mut stderr = std::io::stderr();
-                match codex_apply_patch::apply_patch(&patch_arg, &mut stdout, &mut stderr) {
+                let options = codex_apply_patch::ApplyPatchOptions { preserve_crlf };
+                match codex_apply_patch::apply_patch_with_options(
+                    &patch_arg,
+                    options,
+                    &mut stdout,
+                    &mut stderr,
+                ) {
                     Ok(()) => 0,
                     Err(_) => 1,
                 }
+            }
+            Some(_) => {
+                eprintln!("Error: {CODEX_APPLY_PATCH_ARG1} accepts exactly one PATCH argument.");
+                1
             }
             None => {
                 eprintln!("Error: {CODEX_APPLY_PATCH_ARG1} requires a UTF-8 PATCH argument.");
