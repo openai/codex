@@ -1084,7 +1084,7 @@ WHERE job_id =
         job_id: &str,
         item_id: &str,
     ) -> anyhow::Result<Option<AgentJobItem>> {
-        let row = sqlx::query(
+        let row = sqlx::query_as::<_, AgentJobItemRow>(
             r#"
 SELECT
     job_id,

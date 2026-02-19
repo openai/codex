@@ -120,7 +120,6 @@ pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
-const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
 
 fn default_sqlite_home(sandbox_policy: &SandboxPolicy, codex_home: &Path) -> PathBuf {
     if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
@@ -133,7 +132,7 @@ fn default_sqlite_home(sandbox_policy: &SandboxPolicy, codex_home: &Path) -> Pat
 }
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
-    let raw = std::env::var(SQLITE_HOME_ENV).ok()?;
+    let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
