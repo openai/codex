@@ -1298,7 +1298,7 @@
     "background_terminal_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
       "format": "uint64",
-      "minimum": 5000.0,
+      "minimum": 0.0,
       "type": "integer"
     },
     "chatgpt_base_url": {
