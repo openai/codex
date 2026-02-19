@@ -3525,13 +3525,9 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
-        sess.record_context_updates_and_set_previous_context_item(
-            turn_context.as_ref(),
-            None,
-            false,
-            false,
-        )
-        .await;
+        // Do not update `previous_context_item` here: this path does not send a model request, so
+        // recording context updates would race shell output ordering and could suppress required
+        // reinjection on the next actual model turn.
     }
 
     pub async fn resolve_elicitation(
@@ -7898,6 +7894,33 @@ mod tests {
         let mut expected_history = vec![compacted_summary];
         expected_history.extend(session.build_initial_context(&turn_context).await);
         assert_eq!(history.raw_items().to_vec(), expected_history);
+    }
+
+    #[tokio::test]
+    async fn run_user_shell_command_does_not_set_previous_context_item() {
+        let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+        session.clear_previous_context_item().await;
+
+        handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
+            .await;
+
+        let deadline = StdDuration::from_secs(5);
+        let start = std::time::Instant::now();
+        loop {
+            let remaining = deadline.saturating_sub(start.elapsed());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("event");
+            if matches!(evt.msg, EventMsg::TurnComplete(_)) {
+                break;
+            }
+        }
+
+        assert!(
+            session.previous_context_item().await.is_none(),
+            "standalone shell tasks should not mutate previous context"
+        );
     }
 
     #[derive(Clone, Copy)]
