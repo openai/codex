@@ -11,6 +11,7 @@ use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -33,6 +34,69 @@ impl AgentJobsResponder {
             seen_main: AtomicBool::new(false),
             call_counter: AtomicUsize::new(0),
         }
+    }
+}
+
+struct StopAfterFirstResponder {
+    spawn_args_json: String,
+    seen_main: AtomicBool,
+    worker_calls: Arc<AtomicUsize>,
+}
+
+impl StopAfterFirstResponder {
+    fn new(spawn_args_json: String, worker_calls: Arc<AtomicUsize>) -> Self {
+        Self {
+            spawn_args_json,
+            seen_main: AtomicBool::new(false),
+            worker_calls,
+        }
+    }
+}
+
+impl Respond for StopAfterFirstResponder {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body_bytes = decode_body_bytes(request);
+        let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
+
+        if has_function_call_output(&body) {
+            return sse_response(sse(vec![
+                ev_response_created("resp-tool"),
+                ev_completed("resp-tool"),
+            ]));
+        }
+
+        if let Some((job_id, item_id)) = extract_job_and_item(&body) {
+            let call_index = self.worker_calls.fetch_add(1, Ordering::SeqCst);
+            let call_id = format!("call-worker-{call_index}");
+            let stop = call_index == 0;
+            let args = json!({
+                "job_id": job_id,
+                "item_id": item_id,
+                "result": { "item_id": item_id },
+                "stop": stop,
+            });
+            let args_json = serde_json::to_string(&args).unwrap_or_else(|err| {
+                panic!("worker args serialize: {err}");
+            });
+            return sse_response(sse(vec![
+                ev_response_created("resp-worker"),
+                ev_function_call(&call_id, "report_agent_job_result", &args_json),
+                ev_completed("resp-worker"),
+            ]));
+        }
+
+        if !self.seen_main.swap(true, Ordering::SeqCst) {
+            return sse_response(sse(vec![
+                ev_response_created("resp-main"),
+                ev_function_call("call-spawn", "spawn_agents_on_csv", &self.spawn_args_json),
+                ev_completed("resp-main"),
+            ]));
+        }
+
+        sse_response(sse(vec![
+            ev_response_created("resp-default"),
+            ev_completed("resp-default"),
+        ]))
     }
 }
 
@@ -300,5 +364,61 @@ async fn spawn_agents_on_csv_dedupes_item_ids() -> Result<()> {
     assert_eq!(item_ids.len(), 2);
     assert!(item_ids.contains(&"foo".to_string()));
     assert!(item_ids.contains(&"foo-2".to_string()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agents_on_csv_stop_halts_future_items() -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Collab);
+        config.features.enable(Feature::Sqlite);
+    });
+    let test = builder.build(&server).await?;
+
+    let input_path = test.cwd_path().join("agent_jobs_stop.csv");
+    let output_path = test.cwd_path().join("agent_jobs_stop_out.csv");
+    fs::write(&input_path, "path\nfile-1\nfile-2\nfile-3\n")?;
+
+    let args = json!({
+        "csv_path": input_path.display().to_string(),
+        "instruction": "Return {path}",
+        "output_csv_path": output_path.display().to_string(),
+        "max_concurrency": 1,
+    });
+    let args_json = serde_json::to_string(&args)?;
+
+    let worker_calls = Arc::new(AtomicUsize::new(0));
+    let responder = StopAfterFirstResponder::new(args_json, worker_calls.clone());
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(responder)
+        .mount(&server)
+        .await;
+
+    test.submit_turn("run job").await?;
+
+    let output = fs::read_to_string(&output_path)?;
+    let rows: Vec<&str> = output.lines().skip(1).collect();
+    assert_eq!(rows.len(), 3);
+    let job_id = rows
+        .first()
+        .and_then(|line| {
+            parse_simple_csv_line(line)
+                .iter()
+                .find(|value| value.len() == 36)
+                .cloned()
+        })
+        .expect("job_id from csv");
+    let db = test.codex.state_db().expect("state db");
+    let job = db.get_agent_job(job_id.as_str()).await?.expect("job");
+    assert_eq!(job.status, codex_state::AgentJobStatus::Cancelled);
+    let progress = db.get_agent_job_progress(job_id.as_str()).await?;
+    assert_eq!(progress.total_items, 3);
+    assert_eq!(progress.completed_items, 1);
+    assert_eq!(progress.failed_items, 0);
+    assert_eq!(progress.running_items, 0);
+    assert_eq!(progress.pending_items, 2);
+    assert_eq!(worker_calls.load(Ordering::SeqCst), 1);
     Ok(())
 }

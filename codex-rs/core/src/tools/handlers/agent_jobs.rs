@@ -57,6 +57,7 @@ struct ReportAgentJobResultArgs {
     job_id: String,
     item_id: String,
     result: Value,
+    stop: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -493,6 +494,12 @@ mod report_agent_job_result {
                     "failed to record agent job result for {job_id} / {item_id}: {err}"
                 ))
             })?;
+        if accepted && args.stop.unwrap_or(false) {
+            let message = "cancelled by worker request";
+            let _ = db
+                .mark_agent_job_cancelled(args.job_id.as_str(), message)
+                .await;
+        }
         let content =
             serde_json::to_string(&ReportAgentJobResultToolResult { accepted }).map_err(|err| {
                 FunctionCallError::Fatal(format!(
@@ -589,10 +596,21 @@ async fn run_agent_job_loop(
         .maybe_emit(&session, &turn, job_id.as_str(), &initial_progress, true)
         .await?;
 
+    let mut cancel_requested = db.is_agent_job_cancelled(job_id.as_str()).await?;
     loop {
         let mut progressed = false;
 
-        if active_items.len() < options.max_concurrency {
+        if !cancel_requested && db.is_agent_job_cancelled(job_id.as_str()).await? {
+            cancel_requested = true;
+            let _ = session
+                .notify_background_event(
+                    &turn,
+                    format!("agent job {job_id} cancellation requested; stopping new workers"),
+                )
+                .await;
+        }
+
+        if !cancel_requested && active_items.len() < options.max_concurrency {
             let slots = options.max_concurrency - active_items.len();
             let pending_items = db
                 .list_agent_job_items(
@@ -682,7 +700,13 @@ async fn run_agent_job_loop(
         let finished = find_finished_threads(session.clone(), &active_items).await;
         if finished.is_empty() {
             let progress = db.get_agent_job_progress(job_id.as_str()).await?;
-            if progress.pending_items == 0 && progress.running_items == 0 && active_items.is_empty()
+            if cancel_requested {
+                if progress.running_items == 0 && active_items.is_empty() {
+                    break;
+                }
+            } else if progress.pending_items == 0
+                && progress.running_items == 0
+                && active_items.is_empty()
             {
                 break;
             }
@@ -713,6 +737,17 @@ async fn run_agent_job_loop(
     if let Err(err) = export_job_csv_snapshot(db.clone(), &job).await {
         let message = format!("auto-export failed: {err}");
         db.mark_agent_job_failed(job_id.as_str(), message.as_str())
+            .await?;
+        return Ok(());
+    }
+    let cancelled = cancel_requested || db.is_agent_job_cancelled(job_id.as_str()).await?;
+    if cancelled {
+        let pending_items = progress.pending_items;
+        let message =
+            format!("agent job {job_id} cancelled with {pending_items} unprocessed items");
+        let _ = session.notify_background_event(&turn, message).await;
+        progress_emitter
+            .maybe_emit(&session, &turn, job_id.as_str(), &progress, true)
             .await?;
         return Ok(());
     }
@@ -932,6 +967,7 @@ You MUST call the `report_agent_job_result` tool exactly once with:\n\
 1. `job_id` = \"{job_id}\"\n\
 2. `item_id` = \"{item_id}\"\n\
 3. `result` = a JSON object that contains your analysis result for this row.\n\n\
+If you need to stop the job early, include `stop` = true in the tool call.\n\n\
 After the tool call succeeds, stop.",
     ))
 }

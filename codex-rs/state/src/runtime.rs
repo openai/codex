@@ -1176,6 +1176,49 @@ WHERE id = ?
         Ok(())
     }
 
+    pub async fn mark_agent_job_cancelled(
+        &self,
+        job_id: &str,
+        reason: &str,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let result = sqlx::query(
+            r#"
+UPDATE agent_jobs
+SET status = ?, updated_at = ?, completed_at = ?, last_error = ?
+WHERE id = ? AND status IN (?, ?)
+            "#,
+        )
+        .bind(AgentJobStatus::Cancelled.as_str())
+        .bind(now)
+        .bind(now)
+        .bind(reason)
+        .bind(job_id)
+        .bind(AgentJobStatus::Pending.as_str())
+        .bind(AgentJobStatus::Running.as_str())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn is_agent_job_cancelled(&self, job_id: &str) -> anyhow::Result<bool> {
+        let row = sqlx::query(
+            r#"
+SELECT status
+FROM agent_jobs
+WHERE id = ?
+            "#,
+        )
+        .bind(job_id)
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let status: String = row.try_get("status")?;
+        Ok(AgentJobStatus::parse(status.as_str())? == AgentJobStatus::Cancelled)
+    }
+
     pub async fn mark_agent_job_item_running(
         &self,
         job_id: &str,

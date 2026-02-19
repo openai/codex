@@ -738,6 +738,15 @@ fn create_report_agent_job_result_tool() -> ToolSpec {
             additional_properties: None,
         },
     );
+    properties.insert(
+        "stop".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Optional. When true, cancels the remaining job items after this result is recorded."
+                    .to_string(),
+            ),
+        },
+    );
     ToolSpec::Function(ResponsesApiTool {
         name: "report_agent_job_result".to_string(),
         description:
