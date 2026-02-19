@@ -316,14 +316,6 @@ fn create_write_stdin_tool() -> ToolSpec {
                 ),
             },
         ),
-        (
-            "no_timeout".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "If set to true, nothing will be returned before the end of the process. This can only be used with empty `chars` and empty `yield_time_ms`. This must be used to wait for very long running processes/tests or to schedule a wait.".to_string()
-                )
-            }
-        )
     ]);
 
     ToolSpec::Function(ResponsesApiTool {

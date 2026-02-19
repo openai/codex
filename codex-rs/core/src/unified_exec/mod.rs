@@ -99,7 +99,6 @@ pub(crate) struct WriteStdinRequest<'a> {
     pub input: &'a str,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
-    pub no_timeout: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -248,7 +247,6 @@ mod tests {
                 input,
                 yield_time_ms,
                 max_output_tokens: None,
-                no_timeout: false,
             })
             .await
     }

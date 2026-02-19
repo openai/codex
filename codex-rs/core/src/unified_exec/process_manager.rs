@@ -351,58 +351,27 @@ impl UnifiedExecProcessManager {
         }
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
-        let start = Instant::now();
-        let collected = if request.no_timeout {
-            let mut collected = Vec::with_capacity(4096);
-            loop {
-                let mut next = Self::collect_output_until_deadline(
-                    &output_buffer,
-                    &output_notify,
-                    &output_closed,
-                    &output_closed_notify,
-                    &cancellation_token,
-                    Instant::now() + Duration::from_millis(self.max_write_stdin_yield_time_ms),
-                )
-                .await;
-                collected.append(&mut next);
-
-                if cancellation_token.is_cancelled() {
-                    let mut trailing = Self::collect_output_until_deadline(
-                        &output_buffer,
-                        &output_notify,
-                        &output_closed,
-                        &output_closed_notify,
-                        &cancellation_token,
-                        Instant::now() + Duration::from_millis(50),
-                    )
-                    .await;
-                    collected.append(&mut trailing);
-                    break;
-                }
+        let yield_time_ms = {
+            // Empty polls use configurable background timeout bounds. Non-empty
+            // writes keep a fixed max cap so interactive stdin remains responsive.
+            let time_ms = request.yield_time_ms.max(MIN_YIELD_TIME_MS);
+            if request.input.is_empty() {
+                time_ms.clamp(MIN_EMPTY_YIELD_TIME_MS, self.max_write_stdin_yield_time_ms)
+            } else {
+                time_ms.min(MAX_YIELD_TIME_MS)
             }
-            collected
-        } else {
-            let yield_time_ms = {
-                // Empty polls use configurable background timeout bounds. Non-empty
-                // writes keep a fixed max cap so interactive stdin remains responsive.
-                let time_ms = request.yield_time_ms.max(MIN_YIELD_TIME_MS);
-                if request.input.is_empty() {
-                    time_ms.clamp(MIN_EMPTY_YIELD_TIME_MS, self.max_write_stdin_yield_time_ms)
-                } else {
-                    time_ms.min(MAX_YIELD_TIME_MS)
-                }
-            };
-            let deadline = start + Duration::from_millis(yield_time_ms);
-            Self::collect_output_until_deadline(
-                &output_buffer,
-                &output_notify,
-                &output_closed,
-                &output_closed_notify,
-                &cancellation_token,
-                deadline,
-            )
-            .await
         };
+        let start = Instant::now();
+        let deadline = start + Duration::from_millis(yield_time_ms);
+        let collected = Self::collect_output_until_deadline(
+            &output_buffer,
+            &output_notify,
+            &output_closed,
+            &output_closed_notify,
+            &cancellation_token,
+            deadline,
+        )
+        .await;
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
