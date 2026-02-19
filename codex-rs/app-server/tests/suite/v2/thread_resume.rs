@@ -15,8 +15,6 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
-use codex_app_server_protocol::TurnInterruptParams;
-use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -413,28 +411,9 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         resume_err.error.message
     );
 
-    // This test intentionally keeps a turn running to exercise the resume error path.
-    // Keep this explicit interrupt + turn_aborted wait so teardown does not leave
-    // in-flight work behind (which can show up as LEAK in nextest).
-    let interrupt_id = primary
-        .send_turn_interrupt_request(TurnInterruptParams {
-            thread_id,
-            turn_id: running_turn.id,
-        })
+    primary
+        .interrupt_turn_and_wait_for_aborted(thread_id, running_turn.id, DEFAULT_READ_TIMEOUT)
         .await?;
-    let interrupt_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(interrupt_id)),
-    )
-    .await??;
-    let _turn_interrupt_response: TurnInterruptResponse =
-        to_response::<TurnInterruptResponse>(interrupt_resp)?;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("codex/event/turn_aborted"),
-    )
-    .await??;
 
     Ok(())
 }
@@ -533,28 +512,9 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         resume_err.error.message
     );
 
-    // This test intentionally keeps a turn running to exercise the resume error path.
-    // Keep this explicit interrupt + turn_aborted wait so teardown does not leave
-    // in-flight work behind (which can show up as LEAK in nextest).
-    let interrupt_id = primary
-        .send_turn_interrupt_request(TurnInterruptParams {
-            thread_id,
-            turn_id: running_turn.id,
-        })
+    primary
+        .interrupt_turn_and_wait_for_aborted(thread_id, running_turn.id, DEFAULT_READ_TIMEOUT)
         .await?;
-    let interrupt_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(interrupt_id)),
-    )
-    .await??;
-    let _turn_interrupt_response: TurnInterruptResponse =
-        to_response::<TurnInterruptResponse>(interrupt_resp)?;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("codex/event/turn_aborted"),
-    )
-    .await??;
 
     Ok(())
 }

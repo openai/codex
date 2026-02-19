@@ -572,6 +572,37 @@ impl McpProcess {
         self.send_request("turn/interrupt", params).await
     }
 
+    /// Deterministically clean up an intentionally in-flight turn.
+    ///
+    /// Some tests assert behavior while a turn is still running. Returning from those tests
+    /// without an explicit interrupt + `codex/event/turn_aborted` wait can leave in-flight work
+    /// racing teardown and intermittently show up as `LEAK` in nextest.
+    pub async fn interrupt_turn_and_wait_for_aborted(
+        &mut self,
+        thread_id: String,
+        turn_id: String,
+        read_timeout: std::time::Duration,
+    ) -> anyhow::Result<()> {
+        let interrupt_request_id = self
+            .send_turn_interrupt_request(TurnInterruptParams { thread_id, turn_id })
+            .await?;
+        tokio::time::timeout(
+            read_timeout,
+            self.read_stream_until_response_message(RequestId::Integer(interrupt_request_id)),
+        )
+        .await
+        .with_context(|| "timed out waiting for turn interrupt response")?
+        .with_context(|| "failed while waiting for turn interrupt response")?;
+        tokio::time::timeout(
+            read_timeout,
+            self.read_stream_until_notification_message("codex/event/turn_aborted"),
+        )
+        .await
+        .with_context(|| "timed out waiting for turn aborted notification")?
+        .with_context(|| "failed while waiting for turn aborted notification")?;
+        Ok(())
+    }
+
     /// Send a `turn/steer` JSON-RPC request (v2).
     pub async fn send_turn_steer_request(
         &mut self,
