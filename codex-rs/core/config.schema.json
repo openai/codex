@@ -182,6 +182,18 @@
             }
           ],
           "description": "Approval mode for tools in this app unless a tool override exists."
+        },
+        "disabled_reason": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppDisabledReason"
+            }
+          ],
+          "description": "Reason tools were disabled by default for this app."
+        },
+        "enabled": {
+          "description": "Whether tools are enabled by default for this app.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -213,6 +225,19 @@
         },
         "disable_open_world": {
           "description": "Disable tools with `open_world_hint = true` by default.",
+          "type": "boolean"
+        },
+        "disabled_reason": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppDisabledReason"
+            }
+          ],
+          "description": "Reason apps were disabled by default."
+        },
+        "enabled": {
+          "default": true,
+          "description": "When `false`, apps are disabled unless overridden by per-app settings.",
           "type": "boolean"
         }
       },

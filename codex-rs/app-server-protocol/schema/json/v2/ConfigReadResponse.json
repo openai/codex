@@ -132,6 +132,22 @@
               "type": "null"
             }
           ]
+        },
+        "disabled_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppDisabledReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -160,6 +176,20 @@
         },
         "disable_open_world": {
           "default": false,
+          "type": "boolean"
+        },
+        "disabled_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppDisabledReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "default": true,
           "type": "boolean"
         }
       },

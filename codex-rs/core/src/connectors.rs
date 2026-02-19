@@ -300,10 +300,10 @@ pub fn merge_connectors(
 }
 
 pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
-    let apps = read_apps_config(config).map(|apps_config| apps_config.apps);
-    for connector in &mut connectors {
-        if let Some(app) = apps.as_ref().and_then(|apps| apps.get(&connector.id)) {
-            connector.is_enabled = app.enabled;
+    let apps_config = read_apps_config(config);
+    if let Some(apps_config) = apps_config.as_ref() {
+        for connector in &mut connectors {
+            connector.is_enabled = app_is_enabled(apps_config, Some(connector.id.as_str()));
         }
     }
     connectors
@@ -350,6 +350,19 @@ fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
     AppsConfigToml::deserialize(apps_config).ok()
 }
 
+fn app_is_enabled(apps_config: &AppsConfigToml, connector_id: Option<&str>) -> bool {
+    let default_enabled = apps_config
+        .default
+        .as_ref()
+        .map(|defaults| defaults.enabled)
+        .unwrap_or(true);
+
+    connector_id
+        .and_then(|connector_id| apps_config.apps.get(connector_id))
+        .map(|app| app.enabled)
+        .unwrap_or(default_enabled)
+}
+
 fn app_tool_policy_from_apps_config(
     apps_config: Option<&AppsConfigToml>,
     connector_id: Option<&str>,
@@ -369,7 +382,7 @@ fn app_tool_policy_from_apps_config(
         .or_else(|| tool_defaults.and_then(|defaults| defaults.approval))
         .unwrap_or(AppToolApproval::Auto);
 
-    if app.is_some_and(|app| !app.enabled) {
+    if !app_is_enabled(apps_config, connector_id) {
         return AppToolPolicy {
             enabled: false,
             approval,
@@ -377,6 +390,10 @@ fn app_tool_policy_from_apps_config(
     }
 
     if let Some(enabled) = tool_config.and_then(|tool| tool.enabled) {
+        return AppToolPolicy { enabled, approval };
+    }
+
+    if let Some(enabled) = tool_defaults.and_then(|defaults| defaults.enabled) {
         return AppToolPolicy { enabled, approval };
     }
 
@@ -486,6 +503,7 @@ fn format_connector_label(name: &str, _id: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::types::AppConfig;
+    use crate::config::types::AppDisabledReason;
     use crate::config::types::AppToolConfig;
     use crate::config::types::AppToolsConfig;
     use crate::config::types::AppToolsDefaultConfig;
@@ -509,6 +527,8 @@ mod tests {
     fn app_tool_policy_uses_global_defaults_for_destructive_hints() {
         let apps_config = AppsConfigToml {
             default: Some(AppsDefaultConfig {
+                enabled: true,
+                disabled_reason: None,
                 disable_destructive: true,
                 disable_open_world: false,
             }),
@@ -526,6 +546,112 @@ mod tests {
             policy,
             AppToolPolicy {
                 enabled: false,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_is_enabled_uses_default_for_unconfigured_apps() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                disabled_reason: Some(AppDisabledReason::User),
+                disable_destructive: false,
+                disable_open_world: false,
+            }),
+            apps: HashMap::new(),
+        };
+
+        assert!(!app_is_enabled(&apps_config, Some("calendar")));
+        assert!(!app_is_enabled(&apps_config, None));
+    }
+
+    #[test]
+    fn app_is_enabled_prefers_per_app_override_over_default() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                disabled_reason: Some(AppDisabledReason::User),
+                disable_destructive: false,
+                disable_open_world: false,
+            }),
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    disabled_reason: None,
+                    disable_destructive: None,
+                    disable_open_world: None,
+                    tools: None,
+                },
+            )]),
+        };
+
+        assert!(app_is_enabled(&apps_config, Some("calendar")));
+        assert!(!app_is_enabled(&apps_config, Some("drive")));
+    }
+
+    #[test]
+    fn app_tool_policy_honors_default_app_enabled_false() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                disabled_reason: Some(AppDisabledReason::User),
+                disable_destructive: false,
+                disable_open_world: false,
+            }),
+            apps: HashMap::new(),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/list",
+            Some(&annotations(None, None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: false,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_allows_per_app_enable_when_default_is_disabled() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                disabled_reason: Some(AppDisabledReason::User),
+                disable_destructive: false,
+                disable_open_world: false,
+            }),
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    disabled_reason: None,
+                    disable_destructive: None,
+                    disable_open_world: None,
+                    tools: None,
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/list",
+            Some(&annotations(None, None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
                 approval: AppToolApproval::Auto,
             }
         );
@@ -574,6 +700,84 @@ mod tests {
     }
 
     #[test]
+    fn app_tool_policy_tool_default_enabled_true_overrides_app_level_disable_flags() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    disabled_reason: None,
+                    disable_destructive: Some(true),
+                    disable_open_world: Some(true),
+                    tools: Some(AppToolsConfig {
+                        default: Some(AppToolsDefaultConfig {
+                            enabled: Some(true),
+                            disabled_reason: None,
+                            approval: None,
+                        }),
+                        tools: HashMap::new(),
+                    }),
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/create",
+            Some(&annotations(Some(true), Some(true))),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_tool_default_enabled_false_overrides_app_level_disable_flags() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    disabled_reason: None,
+                    disable_destructive: Some(false),
+                    disable_open_world: Some(false),
+                    tools: Some(AppToolsConfig {
+                        default: Some(AppToolsDefaultConfig {
+                            enabled: Some(false),
+                            disabled_reason: Some(AppDisabledReason::User),
+                            approval: Some(AppToolApproval::Approve),
+                        }),
+                        tools: HashMap::new(),
+                    }),
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/list",
+            Some(&annotations(None, None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: false,
+                approval: AppToolApproval::Approve,
+            }
+        );
+    }
+
+    #[test]
     fn app_tool_policy_uses_tool_default_approval() {
         let apps_config = AppsConfigToml {
             default: None,
@@ -586,6 +790,8 @@ mod tests {
                     disable_open_world: None,
                     tools: Some(AppToolsConfig {
                         default: Some(AppToolsDefaultConfig {
+                            enabled: None,
+                            disabled_reason: None,
                             approval: Some(AppToolApproval::Prompt),
                         }),
                         tools: HashMap::new(),

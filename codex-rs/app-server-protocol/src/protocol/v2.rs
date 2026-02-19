@@ -398,6 +398,9 @@ pub enum AppToolApproval {
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct AppsDefaultConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    pub disabled_reason: Option<AppDisabledReason>,
     #[serde(default)]
     pub disable_destructive: bool,
     #[serde(default)]
@@ -408,6 +411,8 @@ pub struct AppsDefaultConfig {
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct AppToolsDefaultConfig {
+    pub enabled: Option<bool>,
+    pub disabled_reason: Option<AppDisabledReason>,
     pub approval: Option<AppToolApproval>,
 }
 

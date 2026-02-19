@@ -456,6 +456,14 @@ pub enum AppToolApproval {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AppsDefaultConfig {
+    /// When `false`, apps are disabled unless overridden by per-app settings.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+
+    /// Reason apps were disabled by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<AppDisabledReason>,
+
     /// Disable tools with `destructive_hint = true` by default.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disable_destructive: bool,
@@ -469,6 +477,14 @@ pub struct AppsDefaultConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AppToolsDefaultConfig {
+    /// Whether tools are enabled by default for this app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+
+    /// Reason tools were disabled by default for this app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<AppDisabledReason>,
+
     /// Approval mode for tools in this app unless a tool override exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<AppToolApproval>,
