@@ -2749,7 +2749,6 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         previous_user_turn_model: Option<&str>,
-        emit_raw_events: bool,
     ) {
         let reference_context_item = self.reference_context_item().await;
         let settings_update_items = self.build_settings_update_items(
@@ -2776,13 +2775,8 @@ impl Session {
             settings_update_items
         };
         if !context_items.is_empty() {
-            if emit_raw_events {
-                self.record_conversation_items(turn_context, &context_items)
-                    .await;
-            } else {
-                self.record_into_history(&context_items, turn_context).await;
-                self.persist_rollout_response_items(&context_items).await;
-            }
+            self.record_conversation_items(turn_context, &context_items)
+                .await;
         }
 
         let mut state = self.state.lock().await;
@@ -4406,7 +4400,6 @@ pub(crate) async fn run_turn(
     sess.record_context_updates_and_set_reference_context_item(
         turn_context.as_ref(),
         previous_model.as_deref(),
-        true,
     )
     .await;
 
@@ -6602,14 +6595,14 @@ mod tests {
         assert_eq!(expected, history_before_seed.raw_items());
 
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context, None, false)
+            .record_context_updates_and_set_reference_context_item(&turn_context, None)
             .await;
         expected.extend(session.build_initial_context(&turn_context).await);
         let history_after_seed = session.clone_history().await;
         assert_eq!(expected, history_after_seed.raw_items());
 
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context, None, false)
+            .record_context_updates_and_set_reference_context_item(&turn_context, None)
             .await;
         let history_after_second_seed = session.clone_history().await;
         assert_eq!(expected, history_after_second_seed.raw_items());
@@ -7926,7 +7919,7 @@ mod tests {
      {
         let (session, turn_context) = make_session_and_context().await;
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context, None, false)
+            .record_context_updates_and_set_reference_context_item(&turn_context, None)
             .await;
         let history = session.clone_history().await;
         let initial_context = session.build_initial_context(&turn_context).await;
@@ -7957,7 +7950,7 @@ mod tests {
             .record_into_history(std::slice::from_ref(&compacted_summary), &turn_context)
             .await;
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context, None, false)
+            .record_context_updates_and_set_reference_context_item(&turn_context, None)
             .await;
         session.clear_reference_context_item().await;
         session
@@ -7965,7 +7958,7 @@ mod tests {
             .await;
 
         session
-            .record_context_updates_and_set_reference_context_item(&turn_context, None, false)
+            .record_context_updates_and_set_reference_context_item(&turn_context, None)
             .await;
 
         let history = session.clone_history().await;
