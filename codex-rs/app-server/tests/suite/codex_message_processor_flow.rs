@@ -76,7 +76,6 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     let new_conv_id = mcp
         .send_new_conversation_request(NewConversationParams {
             cwd: Some(working_directory.to_string_lossy().into_owned()),
-            approval_policy: Some(AskForApproval::Never),
             sandbox: Some(SandboxMode::DangerFullAccess),
             ..Default::default()
         })
@@ -535,9 +534,6 @@ approval_policy = "untrusted"
 sandbox_mode = "danger-full-access"
 
 model_provider = "mock_provider"
-
-[features]
-shell_snapshot = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

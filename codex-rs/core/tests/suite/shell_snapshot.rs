@@ -83,27 +83,6 @@ async fn wait_for_file_contents(path: &Path) -> Result<String> {
     }
 }
 
-async fn wait_for_snapshot_contents(path: &Path) -> Result<String> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match fs::read_to_string(path).await {
-            Ok(contents) if contents.contains("# Snapshot file") => return Ok(contents),
-            Ok(_) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err.into()),
-        }
-
-        if Instant::now() >= deadline {
-            anyhow::bail!(
-                "timed out waiting for shell snapshot contents at {}",
-                path.display()
-            );
-        }
-
-        sleep(Duration::from_millis(25)).await;
-    }
-}
-
 fn policy_set_path_for_test() -> HashMap<String, String> {
     HashMap::from([("PATH".to_string(), POLICY_PATH_FOR_TEST.to_string())])
 }
@@ -189,7 +168,7 @@ async fn run_snapshot_command_with_options(
     })
     .await;
     let snapshot_path = wait_for_snapshot(&codex_home).await?;
-    let snapshot_content = wait_for_snapshot_contents(&snapshot_path).await?;
+    let snapshot_content = fs::read_to_string(&snapshot_path).await?;
 
     let end = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => Some(ev.clone()),
@@ -275,7 +254,7 @@ async fn run_shell_command_snapshot_with_options(
     })
     .await;
     let snapshot_path = wait_for_snapshot(&codex_home).await?;
-    let snapshot_content = wait_for_snapshot_contents(&snapshot_path).await?;
+    let snapshot_content = fs::read_to_string(&snapshot_path).await?;
 
     let end = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => Some(ev.clone()),
@@ -557,7 +536,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         .await?;
 
     let snapshot_path = wait_for_snapshot(&codex_home).await?;
-    let snapshot_content = wait_for_snapshot_contents(&snapshot_path).await?;
+    let snapshot_content = fs::read_to_string(&snapshot_path).await?;
     assert_posix_snapshot_sections(&snapshot_content);
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

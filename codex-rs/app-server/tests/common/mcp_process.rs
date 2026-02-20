@@ -579,9 +579,10 @@ impl McpProcess {
     /// without an explicit interrupt + `codex/event/turn_aborted` wait can leave in-flight work
     /// racing teardown and intermittently show up as `LEAK` in nextest.
     ///
-    /// In rare races, the turn can complete (including `status: failed`) on its own after we send
-    /// `turn/interrupt`. The helper treats a matching `turn/completed` notification as sufficient
-    /// terminal cleanup in that case so teardown does not flap on timing.
+    /// In rare races, the turn can also fail or complete on its own after we send
+    /// `turn/interrupt` but before the server emits the interrupt response. The helper treats a
+    /// buffered matching `turn/completed` notification as sufficient terminal cleanup in that
+    /// case so teardown does not flap on timing.
     pub async fn interrupt_turn_and_wait_for_aborted(
         &mut self,
         thread_id: String,
@@ -596,25 +597,12 @@ impl McpProcess {
             .await?;
         match tokio::time::timeout(
             read_timeout,
-            self.read_stream_until_message(|message| {
-                Self::message_request_id(message) == Some(&RequestId::Integer(interrupt_request_id))
-                    || Self::is_matching_turn_completed_notification(message, &thread_id, &turn_id)
-            }),
+            self.read_stream_until_response_message(RequestId::Integer(interrupt_request_id)),
         )
         .await
         {
             Ok(result) => {
-                let message =
-                    result.with_context(|| "failed while waiting for turn interrupt response")?;
-                match message {
-                    JSONRPCMessage::Response(_) => {}
-                    JSONRPCMessage::Notification(_) => return Ok(()),
-                    _ => {
-                        unreachable!(
-                            "expected interrupt response or matching turn/completed, got {message:?}"
-                        );
-                    }
-                }
+                result.with_context(|| "failed while waiting for turn interrupt response")?;
             }
             Err(err) => {
                 if self.pending_turn_completed_notification(&thread_id, &turn_id) {
@@ -625,27 +613,12 @@ impl McpProcess {
         }
         match tokio::time::timeout(
             read_timeout,
-            self.read_stream_until_message(|message| {
-                matches!(
-                    message,
-                    JSONRPCMessage::Notification(notification)
-                        if notification.method == "codex/event/turn_aborted"
-                ) || Self::is_matching_turn_completed_notification(message, &thread_id, &turn_id)
-            }),
+            self.read_stream_until_notification_message("codex/event/turn_aborted"),
         )
         .await
         {
             Ok(result) => {
-                let message =
-                    result.with_context(|| "failed while waiting for turn aborted notification")?;
-                match message {
-                    JSONRPCMessage::Notification(_) => {}
-                    _ => {
-                        unreachable!(
-                            "expected turn aborted or matching turn/completed notification, got {message:?}"
-                        );
-                    }
-                }
+                result.with_context(|| "failed while waiting for turn aborted notification")?;
             }
             Err(err) => {
                 if self.pending_turn_completed_notification(&thread_id, &turn_id) {
@@ -1027,29 +1000,21 @@ impl McpProcess {
 
     fn pending_turn_completed_notification(&self, thread_id: &str, turn_id: &str) -> bool {
         self.pending_messages.iter().any(|message| {
-            Self::is_matching_turn_completed_notification(message, thread_id, turn_id)
+            let JSONRPCMessage::Notification(notification) = message else {
+                return false;
+            };
+            if notification.method != "turn/completed" {
+                return false;
+            }
+            let Some(params) = notification.params.as_ref() else {
+                return false;
+            };
+            let Ok(payload) = serde_json::from_value::<TurnCompletedNotification>(params.clone())
+            else {
+                return false;
+            };
+            payload.thread_id == thread_id && payload.turn.id == turn_id
         })
-    }
-
-    fn is_matching_turn_completed_notification(
-        message: &JSONRPCMessage,
-        thread_id: &str,
-        turn_id: &str,
-    ) -> bool {
-        let JSONRPCMessage::Notification(notification) = message else {
-            return false;
-        };
-        if notification.method != "turn/completed" {
-            return false;
-        }
-        let Some(params) = notification.params.as_ref() else {
-            return false;
-        };
-        let Ok(payload) = serde_json::from_value::<TurnCompletedNotification>(params.clone())
-        else {
-            return false;
-        };
-        payload.thread_id == thread_id && payload.turn.id == turn_id
     }
 
     fn message_request_id(message: &JSONRPCMessage) -> Option<&RequestId> {

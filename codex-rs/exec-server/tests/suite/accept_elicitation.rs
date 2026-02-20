@@ -33,36 +33,29 @@ const USE_LOGIN_SHELL: bool = false;
 /// Verify that when using a read-only sandbox and an execpolicy that prompts,
 /// the proper elicitation is sent. Upon auto-approving the elicitation, the
 /// command should be run privileged outside the sandbox.
-#[cfg_attr(
-    target_arch = "aarch64",
-    ignore = "default patched bash transport is flaky under aarch64 sandbox CI; zsh variant covers elicitation flow"
-)]
 #[tokio::test(flavor = "current_thread")]
 async fn accept_elicitation_for_prompt_rule() -> Result<()> {
     // Configure a stdio transport that will launch the MCP server using
     // $CODEX_HOME with an execpolicy that prompts for `git init` commands.
     let codex_home = TempDir::new()?;
-    let git_path = resolve_git_path(USE_LOGIN_SHELL).await?;
     write_default_execpolicy(
-        &format!(
-            r#"
+        r#"
 # Create a rule with `decision = "prompt"` to exercise the elicitation flow.
 prefix_rule(
-  pattern = ["{git_path}", "init"],
+  pattern = ["git", "init"],
   decision = "prompt",
   match = [
-    "{git_path} init ."
+    "git init ."
   ],
 )
- "#
-        ),
+"#,
         codex_home.as_ref(),
     )
     .await?;
     let dotslash_cache_temp_dir = TempDir::new()?;
     let dotslash_cache = dotslash_cache_temp_dir.path();
     let transport = create_transport(codex_home.as_ref(), dotslash_cache).await?;
-    run_accept_elicitation_for_prompt_rule_with_transport(transport, &git_path).await
+    run_accept_elicitation_for_prompt_rule_with_transport(transport).await
 }
 
 /// Verify the same prompt/escalation flow works when the server is launched
@@ -78,20 +71,17 @@ async fn accept_elicitation_for_prompt_rule_with_zsh() -> Result<()> {
     let zsh_path = PathBuf::from(zsh_path);
 
     let codex_home = TempDir::new()?;
-    let git_path = resolve_git_path(USE_LOGIN_SHELL).await?;
     write_default_execpolicy(
-        &format!(
-            r#"
+        r#"
 # Create a rule with `decision = "prompt"` to exercise the elicitation flow.
 prefix_rule(
-  pattern = ["{git_path}", "init"],
+  pattern = ["git", "init"],
   decision = "prompt",
   match = [
-    "{git_path} init ."
+    "git init ."
   ],
 )
- "#
-        ),
+"#,
         codex_home.as_ref(),
     )
     .await?;
@@ -99,16 +89,16 @@ prefix_rule(
     let dotslash_cache = dotslash_cache_temp_dir.path();
     let transport =
         create_transport_with_shell_path(codex_home.as_ref(), dotslash_cache, &zsh_path).await?;
-    run_accept_elicitation_for_prompt_rule_with_transport(transport, &git_path).await
+    run_accept_elicitation_for_prompt_rule_with_transport(transport).await
 }
 
 async fn run_accept_elicitation_for_prompt_rule_with_transport(
     transport: rmcp::transport::TokioChildProcess,
-    git_path: &str,
 ) -> Result<()> {
     // Create an MCP client that approves expected elicitation messages.
     let project_root = TempDir::new()?;
     let project_root_path = project_root.path().canonicalize().unwrap();
+    let git_path = resolve_git_path(USE_LOGIN_SHELL).await?;
     let expected_elicitation_message = format!(
         "Allow agent to run `{} init .` in `{}`?",
         git_path,
@@ -152,7 +142,7 @@ async fn run_accept_elicitation_for_prompt_rule_with_transport(
             arguments: Some(object(json!(
                 {
                     "login": USE_LOGIN_SHELL,
-                    "command": format!("{git_path} init ."),
+                    "command": "git init .",
                     "workdir": project_root_path.to_string_lossy(),
                 }
             ))),
@@ -227,27 +217,23 @@ fn ensure_codex_cli() -> Result<PathBuf> {
     Ok(codex_cli)
 }
 
-async fn resolve_command_path(command: &str, use_login_shell: bool) -> Result<String> {
+async fn resolve_git_path(use_login_shell: bool) -> Result<String> {
     let bash_flag = if use_login_shell { "-lc" } else { "-c" };
     let git = Command::new("bash")
         .arg(bash_flag)
-        .arg(format!("command -v {command}"))
+        .arg("command -v git")
         .output()
         .await
-        .with_context(|| format!("failed to resolve {command} via shell"))?;
+        .context("failed to resolve git via login shell")?;
     ensure!(
         git.status.success(),
-        "failed to resolve {command} via shell: {}",
+        "failed to resolve git via login shell: {}",
         String::from_utf8_lossy(&git.stderr)
     );
     let git_path = String::from_utf8(git.stdout)
-        .with_context(|| format!("{command} path was not valid utf8"))?
+        .context("git path was not valid utf8")?
         .trim()
         .to_string();
-    ensure!(!git_path.is_empty(), "{command} path should not be empty");
+    ensure!(!git_path.is_empty(), "git path should not be empty");
     Ok(git_path)
-}
-
-async fn resolve_git_path(use_login_shell: bool) -> Result<String> {
-    resolve_command_path("git", use_login_shell).await
 }
