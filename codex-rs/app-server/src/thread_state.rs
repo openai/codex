@@ -175,7 +175,13 @@ impl ThreadStateManager {
                 thread_state.remove_connection(subscription_state.connection_id);
             }
             if thread_state.subscribed_connection_ids().is_empty() {
-                thread_state.clear_listener();
+                tracing::debug!(
+                    thread_id = %thread_id,
+                    subscription_id = %subscription_id,
+                    connection_id = ?subscription_state.connection_id,
+                    listener_generation = thread_state.listener_generation,
+                    "retaining thread listener after last subscription removed"
+                );
             }
         }
         Some(thread_id)
@@ -183,7 +189,15 @@ impl ThreadStateManager {
 
     pub(crate) async fn remove_thread_state(&mut self, thread_id: ThreadId) {
         if let Some(thread_state) = self.thread_states.remove(&thread_id) {
-            thread_state.lock().await.clear_listener();
+            let mut thread_state = thread_state.lock().await;
+            tracing::debug!(
+                thread_id = %thread_id,
+                listener_generation = thread_state.listener_generation,
+                had_listener = thread_state.cancel_tx.is_some(),
+                had_active_turn = thread_state.active_turn_snapshot().is_some(),
+                "clearing thread listener during thread-state teardown"
+            );
+            thread_state.clear_listener();
         }
         self.subscription_state_by_id
             .retain(|_, state| state.thread_id != thread_id);
@@ -254,7 +268,11 @@ impl ThreadStateManager {
                 let mut thread_state = thread_state.lock().await;
                 thread_state.remove_connection(connection_id);
                 if thread_state.subscribed_connection_ids().is_empty() {
-                    thread_state.clear_listener();
+                    tracing::debug!(
+                        connection_id = ?connection_id,
+                        listener_generation = thread_state.listener_generation,
+                        "retaining thread listener after connection disconnect left zero subscribers"
+                    );
                 }
             }
             return;
@@ -265,7 +283,12 @@ impl ThreadStateManager {
                 let mut thread_state = thread_state.lock().await;
                 thread_state.remove_connection(connection_id);
                 if thread_state.subscribed_connection_ids().is_empty() {
-                    thread_state.clear_listener();
+                    tracing::debug!(
+                        thread_id = %thread_id,
+                        connection_id = ?connection_id,
+                        listener_generation = thread_state.listener_generation,
+                        "retaining thread listener after connection disconnect left zero subscribers"
+                    );
                 }
             }
         }
