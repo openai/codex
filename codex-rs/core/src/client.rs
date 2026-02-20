@@ -253,7 +253,7 @@ impl ModelClient {
         self.state
             .cached_websocket_connection
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
     }
 
@@ -262,7 +262,7 @@ impl ModelClient {
             .state
             .cached_websocket_connection
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(connection);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(connection);
     }
 
     /// Compacts the current conversation history using the Compact endpoint.
