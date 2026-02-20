@@ -42,7 +42,7 @@ network_approval_context?: NetworkApprovalContext,
 /**
  * Proposed execpolicy amendment that can be applied to allow future runs.
  */
-proposed_execpolicy_amendment?: ExecPolicyAmendment,
+proposed_execpolicy_amendment?: ExecPolicyAmendment, 
 /**
  * Proposed network policy amendments (for example allow/deny this host in future).
  */
