@@ -44,6 +44,14 @@ cliVersion: string,
  */
 source: SessionSource, 
 /**
+ * Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
+ */
+agentNickname: string | null, 
+/**
+ * Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
+ */
+agentRole: string | null, 
+/**
  * Optional Git metadata captured when the thread was created.
  */
 gitInfo: GitInfo | null, 

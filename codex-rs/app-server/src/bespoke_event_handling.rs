@@ -44,6 +44,7 @@ use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
+use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
@@ -105,6 +106,17 @@ use tokio::sync::oneshot;
 use tracing::error;
 
 type JsonValue = serde_json::Value;
+
+enum CommandExecutionApprovalPresentation {
+    Network(V2NetworkApprovalContext),
+    Command(CommandExecutionCompletionItem),
+}
+
+struct CommandExecutionCompletionItem {
+    command: String,
+    cwd: PathBuf,
+    command_actions: Vec<V2ParsedCommand>,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
@@ -245,6 +257,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command,
                 cwd,
                 reason,
+                network_approval_context,
                 proposed_execpolicy_amendment,
                 parsed_cmd,
                 ..
@@ -280,7 +293,32 @@ pub(crate) async fn apply_bespoke_event_handling(
                         .cloned()
                         .map(V2ParsedCommand::from)
                         .collect::<Vec<_>>();
-                    let command_string = shlex_join(&command);
+                    let presentation = if let Some(network_approval_context) =
+                        network_approval_context.map(V2NetworkApprovalContext::from)
+                    {
+                        CommandExecutionApprovalPresentation::Network(network_approval_context)
+                    } else {
+                        let command_string = shlex_join(&command);
+                        let completion_item = CommandExecutionCompletionItem {
+                            command: command_string,
+                            cwd: cwd.clone(),
+                            command_actions: command_actions.clone(),
+                        };
+                        CommandExecutionApprovalPresentation::Command(completion_item)
+                    };
+                    let (network_approval_context, command, cwd, command_actions, completion_item) =
+                        match presentation {
+                            CommandExecutionApprovalPresentation::Network(
+                                network_approval_context,
+                            ) => (Some(network_approval_context), None, None, None, None),
+                            CommandExecutionApprovalPresentation::Command(completion_item) => (
+                                None,
+                                Some(completion_item.command.clone()),
+                                Some(completion_item.cwd.clone()),
+                                Some(completion_item.command_actions.clone()),
+                                Some(completion_item),
+                            ),
+                        };
                     let proposed_execpolicy_amendment_v2 =
                         proposed_execpolicy_amendment.map(V2ExecPolicyAmendment::from);
 
@@ -290,9 +328,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                         item_id: call_id.clone(),
                         approval_id: approval_id.clone(),
                         reason,
-                        command: Some(command_string.clone()),
-                        cwd: Some(cwd.clone()),
-                        command_actions: Some(command_actions.clone()),
+                        network_approval_context,
+                        command,
+                        cwd,
+                        command_actions,
                         proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                     };
                     let rx = outgoing
@@ -306,9 +345,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             conversation_id,
                             approval_id,
                             call_id,
-                            command_string,
-                            cwd,
-                            command_actions,
+                            completion_item,
                             rx,
                             conversation,
                             outgoing,
@@ -1790,9 +1827,7 @@ async fn on_command_execution_request_approval_response(
     conversation_id: ThreadId,
     approval_id: Option<String>,
     item_id: String,
-    command: String,
-    cwd: PathBuf,
-    command_actions: Vec<V2ParsedCommand>,
+    completion_item: Option<CommandExecutionCompletionItem>,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
@@ -1864,15 +1899,16 @@ async fn on_command_execution_request_approval_response(
 
     if let Some(status) = completion_status
         && !suppress_subcommand_completion_item
+        && let Some(completion_item) = completion_item
     {
         complete_command_execution_item(
             conversation_id,
             event_turn_id.clone(),
             item_id.clone(),
-            command.clone(),
-            cwd.clone(),
+            completion_item.command,
+            completion_item.cwd,
             None,
-            command_actions.clone(),
+            completion_item.command_actions,
             status,
             &outgoing,
         )
@@ -2059,6 +2095,8 @@ mod tests {
             call_id: "call-1".to_string(),
             sender_thread_id: ThreadId::new(),
             receiver_thread_id: ThreadId::new(),
+            receiver_agent_nickname: None,
+            receiver_agent_role: None,
         };
 
         let item = collab_resume_begin_item(event.clone());
@@ -2080,6 +2118,8 @@ mod tests {
             call_id: "call-2".to_string(),
             sender_thread_id: ThreadId::new(),
             receiver_thread_id: ThreadId::new(),
+            receiver_agent_nickname: None,
+            receiver_agent_role: None,
             status: codex_protocol::protocol::AgentStatus::NotFound,
         };
 

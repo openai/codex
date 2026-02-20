@@ -1763,7 +1763,6 @@ impl CodexMessageProcessor {
             network: started_network_proxy
                 .as_ref()
                 .map(codex_core::config::StartedNetworkProxy::proxy),
-            network_attempt_id: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level,
             justification: None,
@@ -6663,6 +6662,8 @@ async fn read_summary_from_state_db_context_by_thread_id(
         metadata.cwd,
         metadata.cli_version,
         metadata.source,
+        metadata.agent_nickname,
+        metadata.agent_role,
         metadata.git_sha,
         metadata.git_branch,
         metadata.git_origin_url,
@@ -6683,9 +6684,12 @@ async fn summary_from_thread_list_item(
             .unwrap_or_else(|| fallback_provider.to_string());
         let cwd = it.cwd?;
         let cli_version = it.cli_version.unwrap_or_default();
-        let source = it
-            .source
-            .unwrap_or(codex_protocol::protocol::SessionSource::Unknown);
+        let source = with_thread_spawn_agent_metadata(
+            it.source
+                .unwrap_or(codex_protocol::protocol::SessionSource::Unknown),
+            it.agent_nickname.clone(),
+            it.agent_role.clone(),
+        );
         return Some(ConversationSummary {
             conversation_id: thread_id,
             path: it.path,
@@ -6740,13 +6744,17 @@ fn summary_from_state_db_metadata(
     cwd: PathBuf,
     cli_version: String,
     source: String,
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
     git_sha: Option<String>,
     git_branch: Option<String>,
     git_origin_url: Option<String>,
 ) -> ConversationSummary {
     let preview = first_user_message.unwrap_or_default();
-    let source = serde_json::from_value(serde_json::Value::String(source))
+    let source = serde_json::from_str(&source)
+        .or_else(|_| serde_json::from_value(serde_json::Value::String(source.clone())))
         .unwrap_or(codex_protocol::protocol::SessionSource::Unknown);
+    let source = with_thread_spawn_agent_metadata(source, agent_nickname, agent_role);
     let git_info = if git_sha.is_none() && git_branch.is_none() && git_origin_url.is_none() {
         None
     } else {
@@ -6794,6 +6802,12 @@ pub(crate) async fn read_summary_from_rollout(
         meta: session_meta,
         git,
     } = session_meta_line;
+    let mut session_meta = session_meta;
+    session_meta.source = with_thread_spawn_agent_metadata(
+        session_meta.source.clone(),
+        session_meta.agent_nickname.clone(),
+        session_meta.agent_role.clone(),
+    );
 
     let created_at = if session_meta.timestamp.is_empty() {
         None
@@ -6906,6 +6920,35 @@ fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     }
 }
 
+fn with_thread_spawn_agent_metadata(
+    source: codex_protocol::protocol::SessionSource,
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
+) -> codex_protocol::protocol::SessionSource {
+    if agent_nickname.is_none() && agent_role.is_none() {
+        return source;
+    }
+
+    match source {
+        codex_protocol::protocol::SessionSource::SubAgent(
+            codex_protocol::protocol::SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth,
+                agent_nickname: existing_agent_nickname,
+                agent_role: existing_agent_role,
+            },
+        ) => codex_protocol::protocol::SessionSource::SubAgent(
+            codex_protocol::protocol::SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth,
+                agent_nickname: agent_nickname.or(existing_agent_nickname),
+                agent_role: agent_role.or(existing_agent_role),
+            },
+        ),
+        _ => source,
+    }
+}
+
 fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| {
         chrono::DateTime::parse_from_rfc3339(ts)
@@ -6942,6 +6985,8 @@ fn build_thread_from_snapshot(
         path,
         cwd: config_snapshot.cwd.clone(),
         cli_version: env!("CARGO_PKG_VERSION").to_string(),
+        agent_nickname: config_snapshot.session_source.get_nickname(),
+        agent_role: config_snapshot.session_source.get_agent_role(),
         source: config_snapshot.session_source.clone().into(),
         git_info: None,
         turns: Vec::new(),
@@ -6980,6 +7025,8 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         path: Some(path),
         cwd,
         cli_version,
+        agent_nickname: source.get_nickname(),
+        agent_role: source.get_agent_role(),
         source: source.into(),
         git_info,
         turns: Vec::new(),
@@ -6991,6 +7038,7 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -7133,6 +7181,87 @@ mod tests {
         };
 
         assert_eq!(summary, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_summary_from_rollout_preserves_agent_nickname() -> Result<()> {
+        use codex_protocol::protocol::RolloutItem;
+        use codex_protocol::protocol::RolloutLine;
+        use codex_protocol::protocol::SessionMetaLine;
+        use std::fs;
+
+        let temp_dir = TempDir::new()?;
+        let path = temp_dir.path().join("rollout.jsonl");
+
+        let conversation_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let parent_thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
+        let timestamp = "2025-09-05T16:53:11.850Z".to_string();
+
+        let session_meta = SessionMeta {
+            id: conversation_id,
+            timestamp: timestamp.clone(),
+            source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_nickname: None,
+                agent_role: None,
+            }),
+            agent_nickname: Some("atlas".to_string()),
+            agent_role: Some("explorer".to_string()),
+            model_provider: Some("test-provider".to_string()),
+            ..SessionMeta::default()
+        };
+
+        let line = RolloutLine {
+            timestamp,
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: session_meta,
+                git: None,
+            }),
+        };
+        fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
+
+        let summary = read_summary_from_rollout(path.as_path(), "fallback").await?;
+        let thread = summary_to_thread(summary);
+
+        assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
+        assert_eq!(thread.agent_role, Some("explorer".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn summary_from_state_db_metadata_preserves_agent_nickname() -> Result<()> {
+        let conversation_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let source =
+            serde_json::to_string(&SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?,
+                depth: 1,
+                agent_nickname: None,
+                agent_role: None,
+            }))?;
+
+        let summary = summary_from_state_db_metadata(
+            conversation_id,
+            PathBuf::from("/tmp/rollout.jsonl"),
+            Some("hi".to_string()),
+            "2025-09-05T16:53:11Z".to_string(),
+            "2025-09-05T16:53:12Z".to_string(),
+            "test-provider".to_string(),
+            PathBuf::from("/"),
+            "0.0.0".to_string(),
+            source,
+            Some("atlas".to_string()),
+            Some("explorer".to_string()),
+            None,
+            None,
+            None,
+        );
+
+        let thread = summary_to_thread(summary);
+
+        assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
+        assert_eq!(thread.agent_role, Some("explorer".to_string()));
         Ok(())
     }
 

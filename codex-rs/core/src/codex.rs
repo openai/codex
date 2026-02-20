@@ -149,6 +149,7 @@ use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::mcp_connection_manager::filter_codex_apps_mcp_tools_only;
 use crate::mcp_connection_manager::filter_mcp_tools_by_name;
 use crate::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
@@ -1420,6 +1421,8 @@ impl Session {
             &session_configuration.approval_policy,
             tx_event.clone(),
             sandbox_state,
+            config.codex_home.clone(),
+            codex_apps_tools_cache_key(auth),
         )
         .await;
         {
@@ -3068,6 +3071,8 @@ impl Session {
             &turn_context.config.permissions.approval_policy,
             self.get_tx_event(),
             sandbox_state,
+            config.codex_home.clone(),
+            codex_apps_tools_cache_key(auth.as_ref()),
         )
         .await;
         {
@@ -8342,7 +8347,6 @@ mod tests {
             expiration: timeout_ms.into(),
             env: HashMap::new(),
             network: None,
-            network_attempt_id: None,
             sandbox_permissions,
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: Some("test".to_string()),
@@ -8356,7 +8360,6 @@ mod tests {
             expiration: timeout_ms.into(),
             env: HashMap::new(),
             network: None,
-            network_attempt_id: None,
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
             arg0: None,
