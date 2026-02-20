@@ -6093,6 +6093,7 @@ impl CodexMessageProcessor {
             reason,
             thread_id,
             include_logs,
+            extra_log_files,
         } = params;
 
         let conversation_id = match thread_id.as_deref() {
@@ -6122,15 +6123,17 @@ impl CodexMessageProcessor {
         } else {
             None
         };
+        let mut attachment_paths = validated_rollout_path.into_iter().collect::<Vec<_>>();
+        attachment_paths.extend(extra_log_files);
+
         let session_source = self.thread_manager.session_source();
 
         let upload_result = tokio::task::spawn_blocking(move || {
-            let rollout_path_ref = validated_rollout_path.as_deref();
             snapshot.upload_feedback(
                 &classification,
                 reason.as_deref(),
                 include_logs,
-                rollout_path_ref,
+                &attachment_paths,
                 Some(session_source),
             )
         })
