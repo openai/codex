@@ -211,6 +211,8 @@ SELECT
     created_at,
     updated_at,
     source,
+    agent_nickname,
+    agent_role,
     model_provider,
     cwd,
     cli_version,
@@ -310,6 +312,8 @@ SELECT
     created_at,
     updated_at,
     source,
+    agent_nickname,
+    agent_role,
     model_provider,
     cwd,
     cli_version,
@@ -691,6 +695,8 @@ INSERT INTO threads (
     created_at,
     updated_at,
     source,
+    agent_nickname,
+    agent_role,
     model_provider,
     cwd,
     cli_version,
@@ -704,12 +710,14 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
     source = excluded.source,
+    agent_nickname = excluded.agent_nickname,
+    agent_role = excluded.agent_role,
     model_provider = excluded.model_provider,
     cwd = excluded.cwd,
     cli_version = excluded.cli_version,
@@ -730,6 +738,8 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(datetime_to_epoch_seconds(metadata.created_at))
         .bind(datetime_to_epoch_seconds(metadata.updated_at))
         .bind(metadata.source.as_str())
+        .bind(metadata.agent_nickname.as_deref())
+        .bind(metadata.agent_role.as_deref())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())
@@ -2059,7 +2069,7 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
-    async fn mark_stage1_job_succeeded_no_output_tracks_watermark_without_persisting_output() {
+    async fn mark_stage1_job_succeeded_no_output_skips_phase2_when_output_was_already_absent() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
@@ -2112,23 +2122,129 @@ WHERE kind = 'memory_stage1'
             .expect("claim stage1 up-to-date");
         assert_eq!(up_to_date, Stage1JobClaimOutcome::SkippedUpToDate);
 
+        let global_job_row_count = sqlx::query("SELECT COUNT(*) AS count FROM jobs WHERE kind = ?")
+            .bind("memory_consolidate_global")
+            .fetch_one(runtime.pool.as_ref())
+            .await
+            .expect("load phase2 job row count")
+            .try_get::<i64, _>("count")
+            .expect("phase2 job row count");
+        assert_eq!(
+            global_job_row_count, 0,
+            "no-output without an existing stage1 output should not enqueue phase2"
+        );
+
         let claim_phase2 = runtime
             .try_claim_global_phase2_job(owner, 3600)
             .await
             .expect("claim phase2");
+        assert_eq!(
+            claim_phase2,
+            Phase2JobClaimOutcome::SkippedNotDirty,
+            "phase2 should remain clean when no-output deleted nothing"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn mark_stage1_job_succeeded_no_output_enqueues_phase2_when_deleting_output() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join("workspace"),
+            ))
+            .await
+            .expect("upsert thread");
+
+        let first_claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .await
+            .expect("claim initial stage1");
+        let first_token = match first_claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected initial stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(thread_id, first_token.as_str(), 100, "raw", "sum", None)
+                .await
+                .expect("mark initial stage1 succeeded"),
+            "initial stage1 success should create stage1 output"
+        );
+
+        let phase2_claim = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2 after initial output");
+        let (phase2_token, phase2_input_watermark) = match phase2_claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected phase2 claim after initial output: {other:?}"),
+        };
+        assert_eq!(phase2_input_watermark, 100);
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(phase2_token.as_str(), phase2_input_watermark)
+                .await
+                .expect("mark initial phase2 succeeded"),
+            "initial phase2 success should clear global dirty state"
+        );
+
+        let no_output_claim = runtime
+            .try_claim_stage1_job(thread_id, owner_b, 101, 3600, 64)
+            .await
+            .expect("claim stage1 for no-output delete");
+        let no_output_token = match no_output_claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected no-output stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded_no_output(thread_id, no_output_token.as_str())
+                .await
+                .expect("mark stage1 no-output after existing output"),
+            "no-output should succeed when deleting an existing stage1 output"
+        );
+
+        let output_row_count =
+            sqlx::query("SELECT COUNT(*) AS count FROM stage1_outputs WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("load stage1 output count after delete")
+                .try_get::<i64, _>("count")
+                .expect("stage1 output count");
+        assert_eq!(output_row_count, 0);
+
+        let claim_phase2 = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2 after no-output deletion");
         let (phase2_token, phase2_input_watermark) = match claim_phase2 {
             Phase2JobClaimOutcome::Claimed {
                 ownership_token,
                 input_watermark,
             } => (ownership_token, input_watermark),
-            other => panic!("unexpected phase2 claim outcome after no-output success: {other:?}"),
+            other => panic!("unexpected phase2 claim after no-output deletion: {other:?}"),
         };
-        assert_eq!(phase2_input_watermark, 100);
+        assert_eq!(phase2_input_watermark, 101);
         assert!(
             runtime
-                .mark_global_phase2_job_succeeded(phase2_token.as_str(), phase2_input_watermark,)
+                .mark_global_phase2_job_succeeded(phase2_token.as_str(), phase2_input_watermark)
                 .await
-                .expect("mark phase2 succeeded after no-output")
+                .expect("mark phase2 succeeded after no-output delete")
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -3092,6 +3208,8 @@ VALUES (?, ?, ?, ?, ?)
             created_at: now,
             updated_at: now,
             source: "cli".to_string(),
+            agent_nickname: None,
+            agent_role: None,
             model_provider: "test-provider".to_string(),
             cwd,
             cli_version: "0.0.0".to_string(),

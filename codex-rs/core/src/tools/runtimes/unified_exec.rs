@@ -157,8 +157,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     ) -> Option<NetworkApprovalSpec> {
         req.network.as_ref()?;
         Some(NetworkApprovalSpec {
-            command: req.command.clone(),
-            cwd: req.cwd.clone(),
             network: req.network.clone(),
             mode: NetworkApprovalMode::Deferred,
         })
@@ -188,7 +186,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 
         let mut env = req.env.clone();
         if let Some(network) = req.network.as_ref() {
-            network.apply_to_env_for_attempt(&mut env, ctx.network_attempt_id.as_deref());
+            network.apply_to_env(&mut env);
         }
         let spec = build_command_spec(
             &command,
