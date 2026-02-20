@@ -247,6 +247,10 @@ async fn forward_request(req: Request) -> Result<Response> {
                 method: Some(method.clone()),
                 mode: Some(mode),
                 protocol: "https".to_string(),
+                attempt_id: None,
+                decision: None,
+                source: None,
+                port: Some(target_port),
             }))
             .await;
         warn!(

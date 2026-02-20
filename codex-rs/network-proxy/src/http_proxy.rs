@@ -251,6 +251,14 @@ async fn http_connect_accept(
     if mode == NetworkMode::Limited && mitm_state.is_none() {
         // Limited mode is designed to be read-only. Without MITM, a CONNECT tunnel would hide the
         // inner HTTP method/headers from the proxy, effectively bypassing method policy.
+        let details = PolicyDecisionDetails {
+            decision: NetworkPolicyDecision::Deny,
+            reason: REASON_MITM_REQUIRED,
+            source: NetworkDecisionSource::ModeGuard,
+            protocol: NetworkProtocol::HttpsConnect,
+            host: &host,
+            port: authority.port,
+        };
         let _ = app_state
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: host.clone(),
@@ -265,14 +273,6 @@ async fn http_connect_accept(
                 port: Some(authority.port),
             }))
             .await;
-        let details = PolicyDecisionDetails {
-            decision: NetworkPolicyDecision::Deny,
-            reason: REASON_MITM_REQUIRED,
-            source: NetworkDecisionSource::ModeGuard,
-            protocol: NetworkProtocol::HttpsConnect,
-            host: &host,
-            port: authority.port,
-        };
         let client = client.as_deref().unwrap_or_default();
         warn!(
             "CONNECT blocked; MITM required for read-only HTTPS in limited mode (client={client}, host={host}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
