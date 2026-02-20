@@ -1202,10 +1202,14 @@ impl ChatWidget {
         self.status_line_branch_lookup_complete = true;
     }
 
-    /// Forces a new git-branch lookup when `GitBranch` is part of the configured status line.
+    /// Forces a new git-branch lookup when `GitBranch` is used by the status line or terminal
+    /// title.
     fn request_status_line_branch_refresh(&mut self) {
-        let (items, _) = self.status_line_items_with_invalids();
-        if items.is_empty() || !items.contains(&StatusLineItem::GitBranch) {
+        let (status_line_items, _) = self.status_line_items_with_invalids();
+        let (title_items, _) = self.terminal_title_items_with_invalids();
+        if !status_line_items.contains(&StatusLineItem::GitBranch)
+            && !title_items.contains(&TerminalTitleItem::GitBranch)
+        {
             return;
         }
         let cwd = self.status_line_cwd().to_path_buf();
