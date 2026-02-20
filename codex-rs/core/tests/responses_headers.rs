@@ -23,6 +23,7 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use wiremock::matchers::header;
 
+// Comment-only change to force a full CI run on a no-op PR.
 #[tokio::test]
 async fn responses_stream_includes_subagent_header_on_review() {
     core_test_support::skip_if_no_network!();
