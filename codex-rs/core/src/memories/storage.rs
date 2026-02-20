@@ -86,8 +86,7 @@ async fn rebuild_raw_memories_file(
         writeln!(body, "rollout_summary_file: {rollout_summary_file}")
             .map_err(raw_memories_format_error)?;
         writeln!(body).map_err(raw_memories_format_error)?;
-        let raw_memory = strip_rollout_summary_file_from_raw_memory(&memory.raw_memory);
-        body.push_str(raw_memory.trim());
+        body.push_str(memory.raw_memory.trim());
         body.push_str("\n\n");
     }
 
@@ -160,21 +159,6 @@ fn raw_memories_format_error(err: std::fmt::Error) -> std::io::Error {
 
 fn rollout_summary_format_error(err: std::fmt::Error) -> std::io::Error {
     std::io::Error::other(format!("format rollout summary: {err}"))
-}
-
-fn strip_rollout_summary_file_from_raw_memory(raw_memory: &str) -> String {
-    const ROLLOUT_SUMMARY_PREFIXES: [&str; 2] =
-        ["rollout_summary_file:", "rollout_summary_file_name:"];
-    raw_memory
-        .split('\n')
-        .filter(|line| {
-            let trimmed = line.trim_start();
-            !ROLLOUT_SUMMARY_PREFIXES
-                .iter()
-                .any(|prefix| trimmed.starts_with(prefix))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 pub(crate) fn rollout_summary_file_stem(memory: &Stage1Output) -> String {
@@ -268,7 +252,6 @@ pub(super) fn rollout_summary_file_stem_from_parts(
 mod tests {
     use super::rollout_summary_file_stem;
     use super::rollout_summary_file_stem_from_parts;
-    use super::strip_rollout_summary_file_from_raw_memory;
     use chrono::TimeZone;
     use chrono::Utc;
     use codex_protocol::ThreadId;
@@ -334,83 +317,5 @@ mod tests {
         let memory = stage1_output_with_slug(thread_id, Some(""));
 
         assert_eq!(rollout_summary_file_stem(&memory), FIXED_PREFIX);
-    }
-
-    #[test]
-    fn strip_rollout_summary_file_from_raw_memory_removes_existing_value() {
-        let raw_memory = "\
----
-rollout_summary_file: wrong.md
-description: demo
-keywords: one, two
----
-- body line";
-        let normalized = strip_rollout_summary_file_from_raw_memory(raw_memory);
-
-        assert_eq!(
-            normalized,
-            "\
----
-description: demo
-keywords: one, two
----
-- body line"
-        );
-    }
-
-    #[test]
-    fn strip_rollout_summary_file_from_raw_memory_removes_placeholder() {
-        let raw_memory = "\
----
-rollout_summary_file: <system_populated_file.md>
-description: demo
-keywords: one, two
----
-- body line";
-        let normalized = strip_rollout_summary_file_from_raw_memory(raw_memory);
-
-        assert_eq!(
-            normalized,
-            "\
----
-description: demo
-keywords: one, two
----
-- body line"
-        );
-    }
-
-    #[test]
-    fn strip_rollout_summary_file_from_raw_memory_removes_legacy_field_name() {
-        let raw_memory = "\
----
-rollout_summary_file_name: stale_name.md
-description: demo
-keywords: one, two
----
-- body line";
-        let normalized = strip_rollout_summary_file_from_raw_memory(raw_memory);
-
-        assert_eq!(
-            normalized,
-            "\
----
-description: demo
-keywords: one, two
----
-- body line"
-        );
-    }
-
-    #[test]
-    fn strip_rollout_summary_file_from_raw_memory_leaves_text_without_field_unchanged() {
-        let raw_memory = "\
----
-description: demo
-keywords: one, two
----
-- body line";
-        let normalized = strip_rollout_summary_file_from_raw_memory(raw_memory);
-        assert_eq!(normalized, raw_memory);
     }
 }

@@ -254,7 +254,7 @@ async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename(
 }
 
 #[tokio::test]
-async fn rebuild_raw_memories_file_rewrites_rollout_summary_file_to_canonical_filename() {
+async fn rebuild_raw_memories_file_adds_canonical_rollout_summary_file_header() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path().join("memory");
     ensure_layout(&root).await.expect("ensure layout");
@@ -266,8 +266,6 @@ async fn rebuild_raw_memories_file_rewrites_rollout_summary_file_to_canonical_fi
         source_updated_at: Utc.timestamp_opt(200, 0).single().expect("timestamp"),
         raw_memory: "\
 ---
-rollout_summary_file: state_migration_uniqueness_test.md
-rollout_summary_file_name: legacy_state_migration_uniqueness_test.md
 description: Added a migration test
 keywords: codex-state, migrations
 ---
@@ -321,11 +319,6 @@ task_outcome: success
     assert!(raw_memories.contains(&format!(
         "rollout_summary_file: {canonical_rollout_summary_file}"
     )));
-    assert!(!raw_memories.contains("rollout_summary_file: state_migration_uniqueness_test.md"));
-    assert!(
-        !raw_memories
-            .contains("rollout_summary_file_name: legacy_state_migration_uniqueness_test.md")
-    );
     assert!(raw_memories.contains("description: Added a migration test"));
     assert!(raw_memories.contains("### Task 1: migration-test"));
     assert!(raw_memories.contains("task: add-migration-test"));
