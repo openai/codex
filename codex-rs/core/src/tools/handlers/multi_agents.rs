@@ -175,11 +175,12 @@ mod spawn {
             Err(_) => (None, AgentStatus::NotFound),
         };
         let (new_agent_nickname, new_agent_role) = match new_thread_id {
-            Some(thread_id) => {
-                let agent =
-                    collab_agent_ref(session.as_ref(), turn.as_ref(), thread_id, role_name).await;
-                (agent.agent_nickname, agent.agent_role)
-            }
+            Some(thread_id) => session
+                .services
+                .agent_control
+                .get_agent_nickname_and_role(thread_id)
+                .await
+                .unwrap_or((None, None)),
             None => (None, None),
         };
         session
@@ -241,8 +242,12 @@ mod send_input {
         let receiver_thread_id = agent_id(&args.id)?;
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
-        let receiver_agent =
-            collab_agent_ref(session.as_ref(), turn.as_ref(), receiver_thread_id, None).await;
+        let (receiver_agent_nickname, receiver_agent_role) = session
+            .services
+            .agent_control
+            .get_agent_nickname_and_role(receiver_thread_id)
+            .await
+            .unwrap_or((None, None));
         if args.interrupt {
             session
                 .services
@@ -281,8 +286,8 @@ mod send_input {
                     call_id,
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
-                    receiver_agent_nickname: receiver_agent.agent_nickname,
-                    receiver_agent_role: receiver_agent.agent_role,
+                    receiver_agent_nickname,
+                    receiver_agent_role,
                     prompt,
                     status,
                 }
@@ -325,8 +330,12 @@ mod resume_agent {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: ResumeAgentArgs = parse_arguments(&arguments)?;
         let receiver_thread_id = agent_id(&args.id)?;
-        let receiver_agent =
-            collab_agent_ref(session.as_ref(), turn.as_ref(), receiver_thread_id, None).await;
+        let (receiver_agent_nickname, receiver_agent_role) = session
+            .services
+            .agent_control
+            .get_agent_nickname_and_role(receiver_thread_id)
+            .await
+            .unwrap_or((None, None));
         let child_depth = next_thread_spawn_depth(&turn.session_source);
         if exceeds_thread_spawn_depth_limit(child_depth, turn.config.agent_max_depth) {
             return Err(FunctionCallError::RespondToModel(
@@ -341,8 +350,8 @@ mod resume_agent {
                     call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
-                    receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
-                    receiver_agent_role: receiver_agent.agent_role.clone(),
+                    receiver_agent_nickname: receiver_agent_nickname.clone(),
+                    receiver_agent_role: receiver_agent_role.clone(),
                 }
                 .into(),
             )
@@ -373,6 +382,12 @@ mod resume_agent {
             None
         };
 
+        let (receiver_agent_nickname, receiver_agent_role) = session
+            .services
+            .agent_control
+            .get_agent_nickname_and_role(receiver_thread_id)
+            .await
+            .unwrap_or((receiver_agent_nickname, receiver_agent_role));
         session
             .send_event(
                 &turn,
@@ -380,8 +395,8 @@ mod resume_agent {
                     call_id,
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
-                    receiver_agent_nickname: receiver_agent.agent_nickname,
-                    receiver_agent_role: receiver_agent.agent_role,
+                    receiver_agent_nickname,
+                    receiver_agent_role,
                     status: status.clone(),
                 }
                 .into(),
@@ -473,9 +488,17 @@ pub(crate) mod wait {
             .collect::<Result<Vec<_>, _>>()?;
         let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
         for receiver_thread_id in &receiver_thread_ids {
-            receiver_agents.push(
-                collab_agent_ref(session.as_ref(), turn.as_ref(), *receiver_thread_id, None).await,
-            );
+            let (agent_nickname, agent_role) = session
+                .services
+                .agent_control
+                .get_agent_nickname_and_role(*receiver_thread_id)
+                .await
+                .unwrap_or((None, None));
+            receiver_agents.push(CollabAgentRef {
+                thread_id: *receiver_thread_id,
+                agent_nickname,
+                agent_role,
+            });
         }
 
         // Validate timeout.
@@ -647,8 +670,12 @@ pub mod close_agent {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: CloseAgentArgs = parse_arguments(&arguments)?;
         let agent_id = agent_id(&args.id)?;
-        let receiver_agent =
-            collab_agent_ref(session.as_ref(), turn.as_ref(), agent_id, None).await;
+        let (receiver_agent_nickname, receiver_agent_role) = session
+            .services
+            .agent_control
+            .get_agent_nickname_and_role(agent_id)
+            .await
+            .unwrap_or((None, None));
         session
             .send_event(
                 &turn,
@@ -676,8 +703,8 @@ pub mod close_agent {
                             call_id: call_id.clone(),
                             sender_thread_id: session.conversation_id,
                             receiver_thread_id: agent_id,
-                            receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
-                            receiver_agent_role: receiver_agent.agent_role.clone(),
+                            receiver_agent_nickname: receiver_agent_nickname.clone(),
+                            receiver_agent_role: receiver_agent_role.clone(),
                             status,
                         }
                         .into(),
@@ -704,8 +731,8 @@ pub mod close_agent {
                     call_id,
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id: agent_id,
-                    receiver_agent_nickname: receiver_agent.agent_nickname,
-                    receiver_agent_role: receiver_agent.agent_role,
+                    receiver_agent_nickname,
+                    receiver_agent_role,
                     status: status.clone(),
                 }
                 .into(),
@@ -727,42 +754,6 @@ pub mod close_agent {
 fn agent_id(id: &str) -> Result<ThreadId, FunctionCallError> {
     ThreadId::from_string(id)
         .map_err(|e| FunctionCallError::RespondToModel(format!("invalid agent id {id}: {e:?}")))
-}
-
-async fn collab_agent_ref(
-    session: &Session,
-    turn: &TurnContext,
-    thread_id: ThreadId,
-    role_hint: Option<&str>,
-) -> CollabAgentRef {
-    let (mut agent_nickname, mut agent_role) = session
-        .services
-        .agent_control
-        .get_agent_nickname_and_role(thread_id)
-        .await
-        .unwrap_or((None, None));
-
-    if (agent_nickname.is_none() || agent_role.is_none())
-        && let Some(state_db) = crate::state_db::get_state_db(turn.config.as_ref(), None).await
-        && let Ok(Some(metadata)) = state_db.get_thread(thread_id).await
-    {
-        if agent_nickname.is_none() {
-            agent_nickname = metadata.agent_nickname;
-        }
-        if agent_role.is_none() {
-            agent_role = metadata.agent_role;
-        }
-    }
-
-    if agent_role.is_none() {
-        agent_role = role_hint.map(str::to_string);
-    }
-
-    CollabAgentRef {
-        thread_id,
-        agent_nickname,
-        agent_role,
-    }
 }
 
 fn build_wait_agent_statuses(
