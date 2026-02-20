@@ -264,6 +264,7 @@ pub struct TuiOnboardingKeymap {
 /// runtime preset defaults, and selected chat/composer actions can fall back
 /// through `global` during runtime resolution.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiKeymap {
     #[serde(default)]
@@ -423,4 +424,34 @@ Use a printable character (for example `a`), function keys (`f1`-`f12`), \
 or one of: enter, tab, backspace, esc, delete, arrows, home/end, page-up/page-down, space.\n\
 Keymap template: https://github.com/openai/codex/blob/main/docs/default-keymap.toml"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn misplaced_action_at_keymap_root_is_rejected() {
+        // Actions placed directly under [tui.keymap] instead of a context
+        // sub-table (e.g. [tui.keymap.global]) must produce a parse error,
+        // not be silently ignored.
+        let toml_input = r#"
+            open_transcript = "ctrl-s"
+        "#;
+        let result = toml::from_str::<TuiKeymap>(toml_input);
+        assert!(
+            result.is_err(),
+            "expected error for action at keymap root, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn action_under_global_context_is_accepted() {
+        let toml_input = r#"
+            [global]
+            open_transcript = "ctrl-s"
+        "#;
+        let keymap: TuiKeymap = toml::from_str(toml_input).expect("valid config");
+        assert!(keymap.global.open_transcript.is_some());
+    }
 }
