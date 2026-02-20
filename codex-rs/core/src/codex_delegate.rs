@@ -427,6 +427,7 @@ where
         _ = cancel_token.cancelled() => {
             let empty = RequestUserInputResponse {
                 answers: HashMap::new(),
+                interrupted: false,
             };
             parent_session
                 .notify_user_input_response(sub_id, empty.clone())
@@ -435,6 +436,7 @@ where
         }
         response = fut => response.unwrap_or_else(|| RequestUserInputResponse {
             answers: HashMap::new(),
+            interrupted: false,
         }),
     }
 }
