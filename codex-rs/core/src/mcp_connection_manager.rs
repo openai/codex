@@ -341,6 +341,7 @@ struct ManagedClient {
     tool_timeout: Option<Duration>,
     server_supports_sandbox_state_capability: bool,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    server_supports_out_of_band_elicitation_state_capability: bool,
 }
 
 impl ManagedClient {
@@ -380,6 +381,24 @@ impl ManagedClient {
             .send_custom_request(
                 MCP_SANDBOX_STATE_METHOD,
                 Some(serde_json::to_value(sandbox_state)?),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn notify_out_of_band_elicitation_state_change(
+        &self,
+        state: &OutOfBandElicitationState,
+    ) -> Result<()> {
+        if !self.server_supports_out_of_band_elicitation_state_capability {
+            return Ok(());
+        }
+
+        let _response = self
+            .client
+            .send_custom_request(
+                MCP_OUT_OF_BAND_ELICITATION_STATE_METHOD,
+                Some(serde_json::to_value(state)?),
             )
             .await?;
         Ok(())
@@ -487,13 +506,27 @@ impl AsyncManagedClient {
         let managed = self.client().await?;
         managed.notify_sandbox_state_change(sandbox_state).await
     }
+
+    async fn notify_out_of_band_elicitation_state_change(
+        &self,
+        state: &OutOfBandElicitationState,
+    ) -> Result<()> {
+        let managed = self.client().await?;
+        managed
+            .notify_out_of_band_elicitation_state_change(state)
+            .await
+    }
 }
 
 pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
+pub const MCP_OUT_OF_BAND_ELICITATION_STATE_CAPABILITY: &str =
+    "codex/out-of-band-elicitation-state";
 
 /// Custom MCP request to push sandbox state updates.
 /// When used, the `params` field of the notification is [`SandboxState`].
 pub const MCP_SANDBOX_STATE_METHOD: &str = "codex/sandbox-state/update";
+pub const MCP_OUT_OF_BAND_ELICITATION_STATE_METHOD: &str =
+    "codex/out-of-band-elicitation-state/update";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -503,6 +536,12 @@ pub struct SandboxState {
     pub sandbox_cwd: PathBuf,
     #[serde(default)]
     pub use_linux_sandbox_bwrap: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutOfBandElicitationState {
+    pub paused: bool,
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
@@ -1032,6 +1071,41 @@ impl McpConnectionManager {
 
         Ok(())
     }
+
+    pub async fn notify_out_of_band_elicitation_state_change(
+        &self,
+        state: &OutOfBandElicitationState,
+    ) -> Result<()> {
+        let mut join_set = JoinSet::new();
+
+        for async_managed_client in self.clients.values() {
+            let state = state.clone();
+            let async_managed_client = async_managed_client.clone();
+            join_set.spawn(async move {
+                async_managed_client
+                    .notify_out_of_band_elicitation_state_change(&state)
+                    .await
+            });
+        }
+
+        while let Some(join_res) = join_set.join_next().await {
+            match join_res {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!(
+                        "Failed to notify out-of-band elicitation state change to MCP server: {err:#}",
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "Task panic when notifying out-of-band elicitation state change to MCP server: {err:#}",
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 async fn emit_update(
@@ -1293,6 +1367,12 @@ async fn start_server_task(
         .as_ref()
         .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
         .is_some();
+    let server_supports_out_of_band_elicitation_state_capability = initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|exp| exp.get(MCP_OUT_OF_BAND_ELICITATION_STATE_CAPABILITY))
+        .is_some();
 
     let managed = ManagedClient {
         client: Arc::clone(&client),
@@ -1301,6 +1381,7 @@ async fn start_server_task(
         tool_filter,
         server_supports_sandbox_state_capability,
         codex_apps_tools_cache_context,
+        server_supports_out_of_band_elicitation_state_capability,
     };
 
     Ok(managed)
