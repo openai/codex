@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
@@ -17,6 +19,7 @@ use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
 #[cfg(target_os = "macos")]
 use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
+use crate::skills::SkillMetadata;
 #[cfg(not(target_os = "macos"))]
 type MacOsSeatbeltProfileExtensions = ();
 
@@ -118,6 +121,31 @@ pub(crate) fn compile_permission_profile(
     })
 }
 
+pub(crate) fn build_skill_script_prefix_permissions(
+    skills: &[SkillMetadata],
+) -> HashMap<Vec<String>, Permissions> {
+    let mut entries = HashMap::new();
+
+    for skill in skills {
+        let Some(skill_permissions) = skill.permissions.clone() else {
+            continue;
+        };
+        let Some(skill_dir) = skill.path.parent() else {
+            warn!(
+                "ignoring skill script prefix permissions for {}: SKILL.md has no parent directory",
+                skill.path.display()
+            );
+            continue;
+        };
+
+        for script_path in normalized_skill_script_paths(skill_dir) {
+            entries.insert(vec![script_path], skill_permissions.clone());
+        }
+    }
+
+    entries
+}
+
 fn normalize_permission_paths(
     skill_dir: &Path,
     values: &[String],
@@ -136,6 +164,55 @@ fn normalize_permission_paths(
     }
 
     paths
+}
+
+/// Returns unique script file paths for a skill's top-level `scripts/` directory.
+///
+/// The returned paths are normalized lexically, canonicalized when possible, and
+/// rendered as strings. Non-file entries are ignored. If the directory does not
+/// exist (or can't be read), an empty list is returned after logging a warning
+/// for non-`NotFound` errors.
+fn normalized_skill_script_paths(skill_dir: &Path) -> Vec<String> {
+    let scripts_dir = skill_dir.join("scripts");
+    let entries = match std::fs::read_dir(&scripts_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Vec::new(),
+        Err(err) => {
+            warn!(
+                "ignoring skill scripts directory {}: {err}",
+                scripts_dir.display()
+            );
+            return Vec::new();
+        }
+    };
+
+    let mut normalized_paths = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                warn!(
+                    "ignoring entry in skill scripts directory {}: {err}",
+                    scripts_dir.display()
+                );
+                continue;
+            }
+        };
+        let path = entry.path();
+        let is_file = entry.file_type().is_ok_and(|file_type| file_type.is_file());
+        if !is_file {
+            continue;
+        }
+        let normalized = normalize_lexically(&path);
+        let canonicalized = canonicalize_path(&normalized).unwrap_or(normalized);
+        let rendered = canonicalized.to_string_lossy().to_string();
+        if seen.insert(rendered.clone()) {
+            normalized_paths.push(rendered);
+        }
+    }
+
+    normalized_paths
 }
 
 fn normalize_permission_path(

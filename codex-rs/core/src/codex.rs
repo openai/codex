@@ -120,6 +120,7 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
+use crate::config::Permissions;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
@@ -216,6 +217,7 @@ use crate::skills::collect_explicit_skill_mentions;
 use crate::skills::injection::ToolMentionKind;
 use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
+use crate::skills::permissions::build_skill_script_prefix_permissions;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
@@ -564,6 +566,7 @@ pub(crate) struct TurnContext {
     pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
+    pub(crate) skill_prefix_permissions: std::sync::RwLock<HashMap<Vec<String>, Permissions>>,
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -603,6 +606,11 @@ impl TurnContext {
         let collaboration_mode =
             self.collaboration_mode
                 .with_updates(Some(model.clone()), Some(reasoning_effort), None);
+        let skill_prefix_permissions = self
+            .skill_prefix_permissions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let features = self.features.clone();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -645,7 +653,19 @@ impl TurnContext {
             js_repl: Arc::clone(&self.js_repl),
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
+            skill_prefix_permissions: std::sync::RwLock::new(skill_prefix_permissions),
         }
+    }
+
+    pub(crate) fn set_skill_prefix_permissions(
+        &self,
+        skill_prefix_permissions: HashMap<Vec<String>, Permissions>,
+    ) {
+        let mut registry = self
+            .skill_prefix_permissions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *registry = skill_prefix_permissions;
     }
 
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
@@ -987,6 +1007,7 @@ impl Session {
             js_repl,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
+            skill_prefix_permissions: std::sync::RwLock::new(HashMap::new()),
         }
     }
 
@@ -4177,6 +4198,13 @@ async fn spawn_review_thread(
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,
+        skill_prefix_permissions: std::sync::RwLock::new(
+            parent_turn_context
+                .skill_prefix_permissions
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        ),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -4335,6 +4363,8 @@ pub(crate) async fn run_turn(
             &connector_slug_counts,
         )
     });
+    turn_context
+        .set_skill_prefix_permissions(build_skill_script_prefix_permissions(&mentioned_skills));
     let config = turn_context.config.clone();
     if config
         .features
