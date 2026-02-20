@@ -19,10 +19,65 @@
     },
     "AppConfig": {
       "properties": {
-        "disabled_reason": {
+        "default_tools_approval_mode": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AppDisabledReason"
+              "$ref": "#/definitions/AppToolApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "default_tools_enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "destructive_enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "open_world_enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppToolsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AppToolApproval": {
+      "enum": [
+        "auto",
+        "prompt",
+        "approve"
+      ],
+      "type": "string"
+    },
+    "AppToolConfig": {
+      "properties": {
+        "approval_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
             },
             {
               "type": "null"
@@ -30,20 +85,48 @@
           ]
         },
         "enabled": {
-          "default": true,
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": "object"
     },
-    "AppDisabledReason": {
-      "enum": [
-        "unknown",
-        "user"
-      ],
-      "type": "string"
+    "AppToolsConfig": {
+      "type": "object"
     },
     "AppsConfig": {
+      "properties": {
+        "_default": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppsDefaultConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
+    "AppsDefaultConfig": {
+      "properties": {
+        "destructive_enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "open_world_enabled": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "AskForApproval": {

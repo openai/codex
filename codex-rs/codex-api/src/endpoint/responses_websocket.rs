@@ -175,6 +175,19 @@ pub struct ResponsesWebsocketConnection {
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
 }
 
+impl std::fmt::Debug for ResponsesWebsocketConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResponsesWebsocketConnection")
+            .field("stream", &"<ws-stream>")
+            .field("idle_timeout", &self.idle_timeout)
+            .field("server_reasoning_included", &self.server_reasoning_included)
+            .field("models_etag", &self.models_etag)
+            .field("server_model", &self.server_model)
+            .field("telemetry", &self.telemetry.as_ref().map(|_| "<telemetry>"))
+            .finish()
+    }
+}
+
 impl ResponsesWebsocketConnection {
     fn new(
         stream: WsStream,
