@@ -2776,11 +2776,12 @@ impl Session {
             settings_update_items
         };
         if !context_items.is_empty() {
-            self.record_into_history(&context_items, turn_context).await;
-            self.persist_rollout_response_items(&context_items).await;
             if emit_raw_events {
-                self.send_raw_response_items(turn_context, &context_items)
+                self.record_conversation_items(turn_context, &context_items)
                     .await;
+            } else {
+                self.record_into_history(&context_items, turn_context).await;
+                self.persist_rollout_response_items(&context_items).await;
             }
         }
 
