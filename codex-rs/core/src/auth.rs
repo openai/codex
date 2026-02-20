@@ -621,7 +621,9 @@ async fn request_chatgpt_token_refresh(
         client_id: CLIENT_ID,
         grant_type: "refresh_token",
         refresh_token,
-        scope: "openid profile email",
+        // disabling scopes for refresh until we have a way to upgrade existing tokens to include
+        // 'api.connectors.invoke' and 'api.connectors.read'
+        // scope: "openid profile email",
     };
 
     let endpoint = refresh_token_endpoint();
@@ -717,7 +719,7 @@ struct RefreshRequest {
     client_id: &'static str,
     grant_type: &'static str,
     refresh_token: String,
-    scope: &'static str,
+    //scope: &'static str,
 }
 
 #[derive(Deserialize, Clone)]
