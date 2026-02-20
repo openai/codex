@@ -100,6 +100,13 @@ impl ThreadHistoryBuilder {
             .or_else(|| self.turns.last().cloned())
     }
 
+    pub fn active_turn_id(&self) -> Option<&str> {
+        self.current_turn
+            .as_ref()
+            .map(|turn| turn.id.as_str())
+            .or_else(|| self.turns.last().map(|turn| turn.id.as_str()))
+    }
+
     pub fn has_active_turn(&self) -> bool {
         self.current_turn.is_some()
     }

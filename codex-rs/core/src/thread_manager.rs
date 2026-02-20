@@ -282,7 +282,7 @@ impl ThreadManager {
     }
 
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
-        self.start_thread_with_tools(config, Vec::new(), false)
+        self.start_thread_with_tools(config, Vec::new(), false, None)
             .await
     }
 
@@ -291,6 +291,7 @@ impl ThreadManager {
         config: Config,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
+        requested_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
         self.state
             .spawn_thread(
@@ -300,6 +301,7 @@ impl ThreadManager {
                 self.agent_control(),
                 dynamic_tools,
                 persist_extended_history,
+                requested_thread_id,
             )
             .await
     }
@@ -330,6 +332,7 @@ impl ThreadManager {
                 self.agent_control(),
                 Vec::new(),
                 persist_extended_history,
+                None,
             )
             .await
     }
@@ -371,6 +374,7 @@ impl ThreadManager {
                 self.agent_control(),
                 Vec::new(),
                 persist_extended_history,
+                None,
             )
             .await
     }
@@ -440,6 +444,7 @@ impl ThreadManagerState {
             session_source,
             Vec::new(),
             persist_extended_history,
+            None,
         )
         .await
     }
@@ -460,6 +465,7 @@ impl ThreadManagerState {
             session_source,
             Vec::new(),
             false,
+            None,
         )
         .await
     }
@@ -473,6 +479,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
+        requested_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -482,6 +489,7 @@ impl ThreadManagerState {
             self.session_source.clone(),
             dynamic_tools,
             persist_extended_history,
+            requested_thread_id,
         )
         .await
     }
@@ -496,6 +504,7 @@ impl ThreadManagerState {
         session_source: SessionSource,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
+        requested_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
         let watch_registration = self.file_watcher.register_config(&config);
         let CodexSpawnOk {
@@ -511,6 +520,7 @@ impl ThreadManagerState {
             agent_control,
             dynamic_tools,
             persist_extended_history,
+            requested_thread_id,
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)
@@ -540,6 +550,11 @@ impl ThreadManagerState {
             watch_registration,
         ));
         let mut threads = self.threads.write().await;
+        if threads.contains_key(&thread_id) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "duplicate thread id: {thread_id}"
+            )));
+        }
         threads.insert(thread_id, thread.clone());
 
         Ok(NewThread {

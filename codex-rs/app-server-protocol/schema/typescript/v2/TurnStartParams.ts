@@ -10,7 +10,11 @@ import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { UserInput } from "./UserInput";
 
-export type TurnStartParams = {threadId: string, input: Array<UserInput>, /**
+export type TurnStartParams = {threadId: string, /**
+ * Optional caller-supplied turn ID (UUID). If omitted, the server
+ * generates a new turn ID.
+ */
+turnId?: string | null, input: Array<UserInput>, /**
  * Override the working directory for this turn and subsequent turns.
  */
 cwd?: string | null, /**

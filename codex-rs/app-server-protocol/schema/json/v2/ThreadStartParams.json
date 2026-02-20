@@ -150,6 +150,13 @@
           "type": "null"
         }
       ]
+    },
+    "threadId": {
+      "description": "Optional caller-supplied thread ID (UUID). If omitted, the server generates a new thread ID.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "title": "ThreadStartParams",

@@ -213,6 +213,7 @@ use codex_core::protocol::ReviewDelivery as CoreReviewDelivery;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget as CoreReviewTarget;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::Submission;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
@@ -390,6 +391,70 @@ impl CodexMessageProcessor {
 
         Ok((thread_id, thread))
     }
+
+    async fn validate_requested_turn_id(
+        &mut self,
+        thread_uuid: ThreadId,
+        thread: &Arc<CodexThread>,
+        turn_id: &str,
+    ) -> Result<(), JSONRPCErrorError> {
+        let thread_state = self.thread_state_manager.thread_state(thread_uuid);
+        {
+            let state = thread_state.lock().await;
+            if state.active_turn_id().is_some_and(|id| id == turn_id)
+                || state.has_known_turn_id(turn_id)
+            {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("turnId already exists: {turn_id}"),
+                    data: None,
+                });
+            }
+            if state.known_turn_ids_seeded() {
+                return Ok(());
+            }
+        }
+
+        let historical_turn_ids = if let Some(rollout_path) = thread.rollout_path()
+            && rollout_path.exists()
+        {
+            read_rollout_items_from_rollout(rollout_path.as_path())
+                .await
+                .map(|items| build_turns_from_rollout_items(&items))
+                .map(|turns| turns.into_iter().map(|turn| turn.id).collect::<Vec<_>>())
+                .map_err(|err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!(
+                        "failed to validate turnId {turn_id} against rollout history: {err}"
+                    ),
+                    data: None,
+                })?
+        } else {
+            Vec::new()
+        };
+
+        let mut state = thread_state.lock().await;
+        if state.active_turn_id().is_some_and(|id| id == turn_id) {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("turnId already exists: {turn_id}"),
+                data: None,
+            });
+        }
+        if !state.known_turn_ids_seeded() {
+            state.seed_known_turn_ids(historical_turn_ids);
+        }
+        if state.has_known_turn_id(turn_id) {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("turnId already exists: {turn_id}"),
+                data: None,
+            });
+        }
+
+        Ok(())
+    }
+
     pub fn new(args: CodexMessageProcessorArgs) -> Self {
         let CodexMessageProcessorArgs {
             auth_manager,
@@ -1940,6 +2005,7 @@ impl CodexMessageProcessor {
 
     async fn thread_start(&mut self, request_id: ConnectionRequestId, params: ThreadStartParams) {
         let ThreadStartParams {
+            thread_id,
             model,
             model_provider,
             cwd,
@@ -1955,6 +2021,17 @@ impl CodexMessageProcessor {
             ephemeral,
             persist_extended_history,
         } = params;
+        let requested_thread_id = match thread_id {
+            Some(thread_id) => match ThreadId::from_string(&thread_id) {
+                Ok(thread_id) => Some(thread_id),
+                Err(err) => {
+                    self.send_invalid_request_error(request_id, format!("invalid threadId: {err}"))
+                        .await;
+                    return;
+                }
+            },
+            None => None,
+        };
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -1988,6 +2065,61 @@ impl CodexMessageProcessor {
             }
         };
 
+        if let Some(thread_id) = requested_thread_id {
+            let thread_id_str = thread_id.to_string();
+            if self.thread_manager.get_thread(thread_id).await.is_ok() {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("threadId already exists: {thread_id_str}"),
+                )
+                .await;
+                return;
+            }
+
+            let existing_thread_path =
+                match find_thread_path_by_id_str(&config.codex_home, &thread_id_str).await {
+                    Ok(path) => path,
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to validate threadId {thread_id_str}: {err}"),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            if existing_thread_path.is_some() {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("threadId already exists: {thread_id_str}"),
+                )
+                .await;
+                return;
+            }
+
+            let existing_archived_thread_path =
+                match find_archived_thread_path_by_id_str(&config.codex_home, &thread_id_str).await
+                {
+                    Ok(path) => path,
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to validate threadId {thread_id_str}: {err}"),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            if existing_archived_thread_path.is_some() {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("threadId already exists: {thread_id_str}"),
+                )
+                .await;
+                return;
+            }
+        }
+
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
@@ -2013,7 +2145,12 @@ impl CodexMessageProcessor {
 
         match self
             .thread_manager
-            .start_thread_with_tools(config, core_dynamic_tools, persist_extended_history)
+            .start_thread_with_tools(
+                config,
+                core_dynamic_tools,
+                persist_extended_history,
+                requested_thread_id,
+            )
             .await
         {
             Ok(new_conv) => {
@@ -5294,14 +5431,46 @@ impl CodexMessageProcessor {
         let _ = conversation.submit(Op::Interrupt).await;
     }
 
-    async fn turn_start(&self, request_id: ConnectionRequestId, params: TurnStartParams) {
-        let (_, thread) = match self.load_thread(&params.thread_id).await {
+    async fn turn_start(&mut self, request_id: ConnectionRequestId, params: TurnStartParams) {
+        if let Some(turn_id) = params.turn_id.as_ref()
+            && turn_id.is_empty()
+        {
+            self.send_invalid_request_error(request_id, "turnId must not be empty".to_string())
+                .await;
+            return;
+        }
+        let turn_id = match params.turn_id {
+            Some(turn_id) => match Uuid::parse_str(&turn_id) {
+                Ok(turn_uuid) => Some(turn_uuid.hyphenated().to_string()),
+                Err(_) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        "invalid turnId: must be a UUID".to_string(),
+                    )
+                    .await;
+                    return;
+                }
+            },
+            None => None,
+        };
+
+        let (thread_uuid, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
+
+        if let Some(turn_id) = turn_id.as_deref() {
+            if let Err(error) = self
+                .validate_requested_turn_id(thread_uuid, &thread, turn_id)
+                .await
+            {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        }
 
         let collaboration_mode = params
             .collaboration_mode
@@ -5341,15 +5510,26 @@ impl CodexMessageProcessor {
         }
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
-        let turn_id = thread
-            .submit(Op::UserInput {
-                items: mapped_items,
-                final_output_json_schema: params.output_schema,
-            })
-            .await;
+        let op = Op::UserInput {
+            items: mapped_items,
+            final_output_json_schema: params.output_schema,
+        };
+        let turn_id = match turn_id {
+            Some(turn_id) => thread
+                .submit_with_id(Submission {
+                    id: turn_id.clone(),
+                    op,
+                })
+                .await
+                .map(|()| turn_id),
+            None => thread.submit(op).await,
+        };
 
         match turn_id {
             Ok(turn_id) => {
+                let thread_state = self.thread_state_manager.thread_state(thread_uuid);
+                thread_state.lock().await.remember_turn_id(turn_id.clone());
+
                 let turn = Turn {
                     id: turn_id.clone(),
                     items: vec![],
@@ -5369,14 +5549,19 @@ impl CodexMessageProcessor {
                     .send_server_notification(ServerNotification::TurnStarted(notif))
                     .await;
             }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to start turn: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-            }
+            Err(err) => match err {
+                CodexErr::InvalidRequest(message) => {
+                    self.send_invalid_request_error(request_id, message).await;
+                }
+                err => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to start turn: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                }
+            },
         }
     }
 
