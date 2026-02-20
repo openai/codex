@@ -2377,8 +2377,7 @@ impl CodexMessageProcessor {
                     .thread_watch_manager
                     .loaded_status_for_thread(&thread.id)
                     .await;
-                self.attach_thread_name(thread_id.clone(), &mut thread)
-                    .await;
+                self.attach_thread_name(thread_id, &mut thread).await;
                 let thread_id = thread.id.clone();
                 let response = ThreadUnarchiveResponse { thread };
                 self.outgoing.send_response(request_id, response).await;
