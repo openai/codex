@@ -99,7 +99,9 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::UndoCompleted(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::TurnStarted(_)
-        | EventMsg::TurnComplete(_) => Some(EventPersistenceMode::Limited),
+        | EventMsg::TurnComplete(_)
+        // Keep wait-end diagnostics observable in default (limited) rollout files.
+        | EventMsg::CollabWaitingEnd(_) => Some(EventPersistenceMode::Limited),
         EventMsg::ItemCompleted(event) => {
             // Plan items are derived from streaming tags and are not part of the
             // raw ResponseItem history, so we persist their completion to replay
@@ -118,7 +120,6 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionEnd(_)
-        | EventMsg::CollabWaitingEnd(_)
         | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeEnd(_) => Some(EventPersistenceMode::Extended),
         EventMsg::Warning(_)
@@ -167,5 +168,26 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabResumeBegin(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::CollabWaitingEndEvent;
+    use codex_protocol::ThreadId;
+    use std::collections::HashMap;
+
+    #[test]
+    fn collab_waiting_end_is_persisted_in_limited_mode() {
+        let ev = EventMsg::CollabWaitingEnd(CollabWaitingEndEvent {
+            sender_thread_id: ThreadId::default(),
+            call_id: "call-1".to_string(),
+            agent_statuses: Vec::new(),
+            statuses: HashMap::new(),
+            diagnostics: Vec::new(),
+        });
+
+        assert!(should_persist_event_msg(&ev, EventPersistenceMode::Limited));
     }
 }
