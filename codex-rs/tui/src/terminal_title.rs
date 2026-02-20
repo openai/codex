@@ -21,6 +21,14 @@ pub(crate) fn set_terminal_title(title: &str) -> io::Result<()> {
     execute!(stdout(), SetWindowTitle(title))
 }
 
+pub(crate) fn clear_terminal_title() -> io::Result<()> {
+    if !stdout().is_terminal() {
+        return Ok(());
+    }
+
+    execute!(stdout(), SetWindowTitle(String::new()))
+}
+
 #[derive(Debug, Clone)]
 struct SetWindowTitle(String);
 

@@ -127,6 +127,14 @@ impl TerminalTitleSetupView {
                     Some(Line::from(preview))
                 }
             })
+            .on_change(|items, app_event| {
+                let items = items
+                    .iter()
+                    .filter(|item| item.enabled)
+                    .filter_map(|item| item.id.parse::<TerminalTitleItem>().ok())
+                    .collect::<Vec<_>>();
+                app_event.send(AppEvent::TerminalTitleSetupPreview { items });
+            })
             .on_confirm(|ids, app_event| {
                 let items = ids
                     .iter()
