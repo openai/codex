@@ -76,6 +76,18 @@ pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
     }
 }
 
+pub fn terminal_title_items_edit(items: &[String]) -> ConfigEdit {
+    let mut array = toml_edit::Array::new();
+    for item in items {
+        array.push(item.clone());
+    }
+
+    ConfigEdit::SetPath {
+        segments: vec!["tui".to_string(), "terminal_title".to_string()],
+        value: TomlItem::Value(array.into()),
+    }
+}
+
 pub fn model_availability_nux_count_edits(shown_count: &HashMap<String, u32>) -> Vec<ConfigEdit> {
     let mut shown_count_entries: Vec<_> = shown_count.iter().collect();
     shown_count_entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));

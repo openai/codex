@@ -1583,6 +1583,7 @@ async fn helpers_are_available_and_do_not_panic() {
         model: Some(resolved_model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
     let mut w = ChatWidget::new(init, thread_manager);
@@ -1719,6 +1720,7 @@ async fn make_chatwidget_manual(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
+        last_plan_progress: None,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         last_separator_elapsed_secs: None,
@@ -1730,6 +1732,8 @@ async fn make_chatwidget_manual(
         current_cwd: None,
         session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        last_terminal_title: None,
         status_line_branch: None,
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
@@ -4496,6 +4500,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
 
@@ -4546,6 +4551,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
 
