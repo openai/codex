@@ -336,6 +336,7 @@ pub(crate) struct CodexMessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     config: Arc<Config>,
+    single_client_mode: bool,
     cli_overrides: Vec<(String, TomlValue)>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
@@ -361,6 +362,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+    pub(crate) single_client_mode: bool,
     pub(crate) feedback: CodexFeedback,
 }
 
@@ -397,6 +399,7 @@ impl CodexMessageProcessor {
             config,
             cli_overrides,
             cloud_requirements,
+            single_client_mode,
             feedback,
         } = args;
         Self {
@@ -405,6 +408,7 @@ impl CodexMessageProcessor {
             outgoing: outgoing.clone(),
             codex_linux_sandbox_exe,
             config,
+            single_client_mode,
             cli_overrides,
             cloud_requirements,
             active_login: Arc::new(Mutex::new(None)),
@@ -3042,21 +3046,14 @@ impl CodexMessageProcessor {
                 return true;
             }
 
-            if let Err(err) = self
-                .ensure_conversation_listener(
-                    existing_thread_id,
-                    request_id.connection_id,
-                    false,
-                    ApiVersion::V2,
-                )
-                .await
-            {
-                tracing::warn!(
-                    "failed to attach listener for thread {}: {}",
-                    existing_thread_id,
-                    err.message
-                );
-            }
+            let thread_state = self.thread_state_manager.thread_state(existing_thread_id);
+            self.ensure_listener_task_running(
+                existing_thread_id,
+                existing_thread.clone(),
+                thread_state.clone(),
+                ApiVersion::V2,
+            )
+            .await;
 
             let config_snapshot = existing_thread.config_snapshot().await;
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
@@ -3068,41 +3065,39 @@ impl CodexMessageProcessor {
                 );
             }
 
-            let Some(mut thread) = self
-                .load_thread_from_rollout_or_send_internal(
-                    request_id.clone(),
-                    existing_thread_id,
-                    rollout_path.as_path(),
-                    config_snapshot.model_provider_id.as_str(),
-                )
-                .await
-            else {
+            let listener_command_tx = {
+                let thread_state = thread_state.lock().await;
+                thread_state.listener_command_tx()
+            };
+            let Some(listener_command_tx) = listener_command_tx else {
+                let err = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!(
+                        "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener is not running"
+                    ),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, err).await;
                 return true;
             };
 
-            let ThreadConfigSnapshot {
-                model,
-                model_provider_id,
-                approval_policy,
-                sandbox_policy,
-                cwd,
-                reasoning_effort,
-                ..
-            } = config_snapshot;
-            thread.status = self
-                .thread_watch_manager
-                .loaded_status_for_thread(&thread.id)
-                .await;
-            let response = ThreadResumeResponse {
-                thread,
-                model,
-                model_provider: model_provider_id,
-                cwd,
-                approval_policy: approval_policy.into(),
-                sandbox: sandbox_policy.into(),
-                reasoning_effort,
-            };
-            self.outgoing.send_response(request_id, response).await;
+            let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
+                crate::thread_state::PendingThreadResumeRequest {
+                    request_id: request_id.clone(),
+                    rollout_path,
+                    config_snapshot,
+                },
+            );
+            if listener_command_tx.send(command).is_err() {
+                let err = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!(
+                        "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener command channel is closed"
+                    ),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, err).await;
+            }
             return true;
         }
         false
@@ -4014,6 +4009,7 @@ impl CodexMessageProcessor {
             scopes.as_deref().unwrap_or_default(),
             timeout_secs,
             config.mcp_oauth_callback_port,
+            config.mcp_oauth_callback_url.as_deref(),
         )
         .await
         {
@@ -5816,17 +5812,18 @@ impl CodexMessageProcessor {
         api_version: ApiVersion,
     ) {
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
-        {
+        let mut listener_command_rx = {
             let mut thread_state = thread_state.lock().await;
             if thread_state.listener_matches(&conversation) {
                 return;
             }
-            thread_state.set_listener(cancel_tx, &conversation);
-        }
+            thread_state.set_listener(cancel_tx, &conversation)
+        };
         let outgoing_for_task = self.outgoing.clone();
         let thread_manager = self.thread_manager.clone();
         let thread_watch_manager = self.thread_watch_manager.clone();
         let fallback_model_provider = self.config.model_provider_id.clone();
+        let single_client_mode = self.single_client_mode;
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -5868,7 +5865,10 @@ impl CodexMessageProcessor {
                             conversation_id.to_string().into(),
                         );
                         let (subscribed_connection_ids, raw_events_enabled) = {
-                            let thread_state = thread_state.lock().await;
+                            let mut thread_state = thread_state.lock().await;
+                            if !single_client_mode {
+                                thread_state.track_current_turn_event(&event.msg);
+                            }
                             (
                                 thread_state.subscribed_connection_ids(),
                                 thread_state.experimental_raw_events,
@@ -5906,6 +5906,25 @@ impl CodexMessageProcessor {
                             fallback_model_provider.clone(),
                         )
                         .await;
+                    }
+                    listener_command = listener_command_rx.recv() => {
+                        let Some(listener_command) = listener_command else {
+                            break;
+                        };
+                        match listener_command {
+                            crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
+                                resume_request,
+                            ) => {
+                                handle_pending_thread_resume_request(
+                                    conversation_id,
+                                    &thread_state,
+                                    &thread_watch_manager,
+                                    &outgoing_for_task,
+                                    resume_request,
+                                )
+                                .await;
+                            }
+                        }
                     }
                 }
             }
@@ -6203,6 +6222,106 @@ impl CodexMessageProcessor {
             Err(_) => None,
         }
     }
+}
+
+async fn handle_pending_thread_resume_request(
+    conversation_id: ThreadId,
+    thread_state: &Arc<Mutex<ThreadState>>,
+    thread_watch_manager: &ThreadWatchManager,
+    outgoing: &Arc<OutgoingMessageSender>,
+    pending: crate::thread_state::PendingThreadResumeRequest,
+) {
+    let active_turn = {
+        let state = thread_state.lock().await;
+        state.active_turn_snapshot()
+    };
+
+    let request_id = pending.request_id;
+    let connection_id = request_id.connection_id;
+    let mut thread = match load_thread_for_running_resume_response(
+        conversation_id,
+        pending.rollout_path.as_path(),
+        pending.config_snapshot.model_provider_id.as_str(),
+        active_turn.as_ref(),
+    )
+    .await
+    {
+        Ok(thread) => thread,
+        Err(message) => {
+            outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message,
+                        data: None,
+                    },
+                )
+                .await;
+            return;
+        }
+    };
+    thread.status = thread_watch_manager
+        .loaded_status_for_thread(&thread.id)
+        .await;
+
+    let ThreadConfigSnapshot {
+        model,
+        model_provider_id,
+        approval_policy,
+        sandbox_policy,
+        cwd,
+        reasoning_effort,
+        ..
+    } = pending.config_snapshot;
+    let response = ThreadResumeResponse {
+        thread,
+        model,
+        model_provider: model_provider_id,
+        cwd,
+        approval_policy: approval_policy.into(),
+        sandbox: sandbox_policy.into(),
+        reasoning_effort,
+    };
+    outgoing.send_response(request_id, response).await;
+    thread_state.lock().await.add_connection(connection_id);
+}
+
+async fn load_thread_for_running_resume_response(
+    conversation_id: ThreadId,
+    rollout_path: &Path,
+    fallback_provider: &str,
+    active_turn: Option<&Turn>,
+) -> std::result::Result<Thread, String> {
+    let mut thread = read_summary_from_rollout(rollout_path, fallback_provider)
+        .await
+        .map(summary_to_thread)
+        .map_err(|err| {
+            format!(
+                "failed to load rollout `{}` for thread {conversation_id}: {err}",
+                rollout_path.display()
+            )
+        })?;
+
+    let mut turns = read_rollout_items_from_rollout(rollout_path)
+        .await
+        .map(|items| build_turns_from_rollout_items(&items))
+        .map_err(|err| {
+            format!(
+                "failed to load rollout `{}` for thread {conversation_id}: {err}",
+                rollout_path.display()
+            )
+        })?;
+    if let Some(active_turn) = active_turn {
+        merge_turn_history_with_active_turn(&mut turns, active_turn.clone());
+    }
+    thread.turns = turns;
+    Ok(thread)
+}
+
+fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn) {
+    turns.retain(|turn| turn.id != active_turn.id);
+    turns.push(active_turn);
 }
 
 fn collect_resume_override_mismatches(

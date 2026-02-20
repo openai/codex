@@ -4,8 +4,6 @@ use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
 
 use codex_core::config::Config;
-use codex_core::default_client::is_first_party_chat_originator;
-use codex_core::default_client::originator;
 use codex_core::features::Feature;
 use codex_core::token_data::TokenData;
 use serde::Deserialize;
@@ -22,8 +20,10 @@ use codex_core::connectors::AppMetadata;
 use codex_core::connectors::CONNECTORS_CACHE_TTL;
 pub use codex_core::connectors::connector_display_label;
 use codex_core::connectors::connector_install_url;
+use codex_core::connectors::filter_disallowed_connectors;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
+pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status;
 pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
 use codex_core::connectors::merge_connectors;
 pub use codex_core::connectors::with_app_enabled_state;
@@ -106,7 +106,7 @@ pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>>
     }
     let token_data = get_chatgpt_token_data()?;
     let cache_key = all_connectors_cache_key(config, &token_data);
-    read_cached_all_connectors(&cache_key)
+    read_cached_all_connectors(&cache_key).map(filter_disallowed_connectors)
 }
 
 pub async fn list_all_connectors_with_options(
@@ -123,7 +123,7 @@ pub async fn list_all_connectors_with_options(
         get_chatgpt_token_data().ok_or_else(|| anyhow::anyhow!("ChatGPT token not available"))?;
     let cache_key = all_connectors_cache_key(config, &token_data);
     if !force_refetch && let Some(cached_connectors) = read_cached_all_connectors(&cache_key) {
-        return Ok(cached_connectors);
+        return Ok(filter_disallowed_connectors(cached_connectors));
     }
 
     let mut apps = list_directory_connectors(config).await?;
@@ -149,6 +149,7 @@ pub async fn list_all_connectors_with_options(
             .cmp(&right.name)
             .then_with(|| left.id.cmp(&right.id))
     });
+    let connectors = filter_disallowed_connectors(connectors);
     write_cached_all_connectors(cache_key, &connectors);
     Ok(connectors)
 }
@@ -453,45 +454,6 @@ fn normalize_connector_value(value: Option<&str>) -> Option<String> {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
 }
-
-const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
-    "asdk_app_6938a94a61d881918ef32cb999ff937c",
-    "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
-    "connector_68de829bf7648191acd70a907364c67c",
-    "connector_68e004f14af881919eb50893d3d9f523",
-    "connector_69272cb413a081919685ec3c88d1744e",
-    "connector_0f9c9d4592e54d0a9a12b3f44a1e2010",
-];
-const FIRST_PARTY_CHAT_DISALLOWED_CONNECTOR_IDS: &[&str] =
-    &["connector_0f9c9d4592e54d0a9a12b3f44a1e2010"];
-const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
-
-fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
-    filter_disallowed_connectors_for_originator(connectors, originator().value.as_str())
-}
-
-fn filter_disallowed_connectors_for_originator(
-    connectors: Vec<AppInfo>,
-    originator_value: &str,
-) -> Vec<AppInfo> {
-    let disallowed_connector_ids = if is_first_party_chat_originator(originator_value) {
-        FIRST_PARTY_CHAT_DISALLOWED_CONNECTOR_IDS
-    } else {
-        DISALLOWED_CONNECTOR_IDS
-    };
-
-    connectors
-        .into_iter()
-        .filter(|connector| is_connector_allowed(connector, disallowed_connector_ids))
-        .collect()
-}
-
-fn is_connector_allowed(connector: &AppInfo, disallowed_connector_ids: &[&str]) -> bool {
-    let connector_id = connector.id.as_str();
-    !connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX)
-        && !disallowed_connector_ids.contains(&connector_id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,22 +514,6 @@ mod tests {
             app("delta"),
         ]);
         assert_eq!(filtered, vec![app("delta")]);
-    }
-
-    #[test]
-    fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
-        let filtered = filter_disallowed_connectors_for_originator(
-            vec![
-                app("connector_openai_foo"),
-                app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
-                app("connector_0f9c9d4592e54d0a9a12b3f44a1e2010"),
-            ],
-            "codex_atlas",
-        );
-        assert_eq!(
-            filtered,
-            vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c"),]
-        );
     }
 
     fn merged_app(id: &str, is_accessible: bool) -> AppInfo {
