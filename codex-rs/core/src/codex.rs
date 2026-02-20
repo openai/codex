@@ -1600,8 +1600,8 @@ impl Session {
                 let rollout_items = resumed_history.history;
                 let restored_tool_selection =
                     Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
-                let previous_model = Self::last_rollout_regular_turn_model_name(&rollout_items)
-                    .map(std::string::ToString::to_string);
+                let previous_model = Self::last_rollout_regular_turn_context_item(&rollout_items)
+                    .map(|ctx| ctx.model.clone());
                 {
                     let mut state = self.state.lock().await;
                     state.set_reference_context_item(None);
@@ -1650,8 +1650,8 @@ impl Session {
             InitialHistory::Forked(rollout_items) => {
                 let restored_tool_selection =
                     Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
-                let previous_model = Self::last_rollout_regular_turn_model_name(&rollout_items)
-                    .map(std::string::ToString::to_string);
+                let previous_model = Self::last_rollout_regular_turn_context_item(&rollout_items)
+                    .map(|ctx| ctx.model.clone());
                 self.set_previous_model(previous_model).await;
 
                 // Always add response items to conversation history
@@ -1696,18 +1696,19 @@ impl Session {
         }
     }
 
-    /// Returns the model from the latest completed user turn that persisted a
-    /// `RolloutItem::TurnContext` marker.
+    /// Returns the `TurnContextItem` from the latest completed user turn.
     ///
     /// This derives turn membership from persisted turn lifecycle events so
     /// compact/shell-only turns (which have no user message event) do not
     /// overwrite the previous-model baseline. `ThreadRolledBack` markers are
     /// applied so resume/fork uses the post-rollback history view.
-    fn last_rollout_regular_turn_model_name(rollout_items: &[RolloutItem]) -> Option<&str> {
+    fn last_rollout_regular_turn_context_item(
+        rollout_items: &[RolloutItem],
+    ) -> Option<&TurnContextItem> {
         let mut active_turn_id: Option<&str> = None;
         let mut active_turn_saw_user_message = false;
-        let mut active_turn_model: Option<&str> = None;
-        let mut user_turn_models: Vec<Option<&str>> = Vec::new();
+        let mut active_turn_context: Option<&TurnContextItem> = None;
+        let mut user_turn_contexts: Vec<Option<&TurnContextItem>> = Vec::new();
         let mut saw_turn_lifecycle = false;
 
         for item in rollout_items {
@@ -1716,7 +1717,7 @@ impl Session {
                     saw_turn_lifecycle = true;
                     active_turn_id = Some(event.turn_id.as_str());
                     active_turn_saw_user_message = false;
-                    active_turn_model = None;
+                    active_turn_context = None;
                 }
                 RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
                     saw_turn_lifecycle = true;
@@ -1729,7 +1730,7 @@ impl Session {
                         (active_turn_id, ctx.turn_id.as_deref())
                         && active_id == turn_id
                     {
-                        active_turn_model = Some(ctx.model.as_str());
+                        active_turn_context = Some(ctx);
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
@@ -1737,11 +1738,11 @@ impl Session {
                     if active_turn_id == Some(event.turn_id.as_str())
                         && active_turn_saw_user_message
                     {
-                        user_turn_models.push(active_turn_model);
+                        user_turn_contexts.push(active_turn_context);
                     }
                     active_turn_id = None;
                     active_turn_saw_user_message = false;
-                    active_turn_model = None;
+                    active_turn_context = None;
                 }
                 RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
                     saw_turn_lifecycle = true;
@@ -1749,28 +1750,28 @@ impl Session {
                         && event.turn_id.as_deref() == Some(active_id)
                         && active_turn_saw_user_message
                     {
-                        user_turn_models.push(active_turn_model);
+                        user_turn_contexts.push(active_turn_context);
                     }
                     active_turn_id = None;
                     active_turn_saw_user_message = false;
-                    active_turn_model = None;
+                    active_turn_context = None;
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                     let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
-                    let new_len = user_turn_models.len().saturating_sub(num_turns);
-                    user_turn_models.truncate(new_len);
+                    let new_len = user_turn_contexts.len().saturating_sub(num_turns);
+                    user_turn_contexts.truncate(new_len);
                 }
                 _ => {}
             }
         }
 
-        let last_user_turn_model = user_turn_models.into_iter().rev().flatten().next();
-        if last_user_turn_model.is_some() || saw_turn_lifecycle {
-            return last_user_turn_model;
+        let last_user_turn_context = user_turn_contexts.into_iter().rev().flatten().next();
+        if last_user_turn_context.is_some() || saw_turn_lifecycle {
+            return last_user_turn_context;
         }
 
         rollout_items.iter().rev().find_map(|item| match item {
-            RolloutItem::TurnContext(ctx) => Some(ctx.model.as_str()),
+            RolloutItem::TurnContext(ctx) => Some(ctx),
             _ => None,
         })
     }
