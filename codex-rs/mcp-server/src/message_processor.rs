@@ -62,7 +62,7 @@ impl MessageProcessor {
             .model_providers
             .get(OPENAI_PROVIDER_ID)
             .cloned()
-            .unwrap_or_else(codex_core::ModelProviderInfo::create_openai_provider);
+            .unwrap_or_else(|| codex_core::ModelProviderInfo::create_openai_provider(None));
         let thread_manager = Arc::new(ThreadManager::new_with_models_provider(
             config.codex_home.clone(),
             auth_manager,
