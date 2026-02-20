@@ -18,6 +18,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnContextItem;
 use std::ops::Deref;
 
 /// Transcript of thread history
@@ -26,6 +27,12 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
+    /// Previous turn context snapshot used for diffing context and producing
+    /// model-visible settings update items.
+    ///
+    /// When this is `None`, settings diffing treats the next turn as having no
+    /// baseline and emits a full reinjection of context state.
+    previous_context_item: Option<TurnContextItem>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -41,6 +48,7 @@ impl ContextManager {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            previous_context_item: None,
         }
     }
 
@@ -50,6 +58,14 @@ impl ContextManager {
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         self.token_info = info;
+    }
+
+    pub(crate) fn set_previous_context_item(&mut self, item: Option<TurnContextItem>) {
+        self.previous_context_item = item;
+    }
+
+    pub(crate) fn previous_context_item(&self) -> Option<TurnContextItem> {
+        self.previous_context_item.clone()
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {

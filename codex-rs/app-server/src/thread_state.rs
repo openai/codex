@@ -1,13 +1,19 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
+use codex_app_server_protocol::ThreadHistoryBuilder;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_core::CodexThread;
+use codex_core::ThreadConfigSnapshot;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::EventMsg;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -15,6 +21,16 @@ type PendingInterruptQueue = Vec<(
     ConnectionRequestId,
     crate::codex_message_processor::ApiVersion,
 )>;
+
+pub(crate) struct PendingThreadResumeRequest {
+    pub(crate) request_id: ConnectionRequestId,
+    pub(crate) rollout_path: PathBuf,
+    pub(crate) config_snapshot: ThreadConfigSnapshot,
+}
+
+pub(crate) enum ThreadListenerCommand {
+    SendThreadResumeResponse(PendingThreadResumeRequest),
+}
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
@@ -31,6 +47,8 @@ pub(crate) struct ThreadState {
     pub(crate) turn_summary: TurnSummary,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
+    listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
+    current_turn_history: ThreadHistoryBuilder,
     listener_thread: Option<Weak<CodexThread>>,
     subscribed_connections: HashSet<ConnectionId>,
 }
@@ -47,17 +65,22 @@ impl ThreadState {
         &mut self,
         cancel_tx: oneshot::Sender<()>,
         conversation: &Arc<CodexThread>,
-    ) {
+    ) -> mpsc::UnboundedReceiver<ThreadListenerCommand> {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
         }
+        let (listener_command_tx, listener_command_rx) = mpsc::unbounded_channel();
+        self.listener_command_tx = Some(listener_command_tx);
         self.listener_thread = Some(Arc::downgrade(conversation));
+        listener_command_rx
     }
 
     pub(crate) fn clear_listener(&mut self) {
         if let Some(cancel_tx) = self.cancel_tx.take() {
             let _ = cancel_tx.send(());
         }
+        self.listener_command_tx = None;
+        self.current_turn_history.reset();
         self.listener_thread = None;
     }
 
@@ -75,6 +98,23 @@ impl ThreadState {
 
     pub(crate) fn set_experimental_raw_events(&mut self, enabled: bool) {
         self.experimental_raw_events = enabled;
+    }
+
+    pub(crate) fn listener_command_tx(
+        &self,
+    ) -> Option<mpsc::UnboundedSender<ThreadListenerCommand>> {
+        self.listener_command_tx.clone()
+    }
+
+    pub(crate) fn active_turn_snapshot(&self) -> Option<Turn> {
+        self.current_turn_history.active_turn_snapshot()
+    }
+
+    pub(crate) fn track_current_turn_event(&mut self, event: &EventMsg) {
+        self.current_turn_history.handle_event(event);
+        if !self.current_turn_history.has_active_turn() {
+            self.current_turn_history.reset();
+        }
     }
 }
 
@@ -200,11 +240,23 @@ impl ThreadStateManager {
     }
 
     pub(crate) async fn remove_connection(&mut self, connection_id: ConnectionId) {
-        let Some(thread_ids) = self.thread_ids_by_connection.remove(&connection_id) else {
-            return;
-        };
+        let thread_ids = self
+            .thread_ids_by_connection
+            .remove(&connection_id)
+            .unwrap_or_default();
         self.subscription_state_by_id
             .retain(|_, state| state.connection_id != connection_id);
+
+        if thread_ids.is_empty() {
+            for thread_state in self.thread_states.values() {
+                let mut thread_state = thread_state.lock().await;
+                thread_state.remove_connection(connection_id);
+                if thread_state.subscribed_connection_ids().is_empty() {
+                    thread_state.clear_listener();
+                }
+            }
+            return;
+        }
 
         for thread_id in thread_ids {
             if let Some(thread_state) = self.thread_states.get(&thread_id) {

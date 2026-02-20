@@ -11,7 +11,6 @@ use crate::CodexAuth;
 use crate::SandboxState;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
-use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
@@ -150,6 +149,7 @@ use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::mcp_connection_manager::filter_codex_apps_mcp_tools_only;
 use crate::mcp_connection_manager::filter_mcp_tools_by_name;
 use crate::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
@@ -315,7 +315,7 @@ impl Codex {
         }
 
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
-            && depth >= MAX_THREAD_SPAWN_DEPTH
+            && depth >= config.agent_max_depth
         {
             config.features.disable(Feature::Collab);
         }
@@ -660,10 +660,7 @@ impl TurnContext {
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
     }
 
-    pub(crate) fn to_turn_context_item(
-        &self,
-        collaboration_mode: CollaborationMode,
-    ) -> TurnContextItem {
+    pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             cwd: self.cwd.clone(),
@@ -672,7 +669,7 @@ impl TurnContext {
             network: self.turn_context_network_item(),
             model: self.model_info.slug.clone(),
             personality: self.personality,
-            collaboration_mode: Some(collaboration_mode),
+            collaboration_mode: Some(self.collaboration_mode.clone()),
             effort: self.reasoning_effort,
             summary: self.reasoning_summary,
             user_instructions: self.user_instructions.clone(),
@@ -1285,7 +1282,16 @@ impl Session {
             .await;
 
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            // Initialize the MCP connection manager with an uninitialized
+            // instance. It will be replaced with one created via
+            // McpConnectionManager::new() once all its constructor args are
+            // available. This also ensures `SessionConfigured` is emitted
+            // before any MCP-related events. It is reasonable to consider
+            // changing this to use Option or OnceCell, though the current
+            // setup is straightforward enough and performs well.
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
+                &config.permissions.approval_policy,
+            ))),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
@@ -1389,7 +1395,7 @@ impl Session {
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_file_watcher_listener();
 
-        // Construct sandbox_state before initialize() so it can be sent to each
+        // Construct sandbox_state before MCP startup so it can be sent to each
         // MCP server immediately after it becomes ready (avoiding blocking).
         let sandbox_state = SandboxState {
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
@@ -1403,21 +1409,33 @@ impl Session {
             .map(|(name, _)| name.clone())
             .collect();
         required_mcp_servers.sort();
-        let cancel_token = sess.mcp_startup_cancellation_token().await;
-
-        sess.services
-            .mcp_connection_manager
-            .write()
-            .await
-            .initialize(
-                &mcp_servers,
-                config.mcp_oauth_credentials_store_mode,
-                auth_statuses.clone(),
-                tx_event.clone(),
-                cancel_token,
-                sandbox_state,
-            )
-            .await;
+        {
+            let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
+            cancel_guard.cancel();
+            *cancel_guard = CancellationToken::new();
+        }
+        let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+            &mcp_servers,
+            config.mcp_oauth_credentials_store_mode,
+            auth_statuses.clone(),
+            &session_configuration.approval_policy,
+            tx_event.clone(),
+            sandbox_state,
+            config.codex_home.clone(),
+            codex_apps_tools_cache_key(auth),
+        )
+        .await;
+        {
+            let mut manager_guard = sess.services.mcp_connection_manager.write().await;
+            *manager_guard = mcp_connection_manager;
+        }
+        {
+            let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
+            if cancel_guard.is_cancelled() {
+                cancel_token.cancel();
+            }
+            *cancel_guard = cancel_token;
+        }
         if !required_mcp_servers.is_empty() {
             let failures = sess
                 .services
@@ -1858,6 +1876,11 @@ impl Session {
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
+        self.services
+            .mcp_connection_manager
+            .read()
+            .await
+            .set_approval_policy(&session_configuration.approval_policy);
 
         if sandbox_policy_changed {
             let sandbox_state = SandboxState {
@@ -1995,11 +2018,6 @@ impl Session {
             .await
     }
 
-    pub(crate) async fn current_collaboration_mode(&self) -> CollaborationMode {
-        let state = self.state.lock().await;
-        state.session_configuration.collaboration_mode.clone()
-    }
-
     pub(crate) fn is_model_switch_developer_message(item: &ResponseItem) -> bool {
         let ResponseItem::Message { role, content, .. } = item else {
             return false;
@@ -2014,7 +2032,7 @@ impl Session {
     }
     fn build_settings_update_items(
         &self,
-        previous_context: Option<&Arc<TurnContext>>,
+        previous_context: Option<&TurnContextItem>,
         resumed_model: Option<&str>,
         current_context: &TurnContext,
     ) -> Vec<ResponseItem> {
@@ -2025,7 +2043,7 @@ impl Session {
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
         crate::context_manager::updates::build_settings_update_items(
-            previous_context.map(Arc::as_ref),
+            previous_context,
             resumed_model,
             current_context,
             shell.as_ref(),
@@ -2660,6 +2678,16 @@ impl Session {
         state.clone_history()
     }
 
+    pub(crate) async fn previous_context_item(&self) -> Option<TurnContextItem> {
+        let state = self.state.lock().await;
+        state.previous_context_item()
+    }
+
+    pub(crate) async fn set_previous_context_item(&self, item: Option<TurnContextItem>) {
+        let mut state = self.state.lock().await;
+        state.set_previous_context_item(item);
+    }
+
     pub(crate) async fn update_token_usage_info(
         &self,
         turn_context: &TurnContext,
@@ -3031,19 +3059,29 @@ impl Session {
             sandbox_cwd: turn_context.cwd.clone(),
             use_linux_sandbox_bwrap: turn_context.features.enabled(Feature::UseLinuxSandboxBwrap),
         };
-        let cancel_token = self.reset_mcp_startup_cancellation_token().await;
-
-        let mut refreshed_manager = McpConnectionManager::default();
-        refreshed_manager
-            .initialize(
-                &mcp_servers,
-                store_mode,
-                auth_statuses,
-                self.get_tx_event(),
-                cancel_token,
-                sandbox_state,
-            )
-            .await;
+        {
+            let mut cancel_guard = self.services.mcp_startup_cancellation_token.lock().await;
+            cancel_guard.cancel();
+            *cancel_guard = CancellationToken::new();
+        }
+        let (refreshed_manager, cancel_token) = McpConnectionManager::new(
+            &mcp_servers,
+            store_mode,
+            auth_statuses,
+            &turn_context.config.permissions.approval_policy,
+            self.get_tx_event(),
+            sandbox_state,
+            config.codex_home.clone(),
+            codex_apps_tools_cache_key(auth.as_ref()),
+        )
+        .await;
+        {
+            let mut cancel_guard = self.services.mcp_startup_cancellation_token.lock().await;
+            if cancel_guard.is_cancelled() {
+                cancel_token.cancel();
+            }
+            *cancel_guard = cancel_token;
+        }
 
         let mut manager = self.services.mcp_connection_manager.write().await;
         *manager = refreshed_manager;
@@ -3092,20 +3130,13 @@ impl Session {
             .await;
     }
 
+    #[cfg(test)]
     async fn mcp_startup_cancellation_token(&self) -> CancellationToken {
         self.services
             .mcp_startup_cancellation_token
             .lock()
             .await
             .clone()
-    }
-
-    async fn reset_mcp_startup_cancellation_token(&self) -> CancellationToken {
-        let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-        guard.cancel();
-        let cancel_token = CancellationToken::new();
-        *guard = cancel_token.clone();
-        cancel_token
     }
 
     fn show_raw_agent_reasoning(&self) -> bool {
@@ -3123,7 +3154,9 @@ impl Session {
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
     // Seed with context in case there is an OverrideTurnContext first.
-    let mut previous_context: Option<Arc<TurnContext>> = Some(sess.new_default_turn().await);
+    let initial_context = sess.new_default_turn().await;
+    sess.set_previous_context_item(Some(initial_context.to_turn_context_item()))
+        .await;
 
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
@@ -3173,8 +3206,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 .await;
             }
             Op::UserInput { .. } | Op::UserTurn { .. } => {
-                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
-                    .await;
+                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
             }
             Op::ExecApproval {
                 id: approval_id,
@@ -3251,13 +3283,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::set_thread_name(&sess, sub.id.clone(), name).await;
             }
             Op::RunUserShellCommand { command } => {
-                handlers::run_user_shell_command(
-                    &sess,
-                    sub.id.clone(),
-                    command,
-                    &mut previous_context,
-                )
-                .await;
+                handlers::run_user_shell_command(&sess, sub.id.clone(), command).await;
             }
             Op::ResolveElicitation {
                 server_name,
@@ -3285,7 +3311,6 @@ mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::SteerInputError;
-    use crate::codex::TurnContext;
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
@@ -3389,12 +3414,7 @@ mod handlers {
         }
     }
 
-    pub async fn user_input_or_turn(
-        sess: &Arc<Session>,
-        sub_id: String,
-        op: Op,
-        previous_context: &mut Option<Arc<TurnContext>>,
-    ) {
+    pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
         let (items, updates) = match op {
             Op::UserTurn {
                 cwd,
@@ -3457,8 +3477,9 @@ mod handlers {
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
             sess.seed_initial_context_if_needed(&current_context).await;
             let previous_model = sess.previous_model().await;
+            let previous_context_item = sess.previous_context_item().await;
             let update_items = sess.build_settings_update_items(
-                previous_context.as_ref(),
+                previous_context_item.as_ref(),
                 previous_model.as_deref(),
                 &current_context,
             );
@@ -3472,16 +3493,12 @@ mod handlers {
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
             sess.spawn_task(Arc::clone(&current_context), items, regular_task)
                 .await;
-            *previous_context = Some(current_context);
+            sess.set_previous_context_item(Some(current_context.to_turn_context_item()))
+                .await;
         }
     }
 
-    pub async fn run_user_shell_command(
-        sess: &Arc<Session>,
-        sub_id: String,
-        command: String,
-        previous_context: &mut Option<Arc<TurnContext>>,
-    ) {
+    pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command: String) {
         if let Some((turn_context, cancellation_token)) =
             sess.active_turn_context_and_cancellation_token().await
         {
@@ -3506,7 +3523,8 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
-        *previous_context = Some(turn_context);
+        sess.set_previous_context_item(Some(turn_context.to_turn_context_item()))
+            .await;
     }
 
     pub async fn resolve_elicitation(
@@ -5492,9 +5510,7 @@ async fn try_run_sampling_request(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    let collaboration_mode = sess.current_collaboration_mode().await;
-    let rollout_item =
-        RolloutItem::TurnContext(turn_context.to_turn_context_item(collaboration_mode));
+    let rollout_item = RolloutItem::TurnContext(turn_context.to_turn_context_item());
 
     feedback_tags!(
         model = turn_context.model_info.slug.clone(),
@@ -7326,6 +7342,7 @@ mod tests {
         let models_manager = Arc::new(ModelsManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
+            None,
         ));
         let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
         let model_info =
@@ -7400,6 +7417,7 @@ mod tests {
         let models_manager = Arc::new(ModelsManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
+            None,
         ));
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
@@ -7458,7 +7476,11 @@ mod tests {
 
         let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_connection_manager: Arc::new(RwLock::new(
+                McpConnectionManager::new_mcp_connection_manager_for_tests(
+                    &config.permissions.approval_policy,
+                ),
+            )),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
@@ -7551,6 +7573,7 @@ mod tests {
         let models_manager = Arc::new(ModelsManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
+            None,
         ));
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
@@ -7609,7 +7632,11 @@ mod tests {
 
         let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_connection_manager: Arc::new(RwLock::new(
+                McpConnectionManager::new_mcp_connection_manager_for_tests(
+                    &config.permissions.approval_policy,
+                ),
+            )),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
@@ -7820,8 +7847,12 @@ mod tests {
         .expect("rebuild config layer stack with network requirements");
         current_context.config = Arc::new(config);
 
-        let update_items =
-            session.build_settings_update_items(Some(&previous_context), None, &current_context);
+        let previous_context_item = previous_context.to_turn_context_item();
+        let update_items = session.build_settings_update_items(
+            Some(&previous_context_item),
+            None,
+            &current_context,
+        );
 
         let environment_update = update_items
             .iter()

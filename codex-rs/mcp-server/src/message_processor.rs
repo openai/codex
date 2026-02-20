@@ -61,6 +61,7 @@ impl MessageProcessor {
             config.codex_home.clone(),
             auth_manager,
             SessionSource::Mcp,
+            config.model_catalog.clone(),
         ));
         Self {
             outgoing,

@@ -26,6 +26,7 @@
 //! back. This avoids duplicate handshakes but means a failed prewarm can consume one retry
 //! budget slot before any turn payload is sent.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
@@ -623,6 +624,7 @@ impl ModelClientSession {
             if !responses_websockets_v2_enabled {
                 return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
                     input: append_items,
+                    client_metadata: payload.client_metadata,
                 });
             }
         }
@@ -811,7 +813,10 @@ impl ModelClientSession {
                 effort,
                 summary,
             )?;
-            let ws_payload = ResponseCreateWsRequest::from(&request);
+            let ws_payload = ResponseCreateWsRequest {
+                client_metadata: build_ws_client_metadata(turn_metadata_header),
+                ..ResponseCreateWsRequest::from(&request)
+            };
 
             match self
                 .websocket_connection(
@@ -966,6 +971,14 @@ impl ModelClientSession {
 /// metadata with the same sanitization path used when constructing headers.
 fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<HeaderValue> {
     turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
+}
+
+fn build_ws_client_metadata(turn_metadata_header: Option<&str>) -> Option<HashMap<String, String>> {
+    let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header)?;
+    let turn_metadata = turn_metadata_header.to_str().ok()?.to_string();
+    let mut client_metadata = HashMap::new();
+    client_metadata.insert(X_CODEX_TURN_METADATA_HEADER.to_string(), turn_metadata);
+    Some(client_metadata)
 }
 
 /// Builds the extra headers attached to Responses API requests.
