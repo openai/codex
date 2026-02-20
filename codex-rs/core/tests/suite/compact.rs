@@ -2414,35 +2414,36 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         first_request_user_texts[first_turn_user_index], first_user_message,
         "first turn request should end with the submitted user message"
     );
-    let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
+    let initial_seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
 
     let final_request_user_texts = requests
         .last()
         .unwrap_or_else(|| panic!("final turn request missing for {final_user_message}"))
         .message_input_texts("user");
     assert!(
-        !seeded_user_prefix.is_empty(),
+        !initial_seeded_user_prefix.is_empty(),
         "first turn should include seeded user prefix before the submitted user message"
     );
-    let seeded_user_prefix_index = final_request_user_texts
-        .windows(seeded_user_prefix.len())
-        .position(|window| window == seeded_user_prefix)
+    let (final_request_last_user_text, final_request_before_last_user) = final_request_user_texts
+        .split_last()
+        .unwrap_or_else(|| panic!("final turn request missing user messages"));
+    assert_eq!(
+        final_request_last_user_text, final_user_message,
+        "final turn request should end with the submitted user message"
+    );
+    let history_before_seeded_prefix = final_request_before_last_user
+        .strip_suffix(initial_seeded_user_prefix)
         .unwrap_or_else(|| {
             panic!(
-                "final request missing seeded user prefix from first request: {seeded_user_prefix:?}"
+                "final request should end with the seeded user prefix from the first request: {initial_seeded_user_prefix:?}"
             )
         });
-    let before_seeded_user_prefix = &final_request_user_texts[..seeded_user_prefix_index];
     let expected_history = vec![
         first_user_message.to_string(),
         second_user_message.to_string(),
         expected_second_summary,
     ];
-    assert_eq!(before_seeded_user_prefix, expected_history.as_slice());
-    let after_seeded_user_prefix =
-        &final_request_user_texts[seeded_user_prefix_index + seeded_user_prefix.len()..];
-    let expected_tail = vec![final_user_message.to_string()];
-    assert_eq!(after_seeded_user_prefix, expected_tail.as_slice());
+    assert_eq!(history_before_seeded_prefix, expected_history.as_slice());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
