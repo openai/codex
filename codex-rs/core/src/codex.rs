@@ -2142,18 +2142,6 @@ impl Session {
             .await
     }
 
-    pub(crate) fn is_model_switch_developer_message(item: &ResponseItem) -> bool {
-        let ResponseItem::Message { role, content, .. } = item else {
-            return false;
-        };
-        role == "developer"
-            && content.iter().any(|content_item| {
-                matches!(
-                    content_item,
-                    ContentItem::InputText { text } if text.starts_with("<model_switch>")
-                )
-            })
-    }
     fn build_settings_update_items(
         &self,
         reference_context_item: Option<&TurnContextItem>,
@@ -2793,8 +2781,8 @@ impl Session {
     /// When the reference snapshot is missing, this injects full initial context. Otherwise, it
     /// emits only settings diff items.
     ///
-    /// If full context is injected and a model switch occurred, this appends the `<model_switch>`
-    /// developer message so model-specific instructions are not lost.
+    /// If full context is injected and a model switch occurred, this prepends the
+    /// `<model_switch>` developer message so model-specific instructions are not lost.
     ///
     /// Invariant: this is the only runtime path that writes a non-`None`
     /// `reference_context_item`. Non-regular tasks intentionally do not update that
@@ -2805,28 +2793,28 @@ impl Session {
         previous_user_turn_model: Option<&str>,
     ) {
         let reference_context_item = self.reference_context_item().await;
-        let settings_update_items = self.build_settings_update_items(
-            reference_context_item.as_ref(),
-            previous_user_turn_model,
-            turn_context,
-        );
         let should_inject_full_context = reference_context_item.is_none();
         let context_items = if should_inject_full_context {
             let mut initial_context = self.build_initial_context(turn_context).await;
-            // Full reinjection bypasses the pure diff item list, so explicitly preserve a
-            // model-switch instruction when one is needed this turn. Keep it before the rest
-            // of full context so model-specific guidance is read first.
-            if let Some(model_switch_item) = settings_update_items
-                .iter()
-                .find(|item| Session::is_model_switch_developer_message(item))
-                .cloned()
+            // Full reinjection bypasses the settings-diff path, so add the model-switch
+            // instruction explicitly when needed. Keep it before the rest of full context so
+            // model-specific guidance is read first.
+            if let Some(model_switch_item) =
+                crate::context_manager::updates::build_model_instructions_update_item(
+                    previous_user_turn_model,
+                    turn_context,
+                )
             {
                 initial_context.insert(0, model_switch_item);
             }
             initial_context
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
-            settings_update_items
+            self.build_settings_update_items(
+                reference_context_item.as_ref(),
+                previous_user_turn_model,
+                turn_context,
+            )
         };
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
