@@ -1893,13 +1893,13 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
     insta::assert_snapshot!(
         "remote_mid_turn_compaction_multi_summary_reinjects_above_last_summary_shapes",
         format_labeled_requests_snapshot(
-            "Remote mid-turn compaction after an earlier summary compaction: the older summary remains in model-visible history and round-trips into the next compact request.",
+            "After a prior manual /compact produced REMOTE_OLDER_SUMMARY, the next turn hits remote auto-compaction before the next sampling request. The compact request keeps only user-visible history (including the older summary), and the next sampling request shows the new summary plus canonical context reinjected before USER_TWO.",
             &[
+                ("Remote Compaction Request", &compact_request),
                 (
-                    "Second Turn Request (Before Mid-Turn Compaction)",
+                    "Second Turn Request (After Compaction)",
                     &second_turn_request
                 ),
-                ("Remote Compaction Request", &compact_request),
             ]
         )
     );
