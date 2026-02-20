@@ -3946,10 +3946,10 @@ mod handlers {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
         let mut history = sess.clone_history().await;
-        // TODO: Follow up on rollback/backtracking baseline handling. Truncating
-        // history should also invalidate/recompute `reference_context_item` and
-        // `previous_model` so the next regular turn replays any dropped context
-        // diffs / model-switch instructions.
+        // TODO(ccunningham): Fix rollback/backtracking baseline handling.
+        // Truncating history should also invalidate/recompute
+        // `reference_context_item` and `previous_model` so the next regular
+        // turn replays any dropped context diffs / model-switch instructions.
         history.drop_last_n_user_turns(num_turns);
 
         // Replace with the raw items. We don't want to replace with a normalized
@@ -4325,6 +4325,10 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
+    // TODO(ccunningham): Pre-turn compaction runs before context updates and the
+    // new user message are recorded. Estimate pending incoming items (context
+    // diffs/full reinjection + user input) and trigger compaction preemptively
+    // when they would push the thread over the compaction threshold.
     let pre_sampling_compacted = match run_pre_sampling_compact(&sess, &turn_context).await {
         Ok(compacted) => compacted,
         Err(_) => {
