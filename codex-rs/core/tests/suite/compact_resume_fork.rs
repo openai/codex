@@ -106,6 +106,42 @@ fn normalize_compact_prompts(requests: &mut [Value]) {
     let normalized_summary_prompt = normalize_line_endings_str(SUMMARIZATION_PROMPT);
     for request in requests {
         if let Some(input) = request.get_mut("input").and_then(Value::as_array_mut) {
+            for item in input.iter_mut() {
+                if item.get("type").and_then(Value::as_str) != Some("message")
+                    || item.get("role").and_then(Value::as_str) != Some("user")
+                {
+                    continue;
+                }
+                let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) else {
+                    continue;
+                };
+                let Some(first) = content.first_mut() else {
+                    continue;
+                };
+                let Some(text_value) = first.get_mut("text") else {
+                    continue;
+                };
+                let Some(text) = text_value.as_str().map(str::to_owned) else {
+                    continue;
+                };
+                let mut normalized_text = normalize_line_endings_str(&text);
+                let available_skills_marker = "\n### Available skills\n";
+                let usage_rules_marker = "\n### How to use skills\n";
+                // Repo-local and system skill inventories can differ across CI environments; the
+                // exact list is not relevant to compact/resume history preservation assertions.
+                if let Some(skills_start) = normalized_text.find(available_skills_marker) {
+                    let list_start = skills_start + available_skills_marker.len();
+                    if let Some(rel_list_end) =
+                        normalized_text[list_start..].find(usage_rules_marker)
+                    {
+                        let list_end = list_start + rel_list_end;
+                        normalized_text.replace_range(list_start..list_end, "<skills omitted>\n");
+                    }
+                }
+                if normalized_text != text {
+                    *text_value = Value::String(normalized_text);
+                }
+            }
             input.retain(|item| {
                 if item.get("type").and_then(Value::as_str) != Some("message")
                     || item.get("role").and_then(Value::as_str) != Some("user")
