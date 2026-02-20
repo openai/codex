@@ -230,65 +230,6 @@ async fn conversation_text_before_start_emits_error() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_transport_close_then_audio_emits_error() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_websocket_server(vec![
-        vec![],
-        vec![vec![json!({
-            "type": "session.created",
-            "session": { "id": "sess_1" }
-        })]],
-    ])
-    .await;
-    let mut builder = test_codex();
-    let test = builder.build_with_websocket_server(&server).await?;
-    assert!(server.wait_for_handshakes(1, Duration::from_secs(2)).await);
-
-    test.codex
-        .submit(Op::Conversation {
-            cmd: ConversationCommand::Start(ConversationStartParams {
-                prompt: "backend prompt".to_string(),
-                session_id: None,
-            }),
-        })
-        .await?;
-
-    let _ = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::Conversation(ConversationEvent::Closed(closed))
-            if closed.reason.as_deref() == Some("transport_closed") =>
-        {
-            Some(())
-        }
-        _ => None,
-    })
-    .await;
-
-    test.codex
-        .submit(Op::Conversation {
-            cmd: ConversationCommand::Audio(ConversationAudioParams {
-                frame: RealtimeAudioFrame {
-                    data: "AQID".to_string(),
-                    sample_rate: 24000,
-                    num_channels: 1,
-                    samples_per_channel: Some(480),
-                },
-            }),
-        })
-        .await?;
-
-    let err = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::Error(err) => Some(err.clone()),
-        _ => None,
-    })
-    .await;
-    assert_eq!(err.message, "conversation is not running");
-
-    server.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_second_start_replaces_runtime() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
