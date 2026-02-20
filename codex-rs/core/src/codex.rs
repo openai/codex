@@ -5533,8 +5533,6 @@ async fn try_run_sampling_request(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    // Persist a regular-turn context marker so resume/fork can recover the last
-    // user-turn model even when `reference_context_item` is intentionally cleared.
     let rollout_item = RolloutItem::TurnContext(turn_context.to_turn_context_item());
 
     feedback_tags!(
