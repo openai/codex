@@ -15,7 +15,6 @@ use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -67,7 +66,6 @@ pub struct ExecParams {
     pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
-    pub network_attempt_id: Option<Uuid>,
     pub sandbox_permissions: SandboxPermissions,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     pub justification: Option<String>,
@@ -186,15 +184,13 @@ pub async fn process_exec_tool_call(
         mut env,
         expiration,
         network,
-        network_attempt_id,
         sandbox_permissions,
         windows_sandbox_level,
         justification,
         arg0: _,
     } = params;
-    let network_attempt_id = network_attempt_id.map(|attempt_id| attempt_id.to_string());
     if let Some(network) = network.as_ref() {
-        network.apply_to_env_for_attempt(&mut env, network_attempt_id.as_deref());
+        network.apply_to_env(&mut env);
     }
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
@@ -242,7 +238,6 @@ pub(crate) async fn execute_exec_env(
         cwd,
         env,
         network,
-        network_attempt_id,
         expiration,
         sandbox,
         windows_sandbox_level,
@@ -251,18 +246,12 @@ pub(crate) async fn execute_exec_env(
         arg0,
     } = env;
 
-    let network_attempt_id = match network_attempt_id.as_deref() {
-        Some(attempt_id) => Uuid::parse_str(attempt_id).ok(),
-        None => network.as_ref().map(|_| Uuid::new_v4()),
-    };
-
     let params = ExecParams {
         command,
         cwd,
         expiration,
         env,
         network: network.clone(),
-        network_attempt_id,
         sandbox_permissions,
         windows_sandbox_level,
         justification,
@@ -356,14 +345,12 @@ async fn exec_windows_sandbox(
         cwd,
         mut env,
         network,
-        network_attempt_id,
         expiration,
         windows_sandbox_level,
         ..
     } = params;
-    let network_attempt_id = network_attempt_id.map(|attempt_id| attempt_id.to_string());
     if let Some(network) = network.as_ref() {
-        network.apply_to_env_for_attempt(&mut env, network_attempt_id.as_deref());
+        network.apply_to_env(&mut env);
     }
 
     // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
@@ -717,16 +704,13 @@ async fn exec(
         cwd,
         mut env,
         network,
-        network_attempt_id,
         arg0,
         expiration,
         windows_sandbox_level: _,
         ..
     } = params;
-    let network_attempt_id = network_attempt_id.map(|attempt_id| attempt_id.to_string());
-
     if let Some(network) = network.as_ref() {
-        network.apply_to_env_for_attempt(&mut env, network_attempt_id.as_deref());
+        network.apply_to_env(&mut env);
     }
 
     let (program, args) = command.split_first().ok_or_else(|| {
@@ -1137,7 +1121,6 @@ mod tests {
             expiration: 500.into(),
             env,
             network: None,
-            network_attempt_id: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             justification: None,
@@ -1191,7 +1174,6 @@ mod tests {
             expiration: ExecExpiration::Cancellation(cancel_token),
             env,
             network: None,
-            network_attempt_id: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             justification: None,

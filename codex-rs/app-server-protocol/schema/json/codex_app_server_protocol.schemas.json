@@ -2192,6 +2192,17 @@
         "itemId": {
           "type": "string"
         },
+        "networkApprovalContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkApprovalContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional context for managed-network approval prompts."
+        },
         "proposedExecpolicyAmendment": {
           "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
           "items": {
@@ -10654,29 +10665,50 @@
       },
       "AppConfig": {
         "properties": {
-          "disabled_reason": {
+          "default_tools_approval_mode": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/AppDisabledReason"
+                "$ref": "#/definitions/v2/AppToolApproval"
               },
               {
                 "type": "null"
               }
             ]
           },
+          "default_tools_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "destructive_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "enabled": {
             "default": true,
             "type": "boolean"
+          },
+          "open_world_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tools": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppToolsConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"
-      },
-      "AppDisabledReason": {
-        "enum": [
-          "unknown",
-          "user"
-        ],
-        "type": "string"
       },
       "AppInfo": {
         "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
@@ -10903,7 +10935,69 @@
         ],
         "type": "object"
       },
+      "AppToolApproval": {
+        "enum": [
+          "auto",
+          "prompt",
+          "approve"
+        ],
+        "type": "string"
+      },
+      "AppToolConfig": {
+        "properties": {
+          "approval_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppToolApproval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "AppToolsConfig": {
+        "type": "object"
+      },
       "AppsConfig": {
+        "properties": {
+          "_default": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppsDefaultConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "AppsDefaultConfig": {
+        "properties": {
+          "destructive_enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "open_world_enabled": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "AppsListParams": {
@@ -13452,6 +13546,12 @@
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "dangerouslyAllowAllUnixSockets": {
+            "type": [
+              "boolean",
               "null"
             ]
           },
