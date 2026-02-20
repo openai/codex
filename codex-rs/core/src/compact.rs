@@ -215,12 +215,11 @@ async fn run_compact_task_inner(
     // Mid-turn compaction is the only callsite that must inject initial context above the last user message
     // in the replacement history (preturn callsites simply inject initial context after the compaction item,
     // but for mid-turn compaction the model has been trained to expect the compaction item last).
-    let initial_context = if matches!(callsite, CompactCallsite::MidTurn) {
-        sess.build_initial_context(turn_context.as_ref()).await
-    } else {
-        Vec::new()
-    };
-    let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
+    let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
+    if matches!(callsite, CompactCallsite::MidTurn) {
+        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+        new_history = inject_initial_context_into_compacted_history(new_history, initial_context);
+    }
     // Reattach the stripped model-switch update only after successful compaction so the model
     // still sees the switch instructions on the next real sampling request.
     if let Some(model_switch_item) = stripped_model_switch_item {
@@ -319,16 +318,33 @@ fn inject_initial_context_into_compacted_history(
     mut compacted_history: Vec<ResponseItem>,
     initial_context: Vec<ResponseItem>,
 ) -> Vec<ResponseItem> {
+    let last_real_user_index = compacted_history
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(
+            |(i, item)| match crate::event_mapping::parse_turn_item(item) {
+                Some(TurnItem::UserMessage(user)) if !is_summary_message(&user.message()) => {
+                    Some(i)
+                }
+                _ => None,
+            },
+        );
+    let insertion_index = last_real_user_index.or_else(|| {
+        compacted_history.iter().rposition(|item| {
+            matches!(
+                crate::event_mapping::parse_turn_item(item),
+                Some(TurnItem::UserMessage(_))
+            )
+        })
+    });
+
     // Re-inject canonical context from the current session since we stripped it
-    // from the pre-compaction history. Keep it right before the last user
-    // message so older user messages remain earlier in the transcript.
-    if let Some(last_user_index) = compacted_history.iter().rposition(|item| {
-        matches!(
-            crate::event_mapping::parse_turn_item(item),
-            Some(TurnItem::UserMessage(_))
-        )
-    }) {
-        compacted_history.splice(last_user_index..last_user_index, initial_context);
+    // from the pre-compaction history. Prefer placing it before the last real
+    // user message; if there is no real user message left, place it before the
+    // summary so the compaction item remains last.
+    if let Some(insertion_index) = insertion_index {
+        compacted_history.splice(insertion_index..insertion_index, initial_context);
     } else {
         compacted_history.extend(initial_context);
     }
@@ -1160,6 +1176,90 @@ keep me updated
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: "latest user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        assert_eq!(refreshed, expected);
+    }
+
+    #[test]
+    fn inject_initial_context_into_compacted_history_keeps_summary_last() {
+        let compacted_history = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "older user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "latest user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nsummary text"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        let initial_context = vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "fresh permissions".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let refreshed =
+            inject_initial_context_into_compacted_history(compacted_history, initial_context);
+        let expected = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "older user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "fresh permissions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "latest user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nsummary text"),
                 }],
                 end_turn: None,
                 phase: None,
