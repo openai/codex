@@ -37,6 +37,8 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     }
     metadata.id = meta_line.meta.id;
     metadata.source = enum_to_string(&meta_line.meta.source);
+    metadata.agent_nickname = meta_line.meta.agent_nickname.clone();
+    metadata.agent_role = meta_line.meta.agent_role.clone();
     if let Some(provider) = meta_line.meta.model_provider.as_deref() {
         metadata.model_provider = provider.to_string();
     }
@@ -216,6 +218,8 @@ mod tests {
             created_at,
             updated_at: created_at,
             source: "cli".to_string(),
+            agent_nickname: None,
+            agent_role: None,
             model_provider: "openai".to_string(),
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),

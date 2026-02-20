@@ -6,6 +6,16 @@ import type { ExecPolicyAmendment } from "./ExecPolicyAmendment";
 
 export type CommandExecutionRequestApprovalParams = { threadId: string, turnId: string, itemId: string, 
 /**
+ * Unique identifier for this specific approval callback.
+ *
+ * For regular shell/unified_exec approvals, this is null.
+ *
+ * For zsh-exec-bridge subcommand approvals, multiple callbacks can belong to
+ * one parent `itemId`, so `approvalId` is a distinct opaque callback id
+ * (a UUID) used to disambiguate routing.
+ */
+approvalId?: string | null, 
+/**
  * Optional explanatory reason (e.g. request for network access).
  */
 reason?: string | null, 

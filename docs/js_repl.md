@@ -37,6 +37,19 @@ You can configure an explicit runtime path:
 js_repl_node_path = "/absolute/path/to/node"
 ```
 
+## Module resolution
+
+`js_repl` resolves **bare** specifiers (for example `await import("pkg")`) using an ordered
+search path. Path-style specifiers (`./`, `../`, absolute paths, `file:` URLs) are rejected.
+
+Module resolution proceeds in the following order:
+
+1. `CODEX_JS_REPL_NODE_MODULE_DIRS` (PATH-delimited list)
+2. `js_repl_node_module_dirs` in config/profile (array of absolute paths)
+3. Thread working directory (cwd, always included as the last fallback)
+
+For `CODEX_JS_REPL_NODE_MODULE_DIRS` and `js_repl_node_module_dirs`, module resolution is attempted in the order provided with earlier entries taking precedence.
+
 ## Usage
 
 - `js_repl` is a freeform tool: send raw JavaScript source text.
