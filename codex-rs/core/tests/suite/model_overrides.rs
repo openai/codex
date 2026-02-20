@@ -1,7 +1,10 @@
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
+use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -82,4 +85,32 @@ async fn override_turn_context_does_not_create_config_file() {
         !config_path.exists(),
         "override should not create config.toml"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_service_tier_from_config_is_sent_in_final_request() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.model_service_tier = Some(ServiceTier::Flex);
+    });
+    let test = builder.build(&server).await.expect("create conversation");
+
+    test.submit_turn("hello")
+        .await
+        .expect("submit turn should succeed");
+
+    let request = response_mock.single_request();
+    let body = request.body_json();
+    assert_eq!(body["service_tier"], "flex");
 }
