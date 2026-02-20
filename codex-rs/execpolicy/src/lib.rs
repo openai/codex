@@ -19,7 +19,6 @@ pub use execpolicycheck::ExecPolicyCheckCommand;
 pub use parser::PolicyParser;
 pub use policy::Evaluation;
 pub use policy::Policy;
-pub use rule::NetworkRule;
 pub use rule::NetworkRuleProtocol;
 pub use rule::Rule;
 pub use rule::RuleMatch;

@@ -68,22 +68,6 @@ pub struct NetworkPolicyAmendment {
     pub action: NetworkPolicyRuleAction,
 }
 
-impl NetworkPolicyAmendment {
-    pub fn allow(host: impl Into<String>) -> Self {
-        Self {
-            host: host.into(),
-            action: NetworkPolicyRuleAction::Allow,
-        }
-    }
-
-    pub fn deny(host: impl Into<String>) -> Self {
-        Self {
-            host: host.into(),
-            action: NetworkPolicyRuleAction::Deny,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecApprovalRequestEvent {
     /// Identifier for the associated command execution item.

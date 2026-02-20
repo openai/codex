@@ -2344,8 +2344,14 @@ impl Session {
         let parsed_cmd = parse_command(&command);
         let proposed_network_policy_amendments = network_approval_context.as_ref().map(|context| {
             vec![
-                NetworkPolicyAmendment::allow(context.host.clone()),
-                NetworkPolicyAmendment::deny(context.host.clone()),
+                NetworkPolicyAmendment {
+                    host: context.host.clone(),
+                    action: NetworkPolicyRuleAction::Allow,
+                },
+                NetworkPolicyAmendment {
+                    host: context.host.clone(),
+                    action: NetworkPolicyRuleAction::Deny,
+                },
             ]
         });
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
