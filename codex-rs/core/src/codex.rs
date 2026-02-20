@@ -3319,7 +3319,6 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
-    use codex_api::AuthProvider;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ConversationClosedEvent;
@@ -3335,7 +3334,6 @@ mod handlers {
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
-    use codex_protocol::protocol::RealtimeEvent;
     use codex_protocol::protocol::RemoteSkillDownloadedEvent;
     use codex_protocol::protocol::RemoteSkillHazelnutScope;
     use codex_protocol::protocol::RemoteSkillProductSurface;
@@ -3358,8 +3356,6 @@ mod handlers {
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
-    use http::HeaderMap;
-    use http::HeaderValue;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tracing::info;
@@ -3377,51 +3373,7 @@ mod handlers {
         match cmd {
             ConversationCommand::Start(params) => {
                 let config = sess.get_config().await;
-                let auth = sess.services.auth_manager.auth().await;
-                let api_provider = match config
-                    .model_provider
-                    .to_api_provider(auth.as_ref().map(crate::CodexAuth::auth_mode))
-                {
-                    Ok(provider) => provider,
-                    Err(err) => {
-                        send_conversation_error(
-                            sess,
-                            sub_id,
-                            err.to_string(),
-                            CodexErrorInfo::BadRequest,
-                        )
-                        .await;
-                        return;
-                    }
-                };
-                let api_auth = match crate::api_bridge::auth_provider_from_auth(
-                    auth,
-                    &config.model_provider,
-                ) {
-                    Ok(auth) => auth,
-                    Err(err) => {
-                        send_conversation_error(
-                            sess,
-                            sub_id,
-                            err.to_string(),
-                            CodexErrorInfo::BadRequest,
-                        )
-                        .await;
-                        return;
-                    }
-                };
-
-                let mut extra_headers = HeaderMap::new();
-                if let Some(token) = api_auth.bearer_token()
-                    && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
-                {
-                    extra_headers.insert(http::header::AUTHORIZATION, header);
-                }
-                if let Some(account_id) = api_auth.account_id()
-                    && let Ok(header) = HeaderValue::from_str(&account_id)
-                {
-                    extra_headers.insert("ChatGPT-Account-ID", header);
-                }
+                let api_provider = config.model_provider.to_api_provider(None).unwrap();
 
                 let requested_session_id = params
                     .session_id
@@ -3430,7 +3382,7 @@ mod handlers {
                     .conversation
                     .start(
                         api_provider,
-                        extra_headers,
+                        None,
                         params.prompt,
                         requested_session_id.clone(),
                     )
@@ -3461,30 +3413,18 @@ mod handlers {
 
                 let sess_clone = Arc::clone(sess);
                 tokio::spawn(async move {
+                    let ev = |msg| Event {
+                        id: sub_id.clone(),
+                        msg,
+                    };
                     while let Ok(event) = events_rx.recv().await {
-                        let is_error = matches!(&event, RealtimeEvent::Error(_));
                         sess_clone
-                            .send_event_raw(Event {
-                                id: sub_id.clone(),
-                                msg: EventMsg::Conversation(ConversationEvent::Realtime(
-                                    ConversationRealtimeEvent { payload: event },
-                                )),
-                            })
+                            .send_event_raw(ev(EventMsg::Conversation(
+                                ConversationEvent::Realtime(ConversationRealtimeEvent {
+                                    payload: event,
+                                }),
+                            )))
                             .await;
-
-                        if is_error {
-                            sess_clone
-                                .send_event_raw(Event {
-                                    id: sub_id.clone(),
-                                    msg: EventMsg::Conversation(ConversationEvent::Closed(
-                                        ConversationClosedEvent {
-                                            reason: Some("transport_closed".to_string()),
-                                        },
-                                    )),
-                                })
-                                .await;
-                            break;
-                        }
                     }
                 });
             }

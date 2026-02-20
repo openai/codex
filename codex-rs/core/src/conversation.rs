@@ -42,7 +42,7 @@ impl RealtimeConversationManager {
     pub(crate) async fn start(
         &self,
         api_provider: ApiProvider,
-        extra_headers: HeaderMap,
+        extra_headers: Option<HeaderMap>,
         prompt: String,
         session_id: Option<String>,
     ) -> CodexResult<Receiver<RealtimeEvent>> {
@@ -58,7 +58,11 @@ impl RealtimeConversationManager {
         let session_config = RealtimeSessionConfig { prompt, session_id };
         let client = RealtimeWebsocketClient::new(api_provider);
         let connection = client
-            .connect(session_config, extra_headers, default_headers())
+            .connect(
+                session_config,
+                extra_headers.unwrap_or_default(),
+                default_headers(),
+            )
             .await
             .map_err(map_api_error)?;
 
