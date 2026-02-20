@@ -367,10 +367,17 @@ pub(crate) fn app_tool_policy(
     config: &Config,
     connector_id: Option<&str>,
     tool_name: &str,
+    tool_title: Option<&str>,
     annotations: Option<&ToolAnnotations>,
 ) -> AppToolPolicy {
     let apps_config = read_apps_config(config);
-    app_tool_policy_from_apps_config(apps_config.as_ref(), connector_id, tool_name, annotations)
+    app_tool_policy_from_apps_config(
+        apps_config.as_ref(),
+        connector_id,
+        tool_name,
+        tool_title,
+        annotations,
+    )
 }
 
 pub(crate) fn codex_app_tool_is_enabled(
@@ -385,6 +392,7 @@ pub(crate) fn codex_app_tool_is_enabled(
         config,
         tool_info.connector_id.as_deref(),
         &tool_info.tool_name,
+        tool_info.tool.title.as_deref(),
         tool_info.tool.annotations.as_ref(),
     )
     .enabled
@@ -463,6 +471,7 @@ fn app_tool_policy_from_apps_config(
     apps_config: Option<&AppsConfigToml>,
     connector_id: Option<&str>,
     tool_name: &str,
+    tool_title: Option<&str>,
     annotations: Option<&ToolAnnotations>,
 ) -> AppToolPolicy {
     let Some(apps_config) = apps_config else {
@@ -471,7 +480,12 @@ fn app_tool_policy_from_apps_config(
 
     let app = connector_id.and_then(|connector_id| apps_config.apps.get(connector_id));
     let tools = app.and_then(|app| app.tools.as_ref());
-    let tool_config = tools.and_then(|tools| tools.tools.get(tool_name));
+    let tool_config = tools.and_then(|tools| {
+        tools
+            .tools
+            .get(tool_name)
+            .or_else(|| tool_title.and_then(|title| tools.tools.get(title)))
+    });
     let approval = tool_config
         .and_then(|tool| tool.approval_mode)
         .or_else(|| app.and_then(|app| app.default_tools_approval_mode))
@@ -648,6 +662,7 @@ mod tests {
             Some(&apps_config),
             Some("calendar"),
             "events/create",
+            None,
             Some(&annotations(Some(true), None)),
         );
 
@@ -715,6 +730,7 @@ mod tests {
             Some(&apps_config),
             Some("calendar"),
             "events/list",
+            None,
             Some(&annotations(None, None)),
         );
 
@@ -752,6 +768,7 @@ mod tests {
             Some(&apps_config),
             Some("calendar"),
             "events/list",
+            None,
             Some(&annotations(None, None)),
         );
 
@@ -793,6 +810,7 @@ mod tests {
             Some(&apps_config),
             Some("calendar"),
             "events/create",
+            None,
             Some(&annotations(Some(true), Some(true))),
         );
 
@@ -826,6 +844,7 @@ mod tests {
             Some(&apps_config),
             Some("calendar"),
             "events/create",
+            None,
             Some(&annotations(Some(true), Some(true))),
         );
 
@@ -859,6 +878,7 @@ mod tests {
             Some(&apps_config),
             Some("calendar"),
             "events/list",
+            None,
             Some(&annotations(None, None)),
         );
 
@@ -894,6 +914,7 @@ mod tests {
             Some(&apps_config),
             Some("calendar"),
             "events/list",
+            None,
             Some(&annotations(None, None)),
         );
 
@@ -902,6 +923,48 @@ mod tests {
             AppToolPolicy {
                 enabled: true,
                 approval: AppToolApproval::Prompt,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: Some(false),
+                    open_world_enabled: Some(false),
+                    default_tools_approval_mode: Some(AppToolApproval::Auto),
+                    default_tools_enabled: Some(false),
+                    tools: Some(AppToolsConfig {
+                        tools: HashMap::from([(
+                            "events/create".to_string(),
+                            AppToolConfig {
+                                enabled: Some(true),
+                                approval_mode: Some(AppToolApproval::Approve),
+                            },
+                        )]),
+                    }),
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "calendar_events/create",
+            Some("events/create"),
+            Some(&annotations(Some(true), Some(true))),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Approve,
             }
         );
     }

@@ -76,6 +76,9 @@ pub(crate) async fn handle_mcp_tool_call(
             &tool_name,
             metadata
                 .as_ref()
+                .and_then(|metadata| metadata.tool_title.as_deref()),
+            metadata
+                .as_ref()
                 .and_then(|metadata| metadata.annotations.as_ref()),
         )
     } else {
