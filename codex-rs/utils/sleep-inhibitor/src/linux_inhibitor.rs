@@ -18,6 +18,8 @@ pub(crate) struct LinuxSleepInhibitor {
     missing_backend_logged: bool,
 }
 
+pub(crate) use LinuxSleepInhibitor as SleepInhibitor;
+
 #[derive(Debug, Default)]
 enum InhibitState {
     #[default]
@@ -173,6 +175,7 @@ fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
     // Ensure the helper receives SIGTERM when the original parent dies.
     // `parent_pid` is captured before spawn and checked in `pre_exec` to avoid
     // the fork/exec race where the parent exits before PDEATHSIG is armed.
+    // SAFETY: `getpid` has no preconditions and is safe to call here.
     let parent_pid = unsafe { libc::getpid() };
     let mut command = match backend {
         LinuxBackend::SystemdInhibit => {
@@ -208,6 +211,9 @@ fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
+    // SAFETY: `pre_exec` must be registered before spawn. The closure only
+    // performs libc setup for the child process and returns an `io::Error`
+    // when parent-death signal setup fails.
     unsafe {
         command.pre_exec(|| {
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {

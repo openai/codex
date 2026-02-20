@@ -22,6 +22,8 @@ pub(crate) struct WindowsSleepInhibitor {
     request: Option<PowerRequest>,
 }
 
+pub(crate) use WindowsSleepInhibitor as SleepInhibitor;
+
 impl WindowsSleepInhibitor {
     pub(crate) fn new() -> Self {
         Self::default()
@@ -68,6 +70,8 @@ impl PowerRequest {
                 SimpleReasonString: wide_reason.as_mut_ptr(),
             },
         };
+        // SAFETY: `context` points to a valid `REASON_CONTEXT` for the duration
+        // of the call and Windows copies the relevant data before returning.
         let handle = unsafe { PowerCreateRequest(&context) };
         if handle == 0 || handle == INVALID_HANDLE_VALUE {
             let error = std::io::Error::last_os_error();
@@ -77,8 +81,12 @@ impl PowerRequest {
         // Match macOS `PreventUserIdleSystemSleep`: prevent idle system sleep
         // without forcing the display to stay on.
         let request_type = PowerRequestSystemRequired;
+        // SAFETY: `handle` is a live power request handle and `request_type` is a
+        // valid power request enum value.
         if unsafe { PowerSetRequest(handle, request_type) } == 0 {
             let error = std::io::Error::last_os_error();
+            // SAFETY: `handle` was returned by `PowerCreateRequest` and has not
+            // been closed yet on this error path.
             let _ = unsafe { CloseHandle(handle) };
             return Err(format!("PowerSetRequest failed: {error}"));
         }
@@ -92,7 +100,11 @@ impl PowerRequest {
 
 impl Drop for PowerRequest {
     fn drop(&mut self) {
+        // SAFETY: `self.handle` is the handle owned by this `PowerRequest`, and
+        // `self.request_type` is the request type that was set on acquire.
         let _ = unsafe { PowerClearRequest(self.handle, self.request_type) };
+        // SAFETY: `self.handle` is owned by this struct and closed exactly once
+        // in `Drop`.
         let _ = unsafe { CloseHandle(self.handle) };
     }
 }
