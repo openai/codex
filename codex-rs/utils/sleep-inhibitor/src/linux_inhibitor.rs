@@ -58,9 +58,8 @@ impl PlatformSleepInhibitor for LinuxSleepInhibitor {
                     warn!(
                         ?backend,
                         reason = %error,
-                        "Failed to query Linux sleep inhibitor backend status"
+                        "Failed to query Linux sleep inhibitor backend status; attempting restart"
                     );
-                    return;
                 }
             }
         }
