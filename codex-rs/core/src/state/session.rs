@@ -21,11 +21,6 @@ pub(crate) struct SessionState {
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
-    /// Whether the session's initial context has been seeded into history.
-    ///
-    /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
-    /// timestamp when resuming a session. Remove this once SQLite is in place.
-    pub(crate) initial_context_seeded: bool,
     /// Previous model seen by the session, used for model-switch handling on task start.
     previous_model: Option<String>,
     /// Startup regular task pre-created during session initialization.
@@ -45,7 +40,6 @@ impl SessionState {
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
-            initial_context_seeded: false,
             previous_model: None,
             startup_regular_task: None,
             active_mcp_tool_selection: None,

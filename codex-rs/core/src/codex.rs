@@ -1589,7 +1589,7 @@ impl Session {
                 self.record_conversation_items(&turn_context, &items).await;
                 {
                     let mut state = self.state.lock().await;
-                    state.initial_context_seeded = true;
+                    state.set_previous_context_item_raw(Some(turn_context.to_turn_context_item()));
                 }
                 self.set_previous_model(None).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
@@ -1603,7 +1603,7 @@ impl Session {
                     .map(std::string::ToString::to_string);
                 {
                     let mut state = self.state.lock().await;
-                    state.initial_context_seeded = false;
+                    state.set_previous_context_item_raw(None);
                 }
                 self.set_previous_model(previous_model).await;
 
@@ -1685,7 +1685,7 @@ impl Session {
                     .await;
                 {
                     let mut state = self.state.lock().await;
-                    state.initial_context_seeded = true;
+                    state.set_previous_context_item_raw(Some(turn_context.to_turn_context_item()));
                 }
 
                 // Forked threads should remain file-backed immediately after startup.
@@ -1762,7 +1762,7 @@ impl Session {
         active_selected_tools
     }
 
-    async fn previous_model(&self) -> Option<String> {
+    pub(crate) async fn previous_model(&self) -> Option<String> {
         let state = self.state.lock().await;
         state.previous_model()
     }
@@ -2523,21 +2523,6 @@ impl Session {
         state.replace_history(items);
     }
 
-    pub(crate) async fn seed_initial_context_if_needed(&self, turn_context: &TurnContext) {
-        {
-            let mut state = self.state.lock().await;
-            if state.initial_context_seeded {
-                return;
-            }
-            state.initial_context_seeded = true;
-        }
-
-        let initial_context = self.build_initial_context(turn_context).await;
-        self.record_conversation_items(turn_context, &initial_context)
-            .await;
-        self.flush_rollout().await;
-    }
-
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
         let rollout_items: Vec<RolloutItem> = items
             .iter()
@@ -3199,14 +3184,6 @@ impl Session {
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
-    // Seed with context in case there is an OverrideTurnContext first.
-    // Bootstrap-only write: this should not emit model-visible context updates.
-    let initial_context = sess.new_default_turn().await;
-    {
-        let mut state = sess.state.lock().await;
-        state.set_previous_context_item_raw(Some(initial_context.to_turn_context_item()));
-    }
-
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
@@ -3530,9 +3507,9 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
-        // Do not update `previous_context_item` here: this path does not send a model request, so
-        // recording context updates would race shell output ordering and could suppress required
-        // reinjection on the next actual model turn.
+        // Do not update `previous_context_item` here. `spawn_task` records any required context
+        // diffs before the task starts, which keeps transcript ordering deterministic relative to
+        // shell output persistence.
     }
 
     pub async fn resolve_elicitation(
@@ -6511,7 +6488,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resumed_history_seeds_initial_context_on_first_turn_only() {
+    async fn resumed_history_injects_initial_context_on_first_context_update_only() {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
 
@@ -6526,12 +6503,16 @@ mod tests {
         let history_before_seed = session.state.lock().await.clone_history();
         assert_eq!(expected, history_before_seed.raw_items());
 
-        session.seed_initial_context_if_needed(&turn_context).await;
+        session
+            .record_context_updates_and_set_previous_context_item(&turn_context, None, false, false)
+            .await;
         expected.extend(session.build_initial_context(&turn_context).await);
         let history_after_seed = session.clone_history().await;
         assert_eq!(expected, history_after_seed.raw_items());
 
-        session.seed_initial_context_if_needed(&turn_context).await;
+        session
+            .record_context_updates_and_set_previous_context_item(&turn_context, None, false, false)
+            .await;
         let history_after_second_seed = session.clone_history().await;
         assert_eq!(expected, history_after_second_seed.raw_items());
     }
@@ -7447,8 +7428,7 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let mut state = SessionState::new(session_configuration.clone());
-        mark_state_initial_context_seeded(&mut state);
+        let state = SessionState::new(session_configuration.clone());
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
         let network_approval = Arc::new(NetworkApprovalService::default());
 
@@ -7603,8 +7583,7 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let mut state = SessionState::new(session_configuration.clone());
-        mark_state_initial_context_seeded(&mut state);
+        let state = SessionState::new(session_configuration.clone());
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
         let network_approval = Arc::new(NetworkApprovalService::default());
 
@@ -7688,10 +7667,6 @@ mod tests {
         });
 
         (session, turn_context, rx_event)
-    }
-
-    fn mark_state_initial_context_seeded(state: &mut SessionState) {
-        state.initial_context_seeded = true;
     }
 
     #[tokio::test]
@@ -7903,8 +7878,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_user_shell_command_does_not_set_previous_context_item() {
-        let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    async fn run_user_shell_command_records_context_before_shell_output() {
+        let (session, turn_context, rx) = make_session_and_context_with_rx().await;
         session.clear_previous_context_item().await;
 
         handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
@@ -7923,9 +7898,28 @@ mod tests {
             }
         }
 
+        assert!(session.previous_context_item().await.is_some());
+
+        let history = session.clone_history().await;
+        let first_shell_output_idx = history
+            .raw_items()
+            .iter()
+            .position(|item| {
+                let ResponseItem::Message { content, .. } = item else {
+                    return false;
+                };
+                content.iter().any(|content_item| {
+                    let ContentItem::InputText { text } = content_item else {
+                        return false;
+                    };
+                    crate::user_shell_command::is_user_shell_command_text(text)
+                })
+            })
+            .expect("standalone shell output should be persisted");
+        let initial_context = session.build_initial_context(&turn_context).await;
         assert!(
-            session.previous_context_item().await.is_none(),
-            "standalone shell tasks should not mutate previous context"
+            first_shell_output_idx >= initial_context.len(),
+            "context items should be recorded before standalone shell output"
         );
     }
 

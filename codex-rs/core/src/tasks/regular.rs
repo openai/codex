@@ -83,6 +83,10 @@ impl SessionTask for RegularTask {
         TaskKind::Regular
     }
 
+    fn records_context_updates_in_run(&self) -> bool {
+        true
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,

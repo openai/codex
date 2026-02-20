@@ -11,8 +11,8 @@ Scenario: Manual /compact with no prior user turn currently still issues a compa
 03:message/user:<SUMMARIZATION_PROMPT>
 
 ## Local Post-Compaction History Layout
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:<COMPACTION_SUMMARY>\nMANUAL_EMPTY_SUMMARY
+00:message/user:<COMPACTION_SUMMARY>\nMANUAL_EMPTY_SUMMARY
+01:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/user:<AGENTS_MD>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 04:message/user:AFTER_MANUAL_EMPTY_COMPACT
