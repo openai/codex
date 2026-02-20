@@ -282,7 +282,6 @@ pub struct CodexSpawnOk {
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
-pub(crate) const EVENT_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
 
@@ -302,7 +301,7 @@ impl Codex {
         persist_extended_history: bool,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
-        let (tx_event, rx_event) = async_channel::bounded(EVENT_CHANNEL_CAPACITY);
+        let (tx_event, rx_event) = async_channel::unbounded();
 
         let loaded_skills = skills_manager.skills_for_config(&config);
 
