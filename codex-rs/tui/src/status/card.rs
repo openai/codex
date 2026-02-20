@@ -8,7 +8,6 @@ use chrono::Local;
 use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
@@ -168,14 +167,6 @@ impl StatusHistoryCell {
             ("workdir", config.cwd.display().to_string()),
             ("model", model_name.to_string()),
             ("provider", config.model_provider_id.clone()),
-            (
-                "approval",
-                config.permissions.approval_policy.value().to_string(),
-            ),
-            (
-                "sandbox",
-                summarize_sandbox_policy(config.permissions.sandbox_policy.get()),
-            ),
         ];
         if config.model_provider.wire_api == WireApi::Responses {
             let effort_value = reasoning_effort_override
@@ -189,39 +180,7 @@ impl StatusHistoryCell {
             ));
         }
         let (model_name, model_details) = compose_model_display(model_name, &config_entries);
-        let approval = config_entries
-            .iter()
-            .find(|(k, _)| *k == "approval")
-            .map(|(_, v)| v.clone())
-            .unwrap_or_else(|| "<unknown>".to_string());
-        let sandbox = match config.permissions.sandbox_policy.get() {
-            SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
-            SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
-            SandboxPolicy::WorkspaceWrite {
-                network_access: true,
-                ..
-            } => "workspace-write with network access".to_string(),
-            SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
-            SandboxPolicy::ExternalSandbox { network_access } => {
-                if matches!(network_access, NetworkAccess::Enabled) {
-                    "external-sandbox (network access enabled)".to_string()
-                } else {
-                    "external-sandbox".to_string()
-                }
-            }
-        };
-        let permissions = if config.permissions.approval_policy.value() == AskForApproval::OnRequest
-            && *config.permissions.sandbox_policy.get()
-                == SandboxPolicy::new_workspace_write_policy()
-        {
-            "Default".to_string()
-        } else if config.permissions.approval_policy.value() == AskForApproval::Never
-            && *config.permissions.sandbox_policy.get() == SandboxPolicy::DangerFullAccess
-        {
-            "Full Access".to_string()
-        } else {
-            format!("Custom ({sandbox}, {approval})")
-        };
+        let permissions = permissions_display_text(config);
         let agents_summary = compose_agents_summary(config);
         let model_provider = format_model_provider(config);
         let account = compose_account_display(auth_manager, plan_type);
@@ -403,6 +362,26 @@ impl StatusHistoryCell {
             }
             StatusRateLimitData::Missing => push_label(labels, seen, "Limits"),
         }
+    }
+}
+
+pub(crate) fn permissions_display_text(config: &Config) -> String {
+    permissions_display_text_for(
+        config.permissions.approval_policy.value(),
+        config.permissions.sandbox_policy.get(),
+    )
+}
+
+pub(crate) fn permissions_display_text_for(
+    approval: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+) -> String {
+    let approval = approval.to_string();
+    let sandbox = summarize_sandbox_policy(sandbox_policy, true);
+    match (approval.as_str(), sandbox.as_str()) {
+        ("on-request", "workspace-write") => "Default".to_string(),
+        ("never", "danger-full-access") => "Full Access".to_string(),
+        _ => format!("Custom ({sandbox}, {approval})"),
     }
 }
 
