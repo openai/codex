@@ -5,6 +5,10 @@ use crate::protocol::common::AuthMode;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
+use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
+use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
+use codex_protocol::approvals::NetworkPolicyAmendment as CoreNetworkPolicyAmendment;
+use codex_protocol::approvals::NetworkPolicyRuleAction as CoreNetworkPolicyRuleAction;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -644,6 +648,10 @@ pub enum CommandExecutionApprovalDecision {
     AcceptWithExecpolicyAmendment {
         execpolicy_amendment: ExecPolicyAmendment,
     },
+    /// User chose a persistent network policy rule (allow/deny) for this host.
+    ApplyNetworkPolicyAmendment {
+        network_policy_amendment: NetworkPolicyAmendment,
+    },
     /// User denied the command. The agent will continue the turn.
     Decline,
     /// User denied the command. The turn will also be immediately interrupted.
@@ -843,6 +851,61 @@ impl From<CoreExecPolicyAmendment> for ExecPolicyAmendment {
     fn from(value: CoreExecPolicyAmendment) -> Self {
         Self {
             command: value.command().to_vec(),
+        }
+    }
+}
+
+v2_enum_from_core!(
+    pub enum NetworkApprovalProtocol from CoreNetworkApprovalProtocol {
+        Http, Https, Socks5Tcp, Socks5Udp
+    }
+);
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct NetworkApprovalContext {
+    pub host: String,
+    pub protocol: NetworkApprovalProtocol,
+}
+
+impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
+    fn from(value: CoreNetworkApprovalContext) -> Self {
+        Self {
+            host: value.host,
+            protocol: NetworkApprovalProtocol::from(value.protocol),
+        }
+    }
+}
+
+v2_enum_from_core!(
+    pub enum NetworkPolicyRuleAction from CoreNetworkPolicyRuleAction {
+        Allow, Deny
+    }
+);
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct NetworkPolicyAmendment {
+    pub host: String,
+    pub action: NetworkPolicyRuleAction,
+}
+
+impl NetworkPolicyAmendment {
+    pub fn into_core(self) -> CoreNetworkPolicyAmendment {
+        CoreNetworkPolicyAmendment {
+            host: self.host,
+            action: self.action.to_core(),
+        }
+    }
+}
+
+impl From<CoreNetworkPolicyAmendment> for NetworkPolicyAmendment {
+    fn from(value: CoreNetworkPolicyAmendment) -> Self {
+        Self {
+            host: value.host,
+            action: NetworkPolicyRuleAction::from(value.action),
         }
     }
 }
@@ -3319,10 +3382,18 @@ pub struct CommandExecutionRequestApprovalParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub command_actions: Option<Vec<CommandAction>>,
+    /// Optional network context for a blocked request that can be approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub network_approval_context: Option<NetworkApprovalContext>,
     /// Optional proposed execpolicy amendment to allow similar commands without prompting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+    /// Optional proposed network policy amendments (allow/deny host) for future requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

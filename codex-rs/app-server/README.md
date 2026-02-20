@@ -654,15 +654,15 @@ When an upstream HTTP status is available (for example, from the Responses API o
 Certain actions (shell commands or modifying files) may require explicit user approval depending on the user's config. When `turn/start` is used, the app-server drives an approval flow by sending a server-initiated JSON-RPC request to the client. The client must respond to tell Codex whether to proceed. UIs should present these requests inline with the active turn so users can review the proposed command or diff before choosing.
 
 - Requests include `threadId` and `turnId`—use them to scope UI state to the active conversation.
-- Respond with a single `{ "decision": "accept" | "decline" }` payload (plus optional `acceptSettings` on command executions). The server resumes or declines the work and ends the item with `item/completed`.
+- Respond with a single `{ "decision": ... }` payload. Command approvals support `accept`, `acceptForSession`, `acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment`, `decline`, or `cancel`. The server resumes or declines the work and ends the item with `item/completed`.
 
 ### Command execution approvals
 
 Order of messages:
 
 1. `item/started` — shows the pending `commandExecution` item with `command`, `cwd`, and other fields so you can render the proposed action.
-2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `approvalId` (for subcommand callbacks), `reason`, plus `command`, `cwd`, and `commandActions` for friendly display.
-3. Client response — `{ "decision": "accept", "acceptSettings": { "forSession": false } }` or `{ "decision": "decline" }`.
+2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `approvalId` (for subcommand callbacks), `reason`, plus `command`, `cwd`, `commandActions`, and optional persistence hints like `networkApprovalContext`, `proposedExecpolicyAmendment`, and `proposedNetworkPolicyAmendments`.
+3. Client response — for example `{ "decision": "accept" }`, `{ "decision": "acceptForSession" }`, `{ "decision": { "acceptWithExecpolicyAmendment": { "execpolicy_amendment": [...] } } }`, `{ "decision": { "applyNetworkPolicyAmendment": { "network_policy_amendment": { "host": "example.com", "action": "allow" } } } }`, or `{ "decision": "decline" }`.
 4. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
 
 ### File change approvals

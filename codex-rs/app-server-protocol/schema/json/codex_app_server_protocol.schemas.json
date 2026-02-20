@@ -2071,6 +2071,28 @@
           "type": "object"
         },
         {
+          "additionalProperties": false,
+          "description": "User chose a persistent network policy rule (allow/deny) for this host.",
+          "properties": {
+            "applyNetworkPolicyAmendment": {
+              "properties": {
+                "network_policy_amendment": {
+                  "$ref": "#/definitions/NetworkPolicyAmendment"
+                }
+              },
+              "required": [
+                "network_policy_amendment"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "applyNetworkPolicyAmendment"
+          ],
+          "title": "ApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision",
+          "type": "object"
+        },
+        {
           "description": "User denied the command. The agent will continue the turn.",
           "enum": [
             "decline"
@@ -2123,10 +2145,31 @@
         "itemId": {
           "type": "string"
         },
+        "networkApprovalContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkApprovalContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional network context for a blocked request that can be approved."
+        },
         "proposedExecpolicyAmendment": {
           "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
           "items": {
             "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "proposedNetworkPolicyAmendments": {
+          "description": "Optional proposed network policy amendments (allow/deny host) for future requests.",
+          "items": {
+            "$ref": "#/definitions/NetworkPolicyAmendment"
           },
           "type": [
             "array",
@@ -3564,6 +3607,16 @@
               "description": "Proposed execpolicy amendment that can be applied to allow future runs.",
               "items": {
                 "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "proposed_network_policy_amendments": {
+              "description": "Proposed network policy amendments (for example allow/deny this host in future).",
+              "items": {
+                "$ref": "#/definitions/NetworkPolicyAmendment"
               },
               "type": [
                 "array",
@@ -6403,6 +6456,28 @@
       ],
       "type": "string"
     },
+    "NetworkPolicyAmendment": {
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/NetworkPolicyRuleAction"
+        },
+        "host": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "host"
+      ],
+      "type": "object"
+    },
+    "NetworkPolicyRuleAction": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
     "NewConversationParams": {
       "properties": {
         "approvalPolicy": {
@@ -7683,6 +7758,28 @@
             "approved_for_session"
           ],
           "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "User chose to persist a network policy rule (allow/deny) for future requests to the same host.",
+          "properties": {
+            "network_policy_amendment": {
+              "properties": {
+                "network_policy_amendment": {
+                  "$ref": "#/definitions/NetworkPolicyAmendment"
+                }
+              },
+              "required": [
+                "network_policy_amendment"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "network_policy_amendment"
+          ],
+          "title": "NetworkPolicyAmendmentReviewDecision",
+          "type": "object"
         },
         {
           "description": "User has denied this command and the agent should not execute it, but it should continue the session and try something else.",

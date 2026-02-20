@@ -10,13 +10,18 @@ use codex_network_proxy::NetworkProtocol;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
+use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::WarningEvent;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
+use tracing::warn;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,6 +92,7 @@ struct NetworkApprovalAttempt {
 pub(crate) struct NetworkApprovalService {
     attempts: Mutex<HashMap<String, Arc<NetworkApprovalAttempt>>>,
     session_approved_hosts: Mutex<HashSet<String>>,
+    session_denied_hosts: Mutex<HashSet<String>>,
 }
 
 impl Default for NetworkApprovalService {
@@ -94,6 +100,7 @@ impl Default for NetworkApprovalService {
         Self {
             attempts: Mutex::new(HashMap::new()),
             session_approved_hosts: Mutex::new(HashSet::new()),
+            session_denied_hosts: Mutex::new(HashSet::new()),
         }
     }
 }
@@ -215,6 +222,13 @@ impl NetworkApprovalService {
         const REASON_NOT_ALLOWED: &str = "not_allowed";
 
         {
+            let denied_hosts = self.session_denied_hosts.lock().await;
+            if denied_hosts.contains(request.host.as_str()) {
+                return NetworkDecision::deny(REASON_NOT_ALLOWED);
+            }
+        }
+
+        {
             let approved_hosts = self.session_approved_hosts.lock().await;
             if approved_hosts.contains(request.host.as_str()) {
                 return NetworkDecision::Allow;
@@ -243,6 +257,11 @@ impl NetworkApprovalService {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
 
+        let network_approval_context = NetworkApprovalContext {
+            host: request.host.clone(),
+            protocol,
+        };
+
         let approval_decision = session
             .request_command_approval(
                 turn_context.as_ref(),
@@ -254,25 +273,107 @@ impl NetworkApprovalService {
                     "Network access to \"{}\" is blocked by policy.",
                     request.host
                 )),
-                Some(NetworkApprovalContext {
-                    host: request.host.clone(),
-                    protocol,
-                }),
+                Some(network_approval_context.clone()),
                 None,
             )
             .await;
+        let request_host = request.host.clone();
 
         match approval_decision {
             ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                 let mut approved_hosts = attempt.approved_hosts.lock().await;
-                approved_hosts.insert(request.host);
+                approved_hosts.insert(request_host);
                 NetworkDecision::Allow
             }
             ReviewDecision::ApprovedForSession => {
+                {
+                    let mut denied_hosts = self.session_denied_hosts.lock().await;
+                    denied_hosts.remove(request_host.as_str());
+                }
                 let mut approved_hosts = self.session_approved_hosts.lock().await;
-                approved_hosts.insert(request.host);
+                approved_hosts.insert(request_host);
                 NetworkDecision::Allow
             }
+            ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => match network_policy_amendment.action {
+                NetworkPolicyRuleAction::Allow => {
+                    match session
+                        .persist_network_policy_amendment(
+                            &network_policy_amendment,
+                            &network_approval_context,
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            session
+                                .record_network_policy_amendment_message(
+                                    &attempt.turn_id,
+                                    &network_policy_amendment,
+                                )
+                                .await;
+                        }
+                        Err(err) => {
+                            let message =
+                                format!("Failed to apply network policy amendment: {err}");
+                            warn!("{message}");
+                            session
+                                .send_event_raw(Event {
+                                    id: attempt.turn_id.clone(),
+                                    msg: EventMsg::Warning(WarningEvent { message }),
+                                })
+                                .await;
+                        }
+                    }
+                    {
+                        let mut denied_hosts = self.session_denied_hosts.lock().await;
+                        denied_hosts.remove(request_host.as_str());
+                    }
+                    let mut approved_hosts = self.session_approved_hosts.lock().await;
+                    approved_hosts.insert(request_host);
+                    NetworkDecision::Allow
+                }
+                NetworkPolicyRuleAction::Deny => {
+                    match session
+                        .persist_network_policy_amendment(
+                            &network_policy_amendment,
+                            &network_approval_context,
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            session
+                                .record_network_policy_amendment_message(
+                                    &attempt.turn_id,
+                                    &network_policy_amendment,
+                                )
+                                .await;
+                        }
+                        Err(err) => {
+                            let message =
+                                format!("Failed to apply network policy amendment: {err}");
+                            warn!("{message}");
+                            session
+                                .send_event_raw(Event {
+                                    id: attempt.turn_id.clone(),
+                                    msg: EventMsg::Warning(WarningEvent { message }),
+                                })
+                                .await;
+                        }
+                    }
+                    {
+                        let mut approved_hosts = self.session_approved_hosts.lock().await;
+                        approved_hosts.remove(request_host.as_str());
+                    }
+                    {
+                        let mut denied_hosts = self.session_denied_hosts.lock().await;
+                        denied_hosts.insert(request_host);
+                    }
+                    let mut outcome = attempt.outcome.lock().await;
+                    *outcome = Some(NetworkApprovalOutcome::DeniedByUser);
+                    NetworkDecision::deny(REASON_NOT_ALLOWED)
+                }
+            },
             ReviewDecision::Denied | ReviewDecision::Abort => {
                 let mut outcome = attempt.outcome.lock().await;
                 *outcome = Some(NetworkApprovalOutcome::DeniedByUser);

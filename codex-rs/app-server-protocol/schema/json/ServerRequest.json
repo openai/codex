@@ -213,10 +213,31 @@
         "itemId": {
           "type": "string"
         },
+        "networkApprovalContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkApprovalContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional network context for a blocked request that can be approved."
+        },
         "proposedExecpolicyAmendment": {
           "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
           "items": {
             "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "proposedNetworkPolicyAmendments": {
+          "description": "Optional proposed network policy amendments (allow/deny host) for future requests.",
+          "items": {
+            "$ref": "#/definitions/NetworkPolicyAmendment"
           },
           "type": [
             "array",
@@ -418,6 +439,52 @@
         "turnId"
       ],
       "type": "object"
+    },
+    "NetworkApprovalContext": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/NetworkApprovalProtocol"
+        }
+      },
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "NetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https",
+        "socks5Tcp",
+        "socks5Udp"
+      ],
+      "type": "string"
+    },
+    "NetworkPolicyAmendment": {
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/NetworkPolicyRuleAction"
+        },
+        "host": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "host"
+      ],
+      "type": "object"
+    },
+    "NetworkPolicyRuleAction": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
     },
     "ParsedCommand": {
       "oneOf": [

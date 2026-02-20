@@ -92,6 +92,103 @@ pub struct PrefixRule {
     pub justification: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkRuleProtocol {
+    Http,
+    Https,
+    Socks5Tcp,
+    Socks5Udp,
+}
+
+impl NetworkRuleProtocol {
+    pub fn parse(raw: &str) -> Result<Self> {
+        match raw {
+            "http" => Ok(Self::Http),
+            "https" | "https_connect" | "http-connect" => Ok(Self::Https),
+            "socks5_tcp" => Ok(Self::Socks5Tcp),
+            "socks5_udp" => Ok(Self::Socks5Udp),
+            other => Err(Error::InvalidRule(format!(
+                "network_rule protocol must be one of http, https, socks5_tcp, socks5_udp (got {other})"
+            ))),
+        }
+    }
+
+    pub fn as_policy_string(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Https => "https",
+            Self::Socks5Tcp => "socks5_tcp",
+            Self::Socks5Udp => "socks5_udp",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkRule {
+    pub host: String,
+    pub protocol: NetworkRuleProtocol,
+    pub decision: Decision,
+    pub justification: Option<String>,
+}
+
+pub(crate) fn normalize_network_rule_host(raw: &str) -> Result<String> {
+    let mut host = raw.trim();
+    if host.is_empty() {
+        return Err(Error::InvalidRule(
+            "network_rule host cannot be empty".to_string(),
+        ));
+    }
+    if host.contains("://") || host.contains('/') || host.contains('?') || host.contains('#') {
+        return Err(Error::InvalidRule(
+            "network_rule host must be a hostname or IP literal (without scheme or path)"
+                .to_string(),
+        ));
+    }
+
+    if let Some(stripped) = host.strip_prefix('[') {
+        let Some((inside, rest)) = stripped.split_once(']') else {
+            return Err(Error::InvalidRule(
+                "network_rule host has an invalid bracketed IPv6 literal".to_string(),
+            ));
+        };
+        let port_ok = rest
+            .strip_prefix(':')
+            .is_some_and(|port| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()));
+        if !rest.is_empty() && !port_ok {
+            return Err(Error::InvalidRule(format!(
+                "network_rule host contains an unsupported suffix: {raw}"
+            )));
+        }
+        host = inside;
+    } else if host.matches(':').count() == 1
+        && let Some((candidate, port)) = host.rsplit_once(':')
+        && !candidate.is_empty()
+        && !port.is_empty()
+        && port.chars().all(|c| c.is_ascii_digit())
+    {
+        host = candidate;
+    }
+
+    let normalized = host.trim_end_matches('.').trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err(Error::InvalidRule(
+            "network_rule host cannot be empty".to_string(),
+        ));
+    }
+    if normalized.contains('*') {
+        return Err(Error::InvalidRule(
+            "network_rule host must be a specific host; wildcards are not allowed".to_string(),
+        ));
+    }
+    if normalized.chars().any(char::is_whitespace) {
+        return Err(Error::InvalidRule(
+            "network_rule host cannot contain whitespace".to_string(),
+        ));
+    }
+
+    Ok(normalized)
+}
+
 pub trait Rule: Any + Debug + Send + Sync {
     fn program(&self) -> &str;
 

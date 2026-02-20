@@ -21,6 +21,8 @@ use codex_core::protocol::ElicitationAction;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::NetworkApprovalContext;
+use codex_core::protocol::NetworkPolicyAmendment;
+use codex_core::protocol::NetworkPolicyRuleAction;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_protocol::mcp::RequestId;
@@ -45,6 +47,7 @@ pub(crate) enum ApprovalRequest {
         reason: Option<String>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+        proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
     },
     ApplyPatch {
         id: String,
@@ -112,10 +115,12 @@ impl ApprovalOverlay {
             ApprovalVariant::Exec {
                 network_approval_context,
                 proposed_execpolicy_amendment,
+                proposed_network_policy_amendments,
                 ..
             } => (
                 exec_options(
                     proposed_execpolicy_amendment.clone(),
+                    proposed_network_policy_amendments.clone(),
                     network_approval_context.as_ref(),
                 ),
                 network_approval_context.as_ref().map_or_else(
@@ -358,6 +363,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 reason,
                 network_approval_context,
                 proposed_execpolicy_amendment,
+                proposed_network_policy_amendments,
             } => {
                 let mut header: Vec<Line<'static>> = Vec::new();
                 if let Some(reason) = reason {
@@ -376,6 +382,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                         command,
                         network_approval_context,
                         proposed_execpolicy_amendment,
+                        proposed_network_policy_amendments,
                     },
                     header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
                 }
@@ -432,6 +439,7 @@ enum ApprovalVariant {
         command: Vec<String>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+        proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
     },
     ApplyPatch {
         id: String,
@@ -466,10 +474,11 @@ impl ApprovalOption {
 
 fn exec_options(
     proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+    proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
     network_approval_context: Option<&NetworkApprovalContext>,
 ) -> Vec<ApprovalOption> {
     if network_approval_context.is_some() {
-        return vec![
+        let mut options = vec![
             ApprovalOption {
                 label: "Yes, just this once".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Approved),
@@ -482,13 +491,34 @@ fn exec_options(
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
             },
-            ApprovalOption {
-                label: "No, and tell Codex what to do differently".to_string(),
-                decision: ApprovalDecision::Review(ReviewDecision::Abort),
-                display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
-                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
-            },
         ];
+        for amendment in proposed_network_policy_amendments.unwrap_or_default() {
+            let (label, shortcut) = match amendment.action {
+                NetworkPolicyRuleAction::Allow => (
+                    "Yes, and allow this host in the future".to_string(),
+                    KeyCode::Char('p'),
+                ),
+                NetworkPolicyRuleAction::Deny => (
+                    "No, and never allow this host".to_string(),
+                    KeyCode::Char('d'),
+                ),
+            };
+            options.push(ApprovalOption {
+                label,
+                decision: ApprovalDecision::Review(ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment: amendment,
+                }),
+                display_shortcut: None,
+                additional_shortcuts: vec![key_hint::plain(shortcut)],
+            });
+        }
+        options.push(ApprovalOption {
+            label: "No, and tell Codex what to do differently".to_string(),
+            decision: ApprovalDecision::Review(ReviewDecision::Abort),
+            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+        });
+        return options;
     }
 
     vec![ApprovalOption {
@@ -585,6 +615,7 @@ mod tests {
             reason: Some("reason".to_string()),
             network_approval_context: None,
             proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
         }
     }
 
@@ -630,6 +661,7 @@ mod tests {
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                     "echo".to_string(),
                 ])),
+                proposed_network_policy_amendments: None,
             },
             tx,
             Features::with_defaults(),
@@ -657,6 +689,50 @@ mod tests {
     }
 
     #[test]
+    fn network_deny_forever_option_emits_network_policy_amendment() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(
+            ApprovalRequest::Exec {
+                id: "test".to_string(),
+                command: vec!["curl".to_string(), "https://example.com".to_string()],
+                reason: None,
+                network_approval_context: Some(NetworkApprovalContext {
+                    host: "example.com".to_string(),
+                    protocol: NetworkApprovalProtocol::Https,
+                }),
+                proposed_execpolicy_amendment: None,
+                proposed_network_policy_amendments: Some(vec![
+                    NetworkPolicyAmendment::allow("example.com"),
+                    NetworkPolicyAmendment::deny("example.com"),
+                ]),
+            },
+            tx,
+            Features::with_defaults(),
+        );
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+
+        let mut saw_op = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::CodexOp(Op::ExecApproval { decision, .. }) = ev {
+                assert_eq!(
+                    decision,
+                    ReviewDecision::NetworkPolicyAmendment {
+                        network_policy_amendment: NetworkPolicyAmendment::deny("example.com"),
+                    }
+                );
+                saw_op = true;
+                break;
+            }
+        }
+
+        assert!(
+            saw_op,
+            "expected network deny-forever decision to emit an op"
+        );
+    }
+
+    #[test]
     fn header_includes_command_snippet() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
@@ -667,6 +743,7 @@ mod tests {
             reason: None,
             network_approval_context: None,
             proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
@@ -696,6 +773,10 @@ mod tests {
         };
         let options = exec_options(
             Some(ExecPolicyAmendment::new(vec!["curl".to_string()])),
+            Some(vec![
+                NetworkPolicyAmendment::allow("example.com"),
+                NetworkPolicyAmendment::deny("example.com"),
+            ]),
             Some(&network_context),
         );
 
@@ -705,6 +786,8 @@ mod tests {
             vec![
                 "Yes, just this once".to_string(),
                 "Yes, and allow this host for this session".to_string(),
+                "Yes, and allow this host in the future".to_string(),
+                "No, and never allow this host".to_string(),
                 "No, and tell Codex what to do differently".to_string(),
             ]
         );
@@ -723,6 +806,10 @@ mod tests {
                 protocol: NetworkApprovalProtocol::Https,
             }),
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec!["curl".into()])),
+            proposed_network_policy_amendments: Some(vec![
+                NetworkPolicyAmendment::allow("example.com"),
+                NetworkPolicyAmendment::deny("example.com"),
+            ]),
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
