@@ -3,16 +3,14 @@
 //! On macOS this uses native IOKit power assertions instead of spawning
 //! `caffeinate`, so assertion lifecycle is tied directly to Rust object lifetime.
 
-// Bazel's macOS CI toolchain uses a minimal SDK that omits IOKit, so Bazel
-// builds use the no-op backend on macOS while Cargo builds use the native one.
-#[cfg(any(not(target_os = "macos"), codex_bazel))]
+#[cfg(not(target_os = "macos"))]
 mod dummy;
-#[cfg(all(target_os = "macos", not(codex_bazel)))]
+#[cfg(target_os = "macos")]
 mod macos;
 
-#[cfg(any(not(target_os = "macos"), codex_bazel))]
+#[cfg(not(target_os = "macos"))]
 use dummy as imp;
-#[cfg(all(target_os = "macos", not(codex_bazel)))]
+#[cfg(target_os = "macos")]
 use macos as imp;
 
 /// Keeps the machine awake while a turn is in progress when enabled.
