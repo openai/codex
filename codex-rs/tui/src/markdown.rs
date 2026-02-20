@@ -73,11 +73,13 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
     struct Fence {
         marker: u8,
         len: usize,
-        is_markdown: bool,
         is_blockquoted: bool,
     }
 
-    fn parse_open_fence(line: &str) -> Option<Fence> {
+    // Strip a trailing newline and up to 3 leading spaces, returning the
+    // trimmed slice.  Returns `None` when the line has 4+ leading spaces
+    // (which makes it an indented code line per CommonMark).
+    fn strip_line_indent(line: &str) -> Option<&str> {
         let without_newline = line.strip_suffix('\n').unwrap_or(line);
         let leading_ws = without_newline
             .as_bytes()
@@ -87,30 +89,31 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
         if leading_ws > 3 {
             return None;
         }
-        let trimmed = &without_newline[leading_ws..];
+        Some(&without_newline[leading_ws..])
+    }
+
+    // Parse an opening fence line, returning the fence metadata and whether
+    // the fence info string indicates markdown content.
+    fn parse_open_fence(line: &str) -> Option<(Fence, bool)> {
+        let trimmed = strip_line_indent(line)?;
         let is_blockquoted = trimmed.trim_start().starts_with('>');
         let fence_scan_text = table_detect::strip_blockquote_prefix(trimmed);
         let (marker, len) = table_detect::parse_fence_marker(fence_scan_text)?;
         let is_markdown = table_detect::is_markdown_fence_info(fence_scan_text, len);
-        Some(Fence {
-            marker: marker as u8,
-            len,
+        Some((
+            Fence {
+                marker: marker as u8,
+                len,
+                is_blockquoted,
+            },
             is_markdown,
-            is_blockquoted,
-        })
+        ))
     }
 
     fn is_close_fence(line: &str, fence: Fence) -> bool {
-        let without_newline = line.strip_suffix('\n').unwrap_or(line);
-        let leading_ws = without_newline
-            .as_bytes()
-            .iter()
-            .take_while(|byte| **byte == b' ')
-            .count();
-        if leading_ws > 3 {
+        let Some(trimmed) = strip_line_indent(line) else {
             return false;
-        }
-        let trimmed = &without_newline[leading_ws..];
+        };
         let fence_scan_text = if fence.is_blockquoted {
             if !trimmed.trim_start().starts_with('>') {
                 return false;
@@ -228,8 +231,8 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
             continue;
         }
 
-        if let Some(fence) = parse_open_fence(line) {
-            if fence.is_markdown {
+        if let Some((fence, is_markdown)) = parse_open_fence(line) {
+            if is_markdown {
                 active_fence = Some(ActiveFence::MarkdownCandidate {
                     fence,
                     opening_range: line_range,

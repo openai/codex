@@ -852,23 +852,6 @@ fn code_block_multiple_lines_inside_unordered_list() {
 }
 
 #[test]
-fn code_block_inside_unordered_list_item_multiple_lines() {
-    let md = "- Item\n\n  ```\n  first\n  second\n  ```\n";
-    let text = render_markdown_text(md);
-    let lines: Vec<String> = text
-        .lines
-        .iter()
-        .map(|l| {
-            l.spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<String>()
-        })
-        .collect();
-    assert_eq!(lines, vec!["- Item", "", "  first", "  second"]);
-}
-
-#[test]
 fn markdown_render_complex_snapshot() {
     let md = r#"# H1: Markdown Streaming Test
 Intro paragraph with bold **text**, italic *text*, and inline code `x=1`.

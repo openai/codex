@@ -16,7 +16,7 @@
 //!    alignment count.
 //! 3. **Compute column widths** -- allocate widths with Narrative/Structured
 //!    priority and iterative shrinking.
-//! 4. **Render box grid** -- Unicode borders (`+---+`) or fallback to pipe
+//! 4. **Render box grid** -- Unicode borders (`┌───┬───┐`) or fallback to pipe
 //!    format when the minimum cannot fit.
 //! 5. **Append spillover** -- extracted spillover rows rendered as plain text
 //!    after the table.
@@ -915,12 +915,8 @@ where
     }
 
     fn normalize_row(row: &mut Vec<TableCell>, column_count: usize) {
-        if row.len() > column_count {
-            row.truncate(column_count);
-        }
-        if row.len() < column_count {
-            row.resize(column_count, TableCell::default());
-        }
+        row.truncate(column_count);
+        row.resize(column_count, TableCell::default());
     }
 
     /// subtracts the space eaten by border characters
@@ -1323,8 +1319,8 @@ where
 
     fn looks_like_html_content(text: &str) -> bool {
         let bytes = text.as_bytes();
-        for idx in 0..bytes.len() {
-            if bytes[idx] != b'<' {
+        for (idx, &byte) in bytes.iter().enumerate() {
+            if byte != b'<' {
                 continue;
             }
 
@@ -1360,7 +1356,7 @@ where
     }
 
     fn line_display_width(line: &Line<'_>) -> usize {
-        line.spans.iter().map(|span| span.content.width()).sum()
+        Self::spans_display_width(&line.spans)
     }
 
     fn cell_display_width(cell: &TableCell) -> usize {
@@ -1439,12 +1435,15 @@ where
     /// borders. Passing them through `word_wrap_line` would break the grid at
     /// arbitrary positions. This method prepends the indent/blockquote prefix
     /// and pushes directly to `self.text.lines`.
+    fn is_blockquote_active(&self) -> bool {
+        self.indent_stack
+            .iter()
+            .any(|ctx| ctx.prefix.iter().any(|p| p.content.contains('>')))
+    }
+
     fn push_prewrapped_line(&mut self, line: Line<'static>, pending_marker_line: bool) {
         self.flush_current_line();
-        let blockquote_active = self
-            .indent_stack
-            .iter()
-            .any(|ctx| ctx.prefix.iter().any(|p| p.content.contains('>')));
+        let blockquote_active = self.is_blockquote_active();
         let style = if blockquote_active {
             self.styles.blockquote.patch(line.style)
         } else {
@@ -1458,10 +1457,7 @@ where
 
     fn push_line(&mut self, line: Line<'static>) {
         self.flush_current_line();
-        let blockquote_active = self
-            .indent_stack
-            .iter()
-            .any(|ctx| ctx.prefix.iter().any(|s| s.content.contains('>')));
+        let blockquote_active = self.is_blockquote_active();
         let style = if blockquote_active {
             self.styles.blockquote
         } else {

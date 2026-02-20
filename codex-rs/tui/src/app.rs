@@ -232,48 +232,19 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     )));
 }
 
-fn trailing_agent_message_run_start(transcript_cells: &[Arc<dyn HistoryCell>]) -> usize {
+fn trailing_run_start<T: 'static>(transcript_cells: &[Arc<dyn HistoryCell>]) -> usize {
     let end = transcript_cells.len();
     let mut start = end;
 
     while start > 0
         && transcript_cells[start - 1].is_stream_continuation()
-        && transcript_cells[start - 1]
-            .as_any()
-            .is::<history_cell::AgentMessageCell>()
+        && transcript_cells[start - 1].as_any().is::<T>()
     {
         start -= 1;
     }
 
     if start > 0
-        && transcript_cells[start - 1]
-            .as_any()
-            .is::<history_cell::AgentMessageCell>()
-        && !transcript_cells[start - 1].is_stream_continuation()
-    {
-        start -= 1;
-    }
-
-    start
-}
-
-fn trailing_proposed_plan_stream_run_start(transcript_cells: &[Arc<dyn HistoryCell>]) -> usize {
-    let end = transcript_cells.len();
-    let mut start = end;
-
-    while start > 0
-        && transcript_cells[start - 1].is_stream_continuation()
-        && transcript_cells[start - 1]
-            .as_any()
-            .is::<history_cell::ProposedPlanStreamCell>()
-    {
-        start -= 1;
-    }
-
-    if start > 0
-        && transcript_cells[start - 1]
-            .as_any()
-            .is::<history_cell::ProposedPlanStreamCell>()
+        && transcript_cells[start - 1].as_any().is::<T>()
         && !transcript_cells[start - 1].is_stream_continuation()
     {
         start -= 1;
@@ -1053,6 +1024,11 @@ impl App {
         Ok(())
     }
 
+    fn reset_history_emission_state(&mut self) {
+        self.has_emitted_history_lines = false;
+        self.deferred_history_lines.clear();
+    }
+
     fn display_lines_for_history_insert(
         &mut self,
         cell: &dyn HistoryCell,
@@ -1090,6 +1066,16 @@ impl App {
         self.resize_reflow_pending_until = Some(Instant::now() + RESIZE_REFLOW_DEBOUNCE);
     }
 
+    /// After stream consolidation, schedule a follow-up reflow if one ran mid-stream.
+    fn maybe_finish_stream_reflow(&mut self, tui: &mut tui::Tui) {
+        if self.reflow_ran_during_stream {
+            self.schedule_resize_reflow();
+            tui.frame_requester()
+                .schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
+        }
+        self.reflow_ran_during_stream = false;
+    }
+
     fn handle_draw_size_change(
         &mut self,
         size: ratatui::layout::Size,
@@ -1122,8 +1108,7 @@ impl App {
         }
 
         self.resize_reflow_pending_until = None;
-        self.has_emitted_history_lines = false;
-        self.deferred_history_lines.clear();
+        self.reset_history_emission_state();
     }
 
     fn handle_draw_pre_render(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -1158,16 +1143,14 @@ impl App {
         // Drop any queued pre-resize inserts before rebuilding at the new width.
         tui.clear_pending_history_lines();
         if self.transcript_cells.is_empty() {
-            self.has_emitted_history_lines = false;
-            self.deferred_history_lines.clear();
+            self.reset_history_emission_state();
             return Ok(());
         }
 
         tui.terminal.clear_scrollback()?;
         tui.terminal.clear()?;
 
-        self.has_emitted_history_lines = false;
-        self.deferred_history_lines.clear();
+        self.reset_history_emission_state();
 
         // Track that a reflow happened during an active stream or while trailing
         // unconsolidated AgentMessageCells are still pending consolidation so
@@ -1187,9 +1170,9 @@ impl App {
     fn should_mark_reflow_as_stream_time(&self) -> bool {
         self.chat_widget.has_active_agent_stream()
             || self.chat_widget.has_active_plan_stream()
-            || trailing_agent_message_run_start(&self.transcript_cells)
+            || trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells)
                 < self.transcript_cells.len()
-            || trailing_proposed_plan_stream_run_start(&self.transcript_cells)
+            || trailing_run_start::<history_cell::ProposedPlanStreamCell>(&self.transcript_cells)
                 < self.transcript_cells.len()
     }
 
@@ -1908,7 +1891,8 @@ impl App {
                     "ConsolidateAgentMessage: transcript_cells.len()={end}, source_len={}",
                     source.len()
                 );
-                let start = trailing_agent_message_run_start(&self.transcript_cells);
+                let start =
+                    trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
                 if start < end {
                     tracing::debug!(
                         "ConsolidateAgentMessage: replacing cells [{start}..{end}] with AgentMarkdownCell"
@@ -1924,26 +1908,19 @@ impl App {
                         tui.frame_requester().schedule_frame();
                     }
 
-                    // If a resize reflow ran while these cells were still unconsolidated
-                    // AgentMessageCells, the scrollback has stale table rendering. Schedule a
-                    // re-reflow.
-                    if self.reflow_ran_during_stream {
-                        self.schedule_resize_reflow();
-                        tui.frame_requester()
-                            .schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
-                    }
-
-                    self.reflow_ran_during_stream = false;
+                    self.maybe_finish_stream_reflow(tui);
                 } else {
                     tracing::debug!(
                         "ConsolidateAgentMessage: no cells to consolidate(start={start}, end={end})",
                     );
-                    self.reflow_ran_during_stream = false;
+                    self.maybe_finish_stream_reflow(tui);
                 }
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 let end = self.transcript_cells.len();
-                let start = trailing_proposed_plan_stream_run_start(&self.transcript_cells);
+                let start = trailing_run_start::<history_cell::ProposedPlanStreamCell>(
+                    &self.transcript_cells,
+                );
                 let consolidated: Arc<dyn HistoryCell> =
                     Arc::new(history_cell::new_proposed_plan(source));
 
@@ -1968,12 +1945,7 @@ impl App {
                     );
                 }
 
-                if self.reflow_ran_during_stream {
-                    self.schedule_resize_reflow();
-                    tui.frame_requester()
-                        .schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
-                }
-                self.reflow_ran_during_stream = false;
+                self.maybe_finish_stream_reflow(tui);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {

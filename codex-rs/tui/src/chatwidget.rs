@@ -3346,7 +3346,7 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
                     };
-                    if self.is_session_configured() && !self.is_plan_streaming_in_tui() {
+                    if self.is_session_configured() && !self.has_active_plan_stream() {
                         // Submitted is only emitted when steer is enabled.
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
@@ -3867,11 +3867,7 @@ impl ChatWidget {
     }
 
     fn flush_active_cell(&mut self) {
-        if self
-            .active_cell
-            .as_ref()
-            .is_some_and(|cell| cell.as_any().is::<history_cell::StreamingAgentTailCell>())
-        {
+        if self.active_cell_is_stream_tail() {
             if self.stream_controller.is_some() {
                 return;
             }
@@ -3902,10 +3898,8 @@ impl ChatWidget {
 
         if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
-            let keep_stream_tail_active = self.stream_controller.is_some()
-                && self.active_cell.as_ref().is_some_and(|active| {
-                    active.as_any().is::<history_cell::StreamingAgentTailCell>()
-                });
+            let keep_stream_tail_active =
+                self.stream_controller.is_some() && self.active_cell_is_stream_tail();
             if !keep_stream_tail_active {
                 self.flush_active_cell();
             }
@@ -3939,11 +3933,7 @@ impl ChatWidget {
     }
 
     fn clear_active_stream_tail(&mut self) {
-        if self
-            .active_cell
-            .as_ref()
-            .is_some_and(|cell| cell.as_any().is::<history_cell::StreamingAgentTailCell>())
-        {
+        if self.active_cell_is_stream_tail() {
             self.active_cell = None;
             self.bump_active_cell_revision();
         }
@@ -7210,10 +7200,6 @@ impl ChatWidget {
         self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
-    fn is_plan_streaming_in_tui(&self) -> bool {
-        self.plan_stream_controller.is_some()
-    }
-
     /// Whether an agent message stream is active (not a plan stream).
     pub(crate) fn has_active_agent_stream(&self) -> bool {
         self.stream_controller.is_some()
@@ -7221,6 +7207,13 @@ impl ChatWidget {
 
     pub(crate) fn has_active_plan_stream(&self) -> bool {
         self.plan_stream_controller.is_some()
+    }
+
+    /// Whether the active cell is a transient streaming tail preview.
+    fn active_cell_is_stream_tail(&self) -> bool {
+        self.active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<history_cell::StreamingAgentTailCell>())
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -7246,7 +7239,7 @@ impl ChatWidget {
             return;
         }
         self.set_collaboration_mask(collaboration_mode);
-        let should_queue = self.is_plan_streaming_in_tui();
+        let should_queue = self.has_active_plan_stream();
         let user_message = UserMessage {
             text,
             local_images: Vec::new(),

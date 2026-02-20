@@ -241,15 +241,19 @@ impl StreamCore {
         append_markdown_agent(&self.raw_source, self.width, &mut self.rendered_lines);
     }
 
+    /// Compute how many rendered lines should be in the stable region.
+    fn compute_target_stable_len(&mut self) -> usize {
+        let tail_budget = self.active_tail_budget_lines();
+        self.rendered_lines
+            .len()
+            .saturating_sub(tail_budget)
+            .max(self.emitted_stable_len)
+    }
+
     /// Advance `enqueued_stable_len` toward the target stable boundary and enqueue any
     /// newly-stable lines. Returns `true` if new lines were enqueued.
     fn sync_stable_queue(&mut self) -> bool {
-        let tail_budget = self.active_tail_budget_lines();
-        let target_stable_len = self
-            .rendered_lines
-            .len()
-            .saturating_sub(tail_budget)
-            .max(self.emitted_stable_len);
+        let target_stable_len = self.compute_target_stable_len();
 
         // A structural rewrite moved the stable boundary backward into enqueue-but-unemitted
         // lines. Rebuild queue from the latest snapshot.
@@ -277,12 +281,7 @@ impl StreamCore {
     /// Rebuild the stable queue from the current render snapshot. Used after `set_width()` where
     /// the old queue is stale.
     fn rebuild_stable_queue_from_render(&mut self) {
-        let tail_budget = self.active_tail_budget_lines();
-        let target_stable_len = self
-            .rendered_lines
-            .len()
-            .saturating_sub(tail_budget)
-            .max(self.emitted_stable_len);
+        let target_stable_len = self.compute_target_stable_len();
         self.state.clear_queue();
         if self.emitted_stable_len < target_stable_len {
             self.state
@@ -303,11 +302,9 @@ impl StreamCore {
         let scan_start = Instant::now();
         let holdback_state = self.holdback_scanner.state();
         let tail_budget = match holdback_state {
-            TableHoldbackState::Confirmed { table_start } => {
-                self.tail_budget_from_source_start(table_start)
-            }
-            TableHoldbackState::PendingHeader { header_start } => {
-                self.tail_budget_from_source_start(header_start)
+            TableHoldbackState::Confirmed { table_start: start }
+            | TableHoldbackState::PendingHeader { header_start: start } => {
+                self.tail_budget_from_source_start(start)
             }
             TableHoldbackState::None => 0,
         };
@@ -607,8 +604,8 @@ fn table_candidate_text(line: &str) -> Option<&str> {
 ///
 /// `StreamCore::active_tail_budget_lines` uses this to decide whether to
 /// commit rendered lines to the stable queue or withhold them as mutable tail.
-/// The scan is stateless: `table_holdback_state` re-evaluates the full source
-/// on every delta rather than maintaining incremental state.
+/// The incremental `TableHoldbackScanner` maintains state across deltas;
+/// the stateless `table_holdback_state` function is used only in tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TableHoldbackState {
     /// No table detected -- all rendered lines can flow into the stable queue.

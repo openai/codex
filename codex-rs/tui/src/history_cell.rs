@@ -496,8 +496,6 @@ impl HistoryCell for AgentMarkdownCell {
         // Re-render markdown from source at the current width. Reserve 2 columns for the "• " /
         // " " prefix prepended below.
         crate::markdown::append_markdown_agent(&self.markdown_source, Some(wrap_width), &mut lines);
-        // Use prefix_lines (not word_wrap_lines) so table rows with box-drawing characters are not
-        // broken by word-wrapping. The markdown renderer already output to wrap_width.
         prefix_lines(lines, "• ".dim(), "  ".into())
     }
 }
