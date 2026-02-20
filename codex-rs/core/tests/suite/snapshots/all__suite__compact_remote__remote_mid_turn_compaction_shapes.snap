@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "format_labeled_requests_snapshot(\"Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
+expression: "format_labeled_requests_snapshot(\"Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and the follow-up request includes the returned compaction item.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
 ---
-Scenario: Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.
+Scenario: Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and the follow-up request includes the returned compaction item.
 
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
@@ -17,4 +17,4 @@ Scenario: Remote mid-turn continuation compaction after tool output: compact req
 01:message/user:<AGENTS_MD>
 02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 03:message/user:USER_ONE
-04:message/user:<COMPACTION_SUMMARY>\nREMOTE_MID_TURN_SUMMARY
+04:compaction:encrypted=true

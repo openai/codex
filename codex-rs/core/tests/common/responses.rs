@@ -867,7 +867,7 @@ pub async fn mount_compact_json_once(server: &MockServer, body: serde_json::Valu
 
 /// Mount a `/responses/compact` mock that mirrors the default remote compaction shape:
 /// keep user+developer messages from the request, drop assistant/tool artifacts, and append one
-/// summary user message.
+/// compaction item carrying the provided summary text.
 pub async fn mount_compact_user_history_with_summary_once(
     server: &MockServer,
     summary_text: &str,
@@ -921,11 +921,10 @@ pub async fn mount_compact_user_history_with_summary_sequence(
                         )
                 })
                 .collect::<Vec<Value>>();
-            // Append the synthetic summary message as the newest user item.
+            // Append a synthetic compaction item as the newest item.
             output.push(serde_json::json!({
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": summary_text}],
+                "type": "compaction",
+                "encrypted_content": summary_text,
             }));
             ResponseTemplate::new(200)
                 .insert_header("content-type", "application/json")
