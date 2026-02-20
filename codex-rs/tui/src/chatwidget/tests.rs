@@ -7,7 +7,6 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
-use crate::app_event::ReasoningSelectionPurpose;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
@@ -2124,7 +2123,6 @@ async fn plan_implementation_popup_no_selected_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.open_plan_implementation_prompt();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("plan_implementation_popup_no_selected", popup);
@@ -2147,21 +2145,6 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
     };
     assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
     assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
-}
-
-#[tokio::test]
-async fn plan_implementation_popup_select_reasoning_emits_reasoning_popup_event() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.open_plan_implementation_prompt();
-
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-    let event = rx.try_recv().expect("expected AppEvent");
-    let AppEvent::OpenReasoningPopupForCurrentModel { purpose } = event else {
-        panic!("expected OpenReasoningPopupForCurrentModel, got {event:?}");
-    };
-    assert_eq!(purpose, ReasoningSelectionPurpose::PlanImplementation);
 }
 
 #[tokio::test]
@@ -2202,7 +2185,7 @@ async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset, ReasoningSelectionPurpose::ModelSelection);
+    chat.open_reasoning_popup(preset);
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
@@ -2230,7 +2213,7 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
     chat.set_reasoning_effort(Some(current_preset.default_reasoning_effort));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset, ReasoningSelectionPurpose::ModelSelection);
+    chat.open_reasoning_popup(preset);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let event = rx.try_recv().expect("expected AppEvent");
@@ -2256,7 +2239,7 @@ async fn plan_mode_reasoning_override_is_marked_current_in_reasoning_popup() {
     chat.set_collaboration_mask(plan_mask);
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset, ReasoningSelectionPurpose::ModelSelection);
+    chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 100);
     assert!(popup.contains("Low (current)"));
@@ -2277,7 +2260,7 @@ async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_promp
     set_chatgpt_auth(&mut chat);
 
     let preset = get_available_model(&chat, "gpt-5");
-    chat.open_reasoning_popup(preset, ReasoningSelectionPurpose::ModelSelection);
+    chat.open_reasoning_popup(preset);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let event = rx.try_recv().expect("expected AppEvent");
@@ -5448,7 +5431,7 @@ async fn model_reasoning_selection_popup_snapshot() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset, ReasoningSelectionPurpose::ModelSelection);
+    chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
@@ -5462,7 +5445,7 @@ async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset, ReasoningSelectionPurpose::ModelSelection);
+    chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
@@ -5475,7 +5458,7 @@ async fn reasoning_popup_shows_extra_high_with_space() {
     set_chatgpt_auth(&mut chat);
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset, ReasoningSelectionPurpose::ModelSelection);
+    chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
@@ -5510,7 +5493,7 @@ async fn single_reasoning_option_skips_selection() {
         supported_in_api: true,
         input_modalities: default_input_modalities(),
     };
-    chat.open_reasoning_popup(preset, ReasoningSelectionPurpose::ModelSelection);
+    chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -5560,7 +5543,7 @@ async fn reasoning_popup_escape_returns_to_model_popup() {
     chat.open_model_popup();
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset, ReasoningSelectionPurpose::ModelSelection);
+    chat.open_reasoning_popup(preset);
 
     let before_escape = render_bottom_popup(&chat, 80);
     assert!(before_escape.contains("Select Reasoning Level"));

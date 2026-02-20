@@ -154,7 +154,6 @@ use tracing::warn;
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
-const PLAN_IMPLEMENTATION_SELECT_REASONING: &str = "Select reasoning level and implement this";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
@@ -165,7 +164,6 @@ const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
-use crate::app_event::ReasoningSelectionPurpose;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -1421,12 +1419,6 @@ impl ChatWidget {
             }
             None => (Vec::new(), Some("Default mode unavailable".to_string())),
         };
-        let reasoning_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
-            tx.send(AppEvent::OpenReasoningPopupForCurrentModel {
-                purpose: ReasoningSelectionPurpose::PlanImplementation,
-            });
-        })];
-
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
@@ -1434,19 +1426,6 @@ impl ChatWidget {
                 selected_description: None,
                 is_current: false,
                 actions: implement_actions,
-                disabled_reason: implement_disabled_reason.clone(),
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: PLAN_IMPLEMENTATION_SELECT_REASONING.to_string(),
-                description: Some(
-                    "Choose an all-modes reasoning level, then implement in Default mode."
-                        .to_string(),
-                ),
-                selected_description: None,
-                is_current: false,
-                actions: reasoning_actions,
                 disabled_reason: implement_disabled_reason,
                 dismiss_on_select: true,
                 ..Default::default()
@@ -1469,15 +1448,6 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
-    }
-
-    pub(crate) fn submit_plan_implementation_message(&mut self) {
-        let Some(mask) = collaboration_modes::default_mode_mask(self.models_manager.as_ref())
-        else {
-            self.add_error_message("Default collaboration mode unavailable.".to_string());
-            return;
-        };
-        self.submit_user_message_with_mode(PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string(), mask);
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -5086,7 +5056,6 @@ impl ChatWidget {
                 let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
                     model: preset_for_event,
-                    purpose: ReasoningSelectionPurpose::ModelSelection,
                 });
             })];
             items.push(SelectionItem {
@@ -5191,34 +5160,6 @@ impl ChatWidget {
         })]
     }
 
-    pub(crate) fn open_reasoning_popup_for_current_model(
-        &mut self,
-        purpose: ReasoningSelectionPurpose,
-    ) {
-        let model_slug = self.current_model().to_string();
-        let presets = match self.models_manager.try_list_models() {
-            Ok(presets) => presets,
-            Err(_) => {
-                self.add_info_message(
-                    "Models are being updated; please try again in a moment.".to_string(),
-                    None,
-                );
-                return;
-            }
-        };
-        let Some(preset) = presets
-            .into_iter()
-            .find(|preset| preset.model == model_slug)
-        else {
-            self.add_info_message(
-                "Reasoning selection is unavailable for the current model.".to_string(),
-                None,
-            );
-            return;
-        };
-        self.open_reasoning_popup(preset, purpose);
-    }
-
     fn should_prompt_plan_mode_reasoning_scope(
         &self,
         selected_model: &str,
@@ -5319,11 +5260,7 @@ impl ChatWidget {
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
-    pub(crate) fn open_reasoning_popup(
-        &mut self,
-        preset: ModelPreset,
-        purpose: ReasoningSelectionPurpose,
-    ) {
+    pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
         let in_plan_mode =
@@ -5373,27 +5310,14 @@ impl ChatWidget {
         if choices.len() == 1 {
             let selected_effort = choices.first().and_then(|c| c.stored);
             let selected_model = preset.model;
-            match purpose {
-                ReasoningSelectionPurpose::ModelSelection => {
-                    if self
-                        .should_prompt_plan_mode_reasoning_scope(&selected_model, selected_effort)
-                    {
-                        self.app_event_tx
-                            .send(AppEvent::OpenPlanReasoningScopePrompt {
-                                model: selected_model,
-                                effort: selected_effort,
-                            });
-                    } else {
-                        self.apply_model_and_effort(selected_model, selected_effort);
-                    }
-                }
-                ReasoningSelectionPurpose::PlanImplementation => {
-                    self.app_event_tx
-                        .send(AppEvent::SubmitPlanImplementationWithReasoning {
-                            model: selected_model,
-                            effort: selected_effort,
-                        });
-                }
+            if self.should_prompt_plan_mode_reasoning_scope(&selected_model, selected_effort) {
+                self.app_event_tx
+                    .send(AppEvent::OpenPlanReasoningScopePrompt {
+                        model: selected_model,
+                        effort: selected_effort,
+                    });
+            } else {
+                self.apply_model_and_effort(selected_model, selected_effort);
             }
             return;
         }
@@ -5408,23 +5332,16 @@ impl ChatWidget {
 
         let model_slug = preset.model.to_string();
         let is_current_model = self.current_model() == preset.model.as_str();
-        let highlight_choice = match purpose {
-            ReasoningSelectionPurpose::PlanImplementation => {
-                self.config.model_reasoning_effort.or(default_choice)
+        let highlight_choice = if is_current_model {
+            if in_plan_mode {
+                self.config
+                    .plan_mode_reasoning_effort
+                    .or(self.effective_reasoning_effort())
+            } else {
+                self.effective_reasoning_effort()
             }
-            ReasoningSelectionPurpose::ModelSelection => {
-                if is_current_model {
-                    if in_plan_mode {
-                        self.config
-                            .plan_mode_reasoning_effort
-                            .or(self.effective_reasoning_effort())
-                    } else {
-                        self.effective_reasoning_effort()
-                    }
-                } else {
-                    default_choice
-                }
-            }
+        } else {
+            default_choice
         };
         let selection_choice = highlight_choice.or(default_choice);
         let initial_selected_idx = choices
@@ -5468,35 +5385,27 @@ impl ChatWidget {
             let choice_effort = choice.stored;
             let should_prompt_plan_mode_scope = in_plan_mode
                 && self.should_prompt_plan_mode_reasoning_scope(model_slug.as_str(), choice_effort);
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| match purpose {
-                ReasoningSelectionPurpose::ModelSelection => {
-                    if should_prompt_plan_mode_scope {
-                        tx.send(AppEvent::OpenPlanReasoningScopePrompt {
-                            model: model_for_action.clone(),
-                            effort: choice_effort,
-                        });
-                    } else {
-                        tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                            cwd: None,
-                            approval_policy: None,
-                            sandbox_policy: None,
-                            windows_sandbox_level: None,
-                            model: Some(model_for_action.clone()),
-                            effort: Some(choice_effort),
-                            summary: None,
-                            collaboration_mode: None,
-                            personality: None,
-                        }));
-                        tx.send(AppEvent::UpdateModel(model_for_action.clone()));
-                        tx.send(AppEvent::UpdateReasoningEffort(choice_effort));
-                        tx.send(AppEvent::PersistModelSelection {
-                            model: model_for_action.clone(),
-                            effort: choice_effort,
-                        });
-                    }
-                }
-                ReasoningSelectionPurpose::PlanImplementation => {
-                    tx.send(AppEvent::SubmitPlanImplementationWithReasoning {
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                if should_prompt_plan_mode_scope {
+                    tx.send(AppEvent::OpenPlanReasoningScopePrompt {
+                        model: model_for_action.clone(),
+                        effort: choice_effort,
+                    });
+                } else {
+                    tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        windows_sandbox_level: None,
+                        model: Some(model_for_action.clone()),
+                        effort: Some(choice_effort),
+                        summary: None,
+                        collaboration_mode: None,
+                        personality: None,
+                    }));
+                    tx.send(AppEvent::UpdateModel(model_for_action.clone()));
+                    tx.send(AppEvent::UpdateReasoningEffort(choice_effort));
+                    tx.send(AppEvent::PersistModelSelection {
                         model: model_for_action.clone(),
                         effort: choice_effort,
                     });
@@ -5515,19 +5424,9 @@ impl ChatWidget {
         }
 
         let mut header = ColumnRenderable::new();
-        match purpose {
-            ReasoningSelectionPurpose::PlanImplementation => {
-                header.push(Line::from("Select reasoning level and implement".bold()));
-                header.push(Line::from(
-                    "This updates the all-modes default reasoning level.".dim(),
-                ));
-            }
-            ReasoningSelectionPurpose::ModelSelection => {
-                header.push(Line::from(
-                    format!("Select Reasoning Level for {model_slug}").bold(),
-                ));
-            }
-        }
+        header.push(Line::from(
+            format!("Select Reasoning Level for {model_slug}").bold(),
+        ));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             header: Box::new(header),
