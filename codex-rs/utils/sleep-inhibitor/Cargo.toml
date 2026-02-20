@@ -17,7 +17,7 @@ core-foundation = "0.9"
 libc = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.52", features = [
+windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_System_Power",
     "Win32_System_SystemServices",
