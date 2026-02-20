@@ -1,6 +1,7 @@
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
+use codex_protocol::openai_models::ReasoningEffort;
 
 const COLLABORATION_MODE_PLAN: &str = include_str!("../../templates/collaboration_mode/plan.md");
 const COLLABORATION_MODE_DEFAULT: &str =
@@ -17,7 +18,7 @@ fn plan_preset() -> CollaborationModeMask {
         name: ModeKind::Plan.display_name().to_string(),
         mode: Some(ModeKind::Plan),
         model: None,
-        reasoning_effort: None,
+        reasoning_effort: Some(Some(ReasoningEffort::Medium)),
         developer_instructions: Some(Some(COLLABORATION_MODE_PLAN.to_string())),
     }
 }
@@ -74,7 +75,10 @@ mod tests {
     fn preset_names_use_mode_display_names() {
         assert_eq!(plan_preset().name, ModeKind::Plan.display_name());
         assert_eq!(default_preset().name, ModeKind::Default.display_name());
-        assert_eq!(plan_preset().reasoning_effort, None);
+        assert_eq!(
+            plan_preset().reasoning_effort,
+            Some(Some(ReasoningEffort::Medium))
+        );
     }
 
     #[test]

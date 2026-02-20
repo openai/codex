@@ -35,7 +35,7 @@ Codex stores "do not show again" flags for some UI prompts under the `[notice]` 
 ## Plan mode defaults
 
 `plan_mode_reasoning_effort` lets you set a Plan-mode-specific default reasoning
-effort. When unset, Plan mode inherits the all-modes `model_reasoning_effort`
-default.
+effort override. When unset, Plan mode uses the built-in Plan preset default
+(currently `medium`).
 
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).

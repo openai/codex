@@ -6273,7 +6273,13 @@ impl ChatWidget {
             && let Some(mask) = self.active_collaboration_mask.as_mut()
             && mask.mode == Some(ModeKind::Plan)
         {
-            mask.reasoning_effort = effort.map(Some);
+            if let Some(effort) = effort {
+                mask.reasoning_effort = Some(Some(effort));
+            } else if let Some(plan_mask) =
+                collaboration_modes::plan_mask(self.models_manager.as_ref())
+            {
+                mask.reasoning_effort = plan_mask.reasoning_effort;
+            }
         }
     }
 
@@ -6287,7 +6293,7 @@ impl ChatWidget {
         {
             if mask.mode == Some(ModeKind::Plan) && self.config.plan_mode_reasoning_effort.is_none()
             {
-                mask.reasoning_effort = None;
+                // Preserve the Plan preset's default reasoning unless a Plan-only override is set.
             } else {
                 mask.reasoning_effort = Some(effort);
             }
@@ -6520,8 +6526,10 @@ impl ChatWidget {
         let previous_mode = self.active_mode_kind();
         let previous_model = self.current_model().to_string();
         let previous_effort = self.effective_reasoning_effort();
-        if mask.mode == Some(ModeKind::Plan) {
-            mask.reasoning_effort = self.config.plan_mode_reasoning_effort.map(Some);
+        if mask.mode == Some(ModeKind::Plan)
+            && let Some(effort) = self.config.plan_mode_reasoning_effort
+        {
+            mask.reasoning_effort = Some(Some(effort));
         }
         self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();
@@ -6942,7 +6950,9 @@ impl ChatWidget {
         mut collaboration_mode: CollaborationModeMask,
     ) {
         if collaboration_mode.mode == Some(ModeKind::Plan) {
-            collaboration_mode.reasoning_effort = self.config.plan_mode_reasoning_effort.map(Some);
+            if let Some(effort) = self.config.plan_mode_reasoning_effort {
+                collaboration_mode.reasoning_effort = Some(Some(effort));
+            }
         }
         if self.agent_turn_running
             && self.active_collaboration_mask.as_ref() != Some(&collaboration_mode)

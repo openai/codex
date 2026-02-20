@@ -2183,6 +2183,7 @@ async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
     let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
         .expect("expected plan collaboration mode");
     chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
     set_chatgpt_auth(&mut chat);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
@@ -2209,6 +2210,7 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
     let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
         .expect("expected plan collaboration mode");
     chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
     set_chatgpt_auth(&mut chat);
 
     let current_preset = get_available_model(&chat, "gpt-5.1-codex-max");
@@ -2259,6 +2261,7 @@ async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_promp
     let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
         .expect("expected plan collaboration mode");
     chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
     set_chatgpt_auth(&mut chat);
 
     let preset = get_available_model(&chat, "gpt-5");
@@ -4073,7 +4076,10 @@ async fn set_reasoning_effort_updates_active_collaboration_mask() {
 
     chat.set_reasoning_effort(None);
 
-    assert_eq!(chat.current_reasoning_effort(), None);
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Medium)
+    );
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
 }
 
