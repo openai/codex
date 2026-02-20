@@ -32,4 +32,10 @@ The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schem
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.
 
+## Plan mode defaults
+
+`plan_mode_reasoning_effort` lets you set a Plan-mode-specific default reasoning
+effort. When unset, Plan mode inherits the all-modes `model_reasoning_effort`
+default.
+
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).

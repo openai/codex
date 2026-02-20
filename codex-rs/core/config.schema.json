@@ -467,6 +467,9 @@
         "personality": {
           "$ref": "#/definitions/Personality"
         },
+        "plan_mode_reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
         },
@@ -1896,6 +1899,9 @@
         }
       ],
       "description": "Optionally specify a personality for the model"
+    },
+    "plan_mode_reasoning_effort": {
+      "$ref": "#/definitions/ReasoningEffort"
     },
     "profile": {
       "description": "Profile to use from the `profiles` map.",
