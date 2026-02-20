@@ -237,6 +237,14 @@ async fn run_compact_task_inner(
         .collect();
     new_history.extend(ghost_snapshots);
     sess.replace_history(new_history.clone()).await;
+    if matches!(
+        initial_context_injection,
+        InitialContextInjection::DoNotInject
+    ) {
+        // Pre-turn/manual compaction replacement history strips prior context diffs, so the next
+        // regular turn must fully reinject canonical context.
+        sess.clear_reference_context_item().await;
+    }
     sess.recompute_token_usage(&turn_context).await;
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {

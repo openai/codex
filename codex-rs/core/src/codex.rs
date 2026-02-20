@@ -2736,8 +2736,8 @@ impl Session {
 
     /// Persist the latest turn context snapshot and emit any required model-visible context updates.
     ///
-    /// When the reference snapshot is missing (or `force_full_context_injection` is true), this
-    /// injects full initial context. Otherwise, it emits only settings diff items.
+    /// When the reference snapshot is missing, this injects full initial context. Otherwise, it
+    /// emits only settings diff items.
     ///
     /// If full context is injected and a model switch occurred, this appends the `<model_switch>`
     /// developer message so model-specific instructions are not lost.
@@ -2749,7 +2749,6 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         previous_user_turn_model: Option<&str>,
-        force_full_context_injection: bool,
         emit_raw_events: bool,
     ) {
         let reference_context_item = self.reference_context_item().await;
@@ -2758,8 +2757,7 @@ impl Session {
             previous_user_turn_model,
             turn_context,
         );
-        let should_inject_full_context =
-            force_full_context_injection || reference_context_item.is_none();
+        let should_inject_full_context = reference_context_item.is_none();
         let context_items = if should_inject_full_context {
             let mut initial_context = self.build_initial_context(turn_context).await;
             // Full reinjection bypasses the pure diff item list, so explicitly preserve a
@@ -4392,19 +4390,18 @@ pub(crate) async fn run_turn(
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    let pre_sampling_compacted = match run_pre_sampling_compact(&sess, &turn_context).await {
-        Ok(compacted) => compacted,
-        Err(_) => {
-            error!("Failed to run pre-sampling compact");
-            return None;
-        }
-    };
+    if run_pre_sampling_compact(&sess, &turn_context)
+        .await
+        .is_err()
+    {
+        error!("Failed to run pre-sampling compact");
+        return None;
+    }
 
     let previous_model = sess.previous_model().await;
     sess.record_context_updates_and_set_reference_context_item(
         turn_context.as_ref(),
         previous_model.as_deref(),
-        pre_sampling_compacted,
         true,
     )
     .await;
@@ -6601,24 +6598,14 @@ mod tests {
         assert_eq!(expected, history_before_seed.raw_items());
 
         session
-            .record_context_updates_and_set_reference_context_item(
-                &turn_context,
-                None,
-                false,
-                false,
-            )
+            .record_context_updates_and_set_reference_context_item(&turn_context, None, false)
             .await;
         expected.extend(session.build_initial_context(&turn_context).await);
         let history_after_seed = session.clone_history().await;
         assert_eq!(expected, history_after_seed.raw_items());
 
         session
-            .record_context_updates_and_set_reference_context_item(
-                &turn_context,
-                None,
-                false,
-                false,
-            )
+            .record_context_updates_and_set_reference_context_item(&turn_context, None, false)
             .await;
         let history_after_second_seed = session.clone_history().await;
         assert_eq!(expected, history_after_second_seed.raw_items());
@@ -7935,12 +7922,7 @@ mod tests {
      {
         let (session, turn_context) = make_session_and_context().await;
         session
-            .record_context_updates_and_set_reference_context_item(
-                &turn_context,
-                None,
-                false,
-                false,
-            )
+            .record_context_updates_and_set_reference_context_item(&turn_context, None, false)
             .await;
         let history = session.clone_history().await;
         let initial_context = session.build_initial_context(&turn_context).await;
@@ -7971,12 +7953,7 @@ mod tests {
             .record_into_history(std::slice::from_ref(&compacted_summary), &turn_context)
             .await;
         session
-            .record_context_updates_and_set_reference_context_item(
-                &turn_context,
-                None,
-                false,
-                false,
-            )
+            .record_context_updates_and_set_reference_context_item(&turn_context, None, false)
             .await;
         session.clear_reference_context_item().await;
         session
@@ -7984,12 +7961,7 @@ mod tests {
             .await;
 
         session
-            .record_context_updates_and_set_reference_context_item(
-                &turn_context,
-                None,
-                false,
-                false,
-            )
+            .record_context_updates_and_set_reference_context_item(&turn_context, None, false)
             .await;
 
         let history = session.clone_history().await;
