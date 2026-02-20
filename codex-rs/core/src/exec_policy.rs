@@ -166,6 +166,16 @@ impl ExecPolicyManager {
         Self::create_exec_approval_requirement_for_command_with_policy(exec_policy.as_ref(), req)
     }
 
+    /// Evaluates approval requirements with an in-memory prompt-only overlay.
+    ///
+    /// The base execpolicy is always evaluated first. If any base policy rule
+    /// matches (allow/prompt/forbidden), that result is returned as-is and the
+    /// overlay is ignored for this command.
+    ///
+    /// Overlay prefixes are only applied when the base evaluation had no policy
+    /// matches (i.e. only heuristics would decide). In that case, each overlay
+    /// prefix is added as an in-memory `prompt` rule and the command is
+    /// re-evaluated. The overlay is not persisted to the manager's policy.
     pub(crate) async fn create_exec_approval_requirement_for_command_with_overlay(
         &self,
         req: ExecApprovalRequest<'_>,
@@ -175,7 +185,33 @@ impl ExecPolicyManager {
             return self.create_exec_approval_requirement_for_command(req).await;
         }
 
-        let mut exec_policy = self.current().as_ref().clone();
+        let ExecApprovalRequest {
+            command,
+            approval_policy,
+            sandbox_policy,
+            sandbox_permissions,
+            prefix_rule,
+        } = req;
+
+        let base_policy = self.current();
+        let (base_evaluation, base_auto_amendment_allowed) = evaluate_exec_policy_for_command(
+            base_policy.as_ref(),
+            command,
+            approval_policy,
+            sandbox_policy,
+            sandbox_permissions,
+        );
+        if base_evaluation.matched_rules.iter().any(is_policy_match) {
+            return create_exec_approval_requirement_from_evaluation(
+                command,
+                approval_policy,
+                prefix_rule.as_ref(),
+                &base_evaluation,
+                base_auto_amendment_allowed,
+            );
+        }
+
+        let mut exec_policy = base_policy.as_ref().clone();
         for prefix in overlay_prompt_prefixes {
             if let Err(err) = exec_policy.add_prefix_rule(prefix, Decision::Prompt) {
                 tracing::warn!(
@@ -184,7 +220,20 @@ impl ExecPolicyManager {
             }
         }
 
-        Self::create_exec_approval_requirement_for_command_with_policy(&exec_policy, req)
+        let (overlay_evaluation, overlay_auto_amendment_allowed) = evaluate_exec_policy_for_command(
+            &exec_policy,
+            command,
+            approval_policy,
+            sandbox_policy,
+            sandbox_permissions,
+        );
+        create_exec_approval_requirement_from_evaluation(
+            command,
+            approval_policy,
+            prefix_rule.as_ref(),
+            &overlay_evaluation,
+            overlay_auto_amendment_allowed,
+        )
     }
 
     fn create_exec_approval_requirement_for_command_with_policy(
@@ -198,63 +247,20 @@ impl ExecPolicyManager {
             sandbox_permissions,
             prefix_rule,
         } = req;
-        let (commands, used_complex_parsing) = commands_for_exec_policy(command);
-        // Keep heredoc prefix parsing for rule evaluation so existing
-        // allow/prompt/forbidden rules still apply, but avoid auto-derived
-        // amendments when only the heredoc fallback parser matched.
-        let auto_amendment_allowed = !used_complex_parsing;
-        let exec_policy_fallback = |cmd: &[String]| {
-            render_decision_for_unmatched_command(
-                approval_policy,
-                sandbox_policy,
-                cmd,
-                sandbox_permissions,
-                used_complex_parsing,
-            )
-        };
-        let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
-
-        let requested_amendment = derive_requested_execpolicy_amendment_from_prefix_rule(
-            prefix_rule.as_ref(),
-            &evaluation.matched_rules,
+        let (evaluation, auto_amendment_allowed) = evaluate_exec_policy_for_command(
+            exec_policy,
+            command,
+            approval_policy,
+            sandbox_policy,
+            sandbox_permissions,
         );
-
-        match evaluation.decision {
-            Decision::Forbidden => ExecApprovalRequirement::Forbidden {
-                reason: derive_forbidden_reason(command, &evaluation),
-            },
-            Decision::Prompt => {
-                if matches!(approval_policy, AskForApproval::Never) {
-                    ExecApprovalRequirement::Forbidden {
-                        reason: PROMPT_CONFLICT_REASON.to_string(),
-                    }
-                } else {
-                    ExecApprovalRequirement::NeedsApproval {
-                        reason: derive_prompt_reason(command, &evaluation),
-                        proposed_execpolicy_amendment: requested_amendment.or_else(|| {
-                            if auto_amendment_allowed {
-                                try_derive_execpolicy_amendment_for_prompt_rules(
-                                    &evaluation.matched_rules,
-                                )
-                            } else {
-                                None
-                            }
-                        }),
-                    }
-                }
-            }
-            Decision::Allow => ExecApprovalRequirement::Skip {
-                // Bypass sandbox if execpolicy allows the command
-                bypass_sandbox: evaluation.matched_rules.iter().any(|rule_match| {
-                    is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
-                }),
-                proposed_execpolicy_amendment: if auto_amendment_allowed {
-                    try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
-                } else {
-                    None
-                },
-            },
-        }
+        create_exec_approval_requirement_from_evaluation(
+            command,
+            approval_policy,
+            prefix_rule.as_ref(),
+            &evaluation,
+            auto_amendment_allowed,
+        )
     }
 
     pub(crate) async fn append_amendment_and_update(
@@ -280,6 +286,81 @@ impl ExecPolicyManager {
         updated_policy.add_prefix_rule(&prefix, Decision::Allow)?;
         self.policy.store(Arc::new(updated_policy));
         Ok(())
+    }
+}
+
+fn evaluate_exec_policy_for_command(
+    exec_policy: &Policy,
+    command: &[String],
+    approval_policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+    sandbox_permissions: SandboxPermissions,
+) -> (Evaluation, bool) {
+    let (commands, used_complex_parsing) = commands_for_exec_policy(command);
+    // Keep heredoc prefix parsing for rule evaluation so existing
+    // allow/prompt/forbidden rules still apply, but avoid auto-derived
+    // amendments when only the heredoc fallback parser matched.
+    let auto_amendment_allowed = !used_complex_parsing;
+    let exec_policy_fallback = |cmd: &[String]| {
+        render_decision_for_unmatched_command(
+            approval_policy,
+            sandbox_policy,
+            cmd,
+            sandbox_permissions,
+            used_complex_parsing,
+        )
+    };
+    let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
+    (evaluation, auto_amendment_allowed)
+}
+
+fn create_exec_approval_requirement_from_evaluation(
+    command: &[String],
+    approval_policy: AskForApproval,
+    prefix_rule: Option<&Vec<String>>,
+    evaluation: &Evaluation,
+    auto_amendment_allowed: bool,
+) -> ExecApprovalRequirement {
+    let requested_amendment = derive_requested_execpolicy_amendment_from_prefix_rule(
+        prefix_rule,
+        &evaluation.matched_rules,
+    );
+
+    match evaluation.decision {
+        Decision::Forbidden => ExecApprovalRequirement::Forbidden {
+            reason: derive_forbidden_reason(command, evaluation),
+        },
+        Decision::Prompt => {
+            if matches!(approval_policy, AskForApproval::Never) {
+                ExecApprovalRequirement::Forbidden {
+                    reason: PROMPT_CONFLICT_REASON.to_string(),
+                }
+            } else {
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: derive_prompt_reason(command, evaluation),
+                    proposed_execpolicy_amendment: requested_amendment.or_else(|| {
+                        if auto_amendment_allowed {
+                            try_derive_execpolicy_amendment_for_prompt_rules(
+                                &evaluation.matched_rules,
+                            )
+                        } else {
+                            None
+                        }
+                    }),
+                }
+            }
+        }
+        Decision::Allow => ExecApprovalRequirement::Skip {
+            // Bypass sandbox if execpolicy allows the command
+            bypass_sandbox: evaluation.matched_rules.iter().any(|rule_match| {
+                is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+            }),
+            proposed_execpolicy_amendment: if auto_amendment_allowed {
+                try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
+            } else {
+                None
+            },
+        },
     }
 }
 
@@ -1304,6 +1385,72 @@ prefix_rule(
             manager.current().get_allowed_prefixes(),
             Vec::<Vec<String>>::new(),
             "overlay prefixes must not persist in session execpolicy state"
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_approval_overlay_does_not_override_base_allow_rule_for_same_prefix() {
+        let policy_src = r#"prefix_rule(pattern=["/tmp/skill-script.sh"], decision="allow")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+        let command = vec!["/tmp/skill-script.sh".to_string()];
+
+        let requirement = manager
+            .create_exec_approval_requirement_for_command_with_overlay(
+                ExecApprovalRequest {
+                    command: &command,
+                    approval_policy: AskForApproval::UnlessTrusted,
+                    sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    prefix_rule: None,
+                },
+                std::slice::from_ref(&command),
+            )
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_approval_overlay_does_not_override_base_prompt_reason_for_same_prefix() {
+        let policy_src = r#"prefix_rule(pattern=["/tmp/skill-script.sh"], decision="prompt", justification="base policy prompt")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+        let command = vec!["/tmp/skill-script.sh".to_string()];
+
+        let requirement = manager
+            .create_exec_approval_requirement_for_command_with_overlay(
+                ExecApprovalRequest {
+                    command: &command,
+                    approval_policy: AskForApproval::UnlessTrusted,
+                    sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    prefix_rule: None,
+                },
+                std::slice::from_ref(&command),
+            )
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: Some(
+                    "`/tmp/skill-script.sh` requires approval: base policy prompt".to_string()
+                ),
+                proposed_execpolicy_amendment: None,
+            }
         );
     }
 

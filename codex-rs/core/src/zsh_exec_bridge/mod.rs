@@ -353,11 +353,13 @@ impl ZshExecBridge {
             argv.clone()
         };
 
+        // Check exec policy against the resolved executable path, not the original argv[0].
         let mut command_for_execpolicy = command_for_approval.clone();
         if let Some(program) = command_for_execpolicy.first_mut() {
             *program = file.clone();
         }
 
+        // Collect skill-provided approval overlays that may add promptable prefix rules.
         let overlay_prompt_prefixes = {
             let registry = turn
                 .skill_prefix_permissions
@@ -365,6 +367,8 @@ impl ZshExecBridge {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             registry.keys().cloned().collect::<Vec<_>>()
         };
+
+        // Ask exec policy whether this command can run, is forbidden, or needs approval.
         let exec_approval_requirement = session
             .services
             .exec_policy
@@ -380,6 +384,7 @@ impl ZshExecBridge {
             )
             .await;
 
+        // Send immediate allow/deny responses, or carry forward approval details for prompting.
         let (reason, proposed_execpolicy_amendment) = match exec_approval_requirement {
             ExecApprovalRequirement::Skip { .. } => {
                 write_json_line(
