@@ -134,6 +134,7 @@ mod tests {
             parent_thread_id,
             depth: 1,
             agent_nickname: None,
+            agent_role: None,
         });
 
         assert!(source_kind_matches(

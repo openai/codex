@@ -27,12 +27,7 @@ fn agent_nickname_list() -> Vec<&'static str> {
 }
 
 fn thread_spawn_agent_nickname(session_source: &SessionSource) -> Option<String> {
-    match session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {
-            agent_nickname.clone()
-        }
-        _ => None,
-    }
+    session_source.get_nickname()
 }
 
 /// Control-plane handle for multi-agent operations.
@@ -72,6 +67,7 @@ impl AgentControl {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
+                agent_role,
                 ..
             })) => {
                 let agent_nickname = reservation.reserve_agent_nickname(&agent_nickname_list())?;
@@ -79,6 +75,7 @@ impl AgentControl {
                     parent_thread_id,
                     depth,
                     agent_nickname: Some(agent_nickname),
+                    agent_role,
                 }))
             }
             other => other,
@@ -833,6 +830,7 @@ mod tests {
                     parent_thread_id,
                     depth: 1,
                     agent_nickname: None,
+                    agent_role: Some("explorer".to_string()),
                 })),
             )
             .await
@@ -865,6 +863,7 @@ mod tests {
                     parent_thread_id,
                     depth: 1,
                     agent_nickname: None,
+                    agent_role: Some("explorer".to_string()),
                 })),
             )
             .await
@@ -881,6 +880,7 @@ mod tests {
             parent_thread_id: seen_parent_thread_id,
             depth,
             agent_nickname,
+            agent_role,
         }) = snapshot.session_source
         else {
             panic!("expected thread-spawn sub-agent source");
@@ -888,5 +888,6 @@ mod tests {
         assert_eq!(seen_parent_thread_id, parent_thread_id);
         assert_eq!(depth, 1);
         assert!(agent_nickname.is_some());
+        assert_eq!(agent_role, Some("explorer".to_string()));
     }
 }

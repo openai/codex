@@ -96,6 +96,7 @@ SELECT
     updated_at,
     source,
     agent_nickname,
+    agent_role,
     model_provider,
     cwd,
     cli_version,

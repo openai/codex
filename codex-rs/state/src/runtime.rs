@@ -212,6 +212,7 @@ SELECT
     updated_at,
     source,
     agent_nickname,
+    agent_role,
     model_provider,
     cwd,
     cli_version,
@@ -312,6 +313,7 @@ SELECT
     updated_at,
     source,
     agent_nickname,
+    agent_role,
     model_provider,
     cwd,
     cli_version,
@@ -694,6 +696,7 @@ INSERT INTO threads (
     updated_at,
     source,
     agent_nickname,
+    agent_role,
     model_provider,
     cwd,
     cli_version,
@@ -707,13 +710,14 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
     source = excluded.source,
     agent_nickname = excluded.agent_nickname,
+    agent_role = excluded.agent_role,
     model_provider = excluded.model_provider,
     cwd = excluded.cwd,
     cli_version = excluded.cli_version,
@@ -735,6 +739,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(datetime_to_epoch_seconds(metadata.updated_at))
         .bind(metadata.source.as_str())
         .bind(metadata.agent_nickname.as_deref())
+        .bind(metadata.agent_role.as_deref())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())
@@ -3098,6 +3103,7 @@ VALUES (?, ?, ?, ?, ?)
             updated_at: now,
             source: "cli".to_string(),
             agent_nickname: None,
+            agent_role: None,
             model_provider: "test-provider".to_string(),
             cwd,
             cli_version: "0.0.0".to_string(),

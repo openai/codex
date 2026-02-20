@@ -54,7 +54,6 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
 
@@ -392,13 +391,8 @@ impl RolloutRecorder {
                         cwd: config.cwd.clone(),
                         originator: originator().value,
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
-                        agent_nickname: match &source {
-                            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                                agent_nickname,
-                                ..
-                            }) => agent_nickname.clone(),
-                            _ => None,
-                        },
+                        agent_nickname: source.get_nickname(),
+                        agent_role: source.get_agent_role(),
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
                         base_instructions: Some(base_instructions),
@@ -937,10 +931,12 @@ impl From<codex_state::ThreadsPage> for ThreadsPage {
                 git_sha: item.git_sha,
                 git_origin_url: item.git_origin_url,
                 source: Some(
-                    serde_json::from_value(Value::String(item.source))
+                    serde_json::from_str(item.source.as_str())
+                        .or_else(|_| serde_json::from_value(Value::String(item.source)))
                         .unwrap_or(SessionSource::Unknown),
                 ),
                 agent_nickname: item.agent_nickname,
+                agent_role: item.agent_role,
                 model_provider: Some(item.model_provider),
                 cli_version: Some(item.cli_version),
                 created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),

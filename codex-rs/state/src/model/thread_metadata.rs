@@ -64,6 +64,8 @@ pub struct ThreadMetadata {
     pub source: String,
     /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
     pub agent_nickname: Option<String>,
+    /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
+    pub agent_role: Option<String>,
     /// The model provider identifier.
     pub model_provider: String,
     /// The working directory for the thread.
@@ -105,6 +107,8 @@ pub struct ThreadMetadataBuilder {
     pub source: SessionSource,
     /// Optional random unique nickname assigned to the session.
     pub agent_nickname: Option<String>,
+    /// Optional role (agent_role) assigned to the session.
+    pub agent_role: Option<String>,
     /// The model provider identifier, if known.
     pub model_provider: Option<String>,
     /// The working directory for the thread.
@@ -140,6 +144,7 @@ impl ThreadMetadataBuilder {
             updated_at: None,
             source,
             agent_nickname: None,
+            agent_role: None,
             model_provider: None,
             cwd: PathBuf::new(),
             cli_version: None,
@@ -169,6 +174,7 @@ impl ThreadMetadataBuilder {
             updated_at,
             source,
             agent_nickname: self.agent_nickname.clone(),
+            agent_role: self.agent_role.clone(),
             model_provider: self
                 .model_provider
                 .clone()
@@ -209,6 +215,9 @@ impl ThreadMetadata {
         }
         if self.agent_nickname != other.agent_nickname {
             diffs.push("agent_nickname");
+        }
+        if self.agent_role != other.agent_role {
+            diffs.push("agent_role");
         }
         if self.model_provider != other.model_provider {
             diffs.push("model_provider");
@@ -262,6 +271,7 @@ pub(crate) struct ThreadRow {
     updated_at: i64,
     source: String,
     agent_nickname: Option<String>,
+    agent_role: Option<String>,
     model_provider: String,
     cwd: String,
     cli_version: String,
@@ -285,6 +295,7 @@ impl ThreadRow {
             updated_at: row.try_get("updated_at")?,
             source: row.try_get("source")?,
             agent_nickname: row.try_get("agent_nickname")?,
+            agent_role: row.try_get("agent_role")?,
             model_provider: row.try_get("model_provider")?,
             cwd: row.try_get("cwd")?,
             cli_version: row.try_get("cli_version")?,
@@ -312,6 +323,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             updated_at,
             source,
             agent_nickname,
+            agent_role,
             model_provider,
             cwd,
             cli_version,
@@ -332,6 +344,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             updated_at: epoch_seconds_to_datetime(updated_at)?,
             source,
             agent_nickname,
+            agent_role,
             model_provider,
             cwd: PathBuf::from(cwd),
             cli_version,

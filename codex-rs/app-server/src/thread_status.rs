@@ -623,6 +623,7 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
             cli_version: "test".to_string(),
             agent_nickname: None,
+            agent_role: None,
             source,
             git_info: None,
             turns: Vec::new(),

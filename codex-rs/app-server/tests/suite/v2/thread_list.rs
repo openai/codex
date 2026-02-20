@@ -583,6 +583,7 @@ async fn thread_list_filters_by_source_kind_subagent_thread_spawn() -> Result<()
             parent_thread_id,
             depth: 1,
             agent_nickname: None,
+            agent_role: None,
         }),
     )?;
 
@@ -645,6 +646,7 @@ async fn thread_list_filters_by_subagent_variant() -> Result<()> {
             parent_thread_id,
             depth: 1,
             agent_nickname: None,
+            agent_role: None,
         }),
     )?;
     let other_id = create_fake_rollout_with_source(

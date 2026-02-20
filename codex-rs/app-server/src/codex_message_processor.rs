@@ -6659,6 +6659,7 @@ async fn read_summary_from_state_db_context_by_thread_id(
         metadata.cli_version,
         metadata.source,
         metadata.agent_nickname,
+        metadata.agent_role,
         metadata.git_sha,
         metadata.git_branch,
         metadata.git_origin_url,
@@ -6679,10 +6680,11 @@ async fn summary_from_thread_list_item(
             .unwrap_or_else(|| fallback_provider.to_string());
         let cwd = it.cwd?;
         let cli_version = it.cli_version.unwrap_or_default();
-        let source = with_thread_spawn_agent_nickname(
+        let source = with_thread_spawn_agent_metadata(
             it.source
                 .unwrap_or(codex_protocol::protocol::SessionSource::Unknown),
             it.agent_nickname.clone(),
+            it.agent_role.clone(),
         );
         return Some(ConversationSummary {
             conversation_id: thread_id,
@@ -6739,6 +6741,7 @@ fn summary_from_state_db_metadata(
     cli_version: String,
     source: String,
     agent_nickname: Option<String>,
+    agent_role: Option<String>,
     git_sha: Option<String>,
     git_branch: Option<String>,
     git_origin_url: Option<String>,
@@ -6747,7 +6750,7 @@ fn summary_from_state_db_metadata(
     let source = serde_json::from_str(&source)
         .or_else(|_| serde_json::from_value(serde_json::Value::String(source.clone())))
         .unwrap_or(codex_protocol::protocol::SessionSource::Unknown);
-    let source = with_thread_spawn_agent_nickname(source, agent_nickname);
+    let source = with_thread_spawn_agent_metadata(source, agent_nickname, agent_role);
     let git_info = if git_sha.is_none() && git_branch.is_none() && git_origin_url.is_none() {
         None
     } else {
@@ -6907,26 +6910,29 @@ fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     }
 }
 
-fn with_thread_spawn_agent_nickname(
+fn with_thread_spawn_agent_metadata(
     source: codex_protocol::protocol::SessionSource,
     agent_nickname: Option<String>,
+    agent_role: Option<String>,
 ) -> codex_protocol::protocol::SessionSource {
-    let Some(agent_nickname) = agent_nickname else {
+    if agent_nickname.is_none() && agent_role.is_none() {
         return source;
-    };
+    }
 
     match source {
         codex_protocol::protocol::SessionSource::SubAgent(
             codex_protocol::protocol::SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
-                agent_nickname: None,
+                agent_nickname: existing_agent_nickname,
+                agent_role: existing_agent_role,
             },
         ) => codex_protocol::protocol::SessionSource::SubAgent(
             codex_protocol::protocol::SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
-                agent_nickname: Some(agent_nickname),
+                agent_nickname: agent_nickname.or(existing_agent_nickname),
+                agent_role: agent_role.or(existing_agent_role),
             },
         ),
         _ => source,
@@ -6970,6 +6976,7 @@ fn build_thread_from_snapshot(
         cwd: config_snapshot.cwd.clone(),
         cli_version: env!("CARGO_PKG_VERSION").to_string(),
         agent_nickname: config_snapshot.session_source.get_nickname(),
+        agent_role: config_snapshot.session_source.get_agent_role(),
         source: config_snapshot.session_source.clone().into(),
         git_info: None,
         turns: Vec::new(),
@@ -7009,6 +7016,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         cwd,
         cli_version,
         agent_nickname: source.get_nickname(),
+        agent_role: source.get_agent_role(),
         source: source.into(),
         git_info,
         turns: Vec::new(),
@@ -7174,6 +7182,7 @@ mod tests {
                 parent_thread_id: ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?,
                 depth: 1,
                 agent_nickname: None,
+                agent_role: None,
             }))?;
 
         let summary = summary_from_state_db_metadata(
@@ -7187,6 +7196,7 @@ mod tests {
             "0.0.0".to_string(),
             source,
             Some("atlas".to_string()),
+            Some("explorer".to_string()),
             None,
             None,
             None,
@@ -7195,6 +7205,7 @@ mod tests {
         let thread = summary_to_thread(summary);
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
+        assert_eq!(thread.agent_role, Some("explorer".to_string()));
         Ok(())
     }
 
