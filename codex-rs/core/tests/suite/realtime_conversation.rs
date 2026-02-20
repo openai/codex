@@ -169,6 +169,58 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_transport_close_emits_closed_event() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let session_created = vec![json!({
+        "type": "session.created",
+        "session": { "id": "sess_1" }
+    })];
+    let server = start_websocket_server(vec![vec![session_created]]).await;
+
+    let mut builder = test_codex();
+    let test = builder.build_with_websocket_server(&server).await?;
+    assert!(server.wait_for_handshakes(1, Duration::from_secs(2)).await);
+
+    test.codex
+        .submit(Op::Conversation {
+            cmd: ConversationCommand::Start(ConversationStartParams {
+                prompt: "backend prompt".to_string(),
+                session_id: None,
+            }),
+        })
+        .await?;
+
+    let started = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::Conversation(ConversationEvent::Started(started)) => Some(Ok(started.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+    assert!(started.session_id.is_some());
+
+    let session_created = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::Conversation(ConversationEvent::Realtime(ConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionCreated { session_id },
+        })) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(session_created, "sess_1");
+
+    let closed = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::Conversation(ConversationEvent::Closed(closed)) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(closed.reason.as_deref(), Some("transport_closed"));
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_audio_before_start_emits_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

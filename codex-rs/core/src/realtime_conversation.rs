@@ -39,6 +39,11 @@ impl RealtimeConversationManager {
         }
     }
 
+    pub(crate) async fn running_state(&self) -> Option<()> {
+        let state = self.state.lock().await;
+        state.as_ref().map(|_| ())
+    }
+
     pub(crate) async fn start(
         &self,
         api_provider: ApiProvider,

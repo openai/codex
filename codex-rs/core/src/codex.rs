@@ -1356,7 +1356,9 @@ impl Session {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
-            conversation: Arc::new(crate::realtime_conversation::RealtimeConversationManager::new()),
+            conversation: Arc::new(
+                crate::realtime_conversation::RealtimeConversationManager::new(),
+            ),
             active_turn: Mutex::new(None),
             services,
             js_repl,
@@ -3424,6 +3426,15 @@ mod handlers {
                                     payload: event,
                                 }),
                             )))
+                            .await;
+                    }
+                    if let Some(()) = sess_clone.conversation.running_state().await {
+                        sess_clone
+                            .send_event_raw(ev(EventMsg::Conversation(ConversationEvent::Closed(
+                                ConversationClosedEvent {
+                                    reason: Some("transport_closed".to_string()),
+                                },
+                            ))))
                             .await;
                     }
                 });
@@ -7580,7 +7591,9 @@ mod tests {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
-            conversation: Arc::new(crate::realtime_conversation::RealtimeConversationManager::new()),
+            conversation: Arc::new(
+                crate::realtime_conversation::RealtimeConversationManager::new(),
+            ),
             active_turn: Mutex::new(None),
             services,
             js_repl,
@@ -7735,7 +7748,9 @@ mod tests {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
-            conversation: Arc::new(crate::realtime_conversation::RealtimeConversationManager::new()),
+            conversation: Arc::new(
+                crate::realtime_conversation::RealtimeConversationManager::new(),
+            ),
             active_turn: Mutex::new(None),
             services,
             js_repl,
