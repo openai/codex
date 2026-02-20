@@ -1711,16 +1711,16 @@ impl Config {
                     }
                 });
         if openai_base_url_from_env.is_some() {
-            let message = if openai_base_url.is_some() {
-                format!(
-                    "`{OPENAI_BASE_URL_ENV_VAR}` is deprecated and ignored because `openai_base_url` is set in config.toml. Remove `{OPENAI_BASE_URL_ENV_VAR}` from your environment."
-                )
+            if openai_base_url.is_some() {
+                tracing::warn!(
+                    env_var = OPENAI_BASE_URL_ENV_VAR,
+                    "deprecated env var is ignored because `openai_base_url` is set in config.toml"
+                );
             } else {
-                format!(
+                startup_warnings.push(format!(
                     "`{OPENAI_BASE_URL_ENV_VAR}` is deprecated. Set `openai_base_url` in config.toml instead."
-                )
-            };
-            startup_warnings.push(message);
+                ));
+            }
         }
         let effective_openai_base_url = openai_base_url.or(openai_base_url_from_env);
 
