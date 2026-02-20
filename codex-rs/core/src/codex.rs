@@ -50,6 +50,7 @@ use codex_hooks::HookResult;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::normalize_host;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -2211,6 +2212,8 @@ impl Session {
         amendment: &NetworkPolicyAmendment,
         network_approval_context: &NetworkApprovalContext,
     ) -> anyhow::Result<()> {
+        let host =
+            Self::validated_network_policy_amendment_host(amendment, network_approval_context)?;
         let codex_home = self
             .state
             .lock()
@@ -2234,22 +2237,17 @@ impl Session {
             NetworkApprovalProtocol::Socks5Tcp => "socks5_tcp",
             NetworkApprovalProtocol::Socks5Udp => "socks5_udp",
         };
-        let justification = format!(
-            "{action_verb} {protocol_label} access to {}",
-            amendment.host
-        );
+        let justification = format!("{action_verb} {protocol_label} access to {host}");
 
         if let Some(started_network_proxy) = self.services.network_proxy.as_ref() {
             let proxy = started_network_proxy.proxy();
             match amendment.action {
                 NetworkPolicyRuleAction::Allow => proxy
-                    .add_allowed_domain(&amendment.host)
+                    .add_allowed_domain(&host)
                     .await
-                    .map_err(|err| {
-                    anyhow::anyhow!("failed to update runtime allowlist: {err}")
-                })?,
+                    .map_err(|err| anyhow::anyhow!("failed to update runtime allowlist: {err}"))?,
                 NetworkPolicyRuleAction::Deny => proxy
-                    .add_denied_domain(&amendment.host)
+                    .add_denied_domain(&host)
                     .await
                     .map_err(|err| anyhow::anyhow!("failed to update runtime denylist: {err}"))?,
             }
@@ -2259,7 +2257,7 @@ impl Session {
             .exec_policy
             .append_network_rule_and_update(
                 &codex_home,
-                &amendment.host,
+                &host,
                 protocol,
                 decision,
                 Some(justification),
@@ -2270,6 +2268,22 @@ impl Session {
             })?;
 
         Ok(())
+    }
+
+    fn validated_network_policy_amendment_host(
+        amendment: &NetworkPolicyAmendment,
+        network_approval_context: &NetworkApprovalContext,
+    ) -> anyhow::Result<String> {
+        let approved_host = normalize_host(&network_approval_context.host);
+        let amendment_host = normalize_host(&amendment.host);
+        if amendment_host != approved_host {
+            return Err(anyhow::anyhow!(
+                "network policy amendment host '{}' does not match approved host '{}'",
+                amendment.host,
+                network_approval_context.host
+            ));
+        }
+        Ok(approved_host)
     }
 
     pub(crate) async fn record_network_policy_amendment_message(
@@ -6048,6 +6062,41 @@ mod tests {
             call_id: call_id.to_string(),
             output: FunctionCallOutputPayload::from_text(output.to_string()),
         })
+    }
+
+    #[test]
+    fn validated_network_policy_amendment_host_allows_normalized_match() {
+        let amendment = NetworkPolicyAmendment {
+            host: "ExAmPlE.Com.:443".to_string(),
+            action: NetworkPolicyRuleAction::Allow,
+        };
+        let context = NetworkApprovalContext {
+            host: "example.com".to_string(),
+            protocol: NetworkApprovalProtocol::Https,
+        };
+
+        let host = Session::validated_network_policy_amendment_host(&amendment, &context)
+            .expect("normalized hosts should match");
+
+        assert_eq!(host, "example.com");
+    }
+
+    #[test]
+    fn validated_network_policy_amendment_host_rejects_mismatch() {
+        let amendment = NetworkPolicyAmendment {
+            host: "evil.example.com".to_string(),
+            action: NetworkPolicyRuleAction::Deny,
+        };
+        let context = NetworkApprovalContext {
+            host: "api.example.com".to_string(),
+            protocol: NetworkApprovalProtocol::Https,
+        };
+
+        let err = Session::validated_network_policy_amendment_host(&amendment, &context)
+            .expect_err("mismatched hosts should be rejected");
+
+        let message = err.to_string();
+        assert!(message.contains("does not match approved host"));
     }
 
     #[tokio::test]
