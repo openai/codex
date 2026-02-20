@@ -8,7 +8,7 @@ use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::System::Power::POWER_REQUEST_TYPE;
 use windows_sys::Win32::System::Power::PowerClearRequest;
 use windows_sys::Win32::System::Power::PowerCreateRequest;
-use windows_sys::Win32::System::Power::PowerRequestExecutionRequired;
+use windows_sys::Win32::System::Power::PowerRequestSystemRequired;
 use windows_sys::Win32::System::Power::PowerSetRequest;
 use windows_sys::Win32::System::SystemServices::POWER_REQUEST_CONTEXT_VERSION;
 use windows_sys::Win32::System::Threading::POWER_REQUEST_CONTEXT_SIMPLE_STRING;
@@ -34,7 +34,7 @@ impl PlatformSleepInhibitor for WindowsSleepInhibitor {
             return;
         }
 
-        match PowerRequest::new_execution_required(ASSERTION_REASON) {
+        match PowerRequest::new_system_required(ASSERTION_REASON) {
             Ok(request) => {
                 self.request = Some(request);
             }
@@ -59,7 +59,7 @@ struct PowerRequest {
 }
 
 impl PowerRequest {
-    fn new_execution_required(reason: &str) -> Result<Self, String> {
+    fn new_system_required(reason: &str) -> Result<Self, String> {
         let mut wide_reason: Vec<u16> = OsStr::new(reason).encode_wide().chain(once(0)).collect();
         let context = REASON_CONTEXT {
             Version: POWER_REQUEST_CONTEXT_VERSION,
@@ -74,7 +74,9 @@ impl PowerRequest {
             return Err(format!("PowerCreateRequest failed: {error}"));
         }
 
-        let request_type = PowerRequestExecutionRequired;
+        // Match macOS `PreventUserIdleSystemSleep`: prevent idle system sleep
+        // without forcing the display to stay on.
+        let request_type = PowerRequestSystemRequired;
         if unsafe { PowerSetRequest(handle, request_type) } == 0 {
             let error = std::io::Error::last_os_error();
             let _ = unsafe { CloseHandle(handle) };
