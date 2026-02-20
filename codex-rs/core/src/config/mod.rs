@@ -139,7 +139,14 @@ pub struct Permissions {
     pub sandbox_policy: Constrained<SandboxPolicy>,
     /// Effective network configuration applied to all spawned processes.
     pub network: Option<NetworkProxySpec>,
-    /// Whether shell-based tools may request login shell semantics.
+    /// Whether the model may request a login shell for shell-based tools.
+    /// Default to `true`
+    ///
+    /// If `true`, the model may request a login shell (`login = true`), and
+    /// omitting `login` defaults to using a login shell.
+    /// If `false`, the model can never use a login shell: `login = true`
+    /// requests are rejected, and omitting `login` defaults to a non-login
+    /// shell.
     pub allow_login_shell: bool,
     /// Policy used to build process environments for shell/unified exec.
     pub shell_environment_policy: ShellEnvironmentPolicy,
@@ -954,7 +961,14 @@ pub struct ConfigToml {
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
-    /// Whether shell-based tools may request login shell semantics.
+    /// Whether the model may request a login shell for shell-based tools.
+    /// Default to `true`
+    ///
+    /// If `true`, the model may request a login shell (`login = true`), and
+    /// omitting `login` defaults to using a login shell.
+    /// If `false`, the model can never use a login shell: `login = true`
+    /// requests are rejected, and omitting `login` defaults to a non-login
+    /// shell.
     pub allow_login_shell: Option<bool>,
 
     /// Sandbox mode to use.
