@@ -8104,6 +8104,26 @@ async fn terminal_title_status_uses_waiting_ellipsis_for_background_terminal() {
 }
 
 #[tokio::test]
+async fn terminal_title_status_uses_ellipses_for_other_transient_states() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.mcp_startup_status = Some(std::collections::HashMap::new());
+    assert_eq!(chat.terminal_title_status_text(), "Starting...");
+
+    chat.mcp_startup_status = None;
+    chat.bottom_pane.set_task_running(true);
+
+    chat.current_status_header = "Working".to_string();
+    assert_eq!(chat.terminal_title_status_text(), "Working...");
+
+    chat.current_status_header = "Undoing changes".to_string();
+    assert_eq!(chat.terminal_title_status_text(), "Undoing...");
+
+    chat.current_status_header = "Some other active header".to_string();
+    assert_eq!(chat.terminal_title_status_text(), "Thinking...");
+}
+
+#[tokio::test]
 async fn status_line_branch_state_resets_when_git_branch_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.status_line_branch = Some("main".to_string());
