@@ -215,7 +215,7 @@ fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
     // performs libc setup for the child process and returns an `io::Error`
     // when parent-death signal setup fails.
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
                 return Err(std::io::Error::last_os_error());
             }
