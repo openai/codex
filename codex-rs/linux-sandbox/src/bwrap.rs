@@ -468,6 +468,7 @@ mod tests {
 
     #[test]
     fn restricted_read_only_with_platform_defaults_includes_usr_when_present() {
+        let temp_dir = TempDir::new().expect("temp dir");
         let policy = SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::Restricted {
                 include_platform_defaults: true,
@@ -475,7 +476,10 @@ mod tests {
             },
         };
 
-        let args = create_filesystem_args(&policy, Path::new("/")).expect("filesystem args");
+        // `ReadOnlyAccess::Restricted` always includes `cwd` as a readable
+        // root. Using `"/"` here would intentionally collapse to broad read
+        // access, so use a non-root cwd to exercise the restricted path.
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
 
         assert!(args.starts_with(&["--tmpfs".to_string(), "/".to_string()]));
 
