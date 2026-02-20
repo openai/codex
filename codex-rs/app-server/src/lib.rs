@@ -238,7 +238,8 @@ pub async fn run_main_with_transport(
                 Some(start_websocket_acceptor(bind_address, transport_event_tx.clone()).await?);
         }
     }
-    let shutdown_when_no_connections = matches!(transport, AppServerTransport::Stdio);
+    let single_client_mode = matches!(transport, AppServerTransport::Stdio);
+    let shutdown_when_no_connections = single_client_mode;
 
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
@@ -439,6 +440,7 @@ pub async fn run_main_with_transport(
             outgoing: outgoing_message_sender,
             codex_linux_sandbox_exe,
             config: Arc::new(config),
+            single_client_mode,
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
