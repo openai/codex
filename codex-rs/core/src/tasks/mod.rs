@@ -136,6 +136,7 @@ impl Session {
             self.record_context_updates_and_set_previous_context_item(
                 turn_context.as_ref(),
                 previous_model.as_deref(),
+                // force_full_context_injection = false
                 false,
                 false,
             )
