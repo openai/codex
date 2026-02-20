@@ -936,6 +936,14 @@ fn insert_into_namespace(
         .or_insert_with(|| Value::Object(Map::new()));
     match entry {
         Value::Object(map) => {
+            if let Some(existing) = map.get_mut(&name) {
+                if existing != &schema {
+                    if let Some(merged) = merge_compatible_schema_definitions(existing, &schema) {
+                        *existing = merged;
+                    }
+                }
+                return Ok(());
+            }
             map.insert(name, schema);
             Ok(())
         }
@@ -1046,6 +1054,78 @@ fn collect_namespaced_types(schemas: &[GeneratedSchema]) -> HashMap<String, Stri
         }
     }
     types
+}
+
+fn merge_compatible_schema_definitions(existing: &Value, incoming: &Value) -> Option<Value> {
+    if let (Some(existing_variants), Some(incoming_variants)) = (
+        enum_literals_from_schema(existing),
+        enum_literals_from_schema(incoming),
+    ) {
+        let mut merged = existing_variants.clone();
+        for value in incoming_variants {
+            if !merged.contains(&value) {
+                merged.push(value);
+            }
+        }
+        if let Some(schema) = schema_with_replaced_enum_literals(existing, &merged) {
+            return Some(schema);
+        }
+        if let Some(schema) = schema_with_replaced_enum_literals(incoming, &merged) {
+            return Some(schema);
+        }
+    }
+    None
+}
+
+fn enum_literals_from_schema(schema: &Value) -> Option<Vec<String>> {
+    let object = schema.as_object()?;
+    if object.get("type") == Some(&Value::String("string".to_string())) {
+        let enum_values = object.get("enum")?.as_array()?;
+        return enum_values
+            .iter()
+            .map(|value| value.as_str().map(str::to_string))
+            .collect();
+    }
+
+    let one_of = object.get("oneOf")?.as_array()?;
+    let mut values = Vec::new();
+    for variant in one_of {
+        let variant_object = variant.as_object()?;
+        if variant_object.get("type") != Some(&Value::String("string".to_string())) {
+            return None;
+        }
+        let enum_values = variant_object.get("enum")?.as_array()?;
+        if enum_values.len() != 1 {
+            return None;
+        }
+        values.push(enum_values[0].as_str()?.to_string());
+    }
+    Some(values)
+}
+
+fn schema_with_replaced_enum_literals(schema: &Value, values: &[String]) -> Option<Value> {
+    let mut updated = schema.clone();
+    let object = updated.as_object_mut()?;
+    if object.get("type") == Some(&Value::String("string".to_string())) {
+        object.insert(
+            "enum".to_string(),
+            Value::Array(values.iter().cloned().map(Value::String).collect()),
+        );
+        return Some(updated);
+    }
+
+    let one_of = object.get_mut("oneOf")?.as_array_mut()?;
+    if one_of.len() != values.len() {
+        return None;
+    }
+    for (variant, value) in one_of.iter_mut().zip(values) {
+        let variant_object = variant.as_object_mut()?;
+        variant_object.insert(
+            "enum".to_string(),
+            Value::Array(vec![Value::String(value.clone())]),
+        );
+    }
+    Some(updated)
 }
 
 fn namespace_for_definition<'a>(
