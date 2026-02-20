@@ -1068,7 +1068,24 @@ fn create_list_dir_tool() -> ToolSpec {
 }
 
 fn create_js_repl_tool() -> ToolSpec {
-    const JS_REPL_FREEFORM_GRAMMAR: &str = r#"start: /[\s\S]*/"#;
+    // Keep JS input freeform, but block the most common malformed payload shapes
+    // (JSON wrappers, quoted strings, and markdown fences) before they reach the
+    // runtime `reject_json_or_quoted_source` validation. The API's regex engine
+    // does not support look-around, so this uses a "first significant token"
+    // pattern rather than negative lookaheads.
+    const JS_REPL_FREEFORM_GRAMMAR: &str = r#"
+start: pragma_source | plain_source
+
+pragma_source: PRAGMA_LINE NEWLINE js_source
+plain_source: PLAIN_JS_SOURCE
+
+js_source: JS_SOURCE
+
+PRAGMA_LINE: /[ \t]*\/\/ codex-js-repl:[^\r\n]*/
+NEWLINE: /\r?\n/
+PLAIN_JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
+JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
+"#;
 
     ToolSpec::Freeform(FreeformTool {
         name: "js_repl".to_string(),
@@ -1920,6 +1937,21 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
+    }
+
+    #[test]
+    fn js_repl_freeform_grammar_blocks_common_non_js_prefixes() {
+        let ToolSpec::Freeform(FreeformTool { format, .. }) = create_js_repl_tool() else {
+            panic!("js_repl should use a freeform tool spec");
+        };
+
+        assert_eq!(format.syntax, "lark");
+        assert!(format.definition.contains("PRAGMA_LINE"));
+        assert!(format.definition.contains("`[^`]"));
+        assert!(format.definition.contains("``[^`]"));
+        assert!(format.definition.contains("PLAIN_JS_SOURCE"));
+        assert!(format.definition.contains("codex-js-repl:"));
+        assert!(!format.definition.contains("(?!"));
     }
 
     fn assert_model_tools(
