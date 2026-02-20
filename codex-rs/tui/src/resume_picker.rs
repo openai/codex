@@ -1327,17 +1327,10 @@ mod tests {
     fn make_item(path: &str, ts: &str, preview: &str) -> ThreadItem {
         ThreadItem {
             path: PathBuf::from(path),
-            thread_id: None,
             first_user_message: Some(preview.to_string()),
-            cwd: None,
-            git_branch: None,
-            git_sha: None,
-            git_origin_url: None,
-            source: None,
-            model_provider: None,
-            cli_version: None,
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
+            ..Default::default()
         }
     }
 
@@ -1462,17 +1455,10 @@ mod tests {
     fn head_to_row_uses_first_user_message() {
         let item = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
-            thread_id: None,
             first_user_message: Some("real question".to_string()),
-            cwd: None,
-            git_branch: None,
-            git_sha: None,
-            git_origin_url: None,
-            source: None,
-            model_provider: None,
-            cli_version: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
+            ..Default::default()
         };
         let row = head_to_row(&item);
         assert_eq!(row.preview, "real question");
@@ -1483,31 +1469,17 @@ mod tests {
         // Construct two items with different timestamps and real user text.
         let a = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
-            thread_id: None,
             first_user_message: Some("A".to_string()),
-            cwd: None,
-            git_branch: None,
-            git_sha: None,
-            git_origin_url: None,
-            source: None,
-            model_provider: None,
-            cli_version: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
+            ..Default::default()
         };
         let b = ThreadItem {
             path: PathBuf::from("/tmp/b.jsonl"),
-            thread_id: None,
             first_user_message: Some("B".to_string()),
-            cwd: None,
-            git_branch: None,
-            git_sha: None,
-            git_origin_url: None,
-            source: None,
-            model_provider: None,
-            cli_version: None,
             created_at: Some("2025-01-02T00:00:00Z".into()),
             updated_at: Some("2025-01-02T00:00:00Z".into()),
+            ..Default::default()
         };
         let rows = rows_from_items(vec![a, b]);
         assert_eq!(rows.len(), 2);
@@ -1520,17 +1492,10 @@ mod tests {
     fn row_uses_tail_timestamp_for_updated_at() {
         let item = ThreadItem {
             path: PathBuf::from("/tmp/a.jsonl"),
-            thread_id: None,
             first_user_message: Some("Hello".to_string()),
-            cwd: None,
-            git_branch: None,
-            git_sha: None,
-            git_origin_url: None,
-            source: None,
-            model_provider: None,
-            cli_version: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T01:00:00Z".into()),
+            ..Default::default()
         };
 
         let row = head_to_row(&item);

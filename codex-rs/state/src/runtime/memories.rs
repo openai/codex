@@ -95,6 +95,8 @@ SELECT
     created_at,
     updated_at,
     source,
+    agent_nickname,
+    agent_role,
     model_provider,
     cwd,
     cli_version,
@@ -496,7 +498,7 @@ WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
     /// - sets `status='done'` and `last_success_watermark = input_watermark`
     /// - deletes any existing `stage1_outputs` row for the thread
     /// - enqueues/advances the global phase-2 job watermark using the claimed
-    ///   `input_watermark`
+    ///   `input_watermark` only when deleting an existing `stage1_outputs` row
     pub async fn mark_stage1_job_succeeded_no_output(
         &self,
         thread_id: ThreadId,
@@ -546,7 +548,7 @@ WHERE kind = ? AND job_key = ? AND ownership_token = ?
         .await?
         .try_get::<i64, _>("input_watermark")?;
 
-        sqlx::query(
+        let deleted_rows = sqlx::query(
             r#"
 DELETE FROM stage1_outputs
 WHERE thread_id = ?
@@ -554,9 +556,12 @@ WHERE thread_id = ?
         )
         .bind(thread_id.as_str())
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
 
-        enqueue_global_consolidation_with_executor(&mut *tx, source_updated_at).await?;
+        if deleted_rows > 0 {
+            enqueue_global_consolidation_with_executor(&mut *tx, source_updated_at).await?;
+        }
 
         tx.commit().await?;
         Ok(true)

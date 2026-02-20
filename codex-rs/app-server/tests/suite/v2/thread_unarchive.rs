@@ -8,13 +8,16 @@ use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
+use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_path_by_id_str;
+use pretty_assertions::assert_eq;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
 use std::path::Path;
@@ -120,10 +123,22 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     let ThreadUnarchiveResponse {
         thread: unarchived_thread,
     } = to_response::<ThreadUnarchiveResponse>(unarchive_resp)?;
+    let unarchive_notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/unarchived"),
+    )
+    .await??;
+    let unarchived_notification: ThreadUnarchivedNotification = serde_json::from_value(
+        unarchive_notification
+            .params
+            .expect("thread/unarchived notification params"),
+    )?;
+    assert_eq!(unarchived_notification.thread_id, thread.id);
     assert!(
         unarchived_thread.updated_at > old_timestamp,
         "expected updated_at to be bumped on unarchive"
     );
+    assert_eq!(unarchived_thread.status, ThreadStatus::NotLoaded);
 
     let rollout_path_display = rollout_path.display();
     assert!(
