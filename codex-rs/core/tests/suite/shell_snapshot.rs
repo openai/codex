@@ -535,16 +535,16 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         })
         .await?;
 
+    let snapshot_path = wait_for_snapshot(&codex_home).await?;
+    let snapshot_content = fs::read_to_string(&snapshot_path).await?;
+    assert_posix_snapshot_sections(&snapshot_content);
+
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     assert_eq!(
         wait_for_file_contents(&target).await?,
         "hello from snapshot\n"
     );
-
-    let snapshot_path = wait_for_snapshot(&codex_home).await?;
-    let snapshot_content = fs::read_to_string(&snapshot_path).await?;
-    assert_posix_snapshot_sections(&snapshot_content);
 
     Ok(())
 }
