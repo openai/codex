@@ -2040,18 +2040,18 @@ impl Session {
     fn build_settings_update_items(
         &self,
         previous_context: Option<&TurnContextItem>,
-        resumed_model: Option<&str>,
+        previous_user_turn_model: Option<&str>,
         current_context: &TurnContext,
     ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
         // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
-        // context (shell, exec policy, feature gates, resumed model bridge) should be persisted
+        // context (shell, exec policy, feature gates, previous-model bridge) should be persisted
         // state or explicit non-state replay events.
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
         crate::context_manager::updates::build_settings_update_items(
             previous_context,
-            resumed_model,
+            previous_user_turn_model,
             current_context,
             shell.as_ref(),
             exec_policy.as_ref(),
@@ -2685,14 +2685,14 @@ impl Session {
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
-        resumed_model: Option<&str>,
+        previous_user_turn_model: Option<&str>,
         force_full_context_injection: bool,
         emit_raw_events: bool,
     ) {
         let reference_context_item = self.reference_context_item().await;
         let settings_update_items = self.build_settings_update_items(
             reference_context_item.as_ref(),
-            resumed_model,
+            previous_user_turn_model,
             turn_context,
         );
         let should_inject_full_context =

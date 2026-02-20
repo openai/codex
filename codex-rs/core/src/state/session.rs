@@ -22,8 +22,8 @@ pub(crate) struct SessionState {
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
     /// Model used by the latest regular user turn, used for model-switch handling
-    /// when the regular-turn context baseline is intentionally missing (e.g. resume
-    /// or post-`/compact` full-context reinjection).
+    /// on subsequent regular turns (including full-context reinjection after
+    /// resume or `/compact`).
     previous_model: Option<String>,
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<RegularTask>,
