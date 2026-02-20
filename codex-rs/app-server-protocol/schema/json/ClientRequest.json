@@ -531,8 +531,8 @@
       },
       "required": [
         "classification",
-        "includeLogs",
-        "extraLogFiles"
+        "extraLogFiles",
+        "includeLogs"
       ],
       "type": "object"
     },

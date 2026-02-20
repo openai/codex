@@ -28,8 +28,8 @@
   },
   "required": [
     "classification",
-    "includeLogs",
-    "extraLogFiles"
+    "extraLogFiles",
+    "includeLogs"
   ],
   "title": "FeedbackUploadParams",
   "type": "object"
