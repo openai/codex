@@ -1193,7 +1193,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                                     .await;
                                 match find_thread_name_by_id(codex_home, &conversation_id).await {
                                     Ok(name) => {
-                                        thread.thread_name = name;
+                                        thread.name = name;
                                     }
                                     Err(err) => {
                                         warn!(

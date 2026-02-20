@@ -626,7 +626,7 @@ mod tests {
             agent_role: None,
             source,
             git_info: None,
-            thread_name: None,
+            name: None,
             turns: Vec::new(),
         }
     }

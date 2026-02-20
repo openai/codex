@@ -2577,7 +2577,7 @@ impl CodexMessageProcessor {
         let data = threads
             .into_iter()
             .map(|(conversation_id, mut thread)| {
-                thread.thread_name = names.get(&conversation_id).cloned();
+                thread.name = names.get(&conversation_id).cloned();
                 if let Some(status) = statuses.get(&thread.id) {
                     thread.status = status.clone();
                 }
@@ -3249,7 +3249,7 @@ impl CodexMessageProcessor {
     async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
         match find_thread_name_by_id(&self.config.codex_home, &thread_id).await {
             Ok(name) => {
-                thread.thread_name = name;
+                thread.name = name;
             }
             Err(err) => {
                 warn!("Failed to read thread name for {thread_id}: {err}");
@@ -6305,7 +6305,7 @@ async fn handle_pending_thread_resume_request(
         .await;
 
     match find_thread_name_by_id(codex_home, &conversation_id).await {
-        Ok(thread_name) => thread.thread_name = thread_name,
+        Ok(thread_name) => thread.name = thread_name,
         Err(err) => warn!("Failed to read thread name for {conversation_id}: {err}"),
     }
 
@@ -7029,7 +7029,7 @@ fn build_thread_from_snapshot(
         agent_role: config_snapshot.session_source.get_agent_role(),
         source: config_snapshot.session_source.clone().into(),
         git_info: None,
-        thread_name: None,
+        name: None,
         turns: Vec::new(),
     }
 }
@@ -7070,7 +7070,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         agent_role: source.get_agent_role(),
         source: source.into(),
         git_info,
-        thread_name: None,
+        name: None,
         turns: Vec::new(),
     }
 }

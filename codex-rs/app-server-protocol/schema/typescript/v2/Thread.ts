@@ -58,7 +58,7 @@ gitInfo: GitInfo | null,
 /**
  * Optional user-facing thread title.
  */
-threadName: string | null, 
+name: string | null, 
 /**
  * Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
  * (when `includeTurns` is true) responses.
