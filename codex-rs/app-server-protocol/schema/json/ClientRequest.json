@@ -2973,6 +2973,12 @@
               "type": "null"
             }
           ]
+        },
+        "serviceName": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"

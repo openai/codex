@@ -59,6 +59,7 @@ pub(crate) async fn run_codex_thread_interactive(
         parent_session.services.agent_control.clone(),
         Vec::new(),
         false,
+        None,
     )
     .await?;
     let codex = Arc::new(codex);

@@ -79,6 +79,7 @@ impl OtelManager {
                 account_id,
                 account_email,
                 originator: sanitize_metric_tag_value(originator.as_str()),
+                service_name: None,
                 session_source: session_source.to_string(),
                 model: model.to_owned(),
                 slug: slug.to_owned(),

@@ -45,6 +45,7 @@ pub struct OtelEventMetadata {
     pub(crate) account_id: Option<String>,
     pub(crate) account_email: Option<String>,
     pub(crate) originator: String,
+    pub(crate) service_name: Option<String>,
     pub(crate) session_source: String,
     pub(crate) model: String,
     pub(crate) slug: String,
@@ -64,6 +65,11 @@ impl OtelManager {
     pub fn with_model(mut self, model: &str, slug: &str) -> Self {
         self.metadata.model = model.to_owned();
         self.metadata.slug = slug.to_owned();
+        self
+    }
+
+    pub fn with_metrics_service_name(mut self, service_name: &str) -> Self {
+        self.metadata.service_name = Some(sanitize_metric_tag_value(service_name));
         self
     }
 
@@ -197,7 +203,7 @@ impl OtelManager {
         if !self.metrics_use_metadata_tags {
             return Ok(Vec::new());
         }
-        let mut tags = Vec::with_capacity(6);
+        let mut tags = Vec::with_capacity(7);
         Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
         Self::push_metadata_tag(
             &mut tags,
@@ -208,6 +214,11 @@ impl OtelManager {
             &mut tags,
             "originator",
             Some(self.metadata.originator.as_str()),
+        )?;
+        Self::push_metadata_tag(
+            &mut tags,
+            "service_name",
+            self.metadata.service_name.as_deref(),
         )?;
         Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
         Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
