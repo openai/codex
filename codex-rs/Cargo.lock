@@ -1354,6 +1354,7 @@ dependencies = [
  "strum_macros 0.27.2",
  "tempfile",
  "thiserror 2.0.18",
+ "tracing",
  "ts-rs",
  "uuid",
 ]

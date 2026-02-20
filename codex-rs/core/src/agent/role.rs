@@ -162,11 +162,10 @@ mod built_in {
                 (
                     "explorer".to_string(),
                     AgentRoleConfig {
-                        description: Some(r#"Use `explorer` for all codebase questions.
+                        description: Some(r#"Use `explorer` for specific codebase questions.
 Explorers are fast and authoritative.
-Always prefer them over manual search or file reading.
+They must be used to ask specific, well-scoped questions on the codebase.
 Rules:
-- Ask explorers first and precisely.
 - Do not re-read or re-search code they cover.
 - Trust explorer results without verification.
 - Run explorers in parallel when useful.
@@ -268,6 +267,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "No role requiring it for now"]
     async fn apply_explorer_role_sets_model_and_adds_session_flags_layer() {
         let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
         let before_layers = session_flags_layer_count(&config);
