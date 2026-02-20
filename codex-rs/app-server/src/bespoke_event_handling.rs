@@ -105,12 +105,13 @@ use tracing::error;
 
 type JsonValue = serde_json::Value;
 
-struct CommandExecutionApprovalPresentation {
-    network_approval_context: Option<V2NetworkApprovalContext>,
-    command: Option<String>,
-    cwd: Option<PathBuf>,
-    command_actions: Option<Vec<V2ParsedCommand>>,
-    completion_item: Option<CommandExecutionCompletionItem>,
+enum CommandExecutionApprovalPresentation {
+    Network {
+        network_approval_context: V2NetworkApprovalContext,
+    },
+    Command {
+        completion_item: CommandExecutionCompletionItem,
+    },
 }
 
 struct CommandExecutionCompletionItem {
@@ -273,31 +274,34 @@ pub(crate) async fn apply_bespoke_event_handling(
                         .cloned()
                         .map(V2ParsedCommand::from)
                         .collect::<Vec<_>>();
-                    let network_approval_context_v2 =
-                        network_approval_context.map(V2NetworkApprovalContext::from);
-                    let presentation = if let Some(context) = network_approval_context_v2 {
-                        CommandExecutionApprovalPresentation {
-                            network_approval_context: Some(context),
-                            command: None,
-                            cwd: None,
-                            command_actions: None,
-                            completion_item: None,
+                    let presentation = if let Some(network_approval_context) =
+                        network_approval_context.map(V2NetworkApprovalContext::from)
+                    {
+                        CommandExecutionApprovalPresentation::Network {
+                            network_approval_context,
                         }
                     } else {
                         let command_string = shlex_join(&command);
                         let completion_item = CommandExecutionCompletionItem {
-                            command: command_string.clone(),
+                            command: command_string,
                             cwd: cwd.clone(),
                             command_actions: command_actions.clone(),
                         };
-                        CommandExecutionApprovalPresentation {
-                            network_approval_context: None,
-                            command: Some(command_string),
-                            cwd: Some(cwd.clone()),
-                            command_actions: Some(command_actions.clone()),
-                            completion_item: Some(completion_item),
-                        }
+                        CommandExecutionApprovalPresentation::Command { completion_item }
                     };
+                    let (network_approval_context, command, cwd, command_actions, completion_item) =
+                        match presentation {
+                            CommandExecutionApprovalPresentation::Network {
+                                network_approval_context,
+                            } => (Some(network_approval_context), None, None, None, None),
+                            CommandExecutionApprovalPresentation::Command { completion_item } => (
+                                None,
+                                Some(completion_item.command.clone()),
+                                Some(completion_item.cwd.clone()),
+                                Some(completion_item.command_actions.clone()),
+                                Some(completion_item),
+                            ),
+                        };
                     let proposed_execpolicy_amendment_v2 =
                         proposed_execpolicy_amendment.map(V2ExecPolicyAmendment::from);
 
@@ -307,10 +311,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                         item_id: call_id.clone(),
                         approval_id: approval_id.clone(),
                         reason,
-                        network_approval_context: presentation.network_approval_context.clone(),
-                        command: presentation.command.clone(),
-                        cwd: presentation.cwd.clone(),
-                        command_actions: presentation.command_actions.clone(),
+                        network_approval_context,
+                        command,
+                        cwd,
+                        command_actions,
                         proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                     };
                     let rx = outgoing
@@ -324,7 +328,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             conversation_id,
                             approval_id,
                             call_id,
-                            presentation.completion_item,
+                            completion_item,
                             rx,
                             conversation,
                             outgoing,

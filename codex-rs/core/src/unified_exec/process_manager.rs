@@ -142,13 +142,13 @@ impl UnifiedExecProcessManager {
     }
 
     async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
-        if let Some(registration_id) = entry.network_approval_registration_id.as_deref()
+        if let Some(network_approval_id) = entry.network_approval_id.as_deref()
             && let Some(session) = entry.session.upgrade()
         {
             session
                 .services
                 .network_approval
-                .unregister_call(registration_id)
+                .unregister_call(network_approval_id)
                 .await;
         }
     }
@@ -256,7 +256,7 @@ impl UnifiedExecProcessManager {
             // it, and register a background watcher that will emit
             // ExecCommandEnd when the PTY eventually exits (even if no further
             // tool calls are made).
-            let network_approval_registration_id = deferred_network_approval
+            let network_approval_id = deferred_network_approval
                 .as_ref()
                 .map(|deferred| deferred.registration_id().to_string());
             self.store_process(
@@ -267,7 +267,7 @@ impl UnifiedExecProcessManager {
                 start,
                 process_id,
                 request.tty,
-                network_approval_registration_id,
+                network_approval_id,
                 Arc::clone(&transcript),
             )
             .await;
@@ -472,7 +472,7 @@ impl UnifiedExecProcessManager {
         started_at: Instant,
         process_id: String,
         tty: bool,
-        network_approval_registration_id: Option<String>,
+        network_approval_id: Option<String>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     ) {
         let entry = ProcessEntry {
@@ -481,7 +481,7 @@ impl UnifiedExecProcessManager {
             process_id: process_id.clone(),
             command: command.to_vec(),
             tty,
-            network_approval_registration_id,
+            network_approval_id,
             session: Arc::downgrade(&context.session),
             last_used: started_at,
         };
