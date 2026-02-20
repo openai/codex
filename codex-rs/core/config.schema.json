@@ -656,6 +656,9 @@
           },
           "type": "array"
         },
+        "dangerously_allow_all_unix_sockets": {
+          "type": "boolean"
+        },
         "dangerously_allow_non_loopback_admin": {
           "type": "boolean"
         },
