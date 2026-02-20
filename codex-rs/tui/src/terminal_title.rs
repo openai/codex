@@ -15,7 +15,7 @@ pub(crate) fn set_terminal_title(title: &str) -> io::Result<()> {
 
     let title = sanitize_terminal_title(title);
     if title.is_empty() {
-        return Ok(());
+        return clear_terminal_title();
     }
 
     execute!(stdout(), SetWindowTitle(title))
