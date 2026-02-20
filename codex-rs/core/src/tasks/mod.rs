@@ -86,16 +86,6 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// surface it in telemetry and UI.
     fn kind(&self) -> TaskKind;
 
-    /// Whether this task records turn-context updates itself.
-    ///
-    /// Most tasks should use the default (`false`) so `spawn_task` persists
-    /// the appropriate context diffs before the task writes any transcript
-    /// items. `RegularTask` overrides this because `run_turn` must delay
-    /// reinjection until after pre-turn compaction.
-    fn records_context_updates_in_run(&self) -> bool {
-        false
-    }
-
     /// Executes the task until completion or cancellation.
     ///
     /// Implementations typically stream protocol events using `session` and
@@ -131,17 +121,6 @@ impl Session {
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
-        if !task.records_context_updates_in_run() {
-            let previous_model = self.previous_model().await;
-            self.record_context_updates_and_set_previous_context_item(
-                turn_context.as_ref(),
-                previous_model.as_deref(),
-                // force_full_context_injection = false
-                false,
-                false,
-            )
-            .await;
-        }
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();

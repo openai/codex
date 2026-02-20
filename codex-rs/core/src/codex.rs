@@ -1762,7 +1762,7 @@ impl Session {
         active_selected_tools
     }
 
-    pub(crate) async fn previous_model(&self) -> Option<String> {
+    async fn previous_model(&self) -> Option<String> {
         let state = self.state.lock().await;
         state.previous_model()
     }
@@ -2673,7 +2673,8 @@ impl Session {
     /// developer message so model-specific instructions are not lost.
     ///
     /// Invariant: this is the only runtime path that writes a non-`None`
-    /// `previous_context_item`.
+    /// `previous_context_item`. Non-regular tasks intentionally do not update that
+    /// baseline; `previous_context_item` tracks the latest regular model turn.
     pub(crate) async fn record_context_updates_and_set_previous_context_item(
         &self,
         turn_context: &TurnContext,
@@ -3507,9 +3508,8 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
-        // Do not update `previous_context_item` here. `spawn_task` records any required context
-        // diffs before the task starts, which keeps transcript ordering deterministic relative to
-        // shell output persistence.
+        // Standalone shell tasks do not update `previous_context_item`; that
+        // baseline is owned by regular model turns only.
     }
 
     pub async fn resolve_elicitation(
@@ -7878,8 +7878,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_user_shell_command_records_context_before_shell_output() {
-        let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    async fn run_user_shell_command_does_not_set_previous_context_item() {
+        let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
         session.clear_previous_context_item().await;
 
         handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
@@ -7898,28 +7898,9 @@ mod tests {
             }
         }
 
-        assert!(session.previous_context_item().await.is_some());
-
-        let history = session.clone_history().await;
-        let first_shell_output_idx = history
-            .raw_items()
-            .iter()
-            .position(|item| {
-                let ResponseItem::Message { content, .. } = item else {
-                    return false;
-                };
-                content.iter().any(|content_item| {
-                    let ContentItem::InputText { text } = content_item else {
-                        return false;
-                    };
-                    crate::user_shell_command::is_user_shell_command_text(text)
-                })
-            })
-            .expect("standalone shell output should be persisted");
-        let initial_context = session.build_initial_context(&turn_context).await;
         assert!(
-            first_shell_output_idx >= initial_context.len(),
-            "context items should be recorded before standalone shell output"
+            session.previous_context_item().await.is_none(),
+            "standalone shell tasks should not mutate previous context"
         );
     }
 
