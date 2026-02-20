@@ -218,7 +218,8 @@ async fn run_compact_task_inner(
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
     if matches!(callsite, CompactCallsite::MidTurn) {
         let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
-        new_history = inject_initial_context_into_compacted_history(new_history, initial_context);
+        new_history =
+            insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     }
     // Reattach the stripped model-switch update only after successful compaction so the model
     // still sees the switch instructions on the next real sampling request.
@@ -311,10 +312,18 @@ fn process_compacted_history_with_initial_context(
     initial_context: Vec<ResponseItem>,
 ) -> Vec<ResponseItem> {
     compacted_history.retain(should_keep_compacted_history_item);
-    inject_initial_context_into_compacted_history(compacted_history, initial_context)
+    insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context)
 }
 
-fn inject_initial_context_into_compacted_history(
+/// Inserts canonical initial context into compacted replacement history at the
+/// model-expected boundary.
+///
+/// Placement rules:
+/// - Prefer immediately before the last real user message.
+/// - If no real user messages remain, insert before the compaction summary so
+///   the summary stays last.
+/// - If there are no user messages at all, append the context.
+fn insert_initial_context_before_last_real_user_or_summary(
     mut compacted_history: Vec<ResponseItem>,
     initial_context: Vec<ResponseItem>,
 ) -> Vec<ResponseItem> {
@@ -1185,7 +1194,7 @@ keep me updated
     }
 
     #[test]
-    fn inject_initial_context_into_compacted_history_keeps_summary_last() {
+    fn insert_initial_context_before_last_real_user_or_summary_keeps_summary_last() {
         let compacted_history = vec![
             ResponseItem::Message {
                 id: None,
@@ -1225,8 +1234,10 @@ keep me updated
             phase: None,
         }];
 
-        let refreshed =
-            inject_initial_context_into_compacted_history(compacted_history, initial_context);
+        let refreshed = insert_initial_context_before_last_real_user_or_summary(
+            compacted_history,
+            initial_context,
+        );
         let expected = vec![
             ResponseItem::Message {
                 id: None,
