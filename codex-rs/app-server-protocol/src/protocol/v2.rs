@@ -2664,23 +2664,11 @@ impl From<CoreUserInput> for UserInput {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum MessagePhase {
-    Commentary,
-    FinalAnswer,
-}
-
-impl From<CoreMessagePhase> for MessagePhase {
-    fn from(value: CoreMessagePhase) -> Self {
-        match value {
-            CoreMessagePhase::Commentary => Self::Commentary,
-            CoreMessagePhase::FinalAnswer => Self::FinalAnswer,
-        }
+v2_enum_from_core!(
+    pub enum MessagePhaseV2 from CoreMessagePhase {
+        Commentary, FinalAnswer
     }
-}
+);
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -2696,7 +2684,7 @@ pub enum ThreadItem {
         id: String,
         text: String,
         #[serde(default)]
-        phase: Option<MessagePhase>,
+        phase: Option<MessagePhaseV2>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -3908,7 +3896,7 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "agent-2".to_string(),
                 text: "final".to_string(),
-                phase: Some(MessagePhase::FinalAnswer),
+                phase: Some(MessagePhaseV2::FinalAnswer),
             }
         );
 

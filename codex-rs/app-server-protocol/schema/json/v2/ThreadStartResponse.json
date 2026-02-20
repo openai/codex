@@ -419,7 +419,7 @@
       ],
       "type": "string"
     },
-    "MessagePhase": {
+    "MessagePhaseV2": {
       "enum": [
         "commentary",
         "finalAnswer"
@@ -937,7 +937,7 @@
             "phase": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/MessagePhase"
+                  "$ref": "#/definitions/MessagePhaseV2"
                 },
                 {
                   "type": "null"

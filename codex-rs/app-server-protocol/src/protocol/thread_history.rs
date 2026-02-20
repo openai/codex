@@ -1196,7 +1196,7 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "item-1".into(),
                 text: "Final reply".into(),
-                phase: Some(crate::protocol::v2::MessagePhase::FinalAnswer),
+                phase: Some(crate::protocol::v2::MessagePhaseV2::FinalAnswer),
             }
         );
     }

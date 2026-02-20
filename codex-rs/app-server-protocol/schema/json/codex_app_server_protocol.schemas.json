@@ -13361,6 +13361,13 @@
           }
         ]
       },
+      "MessagePhaseV2": {
+        "enum": [
+          "commentary",
+          "finalAnswer"
+        ],
+        "type": "string"
+      },
       "ModeKind": {
         "description": "Initial collaboration mode to use when the TUI starts.",
         "enum": [
@@ -15818,7 +15825,7 @@
               "phase": {
                 "anyOf": [
                   {
-                    "$ref": "#/definitions/v2/MessagePhase"
+                    "$ref": "#/definitions/v2/MessagePhaseV2"
                   },
                   {
                     "type": "null"
