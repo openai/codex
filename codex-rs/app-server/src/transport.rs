@@ -431,12 +431,13 @@ async fn run_websocket_inbound_loop(
                         }
                     }
                     Some(Ok(WebSocketMessage::Ping(payload))) => {
-                        if writer_control_tx
-                            .try_send(WebSocketMessage::Pong(payload))
-                            .await
-                            .is_err()
-                        {
-                            break;
+                        match writer_control_tx.try_send(WebSocketMessage::Pong(payload)) {
+                            Ok(()) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                warn!("websocket control queue full while replying to ping; closing connection");
+                                break;
+                            }
                         }
                     }
                     Some(Ok(WebSocketMessage::Pong(_))) => {}
