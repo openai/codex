@@ -478,7 +478,7 @@ async fn chatgpt_auth_sends_correct_request() {
     )
     .await;
 
-    let mut model_provider = built_in_model_providers()["openai"].clone();
+    let mut model_provider = built_in_model_providers(None)["openai"].clone();
     model_provider.base_url = Some(format!("{}/api/codex", server.uri()));
     let mut builder = test_codex()
         .with_auth(create_dummy_codex_auth())
@@ -554,7 +554,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
+        ..built_in_model_providers(None)["openai"].clone()
     };
 
     // Init session
@@ -1481,7 +1481,7 @@ async fn token_count_includes_rate_limits_snapshot() {
         .mount(&server)
         .await;
 
-    let mut provider = built_in_model_providers()["openai"].clone();
+    let mut provider = built_in_model_providers(None)["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
 
     let mut builder = test_codex()

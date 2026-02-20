@@ -148,7 +148,7 @@ impl ThreadManager {
             codex_home,
             auth_manager,
             session_source,
-            ModelProviderInfo::create_openai_provider(),
+            ModelProviderInfo::create_openai_provider(None),
             model_catalog,
         )
     }
@@ -713,7 +713,7 @@ mod tests {
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = ModelProviderInfo {
             base_url: Some(server.uri()),
-            ..ModelProviderInfo::create_openai_provider()
+            ..ModelProviderInfo::create_openai_provider(None)
         };
         let codex_home = tempdir().expect("create temp codex home");
         let manager = ThreadManager::new_with_models_provider(

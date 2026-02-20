@@ -2686,6 +2686,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite",
+ "toml 0.9.11+spec-1.1.0",
  "walkdir",
  "wiremock",
  "zstd",

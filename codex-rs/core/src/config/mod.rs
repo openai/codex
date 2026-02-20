@@ -118,6 +118,7 @@ pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+const OPENAI_BASE_URL_ENV_VAR: &str = "OPENAI_BASE_URL";
 
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
@@ -1698,30 +1699,32 @@ impl Config {
                 Some(trimmed.to_string())
             }
         });
-        let openai_base_url_from_env = std::env::var("OPENAI_BASE_URL").ok().and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
+        let openai_base_url_from_env =
+            std::env::var(OPENAI_BASE_URL_ENV_VAR)
+                .ok()
+                .and_then(|value| {
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                });
         if openai_base_url_from_env.is_some() {
             let message = if openai_base_url.is_some() {
-                "`OPENAI_BASE_URL` is deprecated and ignored because `openai_base_url` is set in config.toml. Remove `OPENAI_BASE_URL` from your environment."
+                format!(
+                    "`{OPENAI_BASE_URL_ENV_VAR}` is deprecated and ignored because `openai_base_url` is set in config.toml. Remove `{OPENAI_BASE_URL_ENV_VAR}` from your environment."
+                )
             } else {
-                "`OPENAI_BASE_URL` is deprecated. Set `openai_base_url` in config.toml instead."
+                format!(
+                    "`{OPENAI_BASE_URL_ENV_VAR}` is deprecated. Set `openai_base_url` in config.toml instead."
+                )
             };
-            startup_warnings.push(message.to_string());
+            startup_warnings.push(message);
         }
         let effective_openai_base_url = openai_base_url.or(openai_base_url_from_env);
 
-        let mut model_providers = built_in_model_providers();
-        if let Some(base_url) = effective_openai_base_url
-            && let Some(openai_provider) = model_providers.get_mut("openai")
-        {
-            openai_provider.base_url = Some(base_url);
-        }
+        let mut model_providers = built_in_model_providers(effective_openai_base_url);
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
@@ -4494,7 +4497,7 @@ model_verbosity = "high"
             supports_websockets: false,
         };
         let model_provider_map = {
-            let mut model_provider_map = built_in_model_providers();
+            let mut model_provider_map = built_in_model_providers(None);
             model_provider_map.insert("openai-custom".to_string(), openai_custom_provider.clone());
             model_provider_map
         };

@@ -204,7 +204,7 @@ impl TestCodexBuilder {
     ) -> anyhow::Result<(Config, Arc<TempDir>)> {
         let model_provider = ModelProviderInfo {
             base_url: Some(base_url),
-            ..built_in_model_providers()["openai"].clone()
+            ..built_in_model_providers(None)["openai"].clone()
         };
         let cwd = Arc::new(TempDir::new()?);
         let mut config = load_default_config_for_test(home).await;

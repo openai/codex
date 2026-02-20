@@ -68,7 +68,7 @@ impl ModelsManager {
         Self::new_with_provider(
             codex_home,
             auth_manager,
-            ModelProviderInfo::create_openai_provider(),
+            ModelProviderInfo::create_openai_provider(None),
             model_catalog,
         )
     }

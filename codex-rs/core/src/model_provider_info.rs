@@ -216,10 +216,10 @@ impl ModelProviderInfo {
             .map(Duration::from_millis)
             .unwrap_or(Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS))
     }
-    pub fn create_openai_provider() -> ModelProviderInfo {
+    pub fn create_openai_provider(base_url: Option<String>) -> ModelProviderInfo {
         ModelProviderInfo {
             name: OPENAI_PROVIDER_NAME.into(),
-            base_url: None,
+            base_url,
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -262,15 +262,18 @@ pub const LMSTUDIO_OSS_PROVIDER_ID: &str = "lmstudio";
 pub const OLLAMA_OSS_PROVIDER_ID: &str = "ollama";
 
 /// Built-in default provider list.
-pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
+pub fn built_in_model_providers(
+    openai_base_url: Option<String>,
+) -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
+    let openai_provider = P::create_openai_provider(openai_base_url);
 
     // We do not want to be in the business of adjucating which third-party
     // providers are bundled with Codex CLI, so we only include the OpenAI and
     // open source ("oss") providers by default. Users are encouraged to add to
     // `model_providers` in config.toml to add their own providers.
     [
-        (OPENAI_PROVIDER_ID, P::create_openai_provider()),
+        (OPENAI_PROVIDER_ID, openai_provider),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),
