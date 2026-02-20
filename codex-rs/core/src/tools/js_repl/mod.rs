@@ -1350,8 +1350,8 @@ impl JsReplManager {
             )
             .await
         {
-            Ok(response) => {
-                if let Some(items) = response_content_items(&response) {
+            Ok(output) => {
+                if let Some(items) = response_content_items(&output.response_input) {
                     Self::record_exec_tool_call_content_items(
                         &exec_tool_calls,
                         &req.exec_id,
@@ -1360,8 +1360,8 @@ impl JsReplManager {
                     .await;
                 }
 
-                let summary = Self::summarize_tool_call_response(&response);
-                match serde_json::to_value(response) {
+                let summary = Self::summarize_tool_call_response(&output.response_input);
+                match serde_json::to_value(output.response_input) {
                     Ok(value) => {
                         Self::log_tool_call_response(&req, true, &summary, Some(&value), None);
                         RunToolResult {
@@ -1369,6 +1369,25 @@ impl JsReplManager {
                             ok: true,
                             response: Some(value),
                             error: None,
+=======
+            Ok(output) => {
+                if let ResponseInputItem::FunctionCallOutput { output, .. } = &output.response_input
+                    && let Some(items) = output.content_items()
+                {
+                    let mut has_image = false;
+                    let mut content = Vec::with_capacity(items.len());
+                    for item in items {
+                        match item {
+                            FunctionCallOutputContentItem::InputText { text } => {
+                                content.push(ContentItem::InputText { text: text.clone() });
+                            }
+                            FunctionCallOutputContentItem::InputImage { image_url } => {
+                                has_image = true;
+                                content.push(ContentItem::InputImage {
+                                    image_url: image_url.clone(),
+                                });
+                            }
+>>>>>>> 2fbcb2ec4 (core: generalize interrupted tool-result handling)
                         }
                     }
                     Err(err) => {

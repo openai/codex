@@ -14,6 +14,7 @@ use crate::function_tool::FunctionCallError;
 use crate::memories::citations::get_thread_id_from_citations;
 use crate::parse_turn_item;
 use crate::state_db;
+use crate::tools::context::ToolDispatchOutput;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -84,7 +85,7 @@ async fn record_stage1_output_usage_for_completed_item(
 /// queuing any tool execution futures. This records items immediately so
 /// history and rollout stay in sync even if the turn is later cancelled.
 pub(crate) type InFlightFuture<'f> =
-    Pin<Box<dyn Future<Output = Result<ResponseInputItem>> + Send + 'f>>;
+    Pin<Box<dyn Future<Output = Result<ToolDispatchOutput>> + Send + 'f>>;
 
 #[derive(Default)]
 pub(crate) struct OutputItemResult {
