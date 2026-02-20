@@ -2757,6 +2757,14 @@ impl Session {
         sub_id: &str,
         response: RequestUserInputResponse,
     ) {
+        if response.interrupted {
+            let mut active = self.active_turn.lock().await;
+            if let Some(at) = active.as_mut() {
+                let mut ts = at.turn_state.lock().await;
+                ts.mark_request_user_input_interrupted();
+            }
+        }
+
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -2774,6 +2782,17 @@ impl Session {
             None => {
                 warn!("No pending user input found for sub_id: {sub_id}");
             }
+        }
+    }
+
+    pub async fn take_request_user_input_interrupted(&self) -> bool {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.take_request_user_input_interrupted()
+            }
+            None => false,
         }
     }
 
@@ -4998,8 +5017,20 @@ pub(crate) async fn run_turn(
             Ok(sampling_request_output) => {
                 let SamplingRequestResult {
                     needs_follow_up,
+                    request_user_input_interrupted,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
+                if request_user_input_interrupted {
+                    cancellation_token.cancel();
+                    sess.finish_turn_without_completion_event(turn_context.as_ref())
+                        .await;
+                    sess.emit_turn_aborted_without_rollout_flush(
+                        &turn_context,
+                        TurnAbortReason::Interrupted,
+                    )
+                    .await;
+                    break;
+                }
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
@@ -5606,6 +5637,7 @@ async fn built_tools(
 #[derive(Debug)]
 struct SamplingRequestResult {
     needs_follow_up: bool,
+    request_user_input_interrupted: bool,
     last_agent_message: Option<String>,
 }
 
@@ -6202,7 +6234,7 @@ async fn try_run_sampling_request(
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let receiving_span = trace_span!("receiving_stream");
-    let outcome: CodexResult<SamplingRequestResult> = loop {
+    let mut outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
             parent: &receiving_span,
             "handle_responses",
@@ -6376,6 +6408,7 @@ async fn try_run_sampling_request(
 
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
+                    request_user_input_interrupted: false,
                     last_agent_message,
                 });
             }
@@ -6468,6 +6501,12 @@ async fn try_run_sampling_request(
     .await;
 
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    if let Ok(result) = outcome.as_mut()
+        && sess.take_request_user_input_interrupted().await
+    {
+        result.needs_follow_up = false;
+        result.request_user_input_interrupted = true;
+    }
 
     if should_emit_turn_diff {
         let unified_diff = {

@@ -143,7 +143,7 @@ impl Session {
                             Arc::clone(&session_ctx),
                             ctx,
                             input,
-                            task_cancellation_token.child_token(),
+                            task_cancellation_token.clone(),
                         )
                         .await;
                     let sess = session_ctx.clone_session();
@@ -193,29 +193,8 @@ impl Session {
         turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
-
-        let mut active = self.active_turn.lock().await;
-        let mut pending_input = Vec::<ResponseInputItem>::new();
-        let mut should_clear_active_turn = false;
-        if let Some(at) = active.as_mut()
-            && at.remove_task(&turn_context.sub_id)
-        {
-            let mut ts = at.turn_state.lock().await;
-            pending_input = ts.take_pending_input();
-            should_clear_active_turn = true;
-        }
-        if should_clear_active_turn {
-            *active = None;
-        }
-        drop(active);
-        if !pending_input.is_empty() {
-            let pending_response_items = pending_input
-                .into_iter()
-                .map(ResponseItem::from)
-                .collect::<Vec<_>>();
-            self.record_conversation_items(turn_context.as_ref(), &pending_response_items)
-                .await;
-        }
+        self.finish_turn_without_completion_event(turn_context.as_ref())
+            .await;
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
@@ -249,6 +228,31 @@ impl Session {
             .await;
     }
 
+    pub(crate) async fn finish_turn_without_completion_event(&self, turn_context: &TurnContext) {
+        let mut active = self.active_turn.lock().await;
+        let mut pending_input = Vec::<ResponseInputItem>::new();
+        let mut should_clear_active_turn = false;
+        if let Some(at) = active.as_mut()
+            && at.remove_task(&turn_context.sub_id)
+        {
+            let mut ts = at.turn_state.lock().await;
+            pending_input = ts.take_pending_input();
+            should_clear_active_turn = true;
+        }
+        if should_clear_active_turn {
+            *active = None;
+        }
+        drop(active);
+        if !pending_input.is_empty() {
+            let pending_response_items = pending_input
+                .into_iter()
+                .map(ResponseItem::from)
+                .collect::<Vec<_>>();
+            self.record_conversation_items(turn_context, &pending_response_items)
+                .await;
+        }
+    }
+
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
@@ -276,7 +280,34 @@ impl Session {
         session_task
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
+        self.emit_turn_aborted(task.turn_context.as_ref(), reason)
+            .await;
+    }
 
+    pub(crate) async fn emit_turn_aborted(
+        self: &Arc<Self>,
+        turn_context: &TurnContext,
+        reason: TurnAbortReason,
+    ) {
+        self.emit_turn_aborted_inner(turn_context, reason, true)
+            .await;
+    }
+
+    pub(crate) async fn emit_turn_aborted_without_rollout_flush(
+        self: &Arc<Self>,
+        turn_context: &TurnContext,
+        reason: TurnAbortReason,
+    ) {
+        self.emit_turn_aborted_inner(turn_context, reason, false)
+            .await;
+    }
+
+    async fn emit_turn_aborted_inner(
+        self: &Arc<Self>,
+        turn_context: &TurnContext,
+        reason: TurnAbortReason,
+        flush_rollout_before_event: bool,
+    ) {
         if reason == TurnAbortReason::Interrupted {
             let marker = ResponseItem::Message {
                 id: None,
@@ -289,20 +320,22 @@ impl Session {
                 end_turn: None,
                 phase: None,
             };
-            self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
+            self.record_into_history(std::slice::from_ref(&marker), turn_context)
                 .await;
             self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
                 .await;
-            // Ensure the marker is durably visible before emitting TurnAborted: some clients
-            // synchronously re-read the rollout on receipt of the abort event.
-            self.flush_rollout().await;
+            if flush_rollout_before_event {
+                // Ensure the marker is durably visible before emitting TurnAborted: some clients
+                // synchronously re-read the rollout on receipt of the abort event.
+                self.flush_rollout().await;
+            }
         }
 
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
-            turn_id: Some(task.turn_context.sub_id.clone()),
+            turn_id: Some(turn_context.sub_id.clone()),
             reason,
         });
-        self.send_event(task.turn_context.as_ref(), event).await;
+        self.send_event(turn_context, event).await;
     }
 }
 
