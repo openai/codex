@@ -1495,7 +1495,6 @@ impl CodexClient {
             command,
             cwd,
             command_actions,
-            network_approval_context,
             proposed_execpolicy_amendment,
             proposed_network_policy_amendments,
         } = params;

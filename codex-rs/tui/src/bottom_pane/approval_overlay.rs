@@ -705,8 +705,14 @@ mod tests {
                 }),
                 proposed_execpolicy_amendment: None,
                 proposed_network_policy_amendments: Some(vec![
-                    NetworkPolicyAmendment::allow("example.com"),
-                    NetworkPolicyAmendment::deny("example.com"),
+                    NetworkPolicyAmendment {
+                        host: "example.com".to_string(),
+                        action: NetworkPolicyRuleAction::Allow,
+                    },
+                    NetworkPolicyAmendment {
+                        host: "example.com".to_string(),
+                        action: NetworkPolicyRuleAction::Deny,
+                    },
                 ]),
             },
             tx,
@@ -720,7 +726,10 @@ mod tests {
                 assert_eq!(
                     decision,
                     ReviewDecision::NetworkPolicyAmendment {
-                        network_policy_amendment: NetworkPolicyAmendment::deny("example.com"),
+                        network_policy_amendment: NetworkPolicyAmendment {
+                            host: "example.com".to_string(),
+                            action: NetworkPolicyRuleAction::Deny,
+                        },
                     }
                 );
                 saw_op = true;
@@ -776,8 +785,14 @@ mod tests {
         let options = exec_options(
             Some(ExecPolicyAmendment::new(vec!["curl".to_string()])),
             Some(vec![
-                NetworkPolicyAmendment::allow("example.com"),
-                NetworkPolicyAmendment::deny("example.com"),
+                NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Allow,
+                },
+                NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Deny,
+                },
             ]),
             Some(&network_context),
         );
@@ -809,8 +824,14 @@ mod tests {
             }),
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec!["curl".into()])),
             proposed_network_policy_amendments: Some(vec![
-                NetworkPolicyAmendment::allow("example.com"),
-                NetworkPolicyAmendment::deny("example.com"),
+                NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Allow,
+                },
+                NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Deny,
+                },
             ]),
         };
 
