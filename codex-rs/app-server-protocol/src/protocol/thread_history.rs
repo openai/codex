@@ -16,6 +16,7 @@ use crate::protocol::v2::TurnError;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
 use crate::protocol::v2::WebSearchAction;
+use codex_protocol::models::MessagePhase as CoreMessagePhase;
 use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::AgentStatus;
@@ -81,7 +82,9 @@ impl ThreadHistoryBuilder {
     fn handle_event(&mut self, event: &EventMsg) {
         match event {
             EventMsg::UserMessage(payload) => self.handle_user_message(payload),
-            EventMsg::AgentMessage(payload) => self.handle_agent_message(payload.message.clone()),
+            EventMsg::AgentMessage(payload) => {
+                self.handle_agent_message(payload.message.clone(), payload.phase.clone())
+            }
             EventMsg::AgentReasoning(payload) => self.handle_agent_reasoning(payload),
             EventMsg::AgentReasoningRawContent(payload) => {
                 self.handle_agent_reasoning_raw_content(payload)
@@ -143,7 +146,7 @@ impl ThreadHistoryBuilder {
         self.current_turn = Some(turn);
     }
 
-    fn handle_agent_message(&mut self, text: String) {
+    fn handle_agent_message(&mut self, text: String, phase: Option<CoreMessagePhase>) {
         if text.is_empty() {
             return;
         }
@@ -152,7 +155,7 @@ impl ThreadHistoryBuilder {
         self.ensure_turn().items.push(ThreadItem::AgentMessage {
             id,
             text,
-            phase: None,
+            phase: phase.map(Into::into),
         });
     }
 
@@ -758,6 +761,7 @@ impl From<PendingTurn> for Turn {
 mod tests {
     use super::*;
     use codex_protocol::ThreadId;
+    use codex_protocol::models::MessagePhase as CoreMessagePhase;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::AgentMessageEvent;
@@ -792,6 +796,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Hi there".into(),
+                phase: None,
             }),
             EventMsg::AgentReasoning(AgentReasoningEvent {
                 text: "thinking".into(),
@@ -807,6 +812,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Reply two".into(),
+                phase: None,
             }),
         ];
 
@@ -878,6 +884,29 @@ mod tests {
     }
 
     #[test]
+    fn preserves_agent_message_phase_in_history() {
+        let events = vec![EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Final reply".into(),
+            phase: Some(CoreMessagePhase::FinalAnswer),
+        })];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items[0],
+            ThreadItem::AgentMessage {
+                id: "item-1".into(),
+                text: "Final reply".into(),
+                phase: Some(crate::protocol::v2::MessagePhase::FinalAnswer),
+            }
+        );
+    }
+
+    #[test]
     fn splits_reasoning_when_interleaved() {
         let events = vec![
             EventMsg::UserMessage(UserMessageEvent {
@@ -894,6 +923,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "interlude".into(),
+                phase: None,
             }),
             EventMsg::AgentReasoning(AgentReasoningEvent {
                 text: "second summary".into(),
@@ -938,6 +968,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Working...".into(),
+                phase: None,
             }),
             EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some("turn-1".into()),
@@ -951,6 +982,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Second attempt complete.".into(),
+                phase: None,
             }),
         ];
 
@@ -1017,6 +1049,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A1".into(),
+                phase: None,
             }),
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Second".into(),
@@ -1026,6 +1059,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A2".into(),
+                phase: None,
             }),
             EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
             EventMsg::UserMessage(UserMessageEvent {
@@ -1036,6 +1070,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A3".into(),
+                phase: None,
             }),
         ];
 
@@ -1097,6 +1132,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A1".into(),
+                phase: None,
             }),
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Two".into(),
@@ -1106,6 +1142,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A2".into(),
+                phase: None,
             }),
             EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 99 }),
         ];
@@ -1469,6 +1506,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "still in b".into(),
+                phase: None,
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-b".into(),
@@ -1522,6 +1560,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "still in b".into(),
+                phase: None,
             }),
         ];
 
@@ -1626,6 +1665,7 @@ mod tests {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "done".into(),
+                phase: None,
             }),
             EventMsg::Error(ErrorEvent {
                 message: "rollback failed".into(),

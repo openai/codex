@@ -125,16 +125,13 @@ impl ThreadStateManager {
                 self.thread_ids_by_connection
                     .remove(&subscription_state.connection_id);
             }
-            if let Some(thread_state) = self.thread_states.get(&thread_id) {
-                thread_state
-                    .lock()
-                    .await
-                    .remove_connection(subscription_state.connection_id);
-            }
         }
 
         if let Some(thread_state) = self.thread_states.get(&thread_id) {
             let mut thread_state = thread_state.lock().await;
+            if !connection_still_subscribed_to_thread {
+                thread_state.remove_connection(subscription_state.connection_id);
+            }
             if thread_state.subscribed_connection_ids().is_empty() {
                 thread_state.clear_listener();
             }

@@ -12,7 +12,6 @@ pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
 use codex_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::AuthManager;
@@ -91,10 +90,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     let auth_status_entries =
         compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode).await;
 
-    let mut mcp_connection_manager = McpConnectionManager::default();
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
-    let cancel_token = CancellationToken::new();
 
     let sandbox_state = SandboxState {
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
@@ -103,16 +100,15 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
         use_linux_sandbox_bwrap: config.features.enabled(Feature::UseLinuxSandboxBwrap),
     };
 
-    mcp_connection_manager
-        .initialize(
-            &mcp_servers,
-            config.mcp_oauth_credentials_store_mode,
-            auth_status_entries,
-            tx_event,
-            cancel_token.clone(),
-            sandbox_state,
-        )
-        .await;
+    let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+        &mcp_servers,
+        config.mcp_oauth_credentials_store_mode,
+        auth_status_entries,
+        &config.permissions.approval_policy,
+        tx_event,
+        sandbox_state,
+    )
+    .await;
 
     if force_refetch
         && let Err(err) = mcp_connection_manager
