@@ -77,10 +77,6 @@ impl SessionState {
         self.history.set_token_info(info);
     }
 
-    /// Storage-only setter for the reference context snapshot.
-    ///
-    /// When setting `Some(...)`, callers should take care to persist the
-    /// appropriate model-visible context diff items.
     pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
         self.history.set_reference_context_item(item);
     }
