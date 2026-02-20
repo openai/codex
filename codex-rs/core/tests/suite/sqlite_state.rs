@@ -123,6 +123,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     originator: "test".to_string(),
                     cli_version: "test".to_string(),
                     source: SessionSource::default(),
+                    agent_nickname: None,
                     model_provider: None,
                     base_instructions: None,
                     dynamic_tools: Some(dynamic_tools_for_hook),

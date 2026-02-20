@@ -6901,6 +6901,15 @@ fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     }
 }
 
+fn thread_agent_nickname(source: &codex_protocol::protocol::SessionSource) -> Option<String> {
+    match source {
+        codex_protocol::protocol::SessionSource::SubAgent(
+            codex_protocol::protocol::SubAgentSource::ThreadSpawn { agent_nickname, .. },
+        ) => agent_nickname.clone(),
+        _ => None,
+    }
+}
+
 fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     timestamp.and_then(|ts| {
         chrono::DateTime::parse_from_rfc3339(ts)
@@ -6937,6 +6946,7 @@ fn build_thread_from_snapshot(
         path,
         cwd: config_snapshot.cwd.clone(),
         cli_version: env!("CARGO_PKG_VERSION").to_string(),
+        agent_nickname: thread_agent_nickname(&config_snapshot.session_source),
         source: config_snapshot.session_source.clone().into(),
         git_info: None,
         turns: Vec::new(),
@@ -6975,6 +6985,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         path: Some(path),
         cwd,
         cli_version,
+        agent_nickname: thread_agent_nickname(&source),
         source: source.into(),
         git_info,
         turns: Vec::new(),

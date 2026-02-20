@@ -16,6 +16,25 @@ use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
 
+const AGENT_NAMES: &str = include_str!("agent_names.txt");
+
+fn agent_nickname_list() -> Vec<&'static str> {
+    AGENT_NAMES
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn thread_spawn_agent_nickname(session_source: &SessionSource) -> Option<String> {
+    match session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {
+            agent_nickname.clone()
+        }
+        _ => None,
+    }
+}
+
 /// Control-plane handle for multi-agent operations.
 /// `AgentControl` is held by each session (via `SessionServices`). It provides capability to
 /// spawn new agents and the inter-agent communication layer.
@@ -48,7 +67,22 @@ impl AgentControl {
         session_source: Option<SessionSource>,
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
-        let reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let session_source = match session_source {
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth,
+                ..
+            })) => {
+                let agent_nickname = reservation.reserve_agent_nickname(&agent_nickname_list())?;
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth,
+                    agent_nickname: Some(agent_nickname),
+                }))
+            }
+            other => other,
+        };
         let notification_source = session_source.clone();
 
         // The same `AgentControl` is sent to spawn the thread.
@@ -92,7 +126,10 @@ impl AgentControl {
                 session_source,
             )
             .await?;
-        reservation.commit(resumed_thread.thread_id);
+        reservation.commit_with_agent_nickname(
+            resumed_thread.thread_id,
+            thread_spawn_agent_nickname(&notification_source),
+        );
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);
@@ -795,6 +832,7 @@ mod tests {
                 Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id,
                     depth: 1,
+                    agent_nickname: None,
                 })),
             )
             .await
@@ -811,5 +849,44 @@ mod tests {
             .expect("child shutdown should submit");
 
         assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
+    }
+
+    #[tokio::test]
+    async fn spawn_thread_subagent_gets_random_nickname_in_session_source() {
+        let harness = AgentControlHarness::new().await;
+        let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+
+        let child_thread_id = harness
+            .control
+            .spawn_agent(
+                harness.config.clone(),
+                text_input("hello child"),
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth: 1,
+                    agent_nickname: None,
+                })),
+            )
+            .await
+            .expect("child spawn should succeed");
+
+        let child_thread = harness
+            .manager
+            .get_thread(child_thread_id)
+            .await
+            .expect("child thread should be registered");
+        let snapshot = child_thread.config_snapshot().await;
+
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: seen_parent_thread_id,
+            depth,
+            agent_nickname,
+        }) = snapshot.session_source
+        else {
+            panic!("expected thread-spawn sub-agent source");
+        };
+        assert_eq!(seen_parent_thread_id, parent_thread_id);
+        assert_eq!(depth, 1);
+        assert!(agent_nickname.is_some());
     }
 }

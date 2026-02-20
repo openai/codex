@@ -95,6 +95,7 @@ SELECT
     created_at,
     updated_at,
     source,
+    agent_nickname,
     model_provider,
     cwd,
     cli_version,

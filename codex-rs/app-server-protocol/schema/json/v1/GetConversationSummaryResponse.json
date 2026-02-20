@@ -123,6 +123,13 @@
           "properties": {
             "thread_spawn": {
               "properties": {
+                "agent_nickname": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "depth": {
                   "format": "int32",
                   "type": "integer"

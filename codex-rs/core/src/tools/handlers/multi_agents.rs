@@ -737,6 +737,7 @@ fn thread_spawn_source(parent_thread_id: ThreadId, depth: i32) -> SessionSource 
     SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id,
         depth,
+        agent_nickname: None,
     })
 }
 
@@ -1067,6 +1068,7 @@ mod tests {
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
             depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_nickname: None,
         });
 
         let invocation = invocation(
@@ -1103,6 +1105,7 @@ mod tests {
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
             depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_nickname: None,
         });
 
         let invocation = invocation(
@@ -1486,6 +1489,7 @@ mod tests {
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
             depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_nickname: None,
         });
 
         let invocation = invocation(

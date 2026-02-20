@@ -54,6 +54,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
 
@@ -391,6 +392,13 @@ impl RolloutRecorder {
                         cwd: config.cwd.clone(),
                         originator: originator().value,
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
+                        agent_nickname: match &source { // TODO(jif) make a shared helper
+                            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                                agent_nickname,
+                                ..
+                            }) => agent_nickname.clone(),
+                            _ => None,
+                        },
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
                         base_instructions: Some(base_instructions),
@@ -932,6 +940,7 @@ impl From<codex_state::ThreadsPage> for ThreadsPage {
                     serde_json::from_value(Value::String(item.source))
                         .unwrap_or(SessionSource::Unknown),
                 ),
+                agent_nickname: item.agent_nickname,
                 model_provider: Some(item.model_provider),
                 cli_version: Some(item.cli_version),
                 created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
