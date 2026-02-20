@@ -581,6 +581,23 @@ pub(crate) mod wait {
                     status_rxs.push((*id, rx));
                 }
                 Err(CodexErr::ThreadNotFound(_)) => {
+                    warn!(
+                        diagnostic_event = "collab_wait_receiver_not_found_after_close",
+                        thread_id = %id,
+                        sender_thread_id = %session.conversation_id,
+                        receiver_count = receiver_thread_ids.len(),
+                        timeout_ms,
+                        "collab wait receiver resolved to not_found before status subscription"
+                    );
+                    wait_diagnostics.push(make_wait_diagnostic(
+                        "collab_wait_receiver_not_found_after_close",
+                        Some(*id),
+                        receiver_thread_ids.len(),
+                        timeout_ms,
+                        None,
+                        Some(AgentStatus::NotFound),
+                        Some(true),
+                    ));
                     initial_final_statuses.push((*id, AgentStatus::NotFound));
                 }
                 Err(err) => {
@@ -1966,6 +1983,82 @@ mod tests {
             .submit(Op::Shutdown {})
             .await
             .expect("shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn wait_not_found_after_close_emits_structured_not_found_diagnostic() {
+        let (mut session, turn, rx_event) = make_session_and_context_with_rx().await;
+        let manager = thread_manager();
+        Arc::get_mut(&mut session)
+            .expect("session should be uniquely owned in test")
+            .services
+            .agent_control = manager.agent_control();
+
+        let config = turn.config.as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+
+        let close_invocation = invocation(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            "close_agent",
+            function_payload(json!({"id": agent_id.to_string()})),
+        );
+        let _ = MultiAgentHandler
+            .handle(close_invocation)
+            .await
+            .expect("close_agent should succeed");
+
+        let wait_invocation = invocation(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            "wait",
+            function_payload(json!({
+                "ids": [agent_id.to_string()],
+                "timeout_ms": MIN_WAIT_TIMEOUT_MS
+            })),
+        );
+        let output = MultiAgentHandler
+            .handle(wait_invocation)
+            .await
+            .expect("wait should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: wait::WaitResult =
+            serde_json::from_str(&content).expect("wait result should be json");
+        assert_eq!(
+            result,
+            wait::WaitResult {
+                status: HashMap::from([(agent_id, AgentStatus::NotFound)]),
+                timed_out: false
+            }
+        );
+
+        let mut saw_wait_end = false;
+        let mut saw_not_found_diag = false;
+        while let Ok(event) = rx_event.try_recv() {
+            if let EventMsg::CollabWaitingEnd(wait_end) = event.msg {
+                saw_wait_end = true;
+                if wait_end
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.diagnostic_event == "collab_wait_receiver_not_found_after_close")
+                {
+                    saw_not_found_diag = true;
+                    break;
+                }
+            }
+        }
+        assert!(saw_wait_end, "expected a collab waiting end event");
+        assert!(
+            saw_not_found_diag,
+            "expected not_found-after-close diagnostic in collab waiting end event"
+        );
     }
 
     #[tokio::test]
