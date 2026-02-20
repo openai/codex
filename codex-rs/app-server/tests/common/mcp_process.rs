@@ -1045,7 +1045,8 @@ impl McpProcess {
         let Some(params) = notification.params.as_ref() else {
             return false;
         };
-        let Ok(payload) = serde_json::from_value::<TurnCompletedNotification>(params.clone()) else {
+        let Ok(payload) = serde_json::from_value::<TurnCompletedNotification>(params.clone())
+        else {
             return false;
         };
         payload.thread_id == thread_id && payload.turn.id == turn_id
