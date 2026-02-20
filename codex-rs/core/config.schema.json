@@ -35,15 +35,15 @@
           "minimum": 1.0,
           "type": "integer"
         },
-        "max_spawn_depth": {
-          "description": "Maximum depth for thread-spawned subagents.",
-          "format": "uint",
-          "minimum": 1.0,
-          "type": "integer"
-        },
         "max_depth": {
           "description": "Maximum nesting depth allowed for spawned agent threads. Root sessions start at depth 0.",
           "format": "int32",
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "max_spawn_depth": {
+          "description": "Maximum depth for thread-spawned subagents.",
+          "format": "uint",
           "minimum": 1.0,
           "type": "integer"
         },
