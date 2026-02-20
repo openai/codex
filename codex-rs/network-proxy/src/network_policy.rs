@@ -723,7 +723,6 @@ mod tests {
             method: Some("GET".to_string()),
             command: None,
             exec_policy_hint: None,
-            attempt_id: None,
         });
 
         let (decision, events) = capture_events(|| async {
@@ -768,7 +767,6 @@ mod tests {
             method: Some("GET".to_string()),
             command: None,
             exec_policy_hint: None,
-            attempt_id: None,
         });
 
         let (_decision, events) = capture_events(|| async {
