@@ -98,6 +98,7 @@ pub struct JsReplArgs {
 #[derive(Clone, Debug)]
 pub struct JsExecResult {
     pub output: String,
+    pub interrupt_turn: bool,
 }
 
 struct KernelState {
@@ -119,6 +120,7 @@ struct ExecContext {
 #[derive(Default)]
 struct ExecToolCalls {
     in_flight: usize,
+    interrupted: bool,
     notify: Arc<Notify>,
     cancel: CancellationToken,
 }
@@ -362,6 +364,24 @@ impl JsReplManager {
         }
     }
 
+    async fn mark_exec_tool_call_interrupted(
+        exec_tool_calls: &Arc<Mutex<HashMap<String, ExecToolCalls>>>,
+        exec_id: &str,
+    ) {
+        let mut calls = exec_tool_calls.lock().await;
+        if let Some(state) = calls.get_mut(exec_id) {
+            state.interrupted = true;
+        }
+    }
+
+    async fn exec_tool_calls_interrupted(
+        exec_tool_calls: &Arc<Mutex<HashMap<String, ExecToolCalls>>>,
+        exec_id: &str,
+    ) -> bool {
+        let calls = exec_tool_calls.lock().await;
+        calls.get(exec_id).is_some_and(|state| state.interrupted)
+    }
+
     async fn wait_for_exec_tool_calls_map(
         exec_tool_calls: &Arc<Mutex<HashMap<String, ExecToolCalls>>>,
         exec_id: &str,
@@ -546,7 +566,13 @@ impl JsReplManager {
         };
 
         match response {
-            ExecResultMessage::Ok { output } => Ok(JsExecResult { output }),
+            ExecResultMessage::Ok {
+                output,
+                interrupt_turn,
+            } => Ok(JsExecResult {
+                output,
+                interrupt_turn,
+            }),
             ExecResultMessage::Err { message } => Err(FunctionCallError::RespondToModel(message)),
         }
     }
@@ -848,10 +874,15 @@ impl JsReplManager {
                     error,
                 } => {
                     JsReplManager::wait_for_exec_tool_calls_map(&exec_tool_calls, &id).await;
+                    let interrupt_turn =
+                        JsReplManager::exec_tool_calls_interrupted(&exec_tool_calls, &id).await;
                     let mut pending = pending_execs.lock().await;
                     if let Some(tx) = pending.remove(&id) {
                         let payload = if ok {
-                            ExecResultMessage::Ok { output }
+                            ExecResultMessage::Ok {
+                                output,
+                                interrupt_turn,
+                            }
                         } else {
                             ExecResultMessage::Err {
                                 message: error
@@ -874,6 +905,7 @@ impl JsReplManager {
                             ok: false,
                             response: None,
                             error: Some("js_repl exec context not found".to_string()),
+                            interrupt_turn: false,
                         });
                         if let Err(err) = JsReplManager::write_message(&stdin, &payload).await {
                             let snapshot =
@@ -907,6 +939,7 @@ impl JsReplManager {
                                         ok: false,
                                         response: None,
                                         error: Some("js_repl execution reset".to_string()),
+                                        interrupt_turn: false,
                                     },
                                     result = JsReplManager::run_tool_request(ctx, req) => result,
                                 }
@@ -916,8 +949,16 @@ impl JsReplManager {
                                 ok: false,
                                 response: None,
                                 error: Some("js_repl exec context not found".to_string()),
+                                interrupt_turn: false,
                             },
                         };
+                        if result.interrupt_turn {
+                            JsReplManager::mark_exec_tool_call_interrupted(
+                                &exec_tool_calls_for_task,
+                                &exec_id,
+                            )
+                            .await;
+                        }
                         JsReplManager::finish_exec_tool_call(&exec_tool_calls_for_task, &exec_id)
                             .await;
                         let payload = HostToKernel::RunToolResult(result);
@@ -1009,6 +1050,7 @@ impl JsReplManager {
                 ok: false,
                 response: None,
                 error: Some("js_repl cannot invoke itself".to_string()),
+                interrupt_turn: false,
             };
         }
 
@@ -1113,12 +1155,14 @@ impl JsReplManager {
                         ok: true,
                         response: Some(value),
                         error: None,
+                        interrupt_turn: output.interrupt_turn,
                     },
                     Err(err) => RunToolResult {
                         id: req.id,
                         ok: false,
                         response: None,
                         error: Some(format!("failed to serialize tool output: {err}")),
+                        interrupt_turn: false,
                     },
                 }
             }
@@ -1127,6 +1171,7 @@ impl JsReplManager {
                 ok: false,
                 response: None,
                 error: Some(err.to_string()),
+                interrupt_turn: false,
             },
         }
     }
@@ -1216,12 +1261,19 @@ struct RunToolResult {
     response: Option<JsonValue>,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    interrupt_turn: bool,
 }
 
 #[derive(Debug)]
 enum ExecResultMessage {
-    Ok { output: String },
-    Err { message: String },
+    Ok {
+        output: String,
+        interrupt_turn: bool,
+    },
+    Err {
+        message: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

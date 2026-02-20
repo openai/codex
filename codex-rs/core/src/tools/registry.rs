@@ -186,7 +186,8 @@ impl ToolRegistry {
                             Ok(output) => {
                                 let preview = output.log_preview();
                                 let success = output.success_for_logging();
-                                let interrupt_turn = handler.should_interrupt_turn(&output);
+                                let interrupt_turn = output.interrupt_turn_hint()
+                                    || handler.should_interrupt_turn(&output);
                                 let mut guard = output_cell.lock().await;
                                 *guard = Some((output, interrupt_turn));
                                 Ok((preview, success))
