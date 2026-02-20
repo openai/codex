@@ -438,6 +438,7 @@ pub(crate) mod wait {
     use std::time::Duration;
     use tokio::sync::watch::Receiver;
     use tokio::time::Instant;
+    use tracing::warn;
 
     use tokio::time::timeout_at;
 
@@ -451,6 +452,14 @@ pub(crate) mod wait {
     pub(crate) struct WaitResult {
         pub(crate) status: HashMap<ThreadId, AgentStatus>,
         pub(crate) timed_out: bool,
+    }
+
+    pub(super) fn should_emit_wait_none_diagnostic(diagnostic_emitted: bool) -> bool {
+        !diagnostic_emitted
+    }
+
+    pub(super) fn should_emit_sender_close_non_final_diagnostic(latest: &AgentStatus) -> bool {
+        !is_final(latest)
     }
 
     pub async fn handle(
@@ -539,6 +548,7 @@ pub(crate) mod wait {
                 futures.push(wait_for_final_status(session, id, rx));
             }
             let mut results = Vec::new();
+            let mut wait_none_diagnostic_emitted = false;
             let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
             loop {
                 match timeout_at(deadline, futures.next()).await {
@@ -546,7 +556,19 @@ pub(crate) mod wait {
                         results.push(result);
                         break;
                     }
-                    Ok(Some(None)) => continue,
+                    Ok(Some(None)) => {
+                        if should_emit_wait_none_diagnostic(wait_none_diagnostic_emitted) {
+                            warn!(
+                                diagnostic_event = "collab_wait_continue_on_none",
+                                sender_thread_id = %session.conversation_id,
+                                receiver_count = receiver_thread_ids.len(),
+                                timeout_ms,
+                                "collab wait loop continued after non-final status stream result"
+                            );
+                            wait_none_diagnostic_emitted = true;
+                        }
+                        continue;
+                    }
                     Ok(None) | Err(_) => break,
                 }
             }
@@ -565,6 +587,15 @@ pub(crate) mod wait {
 
         // Convert payload.
         let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+        if statuses.is_empty() {
+            warn!(
+                diagnostic_event = "collab_wait_empty_status_map_timeout_like",
+                sender_thread_id = %session.conversation_id,
+                receiver_count = receiver_thread_ids.len(),
+                timeout_ms,
+                "collab wait finished with empty status map (timeout-like outcome)"
+            );
+        }
         let result = WaitResult {
             status: statuses_map.clone(),
             timed_out: statuses.is_empty(),
@@ -605,8 +636,20 @@ pub(crate) mod wait {
 
         loop {
             if status_rx.changed().await.is_err() {
+                let last_observed_status = status.clone();
                 let latest = session.services.agent_control.get_status(thread_id).await;
-                return is_final(&latest).then_some((thread_id, latest));
+                let latest_is_final = is_final(&latest);
+                if should_emit_sender_close_non_final_diagnostic(&latest) {
+                    warn!(
+                        diagnostic_event = "collab_wait_status_stream_closed_non_final",
+                        thread_id = %thread_id,
+                        last_observed_status = ?last_observed_status,
+                        fallback_status = ?latest,
+                        latest_is_final,
+                        "collab wait status stream closed before final status"
+                    );
+                }
+                return latest_is_final.then_some((thread_id, latest));
             }
             status = status_rx.borrow().clone();
             if is_final(&status) {
@@ -1561,6 +1604,25 @@ mod tests {
             err,
             FunctionCallError::RespondToModel("ids must be non-empty".to_string())
         );
+    }
+
+    #[test]
+    fn wait_none_diagnostic_helper_emits_once() {
+        assert!(wait::should_emit_wait_none_diagnostic(false));
+        assert!(!wait::should_emit_wait_none_diagnostic(true));
+    }
+
+    #[test]
+    fn sender_close_non_final_diagnostic_helper_matches_finality() {
+        assert!(wait::should_emit_sender_close_non_final_diagnostic(
+            &AgentStatus::PendingInit
+        ));
+        assert!(wait::should_emit_sender_close_non_final_diagnostic(
+            &AgentStatus::Running
+        ));
+        assert!(!wait::should_emit_sender_close_non_final_diagnostic(
+            &AgentStatus::Shutdown
+        ));
     }
 
     #[tokio::test]
