@@ -162,6 +162,35 @@ impl ExecPolicyManager {
         &self,
         req: ExecApprovalRequest<'_>,
     ) -> ExecApprovalRequirement {
+        let exec_policy = self.current();
+        Self::create_exec_approval_requirement_for_command_with_policy(exec_policy.as_ref(), req)
+    }
+
+    pub(crate) async fn create_exec_approval_requirement_for_command_with_overlay(
+        &self,
+        req: ExecApprovalRequest<'_>,
+        overlay_prompt_prefixes: &[Vec<String>],
+    ) -> ExecApprovalRequirement {
+        if overlay_prompt_prefixes.is_empty() {
+            return self.create_exec_approval_requirement_for_command(req).await;
+        }
+
+        let mut exec_policy = self.current().as_ref().clone();
+        for prefix in overlay_prompt_prefixes {
+            if let Err(err) = exec_policy.add_prefix_rule(prefix, Decision::Prompt) {
+                tracing::warn!(
+                    "failed to add in-memory execpolicy overlay prompt prefix {prefix:?}: {err}"
+                );
+            }
+        }
+
+        Self::create_exec_approval_requirement_for_command_with_policy(&exec_policy, req)
+    }
+
+    fn create_exec_approval_requirement_for_command_with_policy(
+        exec_policy: &Policy,
+        req: ExecApprovalRequest<'_>,
+    ) -> ExecApprovalRequirement {
         let ExecApprovalRequest {
             command,
             approval_policy,
@@ -169,7 +198,6 @@ impl ExecPolicyManager {
             sandbox_permissions,
             prefix_rule,
         } = req;
-        let exec_policy = self.current();
         let (commands, used_complex_parsing) = commands_for_exec_policy(command);
         // Keep heredoc prefix parsing for rule evaluation so existing
         // allow/prompt/forbidden rules still apply, but avoid auto-derived
@@ -1218,6 +1246,64 @@ prefix_rule(
                 reason: None,
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_approval_overlay_merges_with_base_policy_without_mutating_manager() {
+        let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+        let overlay_prefix = vec!["/tmp/skill-script.sh".to_string()];
+
+        let overlay_prompted = manager
+            .create_exec_approval_requirement_for_command_with_overlay(
+                ExecApprovalRequest {
+                    command: &overlay_prefix,
+                    approval_policy: AskForApproval::UnlessTrusted,
+                    sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    prefix_rule: None,
+                },
+                &[overlay_prefix.clone()],
+            )
+            .await;
+        assert_eq!(
+            overlay_prompted,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: Some("`/tmp/skill-script.sh` requires approval by policy".to_string()),
+                proposed_execpolicy_amendment: None,
+            }
+        );
+
+        let rm_command = vec!["rm".to_string(), "-f".to_string(), "tmp.txt".to_string()];
+        let base_rule_still_applies = manager
+            .create_exec_approval_requirement_for_command_with_overlay(
+                ExecApprovalRequest {
+                    command: &rm_command,
+                    approval_policy: AskForApproval::OnRequest,
+                    sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    prefix_rule: None,
+                },
+                &[overlay_prefix],
+            )
+            .await;
+        assert_eq!(
+            base_rule_still_applies,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: Some("`rm -f tmp.txt` requires approval by policy".to_string()),
+                proposed_execpolicy_amendment: None,
+            }
+        );
+
+        assert_eq!(
+            manager.current().get_allowed_prefixes(),
+            Vec::<Vec<String>>::new(),
+            "overlay prefixes must not persist in session execpolicy state"
         );
     }
 

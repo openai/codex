@@ -9,6 +9,8 @@ use crate::error::CodexErr;
 #[cfg(unix)]
 use crate::error::SandboxErr;
 #[cfg(unix)]
+use crate::exec_policy::ExecApprovalRequest;
+#[cfg(unix)]
 use crate::protocol::EventMsg;
 #[cfg(unix)]
 use crate::protocol::ExecCommandOutputDeltaEvent;
@@ -17,9 +19,11 @@ use crate::protocol::ExecOutputStream;
 #[cfg(unix)]
 use crate::protocol::ReviewDecision;
 #[cfg(unix)]
-use anyhow::Context as _;
+use crate::sandboxing::SandboxPermissions;
 #[cfg(unix)]
-use codex_protocol::approvals::ExecPolicyAmendment;
+use crate::tools::sandboxing::ExecApprovalRequirement;
+#[cfg(unix)]
+use anyhow::Context as _;
 #[cfg(unix)]
 use codex_utils_pty::process_group::kill_child_process_group;
 #[cfg(unix)]
@@ -349,6 +353,67 @@ impl ZshExecBridge {
             argv.clone()
         };
 
+        let mut command_for_execpolicy = command_for_approval.clone();
+        if let Some(program) = command_for_execpolicy.first_mut() {
+            *program = file.clone();
+        }
+
+        let overlay_prompt_prefixes = {
+            let registry = turn
+                .skill_prefix_permissions
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            registry.keys().cloned().collect::<Vec<_>>()
+        };
+        let exec_approval_requirement = session
+            .services
+            .exec_policy
+            .create_exec_approval_requirement_for_command_with_overlay(
+                ExecApprovalRequest {
+                    command: &command_for_execpolicy,
+                    approval_policy: turn.approval_policy,
+                    sandbox_policy: &turn.sandbox_policy,
+                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    prefix_rule: None,
+                },
+                &overlay_prompt_prefixes,
+            )
+            .await;
+
+        let (reason, proposed_execpolicy_amendment) = match exec_approval_requirement {
+            ExecApprovalRequirement::Skip { .. } => {
+                write_json_line(
+                    &mut stream,
+                    &WrapperIpcResponse::ExecResponse {
+                        request_id,
+                        action: WrapperExecAction::Run,
+                        reason: None,
+                    },
+                )
+                .await?;
+                return Ok(false);
+            }
+            ExecApprovalRequirement::Forbidden { reason } => {
+                write_json_line(
+                    &mut stream,
+                    &WrapperIpcResponse::ExecResponse {
+                        request_id,
+                        action: WrapperExecAction::Deny,
+                        reason: Some(reason),
+                    },
+                )
+                .await?;
+                return Ok(true);
+            }
+            ExecApprovalRequirement::NeedsApproval {
+                reason,
+                proposed_execpolicy_amendment,
+            } => (
+                reason.or(approval_reason.clone()),
+                proposed_execpolicy_amendment,
+            ),
+        };
+
         let approval_id = Uuid::new_v4().to_string();
         let decision = session
             .request_command_approval(
@@ -357,9 +422,9 @@ impl ZshExecBridge {
                 Some(approval_id),
                 command_for_approval,
                 PathBuf::from(cwd),
-                approval_reason,
+                reason,
                 None,
-                None::<ExecPolicyAmendment>,
+                proposed_execpolicy_amendment,
             )
             .await;
 
