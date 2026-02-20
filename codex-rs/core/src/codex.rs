@@ -3509,8 +3509,6 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
-        // Standalone shell tasks do not update `reference_context_item`; that
-        // baseline is owned by regular model turns only.
     }
 
     pub async fn resolve_elicitation(
