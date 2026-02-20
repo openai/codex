@@ -173,7 +173,7 @@ impl ThreadManager {
             .model_providers
             .get(OPENAI_PROVIDER_ID)
             .cloned()
-            .unwrap_or_else(ModelProviderInfo::create_openai_provider);
+            .unwrap_or_else(|| ModelProviderInfo::create_openai_provider(None));
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
