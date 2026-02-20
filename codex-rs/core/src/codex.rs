@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -87,7 +88,7 @@ use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use futures::future::BoxFuture;
 use futures::prelude::*;
-use futures::stream::FuturesOrdered;
+use futures::stream::FuturesUnordered;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
@@ -5313,6 +5314,12 @@ struct SamplingRequestResult {
     last_agent_message: Option<String>,
 }
 
+#[derive(Debug)]
+struct IndexedToolDispatchOutput {
+    seq: usize,
+    output: ToolDispatchOutput,
+}
+
 /// Ephemeral per-response state for streaming a single proposed plan.
 /// This is intentionally not persisted or stored in session/state since it
 /// only exists while a response is actively streaming. The final plan text
@@ -5690,24 +5697,41 @@ async fn handle_assistant_item_done_in_plan_mode(
 }
 
 async fn drain_in_flight(
-    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ToolDispatchOutput>>>,
+    in_flight: &mut FuturesUnordered<BoxFuture<'static, CodexResult<IndexedToolDispatchOutput>>>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<bool> {
-    let mut interrupted_tool_result = false;
+    let mut next_seq = 0usize;
+    let mut ready = BTreeMap::<usize, ToolDispatchOutput>::new();
     while let Some(res) = in_flight.next().await {
         match res {
-            Ok(output) => {
-                sess.record_conversation_items(&turn_context, &[output.response_input.into()])
-                    .await;
-                interrupted_tool_result |= output.interrupt_turn;
+            Ok(indexed) => {
+                let IndexedToolDispatchOutput { seq, output } = indexed;
+                if output.interrupt_turn {
+                    sess.record_conversation_items(&turn_context, &[output.response_input.into()])
+                        .await;
+                    return Ok(true);
+                }
+
+                ready.insert(seq, output);
+                while let Some(output) = ready.remove(&next_seq) {
+                    sess.record_conversation_items(&turn_context, &[output.response_input.into()])
+                        .await;
+                    next_seq += 1;
+                }
             }
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));
             }
         }
     }
-    Ok(interrupted_tool_result)
+    if !ready.is_empty() {
+        for (_seq, output) in ready {
+            sess.record_conversation_items(&turn_context, &[output.response_input.into()])
+                .await;
+        }
+    }
+    Ok(false)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5763,8 +5787,10 @@ async fn try_run_sampling_request(
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
     );
-    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ToolDispatchOutput>>> =
-        FuturesOrdered::new();
+    let mut in_flight: FuturesUnordered<
+        BoxFuture<'static, CodexResult<IndexedToolDispatchOutput>>,
+    > = FuturesUnordered::new();
+    let mut next_in_flight_seq = 0usize;
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
@@ -5847,7 +5873,12 @@ async fn try_run_sampling_request(
                     .instrument(handle_responses)
                     .await?;
                 if let Some(tool_future) = output_result.tool_future {
-                    in_flight.push_back(tool_future);
+                    let seq = next_in_flight_seq;
+                    next_in_flight_seq += 1;
+                    in_flight.push(Box::pin(async move {
+                        let output = tool_future.await?;
+                        Ok(IndexedToolDispatchOutput { seq, output })
+                    }));
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);

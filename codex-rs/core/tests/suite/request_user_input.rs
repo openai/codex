@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
@@ -347,6 +348,107 @@ async fn request_user_input_interrupted_response_preserves_tool_output() -> anyh
             "interrupted": true
         })
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_interrupt_not_blocked_by_earlier_tool() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let builder = test_codex().with_model("test-gpt-5.1-codex");
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder
+        .with_config(|config| {
+            config.features.enable(Feature::CollaborationModes);
+        })
+        .build(&server)
+        .await?;
+
+    let call_id = "user-input-call-fast-interrupt";
+    let slow_tool_args = json!({
+        "sleep_after_ms": 2_000
+    })
+    .to_string();
+    let request_args = json!({
+        "questions": [{
+            "id": "confirm_path",
+            "header": "Confirm",
+            "question": "Proceed with the plan?",
+            "options": [{
+                "label": "Yes (Recommended)",
+                "description": "Continue the current plan."
+            }, {
+                "label": "No",
+                "description": "Stop and revisit the approach."
+            }]
+        }]
+    })
+    .to_string();
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call("slow-call-1", "test_sync_tool", &slow_tool_args),
+        ev_function_call(call_id, "request_user_input", &request_args),
+        ev_completed("resp-1"),
+    ]);
+    responses::mount_sse_once(&server, first_response).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please confirm".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: Settings {
+                    model: session_configured.model.clone(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            }),
+            personality: None,
+        })
+        .await?;
+
+    let request = wait_for_event_match(&codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(request.call_id, call_id);
+
+    codex
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id.clone(),
+            response: RequestUserInputResponse {
+                answers: HashMap::new(),
+                interrupted: true,
+            },
+        })
+        .await?;
+
+    tokio::time::timeout(Duration::from_millis(750), async {
+        wait_for_event(&codex, |event| matches!(event, EventMsg::TurnAborted(_))).await;
+    })
+    .await
+    .expect("interrupting request_user_input should abort promptly");
 
     Ok(())
 }
