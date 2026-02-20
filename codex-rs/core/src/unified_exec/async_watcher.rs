@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::Sleep;
@@ -40,7 +41,7 @@ pub(crate) fn start_streaming_output(
     process: &UnifiedExecProcess,
     context: &UnifiedExecContext,
     transcript: Arc<Mutex<HeadTailBuffer>>,
-) {
+) -> JoinHandle<()> {
     let mut receiver = process.output_receiver();
     let output_drained = process.output_drained_notify();
     let exit_token = process.cancellation_token();
@@ -97,7 +98,7 @@ pub(crate) fn start_streaming_output(
                 }
             }
         }
-    });
+    })
 }
 
 /// Spawn a background watcher that waits for the PTY to exit and then emits a
@@ -113,7 +114,7 @@ pub(crate) fn spawn_exit_watcher(
     process_id: String,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
-) {
+) -> JoinHandle<()> {
     let exit_token = process.cancellation_token();
     let output_drained = process.output_drained_notify();
 
@@ -136,7 +137,7 @@ pub(crate) fn spawn_exit_watcher(
             duration,
         )
         .await;
-    });
+    })
 }
 
 pub(crate) fn spawn_network_denial_watcher(
@@ -144,7 +145,7 @@ pub(crate) fn spawn_network_denial_watcher(
     session: Arc<Session>,
     process_id: String,
     network_attempt_id: String,
-) {
+) -> JoinHandle<()> {
     let exit_token = process.cancellation_token();
     tokio::spawn(async move {
         let mut poll = tokio::time::interval(Duration::from_millis(100));
@@ -173,7 +174,7 @@ pub(crate) fn spawn_network_denial_watcher(
                 }
             }
         }
-    });
+    })
 }
 
 async fn process_chunk(

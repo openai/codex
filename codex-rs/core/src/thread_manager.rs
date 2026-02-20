@@ -18,6 +18,9 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
+use crate::unified_exec::DetachedProcessSummary;
+use crate::unified_exec::DetachedUnifiedExecStore;
+use crate::unified_exec::ReattachSummary;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
@@ -127,6 +130,7 @@ pub struct ThreadManager {
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+    detached_unified_exec_store: DetachedUnifiedExecStore,
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
@@ -150,6 +154,7 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
+                detached_unified_exec_store: DetachedUnifiedExecStore::default(),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::new(
                     codex_home,
@@ -201,6 +206,7 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
+                detached_unified_exec_store: DetachedUnifiedExecStore::default(),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::with_provider_for_tests(
                     codex_home,
@@ -347,6 +353,7 @@ impl ThreadManager {
             thread.submit(Op::Shutdown).await?;
         }
         self.state.threads.write().await.clear();
+        self.state.clean_all_detached_processes().await;
         Ok(())
     }
 
@@ -377,6 +384,36 @@ impl ThreadManager {
 
     pub(crate) fn agent_control(&self) -> AgentControl {
         AgentControl::new(Arc::downgrade(&self.state))
+    }
+
+    /// Detach unified-exec processes from an attached thread so they can
+    /// survive thread shutdown and be reattached on a later resume.
+    pub async fn detach_thread_processes(
+        &self,
+        thread_id: ThreadId,
+    ) -> CodexResult<DetachedProcessSummary> {
+        match self.state.detach_thread_processes(thread_id).await {
+            Ok(summary) => Ok(summary),
+            Err(CodexErr::ThreadNotFound(_)) => Ok(DetachedProcessSummary::default()),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Reattach previously detached unified-exec processes to the currently
+    /// loaded thread session.
+    pub async fn reattach_thread_processes(
+        &self,
+        thread_id: ThreadId,
+    ) -> CodexResult<ReattachSummary> {
+        self.state.reattach_thread_processes(thread_id).await
+    }
+
+    /// Terminate and remove any detached unified-exec processes for a thread.
+    pub async fn clean_detached_thread_processes(
+        &self,
+        thread_id: ThreadId,
+    ) -> DetachedProcessSummary {
+        self.state.clean_detached_thread_processes(thread_id).await
     }
 
     #[cfg(test)]
@@ -413,6 +450,49 @@ impl ThreadManagerState {
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
         self.threads.write().await.remove(thread_id)
+    }
+
+    pub(crate) async fn detach_thread_processes(
+        &self,
+        thread_id: ThreadId,
+    ) -> CodexResult<DetachedProcessSummary> {
+        let thread = self.get_thread(thread_id).await?;
+        let summary = self
+            .detached_unified_exec_store
+            .detach_from_manager(
+                thread_id,
+                &thread.codex.session.services.unified_exec_manager,
+            )
+            .await;
+        Ok(summary)
+    }
+
+    pub(crate) async fn reattach_thread_processes(
+        &self,
+        thread_id: ThreadId,
+    ) -> CodexResult<ReattachSummary> {
+        let thread = self.get_thread(thread_id).await?;
+        let summary = self
+            .detached_unified_exec_store
+            .reattach_to_manager(
+                thread_id,
+                &thread.codex.session.services.unified_exec_manager,
+            )
+            .await;
+        Ok(summary)
+    }
+
+    pub(crate) async fn clean_detached_thread_processes(
+        &self,
+        thread_id: ThreadId,
+    ) -> DetachedProcessSummary {
+        self.detached_unified_exec_store
+            .clean_thread(thread_id)
+            .await
+    }
+
+    pub(crate) async fn clean_all_detached_processes(&self) {
+        self.detached_unified_exec_store.clean_all().await;
     }
 
     /// Spawn a new thread with no history using a provided config.
@@ -571,6 +651,7 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::model_provider_info::built_in_model_providers;
     use assert_matches::assert_matches;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -680,5 +761,20 @@ mod tests {
             serde_json::to_value(&got_items).unwrap(),
             serde_json::to_value(&expected).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn detach_thread_processes_is_noop_for_missing_thread() {
+        let manager = ThreadManager::with_models_provider_for_tests(
+            CodexAuth::from_api_key("dummy"),
+            built_in_model_providers()["openai"].clone(),
+        );
+
+        let summary = manager
+            .detach_thread_processes(ThreadId::default())
+            .await
+            .expect("missing thread detach should not fail");
+
+        assert_eq!(summary, DetachedProcessSummary::default());
     }
 }

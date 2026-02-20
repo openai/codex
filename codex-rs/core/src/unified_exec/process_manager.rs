@@ -36,6 +36,7 @@ use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::unified_exec::MIN_YIELD_TIME_MS;
 use crate::unified_exec::ProcessEntry;
 use crate::unified_exec::ProcessStore;
+use crate::unified_exec::ReattachSummary;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
@@ -140,6 +141,9 @@ impl UnifiedExecProcessManager {
             store.remove(process_id)
         };
         if let Some(entry) = removed {
+            // Intentionally do not abort watcher tasks here. In attached flows
+            // (for example network denial), stream/exit watchers must finish so
+            // ExecCommandEnd is still emitted after forced termination.
             Self::unregister_network_attempt_for_entry(&entry).await;
         }
     }
@@ -194,7 +198,7 @@ impl UnifiedExecProcessManager {
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
-        start_streaming_output(&process, context, Arc::clone(&transcript));
+        let stream_task = start_streaming_output(&process, context, Arc::clone(&transcript));
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
@@ -247,6 +251,7 @@ impl UnifiedExecProcessManager {
             )
             .await;
 
+            stream_task.abort();
             self.release_process_id(&request.process_id).await;
             if let Some(deferred) = deferred_network_approval.as_ref()
                 && let Some(message) =
@@ -297,6 +302,7 @@ impl UnifiedExecProcessManager {
                 request.tty,
                 network_attempt_id,
                 Arc::clone(&transcript),
+                stream_task,
             )
             .await;
         };
@@ -430,6 +436,8 @@ impl UnifiedExecProcessManager {
                 let Some(entry) = store.remove(&process_id) else {
                     return ProcessStatus::Unknown;
                 };
+                // Do not abort watcher tasks on natural exit detection here.
+                // The exit watcher emits ExecCommandEnd after output draining.
                 ProcessStatus::Exited {
                     exit_code,
                     entry: Box::new(entry),
@@ -504,8 +512,32 @@ impl UnifiedExecProcessManager {
         tty: bool,
         network_attempt_id: Option<String>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
+        stream_task: tokio::task::JoinHandle<()>,
     ) {
         let network_attempt_id_for_watcher = network_attempt_id.clone();
+        let exit_task = spawn_exit_watcher(
+            Arc::clone(&process),
+            Arc::clone(&context.session),
+            Arc::clone(&context.turn),
+            context.call_id.clone(),
+            command.to_vec(),
+            cwd,
+            process_id.clone(),
+            Arc::clone(&transcript),
+            started_at,
+        );
+        let network_task = if context.turn.config.managed_network_requirements_enabled() {
+            network_attempt_id_for_watcher.map(|network_attempt_id| {
+                spawn_network_denial_watcher(
+                    Arc::clone(&process),
+                    Arc::clone(&context.session),
+                    process_id.clone(),
+                    network_attempt_id,
+                )
+            })
+        } else {
+            None
+        };
         let entry = ProcessEntry {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
@@ -515,6 +547,9 @@ impl UnifiedExecProcessManager {
             network_attempt_id,
             session: Arc::downgrade(&context.session),
             last_used: started_at,
+            stream_task: Some(stream_task),
+            exit_task: Some(exit_task),
+            network_task,
         };
         let (number_processes, pruned_entry) = {
             let mut store = self.process_store.lock().await;
@@ -524,7 +559,8 @@ impl UnifiedExecProcessManager {
         };
         // prune_processes_if_needed runs while holding process_store; do async
         // network-approval cleanup only after dropping that lock.
-        if let Some(pruned_entry) = pruned_entry {
+        if let Some(mut pruned_entry) = pruned_entry {
+            Self::abort_all_watcher_tasks(&mut pruned_entry);
             Self::unregister_network_attempt_for_entry(&pruned_entry).await;
             pruned_entry.process.terminate();
         }
@@ -538,29 +574,6 @@ impl UnifiedExecProcessManager {
                 )
                 .await;
         };
-
-        spawn_exit_watcher(
-            Arc::clone(&process),
-            Arc::clone(&context.session),
-            Arc::clone(&context.turn),
-            context.call_id.clone(),
-            command.to_vec(),
-            cwd,
-            process_id.clone(),
-            transcript,
-            started_at,
-        );
-
-        if context.turn.config.managed_network_requirements_enabled()
-            && let Some(network_attempt_id) = network_attempt_id_for_watcher
-        {
-            spawn_network_denial_watcher(
-                Arc::clone(&process),
-                Arc::clone(&context.session),
-                process_id,
-                network_attempt_id,
-            );
-        }
     }
 
     pub(crate) async fn open_session_with_exec_env(
@@ -791,9 +804,102 @@ impl UnifiedExecProcessManager {
             entries
         };
 
-        for entry in entries {
+        for mut entry in entries {
+            Self::abort_all_watcher_tasks(&mut entry);
             Self::unregister_network_attempt_for_entry(&entry).await;
             entry.process.terminate();
+        }
+    }
+
+    /// Export selected process entries from this manager without terminating
+    /// underlying child processes.
+    ///
+    /// This drains the matching entries from the session-local store, removes
+    /// their reserved process IDs, aborts output/network watchers, keeps the
+    /// exit watcher alive while detached, and clears network approval linkage.
+    pub(crate) async fn export_processes(&self) -> Vec<ProcessEntry> {
+        let entries = {
+            let mut store = self.process_store.lock().await;
+            let mut selected = store.processes.keys().cloned().collect::<Vec<_>>();
+            selected.sort();
+            selected
+                .into_iter()
+                .filter_map(|process_id| store.remove(&process_id))
+                .collect::<Vec<_>>()
+        };
+
+        let mut exported = Vec::with_capacity(entries.len());
+        for mut entry in entries {
+            Self::abort_detach_watcher_tasks(&mut entry);
+            Self::unregister_network_attempt_for_entry(&entry).await;
+            entry.network_attempt_id = None;
+            exported.push(entry);
+        }
+
+        exported
+    }
+
+    /// Import previously detached process entries into this manager.
+    ///
+    /// Process IDs are preserved and reserved in the destination manager so
+    /// existing `write_stdin(session_id=...)` IDs remain stable. Entries whose
+    /// IDs already exist are skipped and returned in the summary.
+    pub(crate) async fn import_processes(
+        &self,
+        entries: Vec<ProcessEntry>,
+        skipped_entries: &mut Vec<ProcessEntry>,
+    ) -> ReattachSummary {
+        let mut reattached_count = 0usize;
+        let mut skipped_count = 0usize;
+        let mut skipped_process_ids = Vec::new();
+
+        let mut store = self.process_store.lock().await;
+        for mut entry in entries {
+            if store.processes.contains_key(&entry.process_id)
+                || store.reserved_process_ids.contains(&entry.process_id)
+            {
+                // Keep existing attached ownership authoritative when there is
+                // an ID collision, and hand the detached entry back to caller.
+                skipped_count += 1;
+                skipped_process_ids.push(entry.process_id.clone());
+                skipped_entries.push(entry);
+                continue;
+            }
+
+            let process_id = entry.process_id.clone();
+            entry.network_attempt_id = None;
+            if let Some(task) = entry.exit_task.take() {
+                task.abort();
+            }
+            entry.session = std::sync::Weak::new();
+            entry.stream_task = None;
+            entry.network_task = None;
+            store.reserved_process_ids.insert(process_id.clone());
+            store.processes.insert(process_id, entry);
+            reattached_count += 1;
+        }
+        skipped_process_ids.sort();
+
+        ReattachSummary {
+            reattached_count,
+            skipped_count,
+            skipped_process_ids,
+        }
+    }
+
+    fn abort_detach_watcher_tasks(entry: &mut ProcessEntry) {
+        if let Some(task) = entry.stream_task.take() {
+            task.abort();
+        }
+        if let Some(task) = entry.network_task.take() {
+            task.abort();
+        }
+    }
+
+    fn abort_all_watcher_tasks(entry: &mut ProcessEntry) {
+        Self::abort_detach_watcher_tasks(entry);
+        if let Some(task) = entry.exit_task.take() {
+            task.abort();
         }
     }
 }

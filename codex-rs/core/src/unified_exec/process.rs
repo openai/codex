@@ -129,7 +129,7 @@ impl UnifiedExecProcess {
         self.process_handle.exit_code()
     }
 
-    pub(super) fn terminate(&self) {
+    pub(crate) fn terminate(&self) {
         self.output_closed.store(true, Ordering::Release);
         self.output_closed_notify.notify_waiters();
         self.process_handle.terminate();
