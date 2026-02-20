@@ -18,7 +18,7 @@ use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
-use crate::compact::InjectTurnContextBeforeLastUserMessage;
+use crate::compact::InitialContextInjection;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
@@ -4631,7 +4631,7 @@ pub(crate) async fn run_turn(
                     if run_auto_compact(
                         &sess,
                         &turn_context,
-                        InjectTurnContextBeforeLastUserMessage::TurnContext,
+                        InitialContextInjection::BeforeLastUserMessage,
                     )
                     .await
                     .is_err()
@@ -4761,12 +4761,7 @@ async fn run_pre_sampling_compact(
         .unwrap_or(i64::MAX);
     // Compact if the total usage tokens are greater than the auto compact limit
     if total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(
-            sess,
-            turn_context,
-            InjectTurnContextBeforeLastUserMessage::DontInjectTurnContext,
-        )
-        .await?;
+        run_auto_compact(sess, turn_context, InitialContextInjection::DoNotInject).await?;
         compacted = true;
     }
     Ok(compacted)
@@ -4809,7 +4804,7 @@ async fn maybe_run_previous_model_inline_compact(
         run_auto_compact(
             sess,
             &previous_model_turn_context,
-            InjectTurnContextBeforeLastUserMessage::DontInjectTurnContext,
+            InitialContextInjection::DoNotInject,
         )
         .await?;
         return Ok(true);
@@ -4820,20 +4815,20 @@ async fn maybe_run_previous_model_inline_compact(
 async fn run_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    inject_turn_context_before_last_user_message: InjectTurnContextBeforeLastUserMessage,
+    initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
     if should_use_remote_compact_task(&turn_context.provider) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
-            inject_turn_context_before_last_user_message,
+            initial_context_injection,
         )
         .await?;
     } else {
         run_inline_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
-            inject_turn_context_before_last_user_message,
+            initial_context_injection,
         )
         .await?;
     }

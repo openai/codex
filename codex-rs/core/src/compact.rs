@@ -33,9 +33,9 @@ pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_pref
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum InjectTurnContextBeforeLastUserMessage {
-    TurnContext,
-    DontInjectTurnContext,
+pub(crate) enum InitialContextInjection {
+    BeforeLastUserMessage,
+    DoNotInject,
 }
 
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
@@ -70,7 +70,7 @@ pub(crate) fn extract_trailing_model_switch_update_for_compaction_request(
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    inject_turn_context_before_last_user_message: InjectTurnContextBeforeLastUserMessage,
+    initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
@@ -79,13 +79,7 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(
-        sess,
-        turn_context,
-        input,
-        inject_turn_context_before_last_user_message,
-    )
-    .await?;
+    run_compact_task_inner(sess, turn_context, input, initial_context_injection).await?;
     Ok(())
 }
 
@@ -104,7 +98,7 @@ pub(crate) async fn run_compact_task(
         sess.clone(),
         turn_context,
         input,
-        InjectTurnContextBeforeLastUserMessage::DontInjectTurnContext,
+        InitialContextInjection::DoNotInject,
     )
     .await
 }
@@ -113,7 +107,7 @@ async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-    inject_turn_context_before_last_user_message: InjectTurnContextBeforeLastUserMessage,
+    initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -224,8 +218,8 @@ async fn run_compact_task_inner(
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
 
     if matches!(
-        inject_turn_context_before_last_user_message,
-        InjectTurnContextBeforeLastUserMessage::TurnContext
+        initial_context_injection,
+        InitialContextInjection::BeforeLastUserMessage
     ) {
         let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
         new_history =
@@ -303,14 +297,14 @@ pub(crate) async fn process_compacted_history(
     sess: &Session,
     turn_context: &TurnContext,
     mut compacted_history: Vec<ResponseItem>,
-    inject_turn_context_before_last_user_message: InjectTurnContextBeforeLastUserMessage,
+    initial_context_injection: InitialContextInjection,
 ) -> Vec<ResponseItem> {
     // Mid-turn compaction is the only path that must inject initial context above the last user
     // message in the replacement history. Pre-turn compaction instead injects context after the
     // compaction item, but mid-turn compaction keeps the compaction item last for model training.
     let initial_context = if matches!(
-        inject_turn_context_before_last_user_message,
-        InjectTurnContextBeforeLastUserMessage::TurnContext
+        initial_context_injection,
+        InitialContextInjection::BeforeLastUserMessage
     ) {
         sess.build_initial_context(turn_context).await
     } else {

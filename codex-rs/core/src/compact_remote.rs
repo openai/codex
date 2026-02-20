@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::compact::InjectTurnContextBeforeLastUserMessage;
+use crate::compact::InitialContextInjection;
 use crate::compact::extract_trailing_model_switch_update_for_compaction_request;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
@@ -26,14 +26,9 @@ use tracing::info;
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    inject_turn_context_before_last_user_message: InjectTurnContextBeforeLastUserMessage,
+    initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    run_remote_compact_task_inner(
-        &sess,
-        &turn_context,
-        inject_turn_context_before_last_user_message,
-    )
-    .await?;
+    run_remote_compact_task_inner(&sess, &turn_context, initial_context_injection).await?;
     Ok(())
 }
 
@@ -48,25 +43,16 @@ pub(crate) async fn run_remote_compact_task(
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_compact_task_inner(
-        &sess,
-        &turn_context,
-        InjectTurnContextBeforeLastUserMessage::DontInjectTurnContext,
-    )
-    .await
+    run_remote_compact_task_inner(&sess, &turn_context, InitialContextInjection::DoNotInject).await
 }
 
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    inject_turn_context_before_last_user_message: InjectTurnContextBeforeLastUserMessage,
+    initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    if let Err(err) = run_remote_compact_task_inner_impl(
-        sess,
-        turn_context,
-        inject_turn_context_before_last_user_message,
-    )
-    .await
+    if let Err(err) =
+        run_remote_compact_task_inner_impl(sess, turn_context, initial_context_injection).await
     {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
@@ -80,7 +66,7 @@ async fn run_remote_compact_task_inner(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    inject_turn_context_before_last_user_message: InjectTurnContextBeforeLastUserMessage,
+    initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
@@ -146,7 +132,7 @@ async fn run_remote_compact_task_inner_impl(
         sess.as_ref(),
         turn_context.as_ref(),
         new_history,
-        inject_turn_context_before_last_user_message,
+        initial_context_injection,
     )
     .await;
     // Reattach the stripped model-switch update only after successful compaction so the model
