@@ -1479,6 +1479,44 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 output_contains: "rejected by user",
             },
         },
+        ScenarioSpec {
+            name: "safe command with heredoc and redirect still requires approval",
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunUnifiedExecCommand {
+                command: "cat <<'EOF' > /tmp/out.txt \nhello\nEOF",
+                justification: None,
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![Feature::UnifiedExec],
+            model_override: None,
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "compound command with one safe command still requires approval",
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunUnifiedExecCommand {
+                command: "cat ./one.txt && touch ./two.txt",
+                justification: None,
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![Feature::UnifiedExec],
+            model_override: None,
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
     ]
 }
 
@@ -1565,7 +1603,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             }
             test.codex
                 .submit(Op::ExecApproval {
-                    id: approval.call_id,
+                    id: approval.effective_approval_id(),
                     turn_id: None,
                     decision: decision.clone(),
                 })
@@ -1785,7 +1823,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
 
     test.codex
         .submit(Op::ExecApproval {
-            id: approval.call_id,
+            id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: expected_execpolicy_amendment.clone(),
@@ -1890,14 +1928,15 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     Ok(())
 }
 
+// todo(dylan) add ScenarioSpec support for rules
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
-async fn heredoc_with_chained_allowed_prefix_still_requires_approval() -> Result<()> {
+async fn compound_command_with_one_safe_command_still_requires_approval() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::UnlessTrusted;
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
@@ -1913,12 +1952,12 @@ async fn heredoc_with_chained_allowed_prefix_still_requires_approval() -> Result
     )?;
 
     let call_id = "heredoc-with-chained-prefix";
-    let command = "cat <<'EOF' > /tmp/test.txt && touch allow-prefix.txt\nhello\nEOF";
+    let command = "touch ./test.txt && rm ./test.txt";
     let (event, expected_command) = ActionKind::RunCommand { command }
         .prepare(&test, &server, call_id, SandboxPermissions::UseDefault)
         .await?;
     let expected_command =
-        expected_command.expect("heredoc chained command scenario should produce a shell command");
+        expected_command.expect("compound command should produce a shell command");
 
     let _ = mount_sse_once(
         &server,
@@ -1940,7 +1979,7 @@ async fn heredoc_with_chained_allowed_prefix_still_requires_approval() -> Result
 
     submit_turn(
         &test,
-        "heredoc chained prefix",
+        "compound command",
         approval_policy,
         sandbox_policy.clone(),
     )
@@ -1949,7 +1988,7 @@ async fn heredoc_with_chained_allowed_prefix_still_requires_approval() -> Result
     let approval = expect_exec_approval(&test, expected_command.as_str()).await;
     test.codex
         .submit(Op::ExecApproval {
-            id: approval.call_id,
+            id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Denied,
         })

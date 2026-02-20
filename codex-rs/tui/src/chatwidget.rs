@@ -184,7 +184,6 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
-use crate::collab;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -201,6 +200,7 @@ use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
+use crate::multi_agents;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -249,6 +249,8 @@ use strum::IntoEnumIterator;
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
+    ["model-with-reasoning", "context-remaining", "current-dir"];
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -953,12 +955,11 @@ impl ChatWidget {
 
     /// Applies status-line item selection from the setup view to in-memory config.
     ///
-    /// An empty selection is normalized to `None` so the status line is fully disabled and the
-    /// behavior matches an unset `tui.status_line` config value.
+    /// An empty selection persists as an explicit empty list.
     pub(crate) fn setup_status_line(&mut self, items: Vec<StatusLineItem>) {
         tracing::info!("status line setup confirmed with items: {items:#?}");
         let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
-        self.config.tui_status_line = if ids.is_empty() { None } else { Some(ids) };
+        self.config.tui_status_line = Some(ids);
         self.refresh_status_line();
     }
 
@@ -2692,13 +2693,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget.bottom_pane.set_status_line_enabled(
-            widget
-                .config
-                .tui_status_line
-                .as_ref()
-                .is_some_and(|items| !items.is_empty()),
-        );
+        widget
+            .bottom_pane
+            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -2859,13 +2856,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget.bottom_pane.set_status_line_enabled(
-            widget
-                .config
-                .tui_status_line
-                .as_ref()
-                .is_some_and(|items| !items.is_empty()),
-        );
+        widget
+            .bottom_pane
+            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -3015,13 +3008,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget.bottom_pane.set_status_line_enabled(
-            widget
-                .config
-                .tui_status_line
-                .as_ref()
-                .is_some_and(|items| !items.is_empty()),
-        );
+        widget
+            .bottom_pane
+            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -4021,7 +4010,9 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
-            EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+                self.on_agent_message(message)
+            }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
             }
@@ -4045,6 +4036,7 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
+            EventMsg::ModelReroute(_) => {}
             EventMsg::Error(ErrorEvent {
                 message,
                 codex_error_info,
@@ -4137,17 +4129,19 @@ impl ChatWidget {
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::CollabAgentSpawnBegin(_) => {}
-            EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(collab::spawn_end(ev)),
+            EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(multi_agents::spawn_end(ev)),
             EventMsg::CollabAgentInteractionBegin(_) => {}
             EventMsg::CollabAgentInteractionEnd(ev) => {
-                self.on_collab_event(collab::interaction_end(ev))
+                self.on_collab_event(multi_agents::interaction_end(ev))
             }
-            EventMsg::CollabWaitingBegin(ev) => self.on_collab_event(collab::waiting_begin(ev)),
-            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
+            EventMsg::CollabWaitingBegin(ev) => {
+                self.on_collab_event(multi_agents::waiting_begin(ev))
+            }
+            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(multi_agents::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
-            EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
-            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(collab::resume_begin(ev)),
-            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(collab::resume_end(ev)),
+            EventMsg::CollabCloseEnd(ev) => self.on_collab_event(multi_agents::close_end(ev)),
+            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(multi_agents::resume_begin(ev)),
+            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(multi_agents::resume_end(ev)),
             EventMsg::ThreadRolledBack(rollback) => {
                 if from_replay {
                     self.app_event_tx.send(AppEvent::ApplyThreadRollback {
@@ -4485,8 +4479,9 @@ impl ChatWidget {
     }
 
     fn open_status_line_setup(&mut self) {
+        let configured_status_line_items = self.configured_status_line_items();
         let view = StatusLineSetupView::new(
-            self.config.tui_status_line.as_deref(),
+            Some(configured_status_line_items.as_slice()),
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -4499,10 +4494,7 @@ impl ChatWidget {
         let mut invalid = Vec::new();
         let mut invalid_seen = HashSet::new();
         let mut items = Vec::new();
-        let Some(config_items) = self.config.tui_status_line.as_ref() else {
-            return (items, invalid);
-        };
-        for id in config_items {
+        for id in self.configured_status_line_items() {
             match id.parse::<StatusLineItem>() {
                 Ok(item) => items.push(item),
                 Err(_) => {
@@ -4513,6 +4505,15 @@ impl ChatWidget {
             }
         }
         (items, invalid)
+    }
+
+    fn configured_status_line_items(&self) -> Vec<String> {
+        self.config.tui_status_line.clone().unwrap_or_else(|| {
+            DEFAULT_STATUS_LINE_ITEMS
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        })
     }
 
     fn status_line_cwd(&self) -> &Path {
@@ -4835,7 +4836,7 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self.models_manager.try_list_models(&self.config).ok()?;
+        let models = self.models_manager.try_list_models().ok()?;
         models
             .iter()
             .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
@@ -4952,7 +4953,7 @@ impl ChatWidget {
             return;
         }
 
-        let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config) {
+        let presets: Vec<ModelPreset> = match self.models_manager.try_list_models() {
             Ok(models) => models,
             Err(_) => {
                 self.add_info_message(
@@ -6274,7 +6275,7 @@ impl ChatWidget {
     fn current_model_supports_personality(&self) -> bool {
         let model = self.current_model();
         self.models_manager
-            .try_list_models(&self.config)
+            .try_list_models()
             .ok()
             .and_then(|models| {
                 models
@@ -6292,7 +6293,7 @@ impl ChatWidget {
     fn current_model_supports_images(&self) -> bool {
         let model = self.current_model();
         self.models_manager
-            .try_list_models(&self.config)
+            .try_list_models()
             .ok()
             .and_then(|models| {
                 models
@@ -6346,10 +6347,7 @@ impl ChatWidget {
         if !config.features.enabled(Feature::CollaborationModes) {
             return None;
         }
-        let mut mask = match config.experimental_mode {
-            Some(kind) => collaboration_modes::mask_for_kind(models_manager, kind)?,
-            None => collaboration_modes::default_mask(models_manager)?,
-        };
+        let mut mask = collaboration_modes::default_mask(models_manager)?;
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }

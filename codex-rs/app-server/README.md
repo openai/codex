@@ -117,12 +117,13 @@ Example with notification opt-out:
 - `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
-- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, and `cwd` filters.
+- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, and `cwd` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
-- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
-- `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
+- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
+- `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
 - `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
-- `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success.
+- `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
@@ -135,14 +136,15 @@ Example with notification opt-out:
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
-- `skills/remote/read` — list public remote skills (**under development; do not call from production clients yet**).
-- `skills/remote/write` — download a public remote skill by `hazelnutId`; `isPreload=true` writes to `.codex/vendor_imports/skills` under `codex_home` (**under development; do not call from production clients yet**).
+- `skills/remote/list` — list public remote skills (**under development; do not call from production clients yet**).
+- `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
+- `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); returns `{ started: true }` immediately and later emits `windowsSandbox/setupCompleted`.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs and conversation_id); returns the tracking thread id.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `config/read` — fetch the effective config on disk after resolving config layering.
@@ -233,8 +235,8 @@ Example:
 } }
 { "id": 20, "result": {
     "data": [
-        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111 },
-        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000 }
+        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111, "status": { "type": "notLoaded" } },
+        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000, "status": { "type": "notLoaded" } }
     ],
     "nextCursor": "opaque-token-or-null"
 } }
@@ -253,18 +255,36 @@ When `nextCursor` is `null`, you’ve reached the final page.
 } }
 ```
 
+### Example: Track thread status changes
+
+`thread/status/changed` is emitted whenever a loaded thread's status changes:
+
+- Includes `threadId` and the new `status`.
+- Status can be `notLoaded`, `idle`, `systemError`, or `active` (with `activeFlags`; `active` implies running).
+
+```json
+{ "method": "thread/status/changed", "params": {
+    "threadId": "thr_123",
+    "status": { "type": "active", "activeFlags": [] }
+} }
+```
+
 ### Example: Read a thread
 
 Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the rollout history loaded into `thread.turns`.
 
 ```json
 { "method": "thread/read", "id": 22, "params": { "threadId": "thr_123" } }
-{ "id": 22, "result": { "thread": { "id": "thr_123", "turns": [] } } }
+{ "id": 22, "result": {
+    "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [] }
+} }
 ```
 
 ```json
 { "method": "thread/read", "id": 23, "params": { "threadId": "thr_123", "includeTurns": true } }
-{ "id": 23, "result": { "thread": { "id": "thr_123", "turns": [ ... ] } } }
+{ "id": 23, "result": {
+    "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [ ... ] }
+} }
 ```
 
 ### Example: Archive a thread
@@ -274,6 +294,7 @@ Use `thread/archive` to move the persisted rollout (stored as a JSONL file on di
 ```json
 { "method": "thread/archive", "id": 21, "params": { "threadId": "thr_b" } }
 { "id": 21, "result": {} }
+{ "method": "thread/archived", "params": { "threadId": "thr_b" } }
 ```
 
 An archived thread will not appear in `thread/list` unless `archived` is set to `true`.
@@ -285,6 +306,7 @@ Use `thread/unarchive` to move an archived rollout back into the sessions direct
 ```json
 { "method": "thread/unarchive", "id": 24, "params": { "threadId": "thr_b" } }
 { "id": 24, "result": { "thread": { "id": "thr_b" } } }
+{ "method": "thread/unarchived", "params": { "threadId": "thr_b" } }
 ```
 
 ### Example: Trigger thread compaction
@@ -519,7 +541,7 @@ Notes:
 
 ## Events
 
-Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `turn/*`, and `item/*` notifications.
 
 ### Notification opt-out
 
@@ -542,6 +564,10 @@ The fuzzy file search session API emits per-query notifications:
 - `fuzzyFileSearch/sessionUpdated` — `{ sessionId, query, files }` with the current matching files for the active query.
 - `fuzzyFileSearch/sessionCompleted` — `{ sessionId, query }` once indexing/matching for that query has completed.
 
+### Windows sandbox setup events
+
+- `windowsSandbox/setupCompleted` — `{ mode, success, error }` after a `windowsSandbox/setupStart` request finishes.
+
 ### Turn events
 
 The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
@@ -550,6 +576,7 @@ The app-server streams JSON-RPC notifications while a turn is running. Each turn
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo?, additionalDetails? } }`.
 - `turn/diff/updated` — `{ threadId, turnId, diff }` represents the up-to-date snapshot of the turn-level unified diff, emitted after every FileChange item. `diff` is the latest aggregated unified diff across every file change in the turn. UIs can render this to show the full "what changed" view without stitching individual `fileChange` items.
 - `turn/plan/updated` — `{ turnId, explanation?, plan }` whenever the agent shares or changes its plan; each `plan` entry is `{ step, status }` with `status` in `pending`, `inProgress`, or `completed`.
+- `model/rerouted` — `{ threadId, turnId, fromModel, toModel, reason }` when the backend reroutes a request to a different model (for example, due to high-risk cyber safety checks).
 
 Today both notifications carry an empty `items` array even when item events were streamed; rely on `item/*` notifications for the canonical item list until this is fixed.
 
@@ -634,7 +661,7 @@ Certain actions (shell commands or modifying files) may require explicit user ap
 Order of messages:
 
 1. `item/started` — shows the pending `commandExecution` item with `command`, `cwd`, and other fields so you can render the proposed action.
-2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason`, plus `command`, `cwd`, and `commandActions` for friendly display.
+2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `approvalId` (for subcommand callbacks), `reason`, plus `command`, `cwd`, and `commandActions` for friendly display.
 3. Client response — `{ "decision": "accept", "acceptSettings": { "forSession": false } }` or `{ "decision": "decline" }`.
 4. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
 
@@ -771,7 +798,7 @@ To enable or disable a skill by path:
 
 ## Apps
 
-Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, whether it is currently accessible, and whether it is enabled in config.
+Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, `branding`, `appMetadata`, `labels`, whether it is currently accessible, and whether it is enabled in config.
 
 ```json
 { "method": "app/list", "id": 50, "params": {
@@ -789,6 +816,9 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
             "logoUrl": "https://example.com/demo-app.png",
             "logoUrlDark": null,
             "distributionChannel": null,
+            "branding": null,
+            "appMetadata": null,
+            "labels": null,
             "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
             "isAccessible": true,
             "isEnabled": true
@@ -816,6 +846,9 @@ The server also emits `app/list/updated` notifications whenever either source (a
         "logoUrl": "https://example.com/demo-app.png",
         "logoUrlDark": null,
         "distributionChannel": null,
+        "branding": null,
+        "appMetadata": null,
+        "labels": null,
         "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
         "isAccessible": true,
         "isEnabled": true

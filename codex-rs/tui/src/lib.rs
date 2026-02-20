@@ -44,6 +44,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use cwd_prompt::CwdPromptAction;
+use cwd_prompt::CwdPromptOutcome;
 use cwd_prompt::CwdSelection;
 use std::fs::OpenOptions;
 use std::path::Path;
@@ -64,7 +65,6 @@ mod bottom_pane;
 mod chatwidget;
 mod cli;
 mod clipboard_paste;
-mod collab;
 mod collaboration_modes;
 mod color;
 pub mod custom_terminal;
@@ -86,6 +86,7 @@ mod markdown_render;
 mod markdown_stream;
 mod mention_codec;
 mod model_migration;
+mod multi_agents;
 mod notifications;
 pub mod onboarding;
 mod oss_selection;
@@ -672,8 +673,22 @@ async fn run_ratatui_app(
     };
     let fallback_cwd = match action_and_path_if_resume_or_fork {
         Some((action, path)) => {
-            resolve_cwd_for_resume_or_fork(&mut tui, &current_cwd, path, action, allow_prompt)
+            match resolve_cwd_for_resume_or_fork(&mut tui, &current_cwd, path, action, allow_prompt)
                 .await?
+            {
+                ResolveCwdOutcome::Continue(cwd) => cwd,
+                ResolveCwdOutcome::Exit => {
+                    restore();
+                    session_log::log_session_end();
+                    return Ok(AppExitInfo {
+                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        thread_id: None,
+                        thread_name: None,
+                        update_action: None,
+                        exit_reason: ExitReason::UserRequested,
+                    });
+                }
+            }
         }
         None => None,
     };
@@ -780,25 +795,35 @@ pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
     }
 }
 
+pub(crate) enum ResolveCwdOutcome {
+    Continue(Option<PathBuf>),
+    Exit,
+}
+
 pub(crate) async fn resolve_cwd_for_resume_or_fork(
     tui: &mut Tui,
     current_cwd: &Path,
     path: &Path,
     action: CwdPromptAction,
     allow_prompt: bool,
-) -> color_eyre::Result<Option<PathBuf>> {
+) -> color_eyre::Result<ResolveCwdOutcome> {
     let Some(history_cwd) = read_session_cwd(path).await else {
-        return Ok(None);
+        return Ok(ResolveCwdOutcome::Continue(None));
     };
     if allow_prompt && cwds_differ(current_cwd, &history_cwd) {
-        let selection =
+        let selection_outcome =
             cwd_prompt::run_cwd_selection_prompt(tui, action, current_cwd, &history_cwd).await?;
-        return Ok(Some(match selection {
-            CwdSelection::Current => current_cwd.to_path_buf(),
-            CwdSelection::Session => history_cwd,
-        }));
+        return Ok(match selection_outcome {
+            CwdPromptOutcome::Selection(CwdSelection::Current) => {
+                ResolveCwdOutcome::Continue(Some(current_cwd.to_path_buf()))
+            }
+            CwdPromptOutcome::Selection(CwdSelection::Session) => {
+                ResolveCwdOutcome::Continue(Some(history_cwd))
+            }
+            CwdPromptOutcome::Exit => ResolveCwdOutcome::Exit,
+        });
     }
-    Ok(Some(history_cwd))
+    Ok(ResolveCwdOutcome::Continue(Some(history_cwd)))
 }
 
 #[expect(

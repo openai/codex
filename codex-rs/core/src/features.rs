@@ -84,6 +84,8 @@ pub enum Feature {
     JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
+    /// Route shell tool execution through the zsh exec bridge.
+    ShellZshFork,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
     /// Allow the model to request web searches that fetch live content.
@@ -101,10 +103,12 @@ pub enum Feature {
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
     WindowsSandboxElevated,
-    /// Refresh remote models and emit AppReady once the list is available.
+    /// Legacy remote models flag kept for backward compatibility.
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Enable git commit attribution guidance via model instructions.
+    CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
@@ -246,6 +250,9 @@ impl Features {
 
     pub fn emit_metrics(&self, otel: &OtelManager) {
         for feature in FEATURES {
+            if matches!(feature.stage, Stage::Removed) {
+                continue;
+            }
             if self.enabled(feature.id) != feature.default_enabled {
                 otel.counter(
                     "codex.feature.state",
@@ -356,7 +363,8 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
                 }
                 _ => alias,
             };
-            let summary = format!("`{label}` is deprecated. Use `web_search` instead.");
+            let summary =
+                format!("`{label}` is deprecated because web search is enabled by default.");
             (summary, Some(web_search_details().to_string()))
         }
         _ => {
@@ -365,7 +373,7 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
                 None
             } else {
                 Some(format!(
-                    "Enable it with `--enable {canonical}` or `[features].{canonical}` in config.toml. See https://github.com/openai/codex/blob/main/docs/config.md#feature-flags for details."
+                    "Enable it with `--enable {canonical}` or `[features].{canonical}` in config.toml. See https://developers.openai.com/codex/config-basic#feature-flags for details."
                 ))
             };
             (summary, details)
@@ -374,7 +382,7 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
 }
 
 fn web_search_details() -> &'static str {
-    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml."
+    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
 }
 
 /// Keys accepted in `[features]` tables.
@@ -429,6 +437,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: !cfg!(windows),
     },
     FeatureSpec {
+        id: Feature::ShellZshFork,
+        key: "shell_zsh_fork",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ShellSnapshot,
         key: "shell_snapshot",
         stage: Stage::Stable,
@@ -465,6 +479,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     // Experimental program. Rendered in the `/experimental` menu for users.
+    FeatureSpec {
+        id: Feature::CodexGitCommit,
+        key: "codex_git_commit",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
     FeatureSpec {
         id: Feature::RuntimeMetrics,
         key: "runtime_metrics",
@@ -511,8 +531,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestRule,
         key: "request_rule",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
@@ -529,8 +549,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::PowershellUtf8,
@@ -552,11 +572,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::Collab,
-        key: "collab",
+        key: "multi_agent",
         stage: Stage::Experimental {
-            name: "Sub-agents",
+            name: "Multi-agents",
             menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
-            announcement: "NEW: Sub-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
+            announcement: "NEW: Multi-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
         },
         default_enabled: false,
     },
@@ -737,5 +757,11 @@ mod tests {
             Stage::UnderDevelopment
         );
         assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
+    }
+
+    #[test]
+    fn collab_is_legacy_alias_for_multi_agent() {
+        assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
+        assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
     }
 }

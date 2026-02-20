@@ -291,7 +291,7 @@ For settings not exposed in the TUI (for example `file_globs`), edit `config.tom
 When Codex needs approval to apply changes or run commands, the server issues JSON‑RPC requests to the client:
 
 - `applyPatchApproval { conversationId, callId, fileChanges, reason?, grantRoot? }`
-- `execCommandApproval { conversationId, callId, command, cwd, reason? }`
+- `execCommandApproval { conversationId, callId, approvalId?, command, cwd, reason? }`
 
 The client must reply with `{ decision: "allow" | "deny" }` for each request.
 

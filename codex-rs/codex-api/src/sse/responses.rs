@@ -26,6 +26,7 @@ use tracing::debug;
 use tracing::trace;
 
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
+const OPENAI_MODEL_HEADER: &str = "openai-model";
 
 /// Streams SSE events from an on-disk fixture for tests.
 pub fn stream_from_fixture(
@@ -60,6 +61,11 @@ pub fn spawn_response_stream(
         .get("X-Models-Etag")
         .and_then(|v| v.to_str().ok())
         .map(ToString::to_string);
+    let server_model = stream_response
+        .headers
+        .get(OPENAI_MODEL_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
     let reasoning_included = stream_response
         .headers
         .get(X_REASONING_INCLUDED_HEADER)
@@ -74,6 +80,9 @@ pub fn spawn_response_stream(
     }
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
+        if let Some(model) = server_model {
+            let _ = tx_event.send(Ok(ResponseEvent::ServerModel(model))).await;
+        }
         for snapshot in rate_limit_snapshots {
             let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
         }
@@ -158,6 +167,7 @@ struct ResponseCompletedOutputTokensDetails {
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub(crate) kind: String,
+    headers: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
     delta: Option<String>,
@@ -168,6 +178,48 @@ pub struct ResponsesStreamEvent {
 impl ResponsesStreamEvent {
     pub fn kind(&self) -> &str {
         &self.kind
+    }
+
+    /// Returns the effective model reported by the server, if present.
+    ///
+    /// Precedence:
+    /// 1. `response.headers` for standard Responses stream events.
+    /// 2. top-level `headers` for websocket metadata events (for example
+    ///    `codex.response.metadata`).
+    pub fn response_model(&self) -> Option<String> {
+        let response_headers_model = self
+            .response
+            .as_ref()
+            .and_then(|response| response.get("headers"))
+            .and_then(header_openai_model_value_from_json);
+
+        match response_headers_model {
+            Some(model) => Some(model),
+            None => self
+                .headers
+                .as_ref()
+                .and_then(header_openai_model_value_from_json),
+        }
+    }
+}
+
+fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
+    let headers = value.as_object()?;
+    headers.iter().find_map(|(name, value)| {
+        if name.eq_ignore_ascii_case("openai-model") || name.eq_ignore_ascii_case("x-openai-model")
+        {
+            json_value_as_string(value)
+        } else {
+            None
+        }
+    })
+}
+
+fn json_value_as_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Array(items) => items.first().and_then(json_value_as_string),
+        _ => None,
     }
 }
 
@@ -339,6 +391,7 @@ pub async fn process_sse(
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
+    let mut last_server_model: Option<String> = None;
 
     loop {
         let start = Instant::now();
@@ -377,6 +430,19 @@ pub async fn process_sse(
                 continue;
             }
         };
+
+        if let Some(model) = event.response_model()
+            && last_server_model.as_deref() != Some(model.as_str())
+        {
+            if tx_event
+                .send(Ok(ResponseEvent::ServerModel(model.clone())))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            last_server_model = Some(model);
+        }
 
         match process_responses_event(event) {
             Ok(Some(event)) => {
@@ -456,9 +522,13 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use bytes::Bytes;
+    use codex_client::StreamResponse;
     use codex_protocol::models::MessagePhase;
     use codex_protocol::models::ResponseItem;
     use futures::stream;
+    use http::HeaderMap;
+    use http::HeaderValue;
+    use http::StatusCode;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::mpsc;
@@ -870,6 +940,143 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn spawn_response_stream_emits_server_model_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            OPENAI_MODEL_HEADER,
+            HeaderValue::from_static(CYBER_RESTRICTED_MODEL_FOR_TESTS),
+        );
+        let bytes = stream::iter(Vec::<Result<Bytes, TransportError>>::new());
+        let stream_response = StreamResponse {
+            status: StatusCode::OK,
+            headers,
+            bytes: Box::pin(bytes),
+        };
+
+        let mut stream = spawn_response_stream(stream_response, idle_timeout(), None, None);
+        let event = stream
+            .rx_event
+            .recv()
+            .await
+            .expect("expected server model event")
+            .expect("expected ok event");
+
+        match event {
+            ResponseEvent::ServerModel(model) => {
+                assert_eq!(model, CYBER_RESTRICTED_MODEL_FOR_TESTS);
+            }
+            other => panic!("expected server model event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn process_sse_ignores_response_model_field_in_payload() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.created",
+                "response": {
+                    "id": "resp-1",
+                    "model": CYBER_RESTRICTED_MODEL_FOR_TESTS
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp-1",
+                    "model": CYBER_RESTRICTED_MODEL_FOR_TESTS
+                }
+            }),
+        ])
+        .await;
+
+        assert_eq!(events.len(), 2);
+        assert_matches!(&events[0], ResponseEvent::Created);
+        assert_matches!(
+            &events[1],
+            ResponseEvent::Completed {
+                response_id,
+                token_usage: None,
+                can_append: false
+            } if response_id == "resp-1"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_sse_emits_server_model_from_response_headers_payload() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.created",
+                "response": {
+                    "id": "resp-1",
+                    "headers": {
+                        "OpenAI-Model": CYBER_RESTRICTED_MODEL_FOR_TESTS
+                    }
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp-1"
+                }
+            }),
+        ])
+        .await;
+
+        assert_eq!(events.len(), 3);
+        assert_matches!(
+            &events[0],
+            ResponseEvent::ServerModel(model) if model == CYBER_RESTRICTED_MODEL_FOR_TESTS
+        );
+        assert_matches!(&events[1], ResponseEvent::Created);
+        assert_matches!(
+            &events[2],
+            ResponseEvent::Completed {
+                response_id,
+                token_usage: None,
+                can_append: false
+            } if response_id == "resp-1"
+        );
+    }
+
+    #[test]
+    fn responses_stream_event_response_model_reads_top_level_headers() {
+        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "codex.response.metadata",
+            "headers": {
+                "openai-model": CYBER_RESTRICTED_MODEL_FOR_TESTS,
+            }
+        }))
+        .expect("expected event to deserialize");
+
+        assert_eq!(
+            ev.response_model().as_deref(),
+            Some(CYBER_RESTRICTED_MODEL_FOR_TESTS)
+        );
+    }
+
+    #[test]
+    fn responses_stream_event_response_model_prefers_response_headers() {
+        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.created",
+            "headers": {
+                "openai-model": "top-level-model"
+            },
+            "response": {
+                "id": "resp-1",
+                "headers": {
+                    "openai-model": CYBER_RESTRICTED_MODEL_FOR_TESTS
+                }
+            }
+        }))
+        .expect("expected event to deserialize");
+
+        assert_eq!(
+            ev.response_model().as_deref(),
+            Some(CYBER_RESTRICTED_MODEL_FOR_TESTS)
+        );
+    }
+
     #[test]
     fn test_try_parse_retry_after() {
         let err = Error {
@@ -909,4 +1116,6 @@ mod tests {
         let delay = try_parse_retry_after(&err);
         assert_eq!(delay, Some(Duration::from_secs(35)));
     }
+
+    const CYBER_RESTRICTED_MODEL_FOR_TESTS: &str = "gpt-5.3-codex";
 }

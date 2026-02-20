@@ -1,9 +1,71 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "AppBranding": {
+      "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
+      "properties": {
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "developer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "isDiscoverableApp": {
+          "type": "boolean"
+        },
+        "privacyPolicy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "termsOfService": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "website": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "isDiscoverableApp"
+      ],
+      "type": "object"
+    },
     "AppInfo": {
       "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
       "properties": {
+        "appMetadata": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "branding": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppBranding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "description": {
           "type": [
             "string",
@@ -34,6 +96,15 @@
           "description": "Whether this app is enabled in config.toml. Example: ```toml [apps.bad_app] enabled = false ```",
           "type": "boolean"
         },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "logoUrl": {
           "type": [
             "string",
@@ -53,6 +124,130 @@
       "required": [
         "id",
         "name"
+      ],
+      "type": "object"
+    },
+    "AppMetadata": {
+      "properties": {
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "developer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "firstPartyRequiresInstall": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "firstPartyType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppReview"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "screenshots": {
+          "items": {
+            "$ref": "#/definitions/AppScreenshot"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "seoDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "showInComposerWhenUnlinked": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "subCategories": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "versionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "versionNotes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AppReview": {
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "AppScreenshot": {
+      "properties": {
+        "fileId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userPrompt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "userPrompt"
       ],
       "type": "object"
     }

@@ -747,7 +747,12 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
     assert!(!turn.id.is_empty());
 
-    // This test only validates that turn/start responds and returns a turn.
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
     Ok(())
 }
 
@@ -1871,7 +1876,7 @@ fn create_config_toml_with_sandbox(
     feature_flags: &BTreeMap<Feature, bool>,
     sandbox_mode: &str,
 ) -> std::io::Result<()> {
-    let mut features = BTreeMap::from([(Feature::RemoteModels, false)]);
+    let mut features = BTreeMap::new();
     for (feature, enabled) in feature_flags {
         features.insert(*feature, *enabled);
     }

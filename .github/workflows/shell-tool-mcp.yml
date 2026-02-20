@@ -408,9 +408,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://git.code.sf.net/p/zsh/code /tmp/zsh
+          git clone https://git.code.sf.net/p/zsh/code /tmp/zsh
           cd /tmp/zsh
-          git fetch --depth 1 origin 77045ef899e53b9598bebc5a41db93a548a40ca6
           git checkout 77045ef899e53b9598bebc5a41db93a548a40ca6
           git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/zsh-exec-wrapper.patch"
           ./Util/preconfig
@@ -487,9 +486,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://git.code.sf.net/p/zsh/code /tmp/zsh
+          git clone https://git.code.sf.net/p/zsh/code /tmp/zsh
           cd /tmp/zsh
-          git fetch --depth 1 origin 77045ef899e53b9598bebc5a41db93a548a40ca6
           git checkout 77045ef899e53b9598bebc5a41db93a548a40ca6
           git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/zsh-exec-wrapper.patch"
           ./Util/preconfig

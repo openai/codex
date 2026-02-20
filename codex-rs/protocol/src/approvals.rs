@@ -57,8 +57,15 @@ pub struct NetworkApprovalContext {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecApprovalRequestEvent {
-    /// Identifier for the associated exec call, if available.
+    /// Identifier for the associated command execution item.
     pub call_id: String,
+    /// Identifier for this specific approval callback.
+    ///
+    /// When absent, the approval is for the command item itself (`call_id`).
+    /// This is present for subcommand approvals (via execve intercept).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approval_id: Option<String>,
     /// Turn ID that this command belongs to.
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
@@ -79,6 +86,14 @@ pub struct ExecApprovalRequestEvent {
     #[ts(optional)]
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     pub parsed_cmd: Vec<ParsedCommand>,
+}
+
+impl ExecApprovalRequestEvent {
+    pub fn effective_approval_id(&self) -> String {
+        self.approval_id
+            .clone()
+            .unwrap_or_else(|| self.call_id.clone())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

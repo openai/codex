@@ -9,6 +9,7 @@ use futures::Stream;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
@@ -56,6 +57,9 @@ pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),
     OutputItemAdded(ResponseItem),
+    /// Emitted when the server includes `OpenAI-Model` on the stream response.
+    /// This can differ from the requested model when backend safety routing applies.
+    ServerModel(String),
     /// Emitted when `X-Reasoning-Included: true` is present on the response,
     /// meaning the server already accounted for past reasoning tokens and the
     /// client should not re-estimate them.
@@ -174,6 +178,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             include: request.include.clone(),
             prompt_cache_key: request.prompt_cache_key.clone(),
             text: request.text.clone(),
+            client_metadata: None,
         }
     }
 }
@@ -196,11 +201,15 @@ pub struct ResponseCreateWsRequest {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_metadata: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ResponseAppendWsRequest {
     pub input: Vec<ResponseItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_metadata: Option<HashMap<String, String>>,
 }
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]

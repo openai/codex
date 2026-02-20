@@ -225,8 +225,6 @@ const APPROVAL_POLICY_UNLESS_TRUSTED: &str =
     include_str!("prompts/permissions/approval_policy/unless_trusted.md");
 const APPROVAL_POLICY_ON_FAILURE: &str =
     include_str!("prompts/permissions/approval_policy/on_failure.md");
-const APPROVAL_POLICY_ON_REQUEST: &str =
-    include_str!("prompts/permissions/approval_policy/on_request.md");
 const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
     include_str!("prompts/permissions/approval_policy/on_request_rule.md");
 
@@ -241,30 +239,36 @@ impl DeveloperInstructions {
         Self { text: text.into() }
     }
 
-    pub fn from(
-        approval_policy: AskForApproval,
-        exec_policy: &Policy,
-        request_rule_enabled: bool,
-    ) -> DeveloperInstructions {
+    pub fn from(approval_policy: AskForApproval, exec_policy: &Policy) -> DeveloperInstructions {
+        let on_request_instructions = || {
+            let command_prefixes = format_allow_prefixes(exec_policy.get_allowed_prefixes());
+            match command_prefixes {
+                Some(prefixes) => {
+                    format!(
+                        "{APPROVAL_POLICY_ON_REQUEST_RULE}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
+                    )
+                }
+                None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
+            }
+        };
         let text = match approval_policy {
             AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
             AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.to_string(),
             AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.to_string(),
-            AskForApproval::OnRequest => {
-                if !request_rule_enabled {
-                    APPROVAL_POLICY_ON_REQUEST.to_string()
-                } else {
-                    let command_prefixes =
-                        format_allow_prefixes(exec_policy.get_allowed_prefixes());
-                    match command_prefixes {
-                        Some(prefixes) => {
-                            format!(
-                                "{APPROVAL_POLICY_ON_REQUEST_RULE}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
-                            )
-                        }
-                        None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
-                    }
-                }
+            AskForApproval::OnRequest => on_request_instructions(),
+            AskForApproval::Reject(reject_config) => {
+                let on_request_instructions = on_request_instructions();
+                let sandbox_approval = reject_config.sandbox_approval;
+                let rules = reject_config.rules;
+                let mcp_elicitations = reject_config.mcp_elicitations;
+                format!(
+                    "{on_request_instructions}\n\n\
+                     Approval policy is `reject`.\n\
+                     - `sandbox_approval`: {sandbox_approval}\n\
+                     - `rules`: {rules}\n\
+                     - `mcp_elicitations`: {mcp_elicitations}\n\
+                     When a category is `true`, requests in that category are auto-rejected instead of prompting the user."
+                )
             }
         };
 
@@ -301,7 +305,6 @@ impl DeveloperInstructions {
         sandbox_policy: &SandboxPolicy,
         approval_policy: AskForApproval,
         exec_policy: &Policy,
-        request_rule_enabled: bool,
         cwd: &Path,
     ) -> Self {
         let network_access = if sandbox_policy.has_full_network_access() {
@@ -325,7 +328,6 @@ impl DeveloperInstructions {
             network_access,
             approval_policy,
             exec_policy,
-            request_rule_enabled,
             writable_roots,
         )
     }
@@ -349,7 +351,6 @@ impl DeveloperInstructions {
         network_access: NetworkAccess,
         approval_policy: AskForApproval,
         exec_policy: &Policy,
-        request_rule_enabled: bool,
         writable_roots: Option<Vec<WritableRoot>>,
     ) -> Self {
         let start_tag = DeveloperInstructions::new("<permissions instructions>");
@@ -359,11 +360,7 @@ impl DeveloperInstructions {
                 sandbox_mode,
                 network_access,
             ))
-            .concat(DeveloperInstructions::from(
-                approval_policy,
-                exec_policy,
-                request_rule_enabled,
-            ))
+            .concat(DeveloperInstructions::from(approval_policy, exec_policy))
             .concat(DeveloperInstructions::from_writable_roots(writable_roots))
             .concat(end_tag)
     }
@@ -1207,7 +1204,6 @@ mod tests {
             NetworkAccess::Enabled,
             AskForApproval::OnRequest,
             &Policy::empty(),
-            false,
             None,
         );
 
@@ -1217,7 +1213,7 @@ mod tests {
             "expected network access to be enabled in message"
         );
         assert!(
-            text.contains("`approval_policy` is `on-request`"),
+            text.contains("How to request escalation"),
             "expected approval guidance to be included"
         );
     }
@@ -1236,7 +1232,6 @@ mod tests {
             &policy,
             AskForApproval::UnlessTrusted,
             &Policy::empty(),
-            false,
             &PathBuf::from("/tmp"),
         );
         let text = instructions.into_text();
@@ -1245,7 +1240,7 @@ mod tests {
     }
 
     #[test]
-    fn includes_request_rule_instructions_when_enabled() {
+    fn includes_request_rule_instructions_for_on_request() {
         let mut exec_policy = Policy::empty();
         exec_policy
             .add_prefix_rule(
@@ -1258,7 +1253,6 @@ mod tests {
             NetworkAccess::Enabled,
             AskForApproval::OnRequest,
             &exec_policy,
-            true,
             None,
         );
 
