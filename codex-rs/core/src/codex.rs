@@ -3946,6 +3946,10 @@ mod handlers {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
         let mut history = sess.clone_history().await;
+        // TODO: Follow up on rollback/backtracking baseline handling. Truncating
+        // history should also invalidate/recompute `reference_context_item` and
+        // `previous_model` so the next regular turn replays any dropped context
+        // diffs / model-switch instructions.
         history.drop_last_n_user_turns(num_turns);
 
         // Replace with the raw items. We don't want to replace with a normalized
@@ -4706,13 +4710,13 @@ async fn maybe_run_previous_model_inline_compact(
     let Some(previous_model) = sess.previous_model().await else {
         return Ok(false);
     };
-    let previous_turn_context = Arc::new(
+    let previous_model_turn_context = Arc::new(
         turn_context
             .with_model(previous_model, &sess.services.models_manager)
             .await,
     );
 
-    let Some(old_context_window) = previous_turn_context.model_context_window() else {
+    let Some(old_context_window) = previous_model_turn_context.model_context_window() else {
         return Ok(false);
     };
     let Some(new_context_window) = turn_context.model_context_window() else {
@@ -4723,12 +4727,12 @@ async fn maybe_run_previous_model_inline_compact(
         .auto_compact_token_limit()
         .unwrap_or(i64::MAX);
     let should_run = total_usage_tokens > new_auto_compact_limit
-        && previous_turn_context.model_info.slug != turn_context.model_info.slug
+        && previous_model_turn_context.model_info.slug != turn_context.model_info.slug
         && old_context_window > new_context_window;
     if should_run {
         run_auto_compact(
             sess,
-            &previous_turn_context,
+            &previous_model_turn_context,
             CompactCallsite::PreTurnModelSwitch,
         )
         .await?;
