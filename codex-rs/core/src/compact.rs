@@ -212,9 +212,9 @@ async fn run_compact_task_inner(
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
 
-    // Mid-turn compaction is the only callsite that must rebuild with full initial context
-    // immediately so follow-up sampling in the same turn sees the canonical context block
-    // above the latest real user message.
+    // Mid-turn compaction is the only callsite that must inject initial context above the last user message
+    // in the replacement history (preturn callsites simply inject initial context after the compaction item,
+    // but for mid-turn compaction the model has been trained to expect the compaction item last).
     let initial_context = if matches!(callsite, CompactCallsite::MidTurn) {
         sess.build_initial_context(turn_context.as_ref()).await
     } else {
@@ -289,14 +289,36 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
     message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
 }
 
-pub(crate) fn process_compacted_history(
+pub(crate) async fn process_compacted_history(
+    sess: &Session,
+    turn_context: &TurnContext,
+    compacted_history: Vec<ResponseItem>,
+    callsite: CompactCallsite,
+) -> Vec<ResponseItem> {
+    // Mid-turn compaction is the only callsite that must inject initial context above the last user message
+    // in the replacement history (preturn callsites simply inject initial context after the compaction item,
+    // but for mid-turn compaction the model has been trained to expect the compaction item last).
+    let initial_context = if matches!(callsite, CompactCallsite::MidTurn) {
+        sess.build_initial_context(turn_context).await
+    } else {
+        Vec::new()
+    };
+
+    process_compacted_history_with_initial_context(compacted_history, initial_context)
+}
+
+fn process_compacted_history_with_initial_context(
     mut compacted_history: Vec<ResponseItem>,
-    initial_context: &[ResponseItem],
+    initial_context: Vec<ResponseItem>,
 ) -> Vec<ResponseItem> {
     compacted_history.retain(should_keep_compacted_history_item);
+    inject_initial_context_into_compacted_history(compacted_history, initial_context)
+}
 
-    let initial_context = initial_context.to_vec();
-
+fn inject_initial_context_into_compacted_history(
+    mut compacted_history: Vec<ResponseItem>,
+    initial_context: Vec<ResponseItem>,
+) -> Vec<ResponseItem> {
     // Re-inject canonical context from the current session since we stripped it
     // from the pre-compaction history. Keep it right before the last user
     // message so older user messages remain earlier in the transcript.
@@ -790,7 +812,8 @@ do things
             },
         ];
 
-        let refreshed = process_compacted_history(compacted_history, &initial_context);
+        let refreshed =
+            process_compacted_history_with_initial_context(compacted_history, initial_context);
         let expected = vec![
             ResponseItem::Message {
                 id: None,
@@ -899,7 +922,8 @@ keep me updated
             },
         ];
 
-        let refreshed = process_compacted_history(compacted_history, &initial_context);
+        let refreshed =
+            process_compacted_history_with_initial_context(compacted_history, initial_context);
         let expected = vec![
             ResponseItem::Message {
                 id: None,
@@ -1035,7 +1059,8 @@ keep me updated
             phase: None,
         }];
 
-        let refreshed = process_compacted_history(compacted_history, &initial_context);
+        let refreshed =
+            process_compacted_history_with_initial_context(compacted_history, initial_context);
         let expected = vec![
             ResponseItem::Message {
                 id: None,
@@ -1100,7 +1125,8 @@ keep me updated
             phase: None,
         }];
 
-        let refreshed = process_compacted_history(compacted_history, &initial_context);
+        let refreshed =
+            process_compacted_history_with_initial_context(compacted_history, initial_context);
         let expected = vec![
             ResponseItem::Message {
                 id: None,

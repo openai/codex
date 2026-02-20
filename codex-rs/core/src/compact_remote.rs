@@ -126,15 +126,13 @@ async fn run_remote_compact_task_inner_impl(
             Err(err)
         })
         .await?;
-    // Mid-turn compaction is the only callsite that must rebuild with full initial context
-    // immediately so follow-up sampling in the same turn sees the canonical context block
-    // above the latest real user message.
-    if matches!(callsite, CompactCallsite::MidTurn) {
-        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
-        new_history = crate::compact::process_compacted_history(new_history, &initial_context);
-    } else {
-        new_history = crate::compact::process_compacted_history(new_history, &[]);
-    }
+    new_history = crate::compact::process_compacted_history(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        new_history,
+        callsite,
+    )
+    .await;
     // Reattach the stripped model-switch update only after successful compaction so the model
     // still sees the switch instructions on the next real sampling request.
     if let Some(model_switch_item) = stripped_model_switch_item {
