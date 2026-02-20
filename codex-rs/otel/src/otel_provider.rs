@@ -3,6 +3,7 @@ use crate::config::OtelHttpProtocol;
 use crate::config::OtelSettings;
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
+use gethostname::gethostname;
 use opentelemetry::Context;
 use opentelemetry::KeyValue;
 use opentelemetry::context::ContextGuard;
@@ -40,6 +41,7 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::registry::LookupSpan;
 
 const ENV_ATTRIBUTE: &str = "env";
+const HOST_NAME_ATTRIBUTE: &str = "host.name";
 const TRACEPARENT_ENV_VAR: &str = "TRACEPARENT";
 const TRACESTATE_ENV_VAR: &str = "TRACESTATE";
 static TRACEPARENT_CONTEXT: OnceLock<Option<Context>> = OnceLock::new();
@@ -223,14 +225,35 @@ fn extract_traceparent_context(traceparent: String, tracestate: Option<String>) 
 fn make_resource(settings: &OtelSettings) -> Resource {
     Resource::builder()
         .with_service_name(settings.service_name.clone())
-        .with_attributes(vec![
-            KeyValue::new(
-                semconv::attribute::SERVICE_VERSION,
-                settings.service_version.clone(),
-            ),
-            KeyValue::new(ENV_ATTRIBUTE, settings.environment.clone()),
-        ])
+        .with_attributes(resource_attributes(
+            settings,
+            detected_host_name().as_deref(),
+        ))
         .build()
+}
+
+fn resource_attributes(settings: &OtelSettings, host_name: Option<&str>) -> Vec<KeyValue> {
+    let mut attributes = vec![
+        KeyValue::new(
+            semconv::attribute::SERVICE_VERSION,
+            settings.service_version.clone(),
+        ),
+        KeyValue::new(ENV_ATTRIBUTE, settings.environment.clone()),
+    ];
+    if let Some(host_name) = host_name.and_then(normalize_host_name) {
+        attributes.push(KeyValue::new(HOST_NAME_ATTRIBUTE, host_name));
+    }
+    attributes
+}
+
+fn detected_host_name() -> Option<String> {
+    let host_name = gethostname();
+    normalize_host_name(host_name.to_string_lossy().as_ref())
+}
+
+fn normalize_host_name(host_name: &str) -> Option<String> {
+    let host_name = host_name.trim();
+    (!host_name.is_empty()).then(|| host_name.to_owned())
 }
 
 fn build_logger(
@@ -377,6 +400,8 @@ mod tests {
     use opentelemetry::trace::SpanId;
     use opentelemetry::trace::TraceContextExt;
     use opentelemetry::trace::TraceId;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
 
     #[test]
     fn parses_valid_traceparent() {
@@ -397,5 +422,47 @@ mod tests {
     #[test]
     fn invalid_traceparent_returns_none() {
         assert!(extract_traceparent_context("not-a-traceparent".to_string(), None).is_none());
+    }
+
+    #[test]
+    fn resource_attributes_include_host_name_when_present() {
+        let attrs = resource_attributes(&test_otel_settings(), Some("opentelemetry-test"));
+
+        let host_name = attrs
+            .iter()
+            .find(|kv| kv.key.as_str() == HOST_NAME_ATTRIBUTE)
+            .map(|kv| kv.value.as_str().to_string());
+
+        assert_eq!(host_name, Some("opentelemetry-test".to_string()));
+    }
+
+    #[test]
+    fn resource_attributes_omit_host_name_when_missing_or_empty() {
+        let missing = resource_attributes(&test_otel_settings(), None);
+        let empty = resource_attributes(&test_otel_settings(), Some("   "));
+
+        assert!(
+            !missing
+                .iter()
+                .any(|kv| kv.key.as_str() == HOST_NAME_ATTRIBUTE)
+        );
+        assert!(
+            !empty
+                .iter()
+                .any(|kv| kv.key.as_str() == HOST_NAME_ATTRIBUTE)
+        );
+    }
+
+    fn test_otel_settings() -> OtelSettings {
+        OtelSettings {
+            environment: "test".to_string(),
+            service_name: "codex-test".to_string(),
+            service_version: "0.0.0".to_string(),
+            codex_home: PathBuf::from("."),
+            exporter: OtelExporter::None,
+            trace_exporter: OtelExporter::None,
+            metrics_exporter: OtelExporter::None,
+            runtime_metrics: false,
+        }
     }
 }
