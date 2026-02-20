@@ -1086,10 +1086,15 @@ impl ChatWidget {
         }
 
         if items.is_empty() {
-            if self.last_terminal_title.take().is_some()
-                && let Err(err) = clear_terminal_title()
-            {
-                tracing::debug!(error = %err, "failed to clear terminal title");
+            if self.last_terminal_title.is_some() {
+                match clear_terminal_title() {
+                    Ok(()) => {
+                        self.last_terminal_title = None;
+                    }
+                    Err(err) => {
+                        tracing::debug!(error = %err, "failed to clear terminal title");
+                    }
+                }
             }
             return;
         }
@@ -1121,15 +1126,27 @@ impl ChatWidget {
         if self.last_terminal_title == title {
             return;
         }
-        let had_previous_title = self.last_terminal_title.is_some();
-        self.last_terminal_title = title.clone();
-
-        if let Some(title) = title {
-            if let Err(err) = set_terminal_title(&title) {
-                tracing::debug!(error = %err, "failed to set terminal title");
+        match title {
+            Some(title) => match set_terminal_title(&title) {
+                Ok(()) => {
+                    self.last_terminal_title = Some(title);
+                }
+                Err(err) => {
+                    tracing::debug!(error = %err, "failed to set terminal title");
+                }
+            },
+            None => {
+                if self.last_terminal_title.is_some() {
+                    match clear_terminal_title() {
+                        Ok(()) => {
+                            self.last_terminal_title = None;
+                        }
+                        Err(err) => {
+                            tracing::debug!(error = %err, "failed to clear terminal title");
+                        }
+                    }
+                }
             }
-        } else if had_previous_title && let Err(err) = clear_terminal_title() {
-            tracing::debug!(error = %err, "failed to clear terminal title");
         }
     }
 
