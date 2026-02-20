@@ -43,7 +43,10 @@ use codex_exec::exec_events::McpToolCallItemResult;
 use codex_exec::exec_events::McpToolCallStatus;
 use codex_exec::exec_events::PatchApplyStatus;
 use codex_exec::exec_events::PatchChangeKind;
+use codex_exec::exec_events::PlanDeltaEvent as ExecPlanDeltaEvent;
+use codex_exec::exec_events::PlanItem as ExecPlanItem;
 use codex_exec::exec_events::ReasoningItem;
+use codex_exec::exec_events::RequestUserInputEvent as ExecRequestUserInputEvent;
 use codex_exec::exec_events::ThreadErrorEvent;
 use codex_exec::exec_events::ThreadEvent;
 use codex_exec::exec_events::ThreadItem;
@@ -66,6 +69,8 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecOutputStream;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use pretty_assertions::assert_eq;
 use rmcp::model::Content;
 use serde_json::json;
@@ -342,6 +347,114 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
                 usage: Usage::default(),
             }),
         ]
+    );
+}
+
+#[test]
+fn plan_item_and_plan_delta_emit_json_events() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let out_started = ep.collect_thread_events(&event(
+        "plan-started",
+        EventMsg::ItemStarted(codex_core::protocol::ItemStartedEvent {
+            thread_id: ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
+            turn_id: "turn-1".to_string(),
+            item: codex_protocol::items::TurnItem::Plan(codex_protocol::items::PlanItem {
+                id: "turn-1-plan".to_string(),
+                text: String::new(),
+            }),
+        }),
+    ));
+    assert_eq!(
+        out_started,
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+            item: ThreadItem {
+                id: "turn-1-plan".to_string(),
+                details: ThreadItemDetails::Plan(ExecPlanItem {
+                    text: String::new(),
+                }),
+            },
+        })]
+    );
+
+    let out_delta = ep.collect_thread_events(&event(
+        "plan-delta",
+        EventMsg::PlanDelta(codex_core::protocol::PlanDeltaEvent {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "turn-1-plan".to_string(),
+            delta: "- step 1\n".to_string(),
+        }),
+    ));
+    assert_eq!(
+        out_delta,
+        vec![ThreadEvent::PlanDelta(ExecPlanDeltaEvent {
+            item_id: "turn-1-plan".to_string(),
+            delta: "- step 1\n".to_string(),
+        })]
+    );
+
+    let out_completed = ep.collect_thread_events(&event(
+        "plan-completed",
+        EventMsg::ItemCompleted(codex_core::protocol::ItemCompletedEvent {
+            thread_id: ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
+            turn_id: "turn-1".to_string(),
+            item: codex_protocol::items::TurnItem::Plan(codex_protocol::items::PlanItem {
+                id: "turn-1-plan".to_string(),
+                text: "# Plan\n- step 1".to_string(),
+            }),
+        }),
+    ));
+    assert_eq!(
+        out_completed,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "turn-1-plan".to_string(),
+                details: ThreadItemDetails::Plan(ExecPlanItem {
+                    text: "# Plan\n- step 1".to_string(),
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
+fn request_user_input_event_emits_json_event() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let out = ep.collect_thread_events(&event(
+        "rui-1",
+        EventMsg::RequestUserInput(codex_protocol::request_user_input::RequestUserInputEvent {
+            call_id: "call-123".to_string(),
+            turn_id: "turn-123".to_string(),
+            questions: vec![RequestUserInputQuestion {
+                id: "decision".to_string(),
+                header: "Decision".to_string(),
+                question: "Choose one".to_string(),
+                is_other: true,
+                is_secret: false,
+                options: Some(vec![RequestUserInputQuestionOption {
+                    label: "A".to_string(),
+                    description: "First".to_string(),
+                }]),
+            }],
+        }),
+    ));
+    assert_eq!(
+        out,
+        vec![ThreadEvent::RequestUserInput(ExecRequestUserInputEvent {
+            id: "turn-123".to_string(),
+            call_id: "call-123".to_string(),
+            questions: vec![RequestUserInputQuestion {
+                id: "decision".to_string(),
+                header: "Decision".to_string(),
+                question: "Choose one".to_string(),
+                is_other: true,
+                is_secret: false,
+                options: Some(vec![RequestUserInputQuestionOption {
+                    label: "A".to_string(),
+                    description: "First".to_string(),
+                }]),
+            }],
+        })]
     );
 }
 

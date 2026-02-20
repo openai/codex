@@ -1,5 +1,5 @@
 import { CodexOptions } from "./codexOptions";
-import { ThreadEvent, ThreadError, Usage } from "./events";
+import { RequestUserInputResponse, ThreadEvent, ThreadError, Usage } from "./events";
 import { CodexExec } from "./exec";
 import { ThreadItem } from "./items";
 import { ThreadOptions } from "./threadOptions";
@@ -43,6 +43,8 @@ export class Thread {
   private _options: CodexOptions;
   private _id: string | null;
   private _threadOptions: ThreadOptions;
+  private _sendUserInputAnswer: ((id: string, response: RequestUserInputResponse) => void) | null =
+    null;
 
   /** Returns the ID of the thread. Populated after the first turn starts. */
   public get id(): string | null {
@@ -67,6 +69,14 @@ export class Thread {
     return { events: this.runStreamedInternal(input, turnOptions) };
   }
 
+  /** Sends an answer for an in-flight request_user_input prompt. */
+  answerUserInput(id: string, response: RequestUserInputResponse): void {
+    if (!this._sendUserInputAnswer) {
+      throw new Error("No active turn is awaiting request_user_input answers");
+    }
+    this._sendUserInputAnswer(id, response);
+  }
+
   private async *runStreamedInternal(
     input: Input,
     turnOptions: TurnOptions = {},
@@ -74,7 +84,7 @@ export class Thread {
     const { schemaPath, cleanup } = await createOutputSchemaFile(turnOptions.outputSchema);
     const options = this._threadOptions;
     const { prompt, images } = normalizeInput(input);
-    const generator = this._exec.run({
+    const run = this._exec.run({
       input: prompt,
       baseUrl: this._options.baseUrl,
       apiKey: this._options.apiKey,
@@ -92,9 +102,17 @@ export class Thread {
       webSearchEnabled: options?.webSearchEnabled,
       approvalPolicy: options?.approvalPolicy,
       additionalDirectories: options?.additionalDirectories,
+      collaborationMode: options?.collaborationMode,
     });
+    this._sendUserInputAnswer = (id: string, response: RequestUserInputResponse) => {
+      run.sendControl({
+        type: "user_input_answer",
+        id,
+        response,
+      });
+    };
     try {
-      for await (const item of generator) {
+      for await (const item of run) {
         let parsed: ThreadEvent;
         try {
           parsed = JSON.parse(item) as ThreadEvent;
@@ -107,6 +125,7 @@ export class Thread {
         yield parsed;
       }
     } finally {
+      this._sendUserInputAnswer = null;
       await cleanup();
     }
   }
@@ -119,8 +138,22 @@ export class Thread {
     let usage: Usage | null = null;
     let turnFailure: ThreadError | null = null;
     for await (const event of generator) {
-      if (event.type === "item.completed") {
+      if (event.type === "request_user_input") {
+        if (!turnOptions.onRequestUserInput) {
+          throw new Error(
+            "Turn requested user input but no onRequestUserInput handler was provided",
+          );
+        }
+        const response = await turnOptions.onRequestUserInput({
+          id: event.id,
+          call_id: event.call_id,
+          questions: event.questions,
+        });
+        this.answerUserInput(event.id, response);
+      } else if (event.type === "item.completed") {
         if (event.item.type === "agent_message") {
+          finalResponse = event.item.text;
+        } else if (event.item.type === "plan" && finalResponse === "") {
           finalResponse = event.item.text;
         }
         items.push(event.item);

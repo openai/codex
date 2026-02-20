@@ -7,6 +7,11 @@ export type {
   ItemStartedEvent,
   ItemUpdatedEvent,
   ItemCompletedEvent,
+  RequestUserInputEvent,
+  RequestUserInputQuestion,
+  RequestUserInputQuestionOption,
+  RequestUserInputResponse,
+  PlanDeltaEvent,
   ThreadError,
   ThreadErrorEvent,
   Usage,
@@ -14,6 +19,7 @@ export type {
 export type {
   ThreadItem,
   AgentMessageItem,
+  PlanItem,
   ReasoningItem,
   CommandExecutionItem,
   FileChangeItem,
@@ -36,5 +42,6 @@ export type {
   SandboxMode,
   ModelReasoningEffort,
   WebSearchMode,
+  CollaborationMode,
 } from "./threadOptions";
 export type { TurnOptions } from "./turnOptions";

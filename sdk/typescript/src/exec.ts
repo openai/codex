@@ -4,7 +4,14 @@ import readline from "node:readline";
 import { createRequire } from "node:module";
 
 import type { CodexConfigObject, CodexConfigValue } from "./codexOptions";
-import { SandboxMode, ModelReasoningEffort, ApprovalMode, WebSearchMode } from "./threadOptions";
+import {
+  SandboxMode,
+  ModelReasoningEffort,
+  ApprovalMode,
+  WebSearchMode,
+  CollaborationMode,
+} from "./threadOptions";
+import type { RequestUserInputResponse } from "./events";
 
 export type CodexExecArgs = {
   input: string;
@@ -37,6 +44,18 @@ export type CodexExecArgs = {
   webSearchEnabled?: boolean;
   // --config approval_policy
   approvalPolicy?: ApprovalMode;
+  // --collaboration-mode
+  collaborationMode?: CollaborationMode;
+};
+
+type CodexControlMessage = {
+  type: "user_input_answer";
+  id: string;
+  response: RequestUserInputResponse;
+};
+
+export type CodexExecRun = AsyncIterable<string> & {
+  sendControl: (message: CodexControlMessage) => void;
 };
 
 const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
@@ -69,7 +88,7 @@ export class CodexExec {
     this.configOverrides = configOverrides;
   }
 
-  async *run(args: CodexExecArgs): AsyncGenerator<string> {
+  run(args: CodexExecArgs): CodexExecRun {
     const commandArgs: string[] = ["exec", "--experimental-json"];
 
     if (this.configOverrides) {
@@ -127,6 +146,10 @@ export class CodexExec {
       commandArgs.push("--config", `approval_policy="${args.approvalPolicy}"`);
     }
 
+    if (args.collaborationMode) {
+      commandArgs.push("--collaboration-mode", args.collaborationMode);
+    }
+
     if (args.threadId) {
       commandArgs.push("resume", args.threadId);
     }
@@ -136,6 +159,9 @@ export class CodexExec {
         commandArgs.push("--image", image);
       }
     }
+
+    // Keep stdin available for control messages while passing the initial prompt as a positional arg.
+    commandArgs.push("--", args.input);
 
     const env: Record<string, string> = {};
     if (this.envOverride) {
@@ -169,9 +195,6 @@ export class CodexExec {
       child.kill();
       throw new Error("Child process has no stdin");
     }
-    child.stdin.write(args.input);
-    child.stdin.end();
-
     if (!child.stdout) {
       child.kill();
       throw new Error("Child process has no stdout");
@@ -197,28 +220,51 @@ export class CodexExec {
       crlfDelay: Infinity,
     });
 
-    try {
-      for await (const line of rl) {
-        // `line` is a string (Node sets default encoding to utf8 for readline)
-        yield line as string;
-      }
-
-      if (spawnError) throw spawnError;
-      const { code, signal } = await exitPromise;
-      if (code !== 0 || signal) {
-        const stderrBuffer = Buffer.concat(stderrChunks);
-        const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`;
-        throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`);
-      }
-    } finally {
-      rl.close();
-      child.removeAllListeners();
+    const generator = (async function* () {
       try {
-        if (!child.killed) child.kill();
-      } catch {
-        // ignore
+        for await (const line of rl) {
+          // `line` is a string (Node sets default encoding to utf8 for readline)
+          yield line as string;
+        }
+
+        if (spawnError) throw spawnError;
+        const { code, signal } = await exitPromise;
+        if (code !== 0 || signal) {
+          const stderrBuffer = Buffer.concat(stderrChunks);
+          const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`;
+          throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`);
+        }
+      } finally {
+        rl.close();
+        child.removeAllListeners();
+        try {
+          if (child.stdin && !child.stdin.destroyed) {
+            child.stdin.end();
+          }
+        } catch {
+          // ignore
+        }
+        try {
+          if (!child.killed) child.kill();
+        } catch {
+          // ignore
+        }
       }
-    }
+    })();
+
+    const sendControl = (message: CodexControlMessage): void => {
+      if (!child.stdin || child.stdin.destroyed || child.killed) {
+        throw new Error("Codex Exec is not accepting control messages");
+      }
+      child.stdin.write(`${JSON.stringify(message)}\n`);
+    };
+
+    return {
+      sendControl,
+      [Symbol.asyncIterator](): AsyncGenerator<string> {
+        return generator;
+      },
+    };
   }
 }
 

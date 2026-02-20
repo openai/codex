@@ -57,6 +57,44 @@ export type ItemCompletedEvent = {
   item: ThreadItem;
 };
 
+/** A single option for a request_user_input question. */
+export type RequestUserInputQuestionOption = {
+  label: string;
+  description: string;
+};
+
+/** One user-facing prompt emitted by the request_user_input tool. */
+export type RequestUserInputQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options?: RequestUserInputQuestionOption[];
+};
+
+/** Response shape for answering a request_user_input prompt. */
+export type RequestUserInputResponse = {
+  answers: Record<string, { answers: string[] }>;
+};
+
+/** Emitted when the agent invokes the request_user_input tool and awaits an answer. */
+export type RequestUserInputEvent = {
+  type: "request_user_input";
+  /** Turn id for the in-flight request. */
+  id: string;
+  /** Tool call id from the model stream. */
+  call_id: string;
+  questions: RequestUserInputQuestion[];
+};
+
+/** Emitted when a plan item streams partial text updates. */
+export type PlanDeltaEvent = {
+  type: "item.plan.delta";
+  item_id: string;
+  delta: string;
+};
+
 /** Fatal error emitted by the stream. */
 export type ThreadError = {
   message: string;
@@ -77,4 +115,6 @@ export type ThreadEvent =
   | ItemStartedEvent
   | ItemUpdatedEvent
   | ItemCompletedEvent
+  | RequestUserInputEvent
+  | PlanDeltaEvent
   | ThreadErrorEvent;

@@ -1,4 +1,5 @@
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -31,6 +32,12 @@ pub enum ThreadEvent {
     /// Signals that an item has reached a terminal state—either success or failure.
     #[serde(rename = "item.completed")]
     ItemCompleted(ItemCompletedEvent),
+    /// Emitted when a plan item streams text deltas.
+    #[serde(rename = "item.plan.delta")]
+    PlanDelta(PlanDeltaEvent),
+    /// Emitted when the model requests input via the request_user_input tool.
+    #[serde(rename = "request_user_input")]
+    RequestUserInput(RequestUserInputEvent),
     /// Represents an unrecoverable error emitted directly by the event stream.
     #[serde(rename = "error")]
     Error(ThreadErrorEvent),
@@ -82,6 +89,21 @@ pub struct ItemUpdatedEvent {
     pub item: ThreadItem,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct PlanDeltaEvent {
+    pub item_id: String,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct RequestUserInputEvent {
+    /// Turn id for the in-flight request.
+    pub id: String,
+    /// Tool call id from the model stream.
+    pub call_id: String,
+    pub questions: Vec<RequestUserInputQuestion>,
+}
+
 /// Fatal error emitted by the stream.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ThreadErrorEvent {
@@ -103,6 +125,8 @@ pub enum ThreadItemDetails {
     /// Response from the agent.
     /// Either a natural-language response or a JSON string when structured output is requested.
     AgentMessage(AgentMessageItem),
+    /// Proposed implementation plan emitted in plan mode.
+    Plan(PlanItem),
     /// Agent's reasoning summary.
     Reasoning(ReasoningItem),
     /// Tracks a command executed by the agent. The item starts when the command is
@@ -131,6 +155,11 @@ pub enum ThreadItemDetails {
 /// Either a natural-language response or a JSON string when structured output is requested.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct AgentMessageItem {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct PlanItem {
     pub text: String,
 }
 
