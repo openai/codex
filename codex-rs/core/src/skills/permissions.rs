@@ -90,6 +90,7 @@ pub(crate) fn compile_permission_profile(
                     readable_roots: fs_read,
                 }
             },
+            deny_read_paths: vec![],
             network_access: permissions.network,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -100,6 +101,7 @@ pub(crate) fn compile_permission_profile(
                 include_platform_defaults: true,
                 readable_roots: fs_read,
             },
+            deny_read_paths: vec![],
         }
     } else {
         // Default sandbox policy
@@ -342,6 +344,7 @@ mod tests {
                             .expect("absolute read path")
                         ],
                     },
+                    deny_read_paths: vec![],
                     network_access: true,
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
@@ -437,6 +440,7 @@ mod tests {
                             .expect("absolute read path")
                         ],
                     },
+                    deny_read_paths: vec![],
                 }),
                 network: None,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),

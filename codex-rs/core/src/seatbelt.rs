@@ -192,6 +192,67 @@ fn normalize_path_for_sandbox(path: &Path) -> Option<AbsolutePathBuf> {
     normalized_path.or(Some(absolute_path))
 }
 
+fn deny_read_policy_and_params(sandbox_policy: &SandboxPolicy) -> (String, Vec<(String, PathBuf)>) {
+    let denied_paths = sandbox_policy.denied_read_paths();
+    if denied_paths.is_empty() {
+        return (String::new(), Vec::new());
+    }
+
+    let mut read_deny_params = BTreeMap::new();
+    let mut unlink_deny_params = BTreeMap::new();
+
+    for denied_path in denied_paths {
+        let Some(normalized) = normalize_path_for_sandbox(denied_path.as_path()) else {
+            warn!(
+                "ignoring deny_read path because it could not be normalized for seatbelt: {}",
+                denied_path.display()
+            );
+            continue;
+        };
+
+        read_deny_params
+            .entry(normalized.to_string_lossy().to_string())
+            .or_insert(normalized.clone());
+
+        for ancestor in normalized.as_path().ancestors() {
+            if ancestor == Path::new("/") {
+                break;
+            }
+            if let Some(normalized_ancestor) = normalize_path_for_sandbox(ancestor) {
+                unlink_deny_params
+                    .entry(normalized_ancestor.to_string_lossy().to_string())
+                    .or_insert(normalized_ancestor);
+            }
+        }
+    }
+
+    if read_deny_params.is_empty() {
+        return (String::new(), Vec::new());
+    }
+
+    let mut policy = String::from("; deny managed filesystem read blocklist\n");
+    let mut params = Vec::new();
+
+    for (index, path) in read_deny_params.into_values().enumerate() {
+        let key = format!("DENY_READ_{index}");
+        policy.push_str(&format!("(deny file-read* (subpath (param \"{key}\")))\n"));
+        params.push((key, path.into_path_buf()));
+    }
+
+    if !unlink_deny_params.is_empty() {
+        policy.push_str("; reduce rename/unlink bypasses into denied read paths\n");
+        for (index, path) in unlink_deny_params.into_values().enumerate() {
+            let key = format!("DENY_UNLINK_{index}");
+            policy.push_str(&format!(
+                "(deny file-write-unlink (literal (param \"{key}\")))\n"
+            ));
+            params.push((key, path.into_path_buf()));
+        }
+    }
+
+    (policy, params)
+}
+
 fn unix_socket_path_params(proxy: &ProxyPolicyInputs) -> Vec<UnixSocketPathParam> {
     let mut deduped_paths: BTreeMap<String, AbsolutePathBuf> = BTreeMap::new();
     let UnixDomainSocketPolicy::Restricted { allowed } = &proxy.unix_domain_socket_policy else {
@@ -406,6 +467,7 @@ pub(crate) fn create_seatbelt_command_args_with_extensions(
             )
         }
     };
+    let (deny_read_policy, deny_read_dir_params) = deny_read_policy_and_params(sandbox_policy);
 
     let proxy = proxy_policy_inputs(network);
     let network_policy = dynamic_network_policy(sandbox_policy, enforce_managed_network, &proxy);
@@ -435,12 +497,16 @@ pub(crate) fn create_seatbelt_command_args_with_extensions(
     if !seatbelt_extensions.policy.is_empty() {
         policy_sections.push(seatbelt_extensions.policy.clone());
     }
+    if !deny_read_policy.is_empty() {
+        policy_sections.push(deny_read_policy);
+    }
 
     let full_policy = policy_sections.join("\n");
 
     let dir_params = [
         file_read_dir_params,
         file_write_dir_params,
+        deny_read_dir_params,
         unix_socket_params,
         macos_dir_params(),
         unix_socket_dir_params(&proxy),
@@ -512,6 +578,7 @@ mod tests {
     use super::UnixDomainSocketPolicy;
     use super::create_seatbelt_command_args;
     use super::create_seatbelt_command_args_with_extensions;
+    use super::deny_read_policy_and_params;
     use super::dynamic_network_policy;
     use super::macos_dir_params;
     use super::normalize_path_for_sandbox;
@@ -542,6 +609,37 @@ mod tests {
 
     fn absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::from_absolute_path(Path::new(path)).expect("absolute path")
+    }
+
+    #[test]
+    fn deny_read_policy_emits_read_and_unlink_denials() {
+        let tmp = TempDir::new().expect("tempdir");
+        let denied_dir = tmp.path().join("private");
+        let denied_file = denied_dir.join("secrets.txt");
+        std::fs::create_dir_all(&denied_dir).expect("create denied dir");
+        std::fs::write(&denied_file, "secret").expect("write denied file");
+
+        let policy = SandboxPolicy::ReadOnly {
+            access: Default::default(),
+            deny_read_paths: vec![AbsolutePathBuf::try_from(denied_file).expect("absolute path")],
+        };
+
+        let (policy_text, params) = deny_read_policy_and_params(&policy);
+
+        assert!(policy_text.contains("(deny file-read*"));
+        assert!(policy_text.contains("(deny file-write-unlink"));
+        assert!(
+            params
+                .iter()
+                .any(|(key, value)| key.starts_with("DENY_READ_")
+                    && value.ends_with(Path::new("secrets.txt")))
+        );
+        assert!(
+            params
+                .iter()
+                .any(|(key, value)| key.starts_with("DENY_UNLINK_")
+                    && value.ends_with(Path::new("private")))
+        );
     }
 
     #[test]
@@ -717,6 +815,7 @@ mod tests {
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 read_only_access: Default::default(),
+                deny_read_paths: vec![],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -746,6 +845,7 @@ mod tests {
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 read_only_access: Default::default(),
+                deny_read_paths: vec![],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -864,6 +964,7 @@ mod tests {
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 read_only_access: Default::default(),
+                deny_read_paths: vec![],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -915,6 +1016,7 @@ mod tests {
                 .map(|p| p.try_into().unwrap())
                 .collect(),
             read_only_access: Default::default(),
+            deny_read_paths: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1110,6 +1212,7 @@ mod tests {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![worktree_root.try_into().expect("worktree_root is absolute")],
             read_only_access: Default::default(),
+            deny_read_paths: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1195,6 +1298,7 @@ mod tests {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             read_only_access: Default::default(),
+            deny_read_paths: vec![],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,

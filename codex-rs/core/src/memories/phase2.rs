@@ -244,6 +244,7 @@ mod agent {
         let consolidation_sandbox_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots,
             read_only_access: Default::default(),
+            deny_read_paths: vec![],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
