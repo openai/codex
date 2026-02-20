@@ -18,6 +18,14 @@ sender_thread_id: ThreadId,
  */
 new_thread_id: ThreadId | null, 
 /**
+ * Optional nickname assigned to the new agent.
+ */
+new_agent_nickname?: string | null, 
+/**
+ * Optional role assigned to the new agent.
+ */
+new_agent_role?: string | null, 
+/**
  * Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
  * beginning.
  */

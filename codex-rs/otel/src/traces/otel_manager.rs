@@ -588,12 +588,15 @@ impl OtelManager {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn log_tool_result_with_tags<F, Fut, E>(
         &self,
         tool_name: &str,
         call_id: &str,
         arguments: &str,
         extra_tags: &[(&str, &str)],
+        mcp_server: Option<&str>,
+        mcp_server_origin: Option<&str>,
         f: F,
     ) -> Result<(String, bool), E>
     where
@@ -618,6 +621,8 @@ impl OtelManager {
             success,
             output.as_ref(),
             extra_tags,
+            mcp_server,
+            mcp_server_origin,
         );
 
         result
@@ -641,6 +646,8 @@ impl OtelManager {
             duration_ms = %Duration::ZERO.as_millis(),
             success = %false,
             output = %error,
+            mcp_server = "",
+            mcp_server_origin = "",
         );
     }
 
@@ -654,6 +661,8 @@ impl OtelManager {
         success: bool,
         output: &str,
         extra_tags: &[(&str, &str)],
+        mcp_server: Option<&str>,
+        mcp_server_origin: Option<&str>,
     ) {
         let success_str = if success { "true" } else { "false" };
         let mut tags = Vec::with_capacity(2 + extra_tags.len());
@@ -662,6 +671,8 @@ impl OtelManager {
         tags.extend_from_slice(extra_tags);
         self.counter(TOOL_CALL_COUNT_METRIC, 1, &tags);
         self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
+        let mcp_server = mcp_server.unwrap_or("");
+        let mcp_server_origin = mcp_server_origin.unwrap_or("");
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.tool_result",
@@ -681,6 +692,8 @@ impl OtelManager {
             duration_ms = %duration.as_millis(),
             success = %success_str,
             output = %output,
+            mcp_server = %mcp_server,
+            mcp_server_origin = %mcp_server_origin,
         );
     }
 

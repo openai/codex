@@ -2002,6 +2002,8 @@ mod tests {
                     .expect("valid sender thread id"),
                 receiver_thread_id: ThreadId::try_from("00000000-0000-0000-0000-000000000002")
                     .expect("valid receiver thread id"),
+                receiver_agent_nickname: None,
+                receiver_agent_role: None,
                 status: AgentStatus::Completed(None),
             }),
         ];

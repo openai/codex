@@ -2059,6 +2059,8 @@ mod tests {
             call_id: "call-1".to_string(),
             sender_thread_id: ThreadId::new(),
             receiver_thread_id: ThreadId::new(),
+            receiver_agent_nickname: None,
+            receiver_agent_role: None,
         };
 
         let item = collab_resume_begin_item(event.clone());
@@ -2080,6 +2082,8 @@ mod tests {
             call_id: "call-2".to_string(),
             sender_thread_id: ThreadId::new(),
             receiver_thread_id: ThreadId::new(),
+            receiver_agent_nickname: None,
+            receiver_agent_role: None,
             status: codex_protocol::protocol::AgentStatus::NotFound,
         };
 

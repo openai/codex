@@ -44,6 +44,8 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         true,
         "ok",
         &[],
+        None,
+        None,
     );
     manager.record_api_request(1, Some(200), None, Duration::from_millis(300));
     manager.record_websocket_request(Duration::from_millis(400), None);

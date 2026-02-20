@@ -50,7 +50,7 @@ tokio = { workspace = true, features = [
 ] }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
-tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]

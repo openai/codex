@@ -73,6 +73,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 use tracing::warn;
+use url::Url;
 
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::types::McpServerConfig;
@@ -507,6 +508,7 @@ pub struct SandboxState {
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
 pub(crate) struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
+    server_origins: HashMap<String, String>,
     elicitation_requests: ElicitationRequestManager,
 }
 
@@ -514,6 +516,7 @@ impl McpConnectionManager {
     pub(crate) fn new_uninitialized(approval_policy: &Constrained<AskForApproval>) -> Self {
         Self {
             clients: HashMap::new(),
+            server_origins: HashMap::new(),
             elicitation_requests: ElicitationRequestManager::new(approval_policy.value()),
         }
     }
@@ -527,6 +530,10 @@ impl McpConnectionManager {
 
     pub(crate) fn has_servers(&self) -> bool {
         !self.clients.is_empty()
+    }
+
+    pub(crate) fn server_origin(&self, server_name: &str) -> Option<&str> {
+        self.server_origins.get(server_name).map(String::as_str)
     }
 
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
@@ -548,10 +555,14 @@ impl McpConnectionManager {
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
+        let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::new(approval_policy.value());
         let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
+            if let Some(origin) = transport_origin(&cfg.transport) {
+                server_origins.insert(server_name.clone(), origin);
+            }
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
                 &tx_event,
@@ -624,6 +635,7 @@ impl McpConnectionManager {
         }
         let manager = Self {
             clients,
+            server_origins,
             elicitation_requests: elicitation_requests.clone(),
         };
         tokio::spawn(async move {
@@ -1448,6 +1460,16 @@ fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
     }
 }
 
+fn transport_origin(transport: &McpServerTransportConfig) -> Option<String> {
+    match transport {
+        McpServerTransportConfig::StreamableHttp { url, .. } => {
+            let parsed = Url::parse(url).ok()?;
+            Some(parsed.origin().ascii_serialization())
+        }
+        McpServerTransportConfig::Stdio { .. } => Some("stdio".to_string()),
+    }
+}
+
 async fn list_tools_for_client_uncached(
     server_name: &str,
     client: &Arc<RmcpClient>,
@@ -2163,5 +2185,33 @@ mod tests {
             "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
             display
         );
+    }
+
+    #[test]
+    fn transport_origin_extracts_http_origin() {
+        let transport = McpServerTransportConfig::StreamableHttp {
+            url: "https://example.com:8443/path?query=1".to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        };
+
+        assert_eq!(
+            transport_origin(&transport),
+            Some("https://example.com:8443".to_string())
+        );
+    }
+
+    #[test]
+    fn transport_origin_is_stdio_for_stdio_transport() {
+        let transport = McpServerTransportConfig::Stdio {
+            command: "server".to_string(),
+            args: Vec::new(),
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        };
+
+        assert_eq!(transport_origin(&transport), Some("stdio".to_string()));
     }
 }
