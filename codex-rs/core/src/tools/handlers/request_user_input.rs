@@ -11,6 +11,7 @@ use crate::tools::registry::ToolKind;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
 use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 
 fn format_allowed_modes() -> String {
     let mode_names: Vec<&str> = TUI_VISIBLE_COLLABORATION_MODES
@@ -109,6 +110,17 @@ impl ToolHandler for RequestUserInputHandler {
             success: Some(true),
         })
     }
+
+    fn should_interrupt_turn(&self, output: &ToolOutput) -> bool {
+        let ToolOutput::Function { body, .. } = output else {
+            return false;
+        };
+        let Some(content) = body.to_text() else {
+            return false;
+        };
+        serde_json::from_str::<RequestUserInputResponse>(&content)
+            .is_ok_and(|response| response.interrupted)
+    }
 }
 
 #[cfg(test)]
@@ -147,5 +159,27 @@ mod tests {
             request_user_input_tool_description(),
             "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.".to_string()
         );
+    }
+
+    #[test]
+    fn interrupted_response_interrupts_turn() {
+        let handler = RequestUserInputHandler;
+        let output = ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(r#"{"answers":{},"interrupted":true}"#.to_string()),
+            success: Some(true),
+        };
+
+        assert!(handler.should_interrupt_turn(&output));
+    }
+
+    #[test]
+    fn non_interrupted_response_does_not_interrupt_turn() {
+        let handler = RequestUserInputHandler;
+        let output = ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(r#"{"answers":{}}"#.to_string()),
+            success: Some(true),
+        };
+
+        assert!(!handler.should_interrupt_turn(&output));
     }
 }

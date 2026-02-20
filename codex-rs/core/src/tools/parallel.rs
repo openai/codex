@@ -14,6 +14,7 @@ use crate::codex::TurnContext;
 use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolDispatchOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
@@ -51,7 +52,7 @@ impl ToolCallRuntime {
         self,
         call: ToolCall,
         cancellation_token: CancellationToken,
-    ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
+    ) -> impl std::future::Future<Output = Result<ToolDispatchOutput, CodexErr>> {
         let supports_parallel = self.router.tool_supports_parallel(&call.tool_name);
 
         let router = Arc::clone(&self.router);
@@ -69,7 +70,7 @@ impl ToolCallRuntime {
             aborted = false,
         );
 
-        let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =
+        let handle: AbortOnDropHandle<Result<ToolDispatchOutput, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
@@ -113,8 +114,8 @@ impl ToolCallRuntime {
 }
 
 impl ToolCallRuntime {
-    fn aborted_response(call: &ToolCall, secs: f32) -> ResponseInputItem {
-        match &call.payload {
+    fn aborted_response(call: &ToolCall, secs: f32) -> ToolDispatchOutput {
+        let response_input = match &call.payload {
             ToolPayload::Custom { .. } => ResponseInputItem::CustomToolCallOutput {
                 call_id: call.call_id.clone(),
                 output: Self::abort_message(call, secs),
@@ -130,6 +131,10 @@ impl ToolCallRuntime {
                     ..Default::default()
                 },
             },
+        };
+        ToolDispatchOutput {
+            response_input,
+            interrupt_turn: false,
         }
     }
 

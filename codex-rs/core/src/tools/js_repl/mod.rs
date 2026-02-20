@@ -1053,7 +1053,7 @@ impl JsReplManager {
             )
             .await
         {
-            Ok(response) => match serde_json::to_value(response) {
+            Ok(output) => match serde_json::to_value(output.response_input) {
                 Ok(value) => RunToolResult {
                     id: req.id,
                     ok: true,
