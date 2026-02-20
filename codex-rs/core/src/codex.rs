@@ -1707,21 +1707,18 @@ impl Session {
         }
     }
 
-    /// Returns `(last_regular_turn_context_item, crossed_compaction_after_turn)`, where the
-    /// context item comes from the latest completed user turn and the boolean indicates whether a
-    /// compaction was recorded after that turn in the rollback-adjusted rollout view.
+    /// Returns `(last_turn_context_item, crossed_compaction_after_turn)` from the
+    /// rollback-adjusted rollout view.
     ///
-    /// This derives turn membership from persisted turn lifecycle events so
-    /// compact/shell-only turns (which have no user message event) do not
-    /// overwrite the previous-model baseline. `ThreadRolledBack` markers are
-    /// applied so resume/fork uses the post-rollback history view.
+    /// This relies on the invariant that only regular turns persist `TurnContextItem`.
+    /// `ThreadRolledBack` markers are applied so resume/fork uses the post-rollback history view.
     ///
-    /// Returns `(None, false)` when no completed regular turn with a persisted
+    /// Returns `(None, false)` when no completed turn with a persisted
     /// `TurnContextItem` is present in the lifecycle-aware rollout view.
     fn last_rollout_regular_turn_context_lookup(
         rollout_items: &[RolloutItem],
     ) -> (Option<&TurnContextItem>, bool) {
-        struct CompletedRegularTurn<'a> {
+        struct CompletedTurn<'a> {
             context_item: Option<&'a TurnContextItem>,
             // Monotonic epoch used to detect whether any later compaction crossed the selected
             // turn, even if newer regular turns are missing a TurnContextItem.
@@ -1729,22 +1726,19 @@ impl Session {
         }
 
         let mut active_turn_id: Option<&str> = None;
-        let mut active_turn_saw_user_message = false;
         let mut active_turn_context: Option<&TurnContextItem> = None;
-        let mut completed_regular_turns: Vec<CompletedRegularTurn<'_>> = Vec::new();
+        let mut completed_turns: Vec<CompletedTurn<'_>> = Vec::new();
         let mut compaction_epoch = 0usize;
         let mut finish_active_turn = |ended_turn_id: Option<&str>| {
             if let Some(active_id) = active_turn_id
                 && ended_turn_id == Some(active_id)
-                && active_turn_saw_user_message
             {
-                completed_regular_turns.push(CompletedRegularTurn {
+                completed_turns.push(CompletedTurn {
                     context_item: active_turn_context,
                     compaction_epoch_at_completion: compaction_epoch,
                 });
             }
             active_turn_id = None;
-            active_turn_saw_user_message = false;
             active_turn_context = None;
         };
 
@@ -1752,13 +1746,7 @@ impl Session {
             match item {
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
                     active_turn_id = Some(event.turn_id.as_str());
-                    active_turn_saw_user_message = false;
                     active_turn_context = None;
-                }
-                RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
-                    if active_turn_id.is_some() {
-                        active_turn_saw_user_message = true;
-                    }
                 }
                 RolloutItem::TurnContext(ctx) => {
                     if let (Some(active_id), Some(turn_id)) =
@@ -1779,15 +1767,15 @@ impl Session {
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                     let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
-                    let new_len = completed_regular_turns.len().saturating_sub(num_turns);
-                    completed_regular_turns.truncate(new_len);
+                    let new_len = completed_turns.len().saturating_sub(num_turns);
+                    completed_turns.truncate(new_len);
                 }
                 _ => {}
             }
         }
 
         if let Some((context_item, compaction_epoch_at_completion)) =
-            completed_regular_turns.into_iter().rev().find_map(|turn| {
+            completed_turns.into_iter().rev().find_map(|turn| {
                 turn.context_item
                     .map(|ctx| (ctx, turn.compaction_epoch_at_completion))
             })
