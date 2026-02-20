@@ -1718,73 +1718,76 @@ impl Session {
     fn last_rollout_regular_turn_context_lookup(
         rollout_items: &[RolloutItem],
     ) -> (Option<&TurnContextItem>, bool) {
-        struct CompletedTurn<'a> {
-            context_item: Option<&'a TurnContextItem>,
-            // Monotonic epoch used to detect whether any later compaction crossed the selected
-            // turn, even if newer regular turns are missing a TurnContextItem.
-            compaction_epoch_at_completion: usize,
-        }
-
+        let mut turns_to_skip_due_to_rollback = 0usize;
+        let mut saw_surviving_compaction_after_current_turn = false;
         let mut active_turn_id: Option<&str> = None;
+        let mut active_turn_is_rolled_back = false;
         let mut active_turn_context: Option<&TurnContextItem> = None;
-        let mut completed_turns: Vec<CompletedTurn<'_>> = Vec::new();
-        let mut compaction_epoch = 0usize;
-        let mut finish_active_turn = |ended_turn_id: Option<&str>| {
-            if let Some(active_id) = active_turn_id
-                && ended_turn_id == Some(active_id)
-            {
-                completed_turns.push(CompletedTurn {
-                    context_item: active_turn_context,
-                    compaction_epoch_at_completion: compaction_epoch,
-                });
-            }
-            active_turn_id = None;
-            active_turn_context = None;
-        };
+        let mut active_turn_contains_compaction = false;
 
-        for item in rollout_items {
+        for item in rollout_items.iter().rev() {
             match item {
-                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
+                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                    turns_to_skip_due_to_rollback =
+                        turns_to_skip_due_to_rollback.saturating_add(num_turns);
+                }
+                RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
                     active_turn_id = Some(event.turn_id.as_str());
+                    active_turn_is_rolled_back = turns_to_skip_due_to_rollback > 0;
+                    if active_turn_is_rolled_back {
+                        turns_to_skip_due_to_rollback -= 1;
+                    }
                     active_turn_context = None;
+                    active_turn_contains_compaction = false;
+                }
+                RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
+                    active_turn_id = event.turn_id.as_deref();
+                    active_turn_is_rolled_back = turns_to_skip_due_to_rollback > 0;
+                    if active_turn_is_rolled_back {
+                        turns_to_skip_due_to_rollback -= 1;
+                    }
+                    active_turn_context = None;
+                    active_turn_contains_compaction = false;
+                }
+                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
+                    if active_turn_id == Some(event.turn_id.as_str()) {
+                        if !active_turn_is_rolled_back {
+                            if let Some(context_item) = active_turn_context {
+                                return (
+                                    Some(context_item),
+                                    saw_surviving_compaction_after_current_turn,
+                                );
+                            }
+                            if active_turn_contains_compaction {
+                                saw_surviving_compaction_after_current_turn = true;
+                            }
+                        }
+                        active_turn_id = None;
+                        active_turn_is_rolled_back = false;
+                        active_turn_context = None;
+                        active_turn_contains_compaction = false;
+                    }
                 }
                 RolloutItem::TurnContext(ctx) => {
                     if let (Some(active_id), Some(turn_id)) =
                         (active_turn_id, ctx.turn_id.as_deref())
                         && active_id == turn_id
                     {
-                        active_turn_context = Some(ctx);
+                        active_turn_context.get_or_insert(ctx);
                     }
                 }
-                RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
-                    finish_active_turn(Some(event.turn_id.as_str()));
-                }
-                RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
-                    finish_active_turn(event.turn_id.as_deref());
-                }
                 RolloutItem::Compacted(_) => {
-                    compaction_epoch = compaction_epoch.saturating_add(1);
-                }
-                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
-                    let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
-                    let new_len = completed_turns.len().saturating_sub(num_turns);
-                    completed_turns.truncate(new_len);
+                    if active_turn_id.is_some() {
+                        active_turn_contains_compaction = true;
+                    } else {
+                        saw_surviving_compaction_after_current_turn = true;
+                    }
                 }
                 _ => {}
             }
         }
 
-        if let Some((context_item, compaction_epoch_at_completion)) =
-            completed_turns.into_iter().rev().find_map(|turn| {
-                turn.context_item
-                    .map(|ctx| (ctx, turn.compaction_epoch_at_completion))
-            })
-        {
-            return (
-                Some(context_item),
-                compaction_epoch > compaction_epoch_at_completion,
-            );
-        }
         (None, false)
     }
 
