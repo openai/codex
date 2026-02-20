@@ -162,6 +162,9 @@ impl Session {
                     // immediately following turns observe the correct switch state.
                     sess.set_previous_model(Some(model_slug)).await;
                     if let Some(reason) = abort_reason {
+                        ctx_for_finish
+                            .turn_metadata_state
+                            .cancel_git_enrichment_task();
                         // Emit TurnAborted from the spawn site so the rollout flush above
                         // makes the interrupt marker durable before clients observe the event.
                         sess.emit_turn_aborted(ctx_for_finish.as_ref(), reason)
