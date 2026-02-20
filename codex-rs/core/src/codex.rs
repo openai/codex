@@ -1606,13 +1606,11 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.set_reference_context_item(None);
                 }
-                self.set_previous_model(previous_model).await;
+                self.set_previous_model(previous_model.clone()).await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr = turn_context.model_info.slug.as_str();
-                if let Some(prev) = Self::last_rollout_regular_turn_model_name(&rollout_items)
-                    .filter(|p| *p != curr)
-                {
+                if let Some(prev) = previous_model.as_deref().filter(|p| *p != curr) {
                     warn!("resuming session with different model: previous={prev}, current={curr}");
                     self.send_event(
                         &turn_context,
