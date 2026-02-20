@@ -74,6 +74,7 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
         marker: u8,
         len: usize,
         is_markdown: bool,
+        is_blockquoted: bool,
     }
 
     fn parse_open_fence(line: &str) -> Option<Fence> {
@@ -87,6 +88,7 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
             return None;
         }
         let trimmed = &without_newline[leading_ws..];
+        let is_blockquoted = trimmed.trim_start().starts_with('>');
         let fence_scan_text = table_detect::strip_blockquote_prefix(trimmed);
         let (marker, len) = table_detect::parse_fence_marker(fence_scan_text)?;
         let is_markdown = table_detect::is_markdown_fence_info(fence_scan_text, len);
@@ -94,6 +96,7 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
             marker: marker as u8,
             len,
             is_markdown,
+            is_blockquoted,
         })
     }
 
@@ -108,7 +111,14 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
             return false;
         }
         let trimmed = &without_newline[leading_ws..];
-        let fence_scan_text = table_detect::strip_blockquote_prefix(trimmed);
+        let fence_scan_text = if fence.is_blockquoted {
+            if !trimmed.trim_start().starts_with('>') {
+                return false;
+            }
+            table_detect::strip_blockquote_prefix(trimmed)
+        } else {
+            trimmed
+        };
         if let Some((marker, len)) = table_detect::parse_fence_marker(fence_scan_text) {
             marker as u8 == fence.marker
                 && len >= fence.len
@@ -118,10 +128,15 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
         }
     }
 
-    fn markdown_fence_contains_table(content: &str) -> bool {
+    fn markdown_fence_contains_table(content: &str, is_blockquoted_fence: bool) -> bool {
         let mut previous_non_empty: Option<&str> = None;
         for line in content.lines() {
-            let trimmed = table_detect::strip_blockquote_prefix(line).trim();
+            let text = if is_blockquoted_fence {
+                table_detect::strip_blockquote_prefix(line)
+            } else {
+                line
+            };
+            let trimmed = text.trim();
             if trimmed.is_empty() {
                 continue;
             }
@@ -188,7 +203,8 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
                         if markdown_fence_contains_table(&content_from_ranges(
                             markdown_source,
                             &content_ranges,
-                        )) {
+                        ), fence.is_blockquoted)
+                        {
                             for range in content_ranges {
                                 push_source_range(range);
                             }
@@ -417,6 +433,13 @@ mod tests {
             !rendered.contains("```"),
             "expected markdown fence markers to be removed: {rendered:?}"
         );
+    }
+
+    #[test]
+    fn append_markdown_agent_keeps_non_blockquoted_markdown_fence_with_blockquote_table_example() {
+        let src = "```markdown\n> | A | B |\n> |---|---|\n> | 1 | 2 |\n```\n";
+        let normalized = unwrap_markdown_fences(src);
+        assert_eq!(normalized, src);
     }
 
     #[test]
