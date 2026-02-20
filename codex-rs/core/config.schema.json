@@ -1270,6 +1270,10 @@
       ],
       "description": "Agent-related settings (thread limits, etc.)."
     },
+    "allow_login_shell": {
+      "description": "Whether shell-based tools may request login shell semantics.",
+      "type": "boolean"
+    },
     "analytics": {
       "allOf": [
         {

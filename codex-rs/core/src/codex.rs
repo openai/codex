@@ -609,6 +609,7 @@ impl TurnContext {
             features: &features,
             web_search_mode: self.tools_config.web_search_mode,
         })
+        .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_agent_roles(config.agent_roles.clone());
 
         Self {
@@ -941,6 +942,7 @@ impl Session {
             features: &per_turn_config.features,
             web_search_mode: Some(per_turn_config.web_search_mode.value()),
         })
+        .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_agent_roles(per_turn_config.agent_roles.clone());
 
         let cwd = session_configuration.cwd.clone();
@@ -4093,6 +4095,7 @@ async fn spawn_review_thread(
         features: &review_features,
         web_search_mode: Some(review_web_search_mode),
     })
+    .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_agent_roles(config.agent_roles.clone());
 
     let review_prompt = resolved.prompt.clone();
