@@ -2401,6 +2401,7 @@ allowed_domains = ["openai.com"]
                 allow_upstream_proxy: Some(false),
                 dangerously_allow_non_loopback_proxy: None,
                 dangerously_allow_non_loopback_admin: None,
+                dangerously_allow_all_unix_sockets: None,
                 mode: None,
                 allowed_domains: Some(vec!["openai.com".to_string()]),
                 denied_domains: None,

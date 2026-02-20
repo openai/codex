@@ -1,16 +1,18 @@
 #![cfg(target_os = "macos")]
 
-use codex_network_proxy::ALLOW_LOCAL_BINDING_ENV_KEY;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use codex_network_proxy::has_proxy_url_env_vars;
 use codex_network_proxy::proxy_url_env_value;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
+use tracing::warn;
 use url::Url;
 
 use crate::protocol::SandboxPolicy;
@@ -110,32 +112,129 @@ fn proxy_loopback_ports_from_env(env: &HashMap<String, String>) -> Vec<u16> {
     ports.into_iter().collect()
 }
 
-fn local_binding_enabled(env: &HashMap<String, String>) -> bool {
-    env.get(ALLOW_LOCAL_BINDING_ENV_KEY).is_some_and(|value| {
-        let trimmed = value.trim();
-        trimmed == "1" || trimmed.eq_ignore_ascii_case("true")
-    })
-}
-
 #[derive(Debug, Default)]
 struct ProxyPolicyInputs {
     ports: Vec<u16>,
     has_proxy_config: bool,
     allow_local_binding: bool,
+    unix_domain_socket_policy: UnixDomainSocketPolicy,
+}
+
+#[derive(Debug, Clone)]
+// Keep allow-all and allowlist modes disjoint so we don't carry ignored state.
+enum UnixDomainSocketPolicy {
+    AllowAll,
+    Restricted { allowed: Vec<AbsolutePathBuf> },
+}
+
+impl Default for UnixDomainSocketPolicy {
+    fn default() -> Self {
+        Self::Restricted { allowed: vec![] }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct UnixSocketPathParam {
+    key: String,
+    path: AbsolutePathBuf,
 }
 
 fn proxy_policy_inputs(network: Option<&NetworkProxy>) -> ProxyPolicyInputs {
     if let Some(network) = network {
         let mut env = HashMap::new();
         network.apply_to_env(&mut env);
+        let unix_domain_socket_policy = if network.dangerously_allow_all_unix_sockets() {
+            UnixDomainSocketPolicy::AllowAll
+        } else {
+            let allowed = network
+                .allow_unix_sockets()
+                .iter()
+                .filter_map(
+                    |socket_path| match normalize_path_for_sandbox(Path::new(socket_path)) {
+                        Some(path) => Some((path.to_string_lossy().to_string(), path)),
+                        None => {
+                            warn!(
+                                "ignoring network.allow_unix_sockets entry because it could not be normalized: {socket_path}"
+                            );
+                            None
+                        }
+                    },
+                )
+                .collect::<BTreeMap<_, _>>()
+                .into_values()
+                .collect();
+            UnixDomainSocketPolicy::Restricted { allowed }
+        };
         return ProxyPolicyInputs {
             ports: proxy_loopback_ports_from_env(&env),
             has_proxy_config: has_proxy_url_env_vars(&env),
-            allow_local_binding: local_binding_enabled(&env),
+            allow_local_binding: network.allow_local_binding(),
+            unix_domain_socket_policy,
         };
     }
 
     ProxyPolicyInputs::default()
+}
+
+fn normalize_path_for_sandbox(path: &Path) -> Option<AbsolutePathBuf> {
+    // `AbsolutePathBuf::from_absolute_path()` normalizes relative paths against the current
+    // working directory, so keep the explicit check to avoid silently accepting relative entries.
+    if !path.is_absolute() {
+        return None;
+    }
+
+    let absolute_path = AbsolutePathBuf::from_absolute_path(path).ok()?;
+    let normalized_path = absolute_path
+        .as_path()
+        .canonicalize()
+        .ok()
+        .and_then(|canonical_path| AbsolutePathBuf::from_absolute_path(canonical_path).ok());
+    normalized_path.or(Some(absolute_path))
+}
+
+fn unix_socket_path_params(proxy: &ProxyPolicyInputs) -> Vec<UnixSocketPathParam> {
+    let mut deduped_paths: BTreeMap<String, AbsolutePathBuf> = BTreeMap::new();
+    let UnixDomainSocketPolicy::Restricted { allowed } = &proxy.unix_domain_socket_policy else {
+        return vec![];
+    };
+    for path in allowed {
+        deduped_paths
+            .entry(path.to_string_lossy().to_string())
+            .or_insert_with(|| path.clone());
+    }
+
+    deduped_paths
+        .into_values()
+        .enumerate()
+        .map(|(index, path)| UnixSocketPathParam {
+            key: format!("UNIX_SOCKET_PATH_{index}"),
+            path,
+        })
+        .collect()
+}
+
+fn unix_socket_dir_params(proxy: &ProxyPolicyInputs) -> Vec<(String, PathBuf)> {
+    unix_socket_path_params(proxy)
+        .into_iter()
+        .map(|param| (param.key, param.path.into_path_buf()))
+        .collect()
+}
+
+/// Returns zero or more complete Seatbelt policy lines for unix socket rules.
+/// When non-empty, the returned string is newline-terminated so callers can
+/// append it directly to larger policy blocks.
+fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
+    if matches!(
+        proxy.unix_domain_socket_policy,
+        UnixDomainSocketPolicy::AllowAll
+    ) {
+        return "(allow network* (subpath \"/\"))\n".to_string();
+    }
+
+    unix_socket_path_params(proxy)
+        .iter()
+        .map(|param| format!("(allow network* (subpath (param \"{}\")))\n", param.key))
+        .collect()
 }
 
 fn dynamic_network_policy(
@@ -156,6 +255,11 @@ fn dynamic_network_policy(
             policy.push_str(&format!(
                 "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
             ));
+        }
+        let unix_socket_policy = unix_socket_policy(proxy);
+        if !unix_socket_policy.is_empty() {
+            policy.push_str("; allow unix domain sockets for local IPC\n");
+            policy.push_str(&unix_socket_policy);
         }
         return format!("{policy}{MACOS_SEATBELT_NETWORK_POLICY}");
     }
@@ -339,6 +443,7 @@ pub(crate) fn create_seatbelt_command_args_with_extensions(
         file_write_dir_params,
         unix_socket_params,
         macos_dir_params(),
+        unix_socket_dir_params(&proxy),
         seatbelt_extensions.dir_params,
     ]
     .concat();
@@ -404,15 +509,20 @@ fn macos_dir_params() -> Vec<(String, PathBuf)> {
 mod tests {
     use super::MACOS_SEATBELT_BASE_POLICY;
     use super::ProxyPolicyInputs;
+    use super::UnixDomainSocketPolicy;
     use super::create_seatbelt_command_args;
     use super::create_seatbelt_command_args_with_extensions;
     use super::dynamic_network_policy;
     use super::macos_dir_params;
+    use super::normalize_path_for_sandbox;
+    use super::unix_socket_dir_params;
+    use super::unix_socket_policy;
     use crate::protocol::SandboxPolicy;
     use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
     use crate::seatbelt_permissions::MacOsAutomationPermission;
     use crate::seatbelt_permissions::MacOsPreferencesPermission;
     use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -428,6 +538,10 @@ mod tests {
                 || stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted"),
             "unexpected stderr: {stderr}"
         );
+    }
+
+    fn absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::from_absolute_path(Path::new(path)).expect("absolute path")
     }
 
     #[test]
@@ -451,6 +565,7 @@ mod tests {
                 ports: vec![43128, 48081],
                 has_proxy_config: true,
                 allow_local_binding: false,
+                ..ProxyPolicyInputs::default()
             },
         );
 
@@ -574,6 +689,7 @@ mod tests {
                 ports: vec![43128],
                 has_proxy_config: true,
                 allow_local_binding: true,
+                ..ProxyPolicyInputs::default()
             },
         );
 
@@ -610,6 +726,7 @@ mod tests {
                 ports: vec![],
                 has_proxy_config: true,
                 allow_local_binding: false,
+                ..ProxyPolicyInputs::default()
             },
         );
 
@@ -638,10 +755,107 @@ mod tests {
                 ports: vec![],
                 has_proxy_config: false,
                 allow_local_binding: false,
+                ..ProxyPolicyInputs::default()
             },
         );
 
         assert_eq!(policy, "");
+    }
+
+    #[test]
+    fn create_seatbelt_args_allowlists_unix_socket_paths() {
+        let policy = dynamic_network_policy(
+            &SandboxPolicy::new_read_only_policy(),
+            false,
+            &ProxyPolicyInputs {
+                ports: vec![43128],
+                has_proxy_config: true,
+                allow_local_binding: false,
+                unix_domain_socket_policy: UnixDomainSocketPolicy::Restricted {
+                    allowed: vec![absolute_path("/tmp/example.sock")],
+                },
+            },
+        );
+
+        assert!(
+            policy.contains("(allow network* (subpath (param \"UNIX_SOCKET_PATH_0\")))"),
+            "policy should allow explicitly configured unix sockets:\n{policy}"
+        );
+    }
+
+    #[test]
+    fn unix_socket_policy_non_empty_output_is_newline_terminated() {
+        let allowlist_policy = unix_socket_policy(&ProxyPolicyInputs {
+            unix_domain_socket_policy: UnixDomainSocketPolicy::Restricted {
+                allowed: vec![absolute_path("/tmp/example.sock")],
+            },
+            ..ProxyPolicyInputs::default()
+        });
+        assert!(
+            allowlist_policy.ends_with('\n'),
+            "allowlist unix socket policy should end with a newline:\n{allowlist_policy}"
+        );
+
+        let allow_all_policy = unix_socket_policy(&ProxyPolicyInputs {
+            unix_domain_socket_policy: UnixDomainSocketPolicy::AllowAll,
+            ..ProxyPolicyInputs::default()
+        });
+        assert!(
+            allow_all_policy.ends_with('\n'),
+            "allow-all unix socket policy should end with a newline:\n{allow_all_policy}"
+        );
+    }
+
+    #[test]
+    fn unix_socket_dir_params_use_stable_param_names() {
+        let params = unix_socket_dir_params(&ProxyPolicyInputs {
+            unix_domain_socket_policy: UnixDomainSocketPolicy::Restricted {
+                allowed: vec![
+                    absolute_path("/tmp/b.sock"),
+                    absolute_path("/tmp/a.sock"),
+                    absolute_path("/tmp/a.sock"),
+                ],
+            },
+            ..ProxyPolicyInputs::default()
+        });
+
+        assert_eq!(
+            params,
+            vec![
+                (
+                    "UNIX_SOCKET_PATH_0".to_string(),
+                    PathBuf::from("/tmp/a.sock")
+                ),
+                (
+                    "UNIX_SOCKET_PATH_1".to_string(),
+                    PathBuf::from("/tmp/b.sock")
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_path_for_sandbox_rejects_relative_paths() {
+        assert_eq!(normalize_path_for_sandbox(Path::new("relative.sock")), None);
+    }
+
+    #[test]
+    fn create_seatbelt_args_allows_all_unix_sockets_when_enabled() {
+        let policy = dynamic_network_policy(
+            &SandboxPolicy::new_read_only_policy(),
+            false,
+            &ProxyPolicyInputs {
+                ports: vec![43128],
+                has_proxy_config: true,
+                allow_local_binding: false,
+                unix_domain_socket_policy: UnixDomainSocketPolicy::AllowAll,
+            },
+        );
+
+        assert!(
+            policy.contains("(allow network* (subpath \"/\"))"),
+            "policy should allow all unix sockets when flag is enabled:\n{policy}"
+        );
     }
 
     #[test]
@@ -659,6 +873,7 @@ mod tests {
                 ports: vec![43128],
                 has_proxy_config: true,
                 allow_local_binding: false,
+                ..ProxyPolicyInputs::default()
             },
         );
 
