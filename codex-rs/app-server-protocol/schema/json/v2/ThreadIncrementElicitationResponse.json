@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "count": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "paused": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "count",
+    "paused"
+  ],
+  "title": "ThreadIncrementElicitationResponse",
+  "type": "object"
+}
