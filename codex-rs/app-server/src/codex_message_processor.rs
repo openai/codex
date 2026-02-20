@@ -6124,7 +6124,9 @@ impl CodexMessageProcessor {
             None
         };
         let mut attachment_paths = validated_rollout_path.into_iter().collect::<Vec<_>>();
-        attachment_paths.extend(extra_log_files);
+        if let Some(extra_log_files) = extra_log_files {
+            attachment_paths.extend(extra_log_files);
+        }
 
         let session_source = self.thread_manager.session_source();
 

@@ -511,7 +511,10 @@
           "items": {
             "type": "string"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "includeLogs": {
           "type": "boolean"
@@ -531,7 +534,6 @@
       },
       "required": [
         "classification",
-        "extraLogFiles",
         "includeLogs"
       ],
       "type": "object"

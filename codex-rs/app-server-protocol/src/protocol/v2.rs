@@ -1471,7 +1471,8 @@ pub struct FeedbackUploadParams {
     #[ts(optional = nullable)]
     pub thread_id: Option<String>,
     pub include_logs: bool,
-    pub extra_log_files: Vec<PathBuf>,
+    #[ts(optional = nullable)]
+    pub extra_log_files: Option<Vec<PathBuf>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
