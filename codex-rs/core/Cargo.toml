@@ -22,7 +22,6 @@ anyhow = { workspace = true }
 arc-swap = "1.8.2"
 async-channel = { workspace = true }
 async-trait = { workspace = true }
-askama = { workspace = true }
 base64 = { workspace = true }
 bm25 = { workspace = true }
 chardetng = { workspace = true }

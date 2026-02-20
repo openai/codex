@@ -12,8 +12,7 @@ const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 const LOCK_FILENAME: &str = ".lock";
-#[cfg(target_os = "windows")]
-const WINDOWS_TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Keeps the per-session PATH entry alive and locked for the process lifetime.
 pub struct Arg0PathEntryGuard {
@@ -129,12 +128,7 @@ where
 fn build_runtime() -> anyhow::Result<tokio::runtime::Runtime> {
     let mut builder = tokio::runtime::Builder::new_multi_thread();
     builder.enable_all();
-    #[cfg(target_os = "windows")]
-    {
-        // Defensive hardening: Windows worker threads have lower effective
-        // stack headroom, so use a larger stack for runtime workers.
-        builder.thread_stack_size(WINDOWS_TOKIO_WORKER_STACK_SIZE_BYTES);
-    }
+    builder.thread_stack_size(TOKIO_WORKER_STACK_SIZE_BYTES);
     Ok(builder.build()?)
 }
 

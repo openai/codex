@@ -61,6 +61,7 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
+use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnSteerParams;
@@ -75,7 +76,7 @@ pub struct McpProcess {
     /// not a guarantee. See the `kill_on_drop` documentation for details.
     #[allow(dead_code)]
     process: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     pending_messages: VecDeque<JSONRPCMessage>,
 }
@@ -105,10 +106,6 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "debug");
-        // Bazel/Linux workers can run with smaller default thread stacks, which makes
-        // tokio-runtime-worker stack overflows more likely in app-server integration tests.
-        // Pin a larger minimum stack for the spawned test server process.
-        cmd.env("RUST_MIN_STACK", "4194304");
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
 
         for (k, v) in env_overrides {
@@ -149,7 +146,7 @@ impl McpProcess {
         Ok(Self {
             next_request_id: AtomicI64::new(0),
             process,
-            stdin,
+            stdin: Some(stdin),
             stdout,
             pending_messages: VecDeque::new(),
         })
@@ -576,6 +573,63 @@ impl McpProcess {
         self.send_request("turn/interrupt", params).await
     }
 
+    /// Deterministically clean up an intentionally in-flight turn.
+    ///
+    /// Some tests assert behavior while a turn is still running. Returning from those tests
+    /// without an explicit interrupt + `codex/event/turn_aborted` wait can leave in-flight work
+    /// racing teardown and intermittently show up as `LEAK` in nextest.
+    ///
+    /// In rare races, the turn can also fail or complete on its own after we send
+    /// `turn/interrupt` but before the server emits the interrupt response. The helper treats a
+    /// buffered matching `turn/completed` notification as sufficient terminal cleanup in that
+    /// case so teardown does not flap on timing.
+    pub async fn interrupt_turn_and_wait_for_aborted(
+        &mut self,
+        thread_id: String,
+        turn_id: String,
+        read_timeout: std::time::Duration,
+    ) -> anyhow::Result<()> {
+        let interrupt_request_id = self
+            .send_turn_interrupt_request(TurnInterruptParams {
+                thread_id: thread_id.clone(),
+                turn_id: turn_id.clone(),
+            })
+            .await?;
+        match tokio::time::timeout(
+            read_timeout,
+            self.read_stream_until_response_message(RequestId::Integer(interrupt_request_id)),
+        )
+        .await
+        {
+            Ok(result) => {
+                result.with_context(|| "failed while waiting for turn interrupt response")?;
+            }
+            Err(err) => {
+                if self.pending_turn_completed_notification(&thread_id, &turn_id) {
+                    return Ok(());
+                }
+                return Err(err).with_context(|| "timed out waiting for turn interrupt response");
+            }
+        }
+        match tokio::time::timeout(
+            read_timeout,
+            self.read_stream_until_notification_message("codex/event/turn_aborted"),
+        )
+        .await
+        {
+            Ok(result) => {
+                result.with_context(|| "failed while waiting for turn aborted notification")?;
+            }
+            Err(err) => {
+                if self.pending_turn_completed_notification(&thread_id, &turn_id) {
+                    return Ok(());
+                }
+                return Err(err).with_context(|| "timed out waiting for turn aborted notification");
+            }
+        }
+        Ok(())
+    }
+
     /// Send a `turn/steer` JSON-RPC request (v2).
     pub async fn send_turn_steer_request(
         &mut self,
@@ -815,10 +869,13 @@ impl McpProcess {
 
     async fn send_jsonrpc_message(&mut self, message: JSONRPCMessage) -> anyhow::Result<()> {
         eprintln!("writing message to stdin: {message:?}");
+        let Some(stdin) = self.stdin.as_mut() else {
+            anyhow::bail!("mcp stdin closed");
+        };
         let payload = serde_json::to_string(&message)?;
-        self.stdin.write_all(payload.as_bytes()).await?;
-        self.stdin.write_all(b"\n").await?;
-        self.stdin.flush().await?;
+        stdin.write_all(payload.as_bytes()).await?;
+        stdin.write_all(b"\n").await?;
+        stdin.flush().await?;
         Ok(())
     }
 
@@ -941,6 +998,25 @@ impl McpProcess {
         None
     }
 
+    fn pending_turn_completed_notification(&self, thread_id: &str, turn_id: &str) -> bool {
+        self.pending_messages.iter().any(|message| {
+            let JSONRPCMessage::Notification(notification) = message else {
+                return false;
+            };
+            if notification.method != "turn/completed" {
+                return false;
+            }
+            let Some(params) = notification.params.as_ref() else {
+                return false;
+            };
+            let Ok(payload) = serde_json::from_value::<TurnCompletedNotification>(params.clone())
+            else {
+                return false;
+            };
+            payload.thread_id == thread_id && payload.turn.id == turn_id
+        })
+    }
+
     fn message_request_id(message: &JSONRPCMessage) -> Option<&RequestId> {
         match message {
             JSONRPCMessage::Request(request) => Some(&request.id),
@@ -965,8 +1041,22 @@ impl Drop for McpProcess {
         //
         // Drop can't be async, so we do a bounded synchronous cleanup:
         //
-        // 1. Request termination with `start_kill()`.
-        // 2. Poll `try_wait()` until the OS reports the child exited, with a short timeout.
+        // 1. Close stdin to request a graceful shutdown via EOF.
+        // 2. Poll briefly for graceful exit.
+        // 3. If still alive, request termination with `start_kill()`.
+        // 4. Poll `try_wait()` until the OS reports the child exited, with a short timeout.
+        drop(self.stdin.take());
+
+        let graceful_start = std::time::Instant::now();
+        let graceful_timeout = std::time::Duration::from_millis(200);
+        while graceful_start.elapsed() < graceful_timeout {
+            match self.process.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                Err(_) => return,
+            }
+        }
+
         let _ = self.process.start_kill();
 
         let start = std::time::Instant::now();

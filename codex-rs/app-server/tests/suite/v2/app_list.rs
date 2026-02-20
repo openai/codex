@@ -491,39 +491,60 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
         })
         .await?;
 
+    let expected_directory_first = vec![
+        AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha connector".to_string()),
+            logo_url: Some("https://example.com/alpha.png".to_string()),
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+        },
+        AppInfo {
+            id: "beta".to_string(),
+            name: "beta".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+        },
+    ];
+    let expected_accessible_first = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta App".to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
+        is_accessible: true,
+        is_enabled: true,
+    }];
+
     let first_update = read_app_list_updated_notification(&mut mcp).await?;
-    assert_eq!(
-        first_update.data,
-        vec![
-            AppInfo {
-                id: "alpha".to_string(),
-                name: "Alpha".to_string(),
-                description: Some("Alpha connector".to_string()),
-                logo_url: Some("https://example.com/alpha.png".to_string()),
-                logo_url_dark: None,
-                distribution_channel: None,
-                branding: None,
-                app_metadata: None,
-                labels: None,
-                install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
-                is_accessible: false,
-                is_enabled: true,
-            },
-            AppInfo {
-                id: "beta".to_string(),
-                name: "beta".to_string(),
-                description: None,
-                logo_url: None,
-                logo_url_dark: None,
-                distribution_channel: None,
-                branding: None,
-                app_metadata: None,
-                labels: None,
-                install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
-                is_accessible: false,
-                is_enabled: true,
-            },
-        ]
+    // app/list emits an update after whichever async load finishes first. Even with
+    // a tools delay in this test, the accessible-tools path can return first if the
+    // process-global Codex Apps tools cache is warm from another test.
+    assert!(
+        first_update.data == expected_directory_first
+            || first_update.data == expected_accessible_first,
+        "unexpected first app/list update: {:#?}",
+        first_update.data
     );
 
     let expected = vec![

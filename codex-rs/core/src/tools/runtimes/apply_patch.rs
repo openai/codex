@@ -127,7 +127,13 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
     }
 
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
-        !matches!(policy, AskForApproval::Never)
+        match policy {
+            AskForApproval::Never => false,
+            AskForApproval::Reject(reject_config) => !reject_config.rejects_sandbox_approval(),
+            AskForApproval::OnFailure => true,
+            AskForApproval::OnRequest => true,
+            AskForApproval::UnlessTrusted => true,
+        }
     }
 
     // apply_patch approvals are decided upstream by assess_patch_safety.
@@ -157,5 +163,31 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::RejectConfig;
+
+    #[test]
+    fn wants_no_sandbox_approval_reject_respects_sandbox_flag() {
+        let runtime = ApplyPatchRuntime::new();
+        assert!(runtime.wants_no_sandbox_approval(AskForApproval::OnRequest));
+        assert!(
+            !runtime.wants_no_sandbox_approval(AskForApproval::Reject(RejectConfig {
+                sandbox_approval: true,
+                rules: false,
+                mcp_elicitations: false,
+            }))
+        );
+        assert!(
+            runtime.wants_no_sandbox_approval(AskForApproval::Reject(RejectConfig {
+                sandbox_approval: false,
+                rules: false,
+                mcp_elicitations: false,
+            }))
+        );
     }
 }
