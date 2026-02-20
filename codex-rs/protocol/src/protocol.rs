@@ -2842,6 +2842,30 @@ pub struct CollabWaitingBeginEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabWaitDiagnosticEvent {
+    /// Stable machine-readable diagnostic marker for collab wait behavior.
+    pub diagnostic_event: String,
+    /// Optional thread id associated with this diagnostic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<ThreadId>,
+    /// Receiver count for the wait call when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_count: Option<usize>,
+    /// Effective timeout for the wait call in milliseconds when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<i64>,
+    /// Last observed status before status stream closure (if applicable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_observed_status: Option<AgentStatus>,
+    /// Fallback status sampled after stream closure (if applicable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_status: Option<AgentStatus>,
+    /// Whether fallback status was final when sampled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_is_final: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct CollabWaitingEndEvent {
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
@@ -2852,6 +2876,9 @@ pub struct CollabWaitingEndEvent {
     pub agent_statuses: Vec<CollabAgentStatusEntry>,
     /// Last known status of the receiver agents reported to the sender agent.
     pub statuses: HashMap<ThreadId, AgentStatus>,
+    /// Structured diagnostics captured during wait execution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<CollabWaitDiagnosticEvent>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]

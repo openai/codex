@@ -119,6 +119,7 @@ pub(crate) fn waiting_end(ev: CollabWaitingEndEvent) -> PlainHistoryCell {
         sender_thread_id: _,
         agent_statuses,
         statuses,
+        ..
     } = ev;
     let details = wait_complete_lines(&statuses, &agent_statuses);
     collab_event(title_text("Finished waiting"), details)
