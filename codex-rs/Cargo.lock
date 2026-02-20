@@ -2237,7 +2237,6 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-utils-absolute-path",
- "codex-utils-approval-presets",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-utils-elapsed",
@@ -2309,13 +2308,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "ts-rs",
-]
-
-[[package]]
-name = "codex-utils-approval-presets"
-version = "0.0.0"
-dependencies = [
- "codex-core",
 ]
 
 [[package]]

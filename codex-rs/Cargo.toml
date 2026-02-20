@@ -55,7 +55,6 @@ members = [
     "utils/sandbox-summary",
     "utils/sanitizer",
     "utils/sleep-inhibitor",
-    "utils/approval-presets",
     "utils/oss",
     "utils/fuzzy-match",
     "codex-client",
@@ -117,7 +116,6 @@ codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
-codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-cache = { path = "utils/cache" }
 codex-utils-cargo-bin = { path = "utils/cargo-bin" }
 codex-utils-cli = { path = "utils/cli" }

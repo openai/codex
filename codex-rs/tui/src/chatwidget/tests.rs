@@ -12,6 +12,7 @@ use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::history_cell::UserHistoryCell;
+use crate::permissions::builtin_permissions_presets;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
@@ -91,7 +92,6 @@ use codex_protocol::protocol::SkillScope;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_approval_presets::builtin_approval_presets;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -3082,7 +3082,7 @@ async fn ctrl_d_quits_without_prompt() {
 async fn ctrl_d_with_modal_open_does_not_quit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.open_approvals_popup();
+    chat.open_permissions_popup();
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
 
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
@@ -5067,7 +5067,7 @@ async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.config.notices.hide_full_access_warning = None;
-    chat.open_approvals_popup();
+    chat.open_permissions_popup();
 
     let popup = render_bottom_popup(&chat, 80);
     #[cfg(target_os = "windows")]
@@ -5088,7 +5088,7 @@ async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     chat.set_feature_enabled(Feature::WindowsSandbox, true);
     chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
 
-    chat.open_approvals_popup();
+    chat.open_permissions_popup();
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -5107,10 +5107,11 @@ async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
 
 #[tokio::test]
 async fn preset_matching_requires_exact_workspace_write_settings() {
-    let preset = builtin_approval_presets()
+    let preset = builtin_permissions_presets()
         .into_iter()
         .find(|p| p.id == "auto")
         .expect("auto preset exists");
+    let mut config = test_config().await;
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![AbsolutePathBuf::try_from("C:\\extra").unwrap()],
         read_only_access: Default::default(),
@@ -5118,13 +5119,28 @@ async fn preset_matching_requires_exact_workspace_write_settings() {
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .unwrap();
+    config
+        .permissions
+        .sandbox_policy
+        .set(current_sandbox)
+        .unwrap();
 
     assert!(
-        !ChatWidget::preset_matches_current(AskForApproval::OnRequest, &current_sandbox, &preset),
+        !preset.to_selection_item(&config).is_current,
         "WorkspaceWrite with extra roots should not match the Default preset"
     );
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::Never)
+        .unwrap();
     assert!(
-        !ChatWidget::preset_matches_current(AskForApproval::Never, &current_sandbox, &preset),
+        !preset.to_selection_item(&config).is_current,
         "approval mismatch should prevent matching the preset"
     );
 }
@@ -5133,11 +5149,11 @@ async fn preset_matching_requires_exact_workspace_write_settings() {
 async fn full_access_confirmation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    let preset = builtin_approval_presets()
+    let preset = builtin_permissions_presets()
         .into_iter()
-        .find(|preset| preset.id == "full-access")
+        .find(|selection_item| selection_item.id == "full-access")
         .expect("full access preset");
-    chat.open_full_access_confirmation(preset, false);
+    chat.open_full_access_confirmation(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("full_access_confirmation_popup", popup);
@@ -5148,7 +5164,7 @@ async fn full_access_confirmation_popup_snapshot() {
 async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    let preset = builtin_approval_presets()
+    let preset = builtin_permissions_presets()
         .into_iter()
         .find(|preset| preset.id == "auto")
         .expect("auto preset");
@@ -5426,7 +5442,7 @@ async fn approvals_popup_shows_disabled_presets() {
             )),
         })
         .expect("construct constrained approval policy");
-    chat.open_approvals_popup();
+    chat.open_permissions_popup();
 
     let width = 80;
     let height = chat.desired_height(width);
@@ -5459,7 +5475,7 @@ async fn approvals_popup_navigation_skips_disabled() {
             _ => Err(invalid_value(candidate.to_string(), "[on-request]")),
         })
         .expect("construct constrained approval policy");
-    chat.open_approvals_popup();
+    chat.open_permissions_popup();
 
     // The approvals popup is the active bottom-pane view; drive navigation via chat handle_key_event.
     // Start selected at idx 0 (enabled), move down twice; the disabled option should be skipped
@@ -5667,11 +5683,8 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
             AppEvent::InsertHistoryCell(cell) => {
                 cells_before_confirmation.push(cell.display_lines(80));
             }
-            AppEvent::OpenFullAccessConfirmation {
-                preset,
-                return_to_permissions,
-            } => {
-                open_confirmation_event = Some((preset, return_to_permissions));
+            AppEvent::OpenFullAccessConfirmation { preset } => {
+                open_confirmation_event = Some(preset);
             }
             _ => {}
         }
@@ -5682,9 +5695,8 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
             "did not expect history cell before confirming full access"
         );
     }
-    let (preset, return_to_permissions) =
-        open_confirmation_event.expect("expected full access confirmation event");
-    chat.open_full_access_confirmation(preset, return_to_permissions);
+    let preset = open_confirmation_event.expect("expected full access confirmation event");
+    chat.open_full_access_confirmation(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
