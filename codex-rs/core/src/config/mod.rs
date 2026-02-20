@@ -5459,7 +5459,7 @@ allow_login_shell = false
         assert!(!config.permissions.allow_login_shell);
         Ok(())
     }
-      
+
     #[test]
     fn config_loads_mcp_oauth_callback_url_from_toml() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
