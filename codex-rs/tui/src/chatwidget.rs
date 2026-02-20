@@ -539,6 +539,7 @@ pub(crate) struct ChatWidget {
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     connectors_cache: ConnectorsCacheState,
     connectors_prefetch_in_flight: bool,
+    connectors_force_refetch_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -2650,6 +2651,7 @@ impl ChatWidget {
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
+            connectors_force_refetch_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2813,6 +2815,7 @@ impl ChatWidget {
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
+            connectors_force_refetch_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2965,6 +2968,7 @@ impl ChatWidget {
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
+            connectors_force_refetch_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -4601,7 +4605,13 @@ impl ChatWidget {
     }
 
     fn prefetch_connectors_with_options(&mut self, force_refetch: bool) {
-        if !self.connectors_enabled() || self.connectors_prefetch_in_flight {
+        if !self.connectors_enabled() {
+            return;
+        }
+        if self.connectors_prefetch_in_flight {
+            if force_refetch {
+                self.connectors_force_refetch_pending = true;
+            }
             return;
         }
 
@@ -4613,8 +4623,8 @@ impl ChatWidget {
         let config = self.config.clone();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let accessible_connectors =
-                match connectors::list_accessible_connectors_from_mcp_tools_with_options(
+            let accessible_result =
+                match connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
                     &config,
                     force_refetch,
                 )
@@ -4629,6 +4639,9 @@ impl ChatWidget {
                         return;
                     }
                 };
+            let should_schedule_force_refetch =
+                !force_refetch && !accessible_result.codex_apps_ready;
+            let accessible_connectors = accessible_result.connectors;
 
             app_event_tx.send(AppEvent::ConnectorsLoaded {
                 result: Ok(ConnectorsSnapshot {
@@ -4638,7 +4651,8 @@ impl ChatWidget {
             });
 
             let result: Result<ConnectorsSnapshot, String> = async {
-                let all_connectors = connectors::list_all_connectors(&config).await?;
+                let all_connectors =
+                    connectors::list_all_connectors_with_options(&config, force_refetch).await?;
                 let connectors = connectors::merge_connectors_with_accessible(
                     all_connectors,
                     accessible_connectors,
@@ -4653,6 +4667,12 @@ impl ChatWidget {
                 result,
                 is_final: true,
             });
+
+            if should_schedule_force_refetch {
+                app_event_tx.send(AppEvent::RefreshConnectors {
+                    force_refetch: true,
+                });
+            }
         });
     }
 
@@ -6821,8 +6841,13 @@ impl ChatWidget {
         result: Result<ConnectorsSnapshot, String>,
         is_final: bool,
     ) {
+        let mut trigger_pending_force_refetch = false;
         if is_final {
             self.connectors_prefetch_in_flight = false;
+            if self.connectors_force_refetch_pending {
+                self.connectors_force_refetch_pending = false;
+                trigger_pending_force_refetch = true;
+            }
         }
 
         match result {
@@ -6857,12 +6882,15 @@ impl ChatWidget {
             Err(err) => {
                 if matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
                     warn!("failed to refresh apps list; retaining current apps snapshot: {err}");
-                    return;
+                } else {
+                    self.connectors_cache = ConnectorsCacheState::Failed(err);
+                    self.bottom_pane.set_connectors_snapshot(None);
                 }
-
-                self.connectors_cache = ConnectorsCacheState::Failed(err);
-                self.bottom_pane.set_connectors_snapshot(None);
             }
+        }
+
+        if trigger_pending_force_refetch {
+            self.prefetch_connectors_with_options(true);
         }
     }
 

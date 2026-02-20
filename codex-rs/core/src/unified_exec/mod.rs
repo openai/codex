@@ -155,7 +155,7 @@ struct ProcessEntry {
     process_id: String,
     command: Vec<String>,
     tty: bool,
-    network_attempt_id: Option<String>,
+    network_approval_id: Option<String>,
     session: Weak<Session>,
     last_used: tokio::time::Instant,
 }
