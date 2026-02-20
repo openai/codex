@@ -7119,7 +7119,6 @@ async fn handle_pending_thread_resume_request(
             return;
         }
     };
-
     has_in_progress_turn = has_in_progress_turn
         || thread
             .turns
