@@ -45,6 +45,7 @@ use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
+use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
@@ -675,6 +676,9 @@ pub(crate) struct ChatWidget {
     terminal_title_invalid_items_warned: Arc<AtomicBool>,
     // Last terminal title emitted, to avoid writing duplicate OSC updates.
     last_terminal_title: Option<String>,
+    // Original terminal-title config captured when opening the setup UI so live preview can be
+    // rolled back on cancel.
+    terminal_title_setup_original_items: Option<Option<Vec<String>>>,
     // Cached git branch name for the status line (None if unknown).
     status_line_branch: Option<String>,
     // CWD used to resolve the cached branch; change resets branch state.
@@ -1082,7 +1086,11 @@ impl ChatWidget {
         }
 
         if items.is_empty() {
-            self.last_terminal_title = None;
+            if self.last_terminal_title.take().is_some()
+                && let Err(err) = clear_terminal_title()
+            {
+                tracing::debug!(error = %err, "failed to clear terminal title");
+            }
             return;
         }
 
@@ -1113,19 +1121,43 @@ impl ChatWidget {
         if self.last_terminal_title == title {
             return;
         }
+        let had_previous_title = self.last_terminal_title.is_some();
         self.last_terminal_title = title.clone();
 
-        let Some(title) = title else {
-            return;
-        };
-        if let Err(err) = set_terminal_title(&title) {
-            tracing::debug!(error = %err, "failed to set terminal title");
+        if let Some(title) = title {
+            if let Err(err) = set_terminal_title(&title) {
+                tracing::debug!(error = %err, "failed to set terminal title");
+            }
+        } else if had_previous_title && let Err(err) = clear_terminal_title() {
+            tracing::debug!(error = %err, "failed to clear terminal title");
         }
     }
 
-    /// Records that terminal-title setup was canceled.
-    pub(crate) fn cancel_terminal_title_setup(&self) {
+    /// Applies a temporary terminal-title selection while the setup UI is open.
+    pub(crate) fn preview_terminal_title(&mut self, items: Vec<TerminalTitleItem>) {
+        if self.terminal_title_setup_original_items.is_none() {
+            self.terminal_title_setup_original_items = Some(self.config.tui_terminal_title.clone());
+        }
+
+        let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
+        self.config.tui_terminal_title = Some(ids);
+        self.refresh_terminal_title();
+    }
+
+    /// Restores the terminal title selection captured before opening the setup UI.
+    pub(crate) fn revert_terminal_title_setup_preview(&mut self) {
+        let Some(original_items) = self.terminal_title_setup_original_items.take() else {
+            return;
+        };
+
+        self.config.tui_terminal_title = original_items;
+        self.refresh_terminal_title();
+    }
+
+    /// Records that terminal-title setup was canceled and rolls back live preview changes.
+    pub(crate) fn cancel_terminal_title_setup(&mut self) {
         tracing::info!("Terminal title setup canceled by user");
+        self.revert_terminal_title_setup_preview();
     }
 
     /// Applies terminal-title item selection from the setup view to in-memory config.
@@ -1134,6 +1166,7 @@ impl ChatWidget {
     pub(crate) fn setup_terminal_title(&mut self, items: Vec<TerminalTitleItem>) {
         tracing::info!("terminal title setup confirmed with items: {items:#?}");
         let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
+        self.terminal_title_setup_original_items = None;
         self.config.tui_terminal_title = Some(ids);
         self.refresh_terminal_title();
     }
@@ -2984,6 +3017,7 @@ impl ChatWidget {
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             last_terminal_title: None,
+            terminal_title_setup_original_items: None,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -3167,6 +3201,7 @@ impl ChatWidget {
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             last_terminal_title: None,
+            terminal_title_setup_original_items: None,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -3338,6 +3373,7 @@ impl ChatWidget {
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
             last_terminal_title: None,
+            terminal_title_setup_original_items: None,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -4852,6 +4888,7 @@ impl ChatWidget {
 
     fn open_terminal_title_setup(&mut self) {
         let configured_terminal_title_items = self.configured_terminal_title_items();
+        self.terminal_title_setup_original_items = Some(self.config.tui_terminal_title.clone());
         let view = TerminalTitleSetupView::new(
             Some(configured_terminal_title_items.as_slice()),
             self.app_event_tx.clone(),
@@ -5105,7 +5142,7 @@ impl ChatWidget {
             .current_status_header
             .starts_with("Waiting for background terminal")
         {
-            return "Waiting".to_string();
+            return "Waiting...".to_string();
         }
 
         if self.current_status_header.starts_with("Undo") {

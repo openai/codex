@@ -1724,6 +1724,7 @@ async fn make_chatwidget_manual(
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         last_terminal_title: None,
+        terminal_title_setup_original_items: None,
         status_line_branch: None,
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
@@ -8068,6 +8069,38 @@ async fn status_line_invalid_items_warn_once() {
         cells.is_empty(),
         "expected invalid status line warning to emit only once"
     );
+}
+
+#[tokio::test]
+async fn terminal_title_setup_cancel_reverts_live_preview() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let original = chat.config.tui_terminal_title.clone();
+
+    chat.open_terminal_title_setup();
+    chat.preview_terminal_title(vec![TerminalTitleItem::Thread, TerminalTitleItem::Status]);
+
+    assert_eq!(
+        chat.config.tui_terminal_title,
+        Some(vec!["thread".to_string(), "status".to_string()])
+    );
+    assert_eq!(
+        chat.terminal_title_setup_original_items,
+        Some(original.clone())
+    );
+
+    chat.cancel_terminal_title_setup();
+
+    assert_eq!(chat.config.tui_terminal_title, original);
+    assert_eq!(chat.terminal_title_setup_original_items, None);
+}
+
+#[tokio::test]
+async fn terminal_title_status_uses_waiting_ellipsis_for_background_terminal() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_task_running(true);
+    chat.current_status_header = "Waiting for background terminal · just fix".to_string();
+
+    assert_eq!(chat.terminal_title_status_text(), "Waiting...");
 }
 
 #[tokio::test]

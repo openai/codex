@@ -395,6 +395,10 @@ pub(crate) enum AppEvent {
     TerminalTitleSetup {
         items: Vec<TerminalTitleItem>,
     },
+    /// Apply a temporary terminal-title preview while the setup UI is open.
+    TerminalTitleSetupPreview {
+        items: Vec<TerminalTitleItem>,
+    },
     /// Dismiss the terminal-title setup UI without changing config.
     TerminalTitleSetupCancelled,
 
