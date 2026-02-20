@@ -38,7 +38,14 @@ impl StopwatchController {
 
     pub(crate) async fn unregister(&self, stopwatch_id: u64) {
         let _operation_guard = self.operation_lock.lock().await;
-        self.state.lock().await.stopwatches.remove(&stopwatch_id);
+        let (stopwatch, paused) = {
+            let mut guard = self.state.lock().await;
+            (guard.stopwatches.remove(&stopwatch_id), guard.paused)
+        };
+
+        if paused && let Some(stopwatch) = stopwatch {
+            stopwatch.resume().await;
+        }
     }
 
     pub(crate) async fn set_paused(&self, paused: bool) {
@@ -108,5 +115,29 @@ mod tests {
         controller.set_paused(false).await;
         controller.unregister(stopwatch_id).await;
         token.cancelled().await;
+    }
+
+    #[tokio::test]
+    async fn unregistering_while_paused_resumes_controller_pause() {
+        let controller = StopwatchController::default();
+        let stopwatch = Stopwatch::new(Duration::from_millis(50));
+        let token = stopwatch.cancellation_token();
+
+        let stopwatch_id = controller.register(stopwatch).await;
+        controller.set_paused(true).await;
+
+        assert!(
+            timeout(Duration::from_millis(30), token.cancelled())
+                .await
+                .is_err()
+        );
+
+        controller.unregister(stopwatch_id).await;
+
+        assert!(
+            timeout(Duration::from_millis(120), token.cancelled())
+                .await
+                .is_ok()
+        );
     }
 }
