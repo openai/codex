@@ -42,12 +42,6 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReasoningSelectionPurpose {
-    ModelSelection,
-    PlanImplementation,
-}
-
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -168,12 +162,6 @@ pub(crate) enum AppEvent {
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
-        purpose: ReasoningSelectionPurpose,
-    },
-
-    /// Open the reasoning popup for the currently active model.
-    OpenReasoningPopupForCurrentModel {
-        purpose: ReasoningSelectionPurpose,
     },
 
     /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
@@ -342,12 +330,6 @@ pub(crate) enum AppEvent {
     SubmitUserMessageWithMode {
         text: String,
         collaboration_mode: CollaborationModeMask,
-    },
-
-    /// Select an all-modes reasoning level, then switch to Default mode and implement the plan.
-    SubmitPlanImplementationWithReasoning {
-        model: String,
-        effort: Option<ReasoningEffort>,
     },
 
     /// Open the approval popup.

@@ -1761,12 +1761,8 @@ impl App {
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
             }
-            AppEvent::OpenReasoningPopup { model, purpose } => {
-                self.chat_widget.open_reasoning_popup(model, purpose);
-            }
-            AppEvent::OpenReasoningPopupForCurrentModel { purpose } => {
-                self.chat_widget
-                    .open_reasoning_popup_for_current_model(purpose);
+            AppEvent::OpenReasoningPopup { model } => {
+                self.chat_widget.open_reasoning_popup(model);
             }
             AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
                 self.chat_widget
@@ -2539,29 +2535,6 @@ impl App {
             } => {
                 self.chat_widget
                     .submit_user_message_with_mode(text, collaboration_mode);
-            }
-            AppEvent::SubmitPlanImplementationWithReasoning { model, effort } => {
-                self.config.plan_mode_reasoning_effort = None;
-                self.chat_widget.set_plan_mode_reasoning_effort(None);
-                self.chat_widget.submit_op(Op::OverrideTurnContext {
-                    cwd: None,
-                    approval_policy: None,
-                    sandbox_policy: None,
-                    windows_sandbox_level: None,
-                    model: Some(model.clone()),
-                    effort: Some(effort),
-                    summary: None,
-                    collaboration_mode: None,
-                    personality: None,
-                });
-                self.chat_widget.set_model(&model);
-                self.on_update_reasoning_effort(effort);
-                self.refresh_status_line();
-                self.app_event_tx
-                    .send(AppEvent::PersistPlanModeReasoningEffort(None));
-                self.app_event_tx
-                    .send(AppEvent::PersistModelSelection { model, effort });
-                self.chat_widget.submit_plan_implementation_message();
             }
             AppEvent::ManageSkillsClosed => {
                 self.chat_widget.handle_manage_skills_closed();
