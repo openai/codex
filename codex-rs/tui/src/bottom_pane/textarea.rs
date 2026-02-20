@@ -45,6 +45,9 @@ pub(crate) struct TextArea {
     elements: Vec<TextElement>,
     next_element_id: u64,
     kill_buffer: String,
+    vim_enabled: bool,
+    vim_mode: VimMode,
+    vim_operator: Option<VimOperator>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +62,18 @@ pub(crate) struct TextAreaState {
     scroll: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimMode {
+    Normal,
+    Insert,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimOperator {
+    Delete,
+    Yank,
+}
+
 impl TextArea {
     pub fn new() -> Self {
         Self {
@@ -69,6 +84,9 @@ impl TextArea {
             elements: Vec::new(),
             next_element_id: 1,
             kill_buffer: String::new(),
+            vim_enabled: false,
+            vim_mode: VimMode::Insert,
+            vim_operator: None,
         }
     }
 
@@ -110,6 +128,38 @@ impl TextArea {
         self.wrap_cache.replace(None);
         self.preferred_col = None;
         self.kill_buffer.clear();
+    }
+
+    pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
+        self.vim_enabled = enabled;
+        self.vim_operator = None;
+        self.vim_mode = if enabled {
+            VimMode::Normal
+        } else {
+            VimMode::Insert
+        };
+    }
+
+    pub(crate) fn is_vim_enabled(&self) -> bool {
+        self.vim_enabled
+    }
+
+    pub(crate) fn allows_paste_burst(&self) -> bool {
+        !self.vim_enabled || self.vim_mode == VimMode::Insert
+    }
+
+    pub(crate) fn is_vim_insert(&self) -> bool {
+        self.vim_enabled && self.vim_mode == VimMode::Insert
+    }
+
+    pub(crate) fn vim_mode_label(&self) -> Option<&'static str> {
+        if !self.vim_enabled {
+            return None;
+        }
+        Some(match self.vim_mode {
+            VimMode::Normal => "Normal",
+            VimMode::Insert => "Insert",
+        })
     }
 
     pub fn text(&self) -> &str {
@@ -256,6 +306,14 @@ impl TextArea {
     }
 
     pub fn input(&mut self, event: KeyEvent) {
+        if self.vim_enabled {
+            self.handle_vim_input(event);
+        } else {
+            self.handle_emacs_input(event);
+        }
+    }
+
+    fn handle_emacs_input(&mut self, event: KeyEvent) {
         match event {
             // Some terminals (or configurations) send Control key chords as
             // C0 control characters without reporting the CONTROL modifier.
@@ -493,6 +551,305 @@ impl TextArea {
         }
     }
 
+    fn handle_vim_input(&mut self, event: KeyEvent) {
+        match self.vim_mode {
+            VimMode::Insert => self.handle_vim_insert(event),
+            VimMode::Normal => self.handle_vim_normal(event),
+        }
+    }
+
+    fn handle_vim_insert(&mut self, event: KeyEvent) {
+        if matches!(event.code, KeyCode::Esc) {
+            self.vim_mode = VimMode::Normal;
+            self.vim_operator = None;
+            self.preferred_col = None;
+            return;
+        }
+        self.handle_emacs_input(event);
+    }
+
+    fn handle_vim_normal(&mut self, event: KeyEvent) {
+        if let Some(op) = self.vim_operator.take()
+            && self.handle_vim_operator(op, event)
+        {
+            return;
+        }
+
+        match event {
+            KeyEvent {
+                code: KeyCode::Char('i'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.vim_mode = VimMode::Insert;
+            }
+            KeyEvent {
+                code: KeyCode::Char('a'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                let next = self.next_atomic_boundary(self.cursor_pos);
+                self.set_cursor(next);
+                self.vim_mode = VimMode::Insert;
+            }
+            KeyEvent {
+                code: KeyCode::Char('A'),
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
+                self.set_cursor(self.end_of_current_line());
+                self.vim_mode = VimMode::Insert;
+            }
+            KeyEvent {
+                code: KeyCode::Char('I'),
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
+                self.set_cursor(self.beginning_of_current_line());
+                self.vim_mode = VimMode::Insert;
+            }
+            KeyEvent {
+                code: KeyCode::Char('o'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                let eol = self.end_of_current_line();
+                let insert_at = if eol < self.text.len() { eol + 1 } else { eol };
+                self.insert_str_at(insert_at, "\n");
+                self.set_cursor(insert_at + 1);
+                self.vim_mode = VimMode::Insert;
+            }
+            KeyEvent {
+                code: KeyCode::Char('O'),
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
+                let bol = self.beginning_of_current_line();
+                self.insert_str_at(bol, "\n");
+                self.set_cursor(bol);
+                self.vim_mode = VimMode::Insert;
+            }
+            KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.move_cursor_left(),
+            KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.move_cursor_right(),
+            KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.move_cursor_down(),
+            KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.move_cursor_up(),
+            KeyEvent {
+                code: KeyCode::Char('w'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.set_cursor(self.beginning_of_next_word()),
+            KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.set_cursor(self.beginning_of_previous_word()),
+            KeyEvent {
+                code: KeyCode::Char('e'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.set_cursor(self.end_of_next_word()),
+            KeyEvent {
+                code: KeyCode::Char('0'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.set_cursor(self.beginning_of_current_line()),
+            KeyEvent {
+                code: KeyCode::Char('$'),
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
+                self.set_cursor(self.end_of_current_line());
+            }
+            KeyEvent {
+                code: KeyCode::Char('x'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.delete_forward_kill(1);
+            }
+            KeyEvent {
+                code: KeyCode::Char('D'),
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
+                self.kill_to_end_of_line();
+            }
+            KeyEvent {
+                code: KeyCode::Char('Y'),
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
+                self.yank_current_line();
+            }
+            KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.paste_after_cursor(),
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.vim_operator = Some(VimOperator::Delete);
+            }
+            KeyEvent {
+                code: KeyCode::Char('y'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.vim_operator = Some(VimOperator::Yank);
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                self.vim_operator = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_vim_operator(&mut self, op: VimOperator, event: KeyEvent) -> bool {
+        match event {
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if op == VimOperator::Delete => {
+                self.delete_current_line();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('y'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if op == VimOperator::Yank => {
+                self.yank_current_line();
+                true
+            }
+            _ => {
+                if let Some(motion) = self.vim_motion_for_event(event) {
+                    self.apply_vim_operator(op, motion);
+                    return true;
+                }
+                false
+            }
+        }
+    }
+
+    fn vim_motion_for_event(&self, event: KeyEvent) -> Option<VimMotion> {
+        match event {
+            KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => Some(VimMotion::Left),
+            KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => Some(VimMotion::Right),
+            KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => Some(VimMotion::Down),
+            KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => Some(VimMotion::Up),
+            KeyEvent {
+                code: KeyCode::Char('w'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => Some(VimMotion::WordForward),
+            KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => Some(VimMotion::WordBackward),
+            KeyEvent {
+                code: KeyCode::Char('e'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => Some(VimMotion::WordEnd),
+            KeyEvent {
+                code: KeyCode::Char('0'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => Some(VimMotion::LineStart),
+            KeyEvent {
+                code: KeyCode::Char('$'),
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
+                Some(VimMotion::LineEnd)
+            }
+            _ => None,
+        }
+    }
+
+    fn apply_vim_operator(&mut self, op: VimOperator, motion: VimMotion) {
+        let Some(range) = self.range_for_motion(motion) else {
+            return;
+        };
+        match op {
+            VimOperator::Delete => self.kill_range(range),
+            VimOperator::Yank => self.yank_range(range),
+        }
+    }
+
+    fn range_for_motion(&mut self, motion: VimMotion) -> Option<Range<usize>> {
+        let start = self.cursor_pos;
+        let target = self.target_for_motion(motion);
+        if start == target {
+            return None;
+        }
+        let (range_start, range_end) = if target < start {
+            (target, start)
+        } else {
+            (start, target)
+        };
+        Some(range_start..range_end)
+    }
+
+    fn target_for_motion(&mut self, motion: VimMotion) -> usize {
+        let original_cursor = self.cursor_pos;
+        let original_preferred = self.preferred_col;
+        match motion {
+            VimMotion::Left => self.move_cursor_left(),
+            VimMotion::Right => self.move_cursor_right(),
+            VimMotion::Up => self.move_cursor_up(),
+            VimMotion::Down => self.move_cursor_down(),
+            VimMotion::WordForward => self.set_cursor(self.beginning_of_next_word()),
+            VimMotion::WordBackward => self.set_cursor(self.beginning_of_previous_word()),
+            VimMotion::WordEnd => self.set_cursor(self.end_of_next_word()),
+            VimMotion::LineStart => self.set_cursor(self.beginning_of_current_line()),
+            VimMotion::LineEnd => self.set_cursor(self.end_of_current_line()),
+        }
+        let target = self.cursor_pos;
+        self.cursor_pos = original_cursor;
+        self.preferred_col = original_preferred;
+        target
+    }
+
     // ####### Input Functions #######
     pub fn delete_backward(&mut self, n: usize) {
         if n == 0 || self.cursor_pos == 0 {
@@ -520,6 +877,20 @@ impl TextArea {
             }
         }
         self.replace_range(self.cursor_pos..target, "");
+    }
+
+    pub fn delete_forward_kill(&mut self, n: usize) {
+        if n == 0 || self.cursor_pos >= self.text.len() {
+            return;
+        }
+        let mut target = self.cursor_pos;
+        for _ in 0..n {
+            target = self.next_atomic_boundary(target);
+            if target >= self.text.len() {
+                break;
+            }
+        }
+        self.kill_range(self.cursor_pos..target);
     }
 
     pub fn delete_backward_word(&mut self) {
@@ -590,6 +961,45 @@ impl TextArea {
 
         self.kill_buffer = removed;
         self.replace_range_raw(range, "");
+    }
+
+    fn yank_range(&mut self, range: Range<usize>) {
+        let range = self.expand_range_to_element_boundaries(range);
+        if range.start >= range.end {
+            return;
+        }
+        let removed = self.text[range].to_string();
+        if removed.is_empty() {
+            return;
+        }
+        self.kill_buffer = removed;
+    }
+
+    fn paste_after_cursor(&mut self) {
+        if self.kill_buffer.is_empty() {
+            return;
+        }
+        let insert_at = self.next_atomic_boundary(self.cursor_pos);
+        self.set_cursor(insert_at);
+        let text = self.kill_buffer.clone();
+        self.insert_str(&text);
+    }
+
+    fn yank_current_line(&mut self) {
+        let range = self.current_line_range_with_newline();
+        self.yank_range(range);
+    }
+
+    fn delete_current_line(&mut self) {
+        let range = self.current_line_range_with_newline();
+        self.kill_range(range);
+    }
+
+    fn current_line_range_with_newline(&self) -> Range<usize> {
+        let bol = self.beginning_of_current_line();
+        let eol = self.end_of_current_line();
+        let end = if eol < self.text.len() { eol + 1 } else { eol };
+        bol..end
     }
 
     /// Move the cursor left by a single grapheme cluster.
@@ -1145,6 +1555,25 @@ impl TextArea {
         self.adjust_pos_out_of_elements(end, false)
     }
 
+    pub(crate) fn beginning_of_next_word(&self) -> usize {
+        let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
+        else {
+            return self.text.len();
+        };
+        let word_start = self.cursor_pos + first_non_ws;
+        if word_start != self.cursor_pos {
+            return self.adjust_pos_out_of_elements(word_start, true);
+        }
+        let end = self.end_of_next_word();
+        if end >= self.text.len() {
+            return self.text.len();
+        }
+        let Some(next_non_ws) = self.text[end..].find(|c: char| !c.is_whitespace()) else {
+            return self.text.len();
+        };
+        self.adjust_pos_out_of_elements(end + next_non_ws, true)
+    }
+
     fn adjust_pos_out_of_elements(&self, pos: usize, prefer_start: bool) -> usize {
         if let Some(idx) = self.find_element_containing(pos) {
             let e = &self.elements[idx];
@@ -1212,6 +1641,19 @@ impl TextArea {
         }
         scroll
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimMotion {
+    Left,
+    Right,
+    Up,
+    Down,
+    WordForward,
+    WordBackward,
+    WordEnd,
+    LineStart,
+    LineEnd,
 }
 
 impl WidgetRef for &TextArea {
@@ -1307,6 +1749,9 @@ impl TextArea {
 mod tests {
     use super::*;
     // crossterm types are intentionally not imported here to avoid unused warnings
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use pretty_assertions::assert_eq;
     use rand::prelude::*;
 
@@ -1460,6 +1905,32 @@ mod tests {
 
         assert_eq!(t.text(), "ab");
         assert_eq!(t.cursor(), elem_start);
+    }
+
+    #[test]
+    fn vim_insert_and_escape() {
+        let mut t = TextArea::new();
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "h");
+        assert!(!t.is_vim_insert());
+    }
+
+    #[test]
+    fn vim_delete_word() {
+        let mut t = ta_with("hello world");
+        t.set_cursor(0);
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "world");
+        assert_eq!(t.kill_buffer, "hello ");
     }
 
     #[test]

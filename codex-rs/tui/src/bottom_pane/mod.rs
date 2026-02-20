@@ -287,6 +287,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn toggle_vim_enabled(&mut self) -> bool {
+        let enabled = self.composer.toggle_vim_enabled();
+        self.request_redraw();
+        enabled
+    }
+
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
     }
@@ -745,7 +751,10 @@ impl BottomPane {
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
-        !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
+        !self.is_task_running
+            && self.view_stack.is_empty()
+            && !self.composer.popup_active()
+            && !self.composer.is_vim_insert()
     }
 
     /// Return true when no popups or modal views are active, regardless of task state.
@@ -1490,6 +1499,31 @@ mod tests {
             matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
             "expected Esc to send Op::Interrupt while a task is running"
         );
+    }
+
+    #[test]
+    fn normal_backtrack_mode_excludes_vim_insert() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.toggle_vim_enabled();
+        assert!(pane.is_normal_backtrack_mode());
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert!(!pane.is_normal_backtrack_mode());
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(pane.is_normal_backtrack_mode());
     }
 
     #[test]

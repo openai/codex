@@ -3317,6 +3317,15 @@ impl ChatWidget {
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
             }
+            SlashCommand::Vim => {
+                let enabled = self.bottom_pane.toggle_vim_enabled();
+                let message = if enabled {
+                    "Vim mode enabled."
+                } else {
+                    "Vim mode disabled."
+                };
+                self.add_info_message(message.to_string(), None);
+            }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {

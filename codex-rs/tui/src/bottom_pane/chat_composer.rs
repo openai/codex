@@ -109,7 +109,13 @@
 //! edits and renders a placeholder prompt instead of the editable textarea. This is part of the
 //! overall state machine, since it affects which transitions are even possible from a given UI
 //! state.
-use crate::bottom_pane::footer::mode_indicator_line;
+//!
+//! # Edit Modes
+//!
+//! The composer supports Emacs-style input (default) and Vim-style modal input. Vim mode uses the
+//! textarea's normal/insert states; paste-burst detection is disabled while in Vim normal mode so
+//! rapid command keystrokes are not buffered as paste.
+use crate::bottom_pane::footer::mode_indicator_line as collaboration_mode_indicator_line;
 use crate::bottom_pane::selection_popup_common::truncate_line_with_ellipsis_if_overflow;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -764,6 +770,60 @@ impl ChatComposer {
         self.relabel_attached_images_and_update_placeholders();
         self.textarea.set_cursor(self.textarea.text().len());
         self.sync_popups();
+    }
+
+    pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
+        self.textarea.set_vim_enabled(enabled);
+        self.paste_burst.clear_after_explicit_paste();
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+    }
+
+    pub(crate) fn toggle_vim_enabled(&mut self) -> bool {
+        let enabled = !self.textarea.is_vim_enabled();
+        self.set_vim_enabled(enabled);
+        enabled
+    }
+
+    pub(crate) fn is_vim_insert(&self) -> bool {
+        self.textarea.is_vim_insert()
+    }
+
+    fn vim_mode_indicator_span(&self) -> Option<Span<'static>> {
+        self.textarea.vim_mode_label().map(|label| match label {
+            "Normal" => "Vim: Normal".magenta(),
+            "Insert" => "Vim: Insert".green(),
+            _ => unreachable!(),
+        })
+    }
+
+    fn mode_indicator_line(&self, show_cycle_hint: bool) -> Option<Line<'static>> {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        if let Some(vim_mode) = self.vim_mode_indicator_span() {
+            spans.push(vim_mode);
+        }
+        if let Some(collab) =
+            collaboration_mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint)
+        {
+            if !spans.is_empty() {
+                spans.push(" | ".dim());
+            }
+            spans.extend(collab.spans);
+        }
+        if spans.is_empty() {
+            None
+        } else {
+            Some(Line::from(spans))
+        }
+    }
+
+    fn right_footer_line_with_context(&self) -> Line<'static> {
+        let mut line =
+            context_window_line(self.context_window_percent, self.context_window_used_tokens);
+        if let Some(vim_mode) = self.vim_mode_indicator_span() {
+            line.spans.push(" | ".dim());
+            line.spans.push(vim_mode);
+        }
+        line
     }
 
     pub(crate) fn current_text_with_pending(&self) -> String {
@@ -2510,8 +2570,11 @@ impl ChatComposer {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
+        if key_event.code == KeyCode::Esc && self.textarea.is_vim_insert() {
+            return self.handle_input_basic(key_event);
+        }
         if key_event.code == KeyCode::Esc {
-            if self.is_empty() {
+            if self.is_empty() && !self.textarea.is_vim_insert() {
                 let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
                 if next_mode != self.footer_mode {
                     self.footer_mode = next_mode;
@@ -2669,7 +2732,7 @@ impl ChatComposer {
         } = input
         {
             let has_ctrl_or_alt = has_ctrl_or_alt(modifiers);
-            if !has_ctrl_or_alt && !self.disable_paste_burst {
+            if !has_ctrl_or_alt && !self.disable_paste_burst && self.textarea.allows_paste_burst() {
                 // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts, so avoid
                 // holding the first char while still allowing burst detection for paste input.
                 if !ch.is_ascii() {
@@ -2852,8 +2915,6 @@ impl ChatComposer {
             steer_enabled: self.steer_enabled,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             is_wsl,
-            context_window_percent: self.context_window_percent,
-            context_window_used_tokens: self.context_window_used_tokens,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
         }
@@ -3557,9 +3618,8 @@ impl ChatComposer {
                     )
                 };
                 let right_line = if status_line_active {
-                    let full =
-                        mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
-                    let compact = mode_indicator_line(self.collaboration_mode_indicator, false);
+                    let full = self.mode_indicator_line(show_cycle_hint);
+                    let compact = self.mode_indicator_line(false);
                     let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                     if can_show_left_with_context(hint_rect, left_width, full_width) {
                         full
@@ -3567,10 +3627,7 @@ impl ChatComposer {
                         compact
                     }
                 } else {
-                    Some(context_window_line(
-                        footer_props.context_window_percent,
-                        footer_props.context_window_used_tokens,
-                    ))
+                    Some(self.right_footer_line_with_context())
                 };
                 let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                 if status_line_active
@@ -3612,9 +3669,7 @@ impl ChatComposer {
                 };
                 let show_right = if matches!(
                     footer_props.mode,
-                    FooterMode::EscHint
-                        | FooterMode::QuitShortcutReminder
-                        | FooterMode::ShortcutOverlay
+                    FooterMode::QuitShortcutReminder | FooterMode::ShortcutOverlay
                 ) {
                     false
                 } else {
@@ -4362,6 +4417,76 @@ mod tests {
             }
             _ => panic!("expected Submitted"),
         }
+    }
+
+    #[test]
+    fn vim_mode_stays_enabled_after_submission() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            true,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+        composer.set_vim_enabled(true);
+
+        assert!(composer.textarea.is_vim_enabled());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Normal".magenta())
+        );
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        composer.set_text_content("h".to_string(), Vec::new(), Vec::new());
+        let (result, _) = composer.handle_submission(false);
+
+        assert!(composer.textarea.is_vim_enabled());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
+        assert!(composer.is_empty());
+        match result {
+            InputResult::Submitted { text, .. } => assert_eq!(text, "h"),
+            _ => panic!("expected Submitted"),
+        }
+    }
+
+    #[test]
+    fn esc_switches_vim_insert_to_normal() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            true,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_vim_enabled(true);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Normal".magenta())
+        );
     }
 
     #[test]
