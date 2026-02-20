@@ -72,12 +72,14 @@ impl ExecCell {
         call_id: &str,
         output: CommandOutput,
         duration: Duration,
-    ) {
-        if let Some(call) = self.calls.iter_mut().rev().find(|c| c.call_id == call_id) {
-            call.output = Some(output);
-            call.duration = Some(duration);
-            call.start_time = None;
-        }
+    ) -> bool {
+        let Some(call) = self.calls.iter_mut().rev().find(|c| c.call_id == call_id) else {
+            return false;
+        };
+        call.output = Some(output);
+        call.duration = Some(duration);
+        call.start_time = None;
+        true
     }
 
     pub(crate) fn should_flush(&self) -> bool {

@@ -2315,6 +2315,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
+        enum ExecEndTarget {
+            ActiveTracked,
+            OrphanHistoryWhileActiveExec,
+            NewCell,
+        }
+
         let running = self.running_commands.remove(&ev.call_id);
         if self.suppressed_exec_calls.remove(&ev.call_id) {
             return;
@@ -2325,48 +2331,93 @@ impl ChatWidget {
         };
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
-
-        let needs_new = self
-            .active_cell
-            .as_ref()
-            .map(|cell| cell.as_any().downcast_ref::<ExecCell>().is_none())
-            .unwrap_or(true);
-        if needs_new {
-            self.flush_active_cell();
-            self.active_cell = Some(Box::new(new_active_exec_command(
-                ev.call_id.clone(),
-                command,
-                parsed,
-                source,
-                ev.interaction_input.clone(),
-                self.config.animations,
-            )));
-        }
-
-        if let Some(cell) = self
-            .active_cell
-            .as_mut()
-            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
-        {
-            let output = if is_unified_exec_interaction {
-                CommandOutput {
-                    exit_code: ev.exit_code,
-                    formatted_output: String::new(),
-                    aggregated_output: String::new(),
+        let end_target = match self.active_cell.as_ref() {
+            Some(cell) => match cell.as_any().downcast_ref::<ExecCell>() {
+                Some(exec_cell)
+                    if exec_cell
+                        .iter_calls()
+                        .any(|call| call.call_id == ev.call_id) =>
+                {
+                    ExecEndTarget::ActiveTracked
                 }
-            } else {
-                CommandOutput {
-                    exit_code: ev.exit_code,
-                    formatted_output: ev.formatted_output.clone(),
-                    aggregated_output: ev.aggregated_output.clone(),
+                Some(exec_cell) if exec_cell.is_active() => {
+                    ExecEndTarget::OrphanHistoryWhileActiveExec
                 }
-            };
-            cell.complete_call(&ev.call_id, output, ev.duration);
-            if cell.should_flush() {
-                self.flush_active_cell();
-            } else {
-                self.bump_active_cell_revision();
+                Some(_) | None => ExecEndTarget::NewCell,
+            },
+            None => ExecEndTarget::NewCell,
+        };
+
+        let output = if is_unified_exec_interaction {
+            CommandOutput {
+                exit_code: ev.exit_code,
+                formatted_output: String::new(),
+                aggregated_output: String::new(),
+            }
+        } else {
+            CommandOutput {
+                exit_code: ev.exit_code,
+                formatted_output: ev.formatted_output.clone(),
+                aggregated_output: ev.aggregated_output.clone(),
+            }
+        };
+
+        match end_target {
+            ExecEndTarget::ActiveTracked => {
+                if let Some(cell) = self
+                    .active_cell
+                    .as_mut()
+                    .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+                {
+                    let completed = cell.complete_call(&ev.call_id, output, ev.duration);
+                    debug_assert!(completed, "active exec cell should contain {}", ev.call_id);
+                    if cell.should_flush() {
+                        self.flush_active_cell();
+                    } else {
+                        self.bump_active_cell_revision();
+                        self.request_redraw();
+                    }
+                }
+            }
+            ExecEndTarget::OrphanHistoryWhileActiveExec => {
+                let mut orphan = new_active_exec_command(
+                    ev.call_id.clone(),
+                    command,
+                    parsed,
+                    source,
+                    ev.interaction_input.clone(),
+                    self.config.animations,
+                );
+                let completed = orphan.complete_call(&ev.call_id, output, ev.duration);
+                debug_assert!(
+                    completed,
+                    "new orphan exec cell should contain {}",
+                    ev.call_id
+                );
+                self.needs_final_message_separator = true;
+                self.app_event_tx
+                    .send(AppEvent::InsertHistoryCell(Box::new(orphan)));
                 self.request_redraw();
+            }
+            ExecEndTarget::NewCell => {
+                self.flush_active_cell();
+                let mut cell = new_active_exec_command(
+                    ev.call_id.clone(),
+                    command,
+                    parsed,
+                    source,
+                    ev.interaction_input.clone(),
+                    self.config.animations,
+                );
+                let completed = cell.complete_call(&ev.call_id, output, ev.duration);
+                debug_assert!(completed, "new exec cell should contain {}", ev.call_id);
+                if cell.should_flush() {
+                    self.add_to_history(cell);
+                } else {
+                    self.active_cell = Some(Box::new(cell));
+                    self.bump_active_cell_revision();
+                    self.request_redraw();
+                }
             }
         }
         // Mark that actual work was done (command executed)
