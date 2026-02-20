@@ -1722,23 +1722,30 @@ impl Session {
     fn last_rollout_regular_turn_context_lookup(
         rollout_items: &[RolloutItem],
     ) -> (Option<&TurnContextItem>, bool) {
+        struct CompletedRegularTurn<'a> {
+            context_item: Option<&'a TurnContextItem>,
+            // Monotonic epoch used to detect whether any later compaction crossed the selected
+            // turn, even if newer regular turns are missing a TurnContextItem.
+            compaction_epoch_at_completion: usize,
+        }
+
         let mut active_turn_id: Option<&str> = None;
         let mut active_turn_saw_user_message = false;
         let mut active_turn_context: Option<&TurnContextItem> = None;
-        let mut user_turn_contexts: Vec<(Option<&TurnContextItem>, usize)> = Vec::new();
-        let mut compaction_count = 0usize;
-        let mut saw_turn_lifecycle = false;
+        let mut completed_regular_turns: Vec<CompletedRegularTurn<'_>> = Vec::new();
+        let mut compaction_epoch = 0usize;
+        let mut saw_turn_lifecycle_events = false;
 
         for item in rollout_items {
             match item {
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
-                    saw_turn_lifecycle = true;
+                    saw_turn_lifecycle_events = true;
                     active_turn_id = Some(event.turn_id.as_str());
                     active_turn_saw_user_message = false;
                     active_turn_context = None;
                 }
                 RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
-                    saw_turn_lifecycle = true;
+                    saw_turn_lifecycle_events = true;
                     if active_turn_id.is_some() {
                         active_turn_saw_user_message = true;
                     }
@@ -1752,54 +1759,62 @@ impl Session {
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
-                    saw_turn_lifecycle = true;
+                    saw_turn_lifecycle_events = true;
                     if active_turn_id == Some(event.turn_id.as_str())
                         && active_turn_saw_user_message
                     {
-                        user_turn_contexts.push((active_turn_context, compaction_count));
+                        completed_regular_turns.push(CompletedRegularTurn {
+                            context_item: active_turn_context,
+                            compaction_epoch_at_completion: compaction_epoch,
+                        });
                     }
                     active_turn_id = None;
                     active_turn_saw_user_message = false;
                     active_turn_context = None;
                 }
                 RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
-                    saw_turn_lifecycle = true;
+                    saw_turn_lifecycle_events = true;
                     if let Some(active_id) = active_turn_id
                         && event.turn_id.as_deref() == Some(active_id)
                         && active_turn_saw_user_message
                     {
-                        user_turn_contexts.push((active_turn_context, compaction_count));
+                        completed_regular_turns.push(CompletedRegularTurn {
+                            context_item: active_turn_context,
+                            compaction_epoch_at_completion: compaction_epoch,
+                        });
                     }
                     active_turn_id = None;
                     active_turn_saw_user_message = false;
                     active_turn_context = None;
                 }
                 RolloutItem::Compacted(_) => {
-                    compaction_count = compaction_count.saturating_add(1);
+                    compaction_epoch = compaction_epoch.saturating_add(1);
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                     let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
-                    let new_len = user_turn_contexts.len().saturating_sub(num_turns);
-                    user_turn_contexts.truncate(new_len);
+                    let new_len = completed_regular_turns.len().saturating_sub(num_turns);
+                    completed_regular_turns.truncate(new_len);
                 }
                 _ => {}
             }
         }
 
-        if let Some((Some(context_item), compaction_count_at_turn)) = user_turn_contexts
-            .into_iter()
-            .rev()
-            .find(|(ctx, _)| ctx.is_some())
+        if let Some((context_item, compaction_epoch_at_completion)) =
+            completed_regular_turns.into_iter().rev().find_map(|turn| {
+                turn.context_item
+                    .map(|ctx| (ctx, turn.compaction_epoch_at_completion))
+            })
         {
             return (
                 Some(context_item),
-                compaction_count > compaction_count_at_turn,
+                compaction_epoch > compaction_epoch_at_completion,
             );
         }
-        if saw_turn_lifecycle {
+        if saw_turn_lifecycle_events {
             return (None, false);
         }
 
+        // Legacy fallback for older rollouts without turn lifecycle events.
         let mut saw_compaction_after_last_turn_context = false;
         for item in rollout_items.iter().rev() {
             match item {
