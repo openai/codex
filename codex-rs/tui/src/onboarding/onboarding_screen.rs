@@ -101,7 +101,7 @@ impl OnboardingScreen {
             steps.push(Step::Auth(AuthModeWidget {
                 request_frame: tui.frame_requester(),
                 highlighted_mode,
-                error: Arc::new(RwLock::new(None)),
+                error: None,
                 sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
                 codex_home: codex_home.clone(),
                 cli_auth_credentials_store_mode,

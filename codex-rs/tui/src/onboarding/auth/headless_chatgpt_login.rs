@@ -1,6 +1,3 @@
-//! Headless and device-code login helpers used by onboarding.
-//!
-//! It handles async device-code login and browser fallback for the auth screen.
 use codex_core::AuthManager;
 use codex_login::ServerOptions;
 use codex_login::complete_device_code_login;
@@ -25,11 +22,9 @@ use super::ContinueInBrowserState;
 use super::ContinueWithDeviceCodeState;
 use super::SignInState;
 
-/// Starts headless ChatGPT login and guards UI updates against stale attempts.
 pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, mut opts: ServerOptions) {
     opts.open_browser = false;
     let sign_in_state = widget.sign_in_state.clone();
-    let error = widget.error.clone();
     let request_frame = widget.request_frame.clone();
     let auth_manager = widget.auth_manager.clone();
     let cancel = begin_device_code_attempt(&sign_in_state, &request_frame);
@@ -54,56 +49,40 @@ pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, mut opts
                             {
                                 *sign_in_state.write().unwrap() =
                                     SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
-                                        auth_url: auth_url.clone(),
+                                        auth_url,
                                         shutdown_flag: Some(child.cancel_handle()),
                                     });
                             }
                             request_frame.schedule_frame();
-                            let result = child.block_until_done().await;
-                            let attempt_is_active = {
-                                let guard = sign_in_state.read().unwrap();
-                                matches!(
-                                    &*guard,
-                                    SignInState::ChatGptContinueInBrowser(state)
-                                        if state.auth_url == auth_url
-                                )
-                            };
-                            if !attempt_is_active {
-                                return;
-                            }
-
-                            match result {
+                            let r = child.block_until_done().await;
+                            match r {
                                 Ok(()) => {
                                     auth_manager.reload();
-                                    set_error(&error, None);
                                     *sign_in_state.write().unwrap() =
                                         SignInState::ChatGptSuccessMessage;
                                     request_frame.schedule_frame();
                                 }
-                                Err(err) => {
+                                _ => {
                                     *sign_in_state.write().unwrap() = SignInState::PickMode;
-                                    set_error(&error, Some(format!("Sign-in failed: {err}")));
                                     request_frame.schedule_frame();
                                 }
                             }
                         }
-                        Err(err) => {
-                            set_device_code_failure_for_active_attempt(
+                        Err(_) => {
+                            set_device_code_state_for_active_attempt(
                                 &sign_in_state,
-                                &error,
                                 &request_frame,
                                 &cancel,
-                                format!("Sign-in failed: {err}"),
+                                SignInState::PickMode,
                             );
                         }
                     }
                 } else {
-                    set_device_code_failure_for_active_attempt(
+                    set_device_code_state_for_active_attempt(
                         &sign_in_state,
-                        &error,
                         &request_frame,
                         &cancel,
-                        format!("Sign-in failed: {err}"),
+                        SignInState::PickMode,
                     );
                 }
 
@@ -130,19 +109,17 @@ pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, mut opts
                     Ok(()) => {
                         set_device_code_success_message_for_active_attempt(
                             &sign_in_state,
-                            &error,
                             &request_frame,
                             &auth_manager,
                             &cancel,
                         );
                     }
-                    Err(err) => {
-                        set_device_code_failure_for_active_attempt(
+                    Err(_) => {
+                        set_device_code_state_for_active_attempt(
                             &sign_in_state,
-                            &error,
                             &request_frame,
                             &cancel,
-                            format!("Sign-in failed: {err}"),
+                            SignInState::PickMode,
                         );
                     }
                 }
@@ -151,7 +128,6 @@ pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, mut opts
     });
 }
 
-/// Draws the device-code login screen.
 pub(super) fn render_device_code_login(
     widget: &AuthModeWidget,
     area: Rect,
@@ -235,10 +211,6 @@ fn begin_device_code_attempt(
     cancel
 }
 
-fn set_error(error: &Arc<RwLock<Option<String>>>, value: Option<String>) {
-    *error.write().unwrap() = value;
-}
-
 fn set_device_code_state_for_active_attempt(
     sign_in_state: &Arc<RwLock<SignInState>>,
     request_frame: &FrameRequester,
@@ -258,7 +230,6 @@ fn set_device_code_state_for_active_attempt(
 
 fn set_device_code_success_message_for_active_attempt(
     sign_in_state: &Arc<RwLock<SignInState>>,
-    error: &Arc<RwLock<Option<String>>>,
     request_frame: &FrameRequester,
     auth_manager: &AuthManager,
     cancel: &Arc<Notify>,
@@ -269,28 +240,8 @@ fn set_device_code_success_message_for_active_attempt(
     }
 
     auth_manager.reload();
-    set_error(error, None);
     *guard = SignInState::ChatGptSuccessMessage;
     drop(guard);
-    request_frame.schedule_frame();
-    true
-}
-
-fn set_device_code_failure_for_active_attempt(
-    sign_in_state: &Arc<RwLock<SignInState>>,
-    error: &Arc<RwLock<Option<String>>>,
-    request_frame: &FrameRequester,
-    cancel: &Arc<Notify>,
-    message: String,
-) -> bool {
-    let mut guard = sign_in_state.write().unwrap();
-    if !device_code_attempt_matches(&guard, cancel) {
-        return false;
-    }
-
-    *guard = SignInState::PickMode;
-    drop(guard);
-    set_error(error, Some(message));
     request_frame.schedule_frame();
     true
 }
@@ -387,7 +338,6 @@ mod tests {
         let request_frame = FrameRequester::test_dummy();
         let cancel = Arc::new(Notify::new());
         let sign_in_state = device_code_sign_in_state(cancel.clone());
-        let error = Arc::new(RwLock::new(Some("stale error".to_string())));
         let temp_dir = TempDir::new().unwrap();
         let auth_manager = AuthManager::shared(
             temp_dir.path().to_path_buf(),
@@ -398,7 +348,6 @@ mod tests {
         assert_eq!(
             set_device_code_success_message_for_active_attempt(
                 &sign_in_state,
-                &error,
                 &request_frame,
                 &auth_manager,
                 &cancel,
@@ -409,13 +358,11 @@ mod tests {
             &*sign_in_state.read().unwrap(),
             SignInState::ChatGptSuccessMessage
         ));
-        assert_eq!(*error.read().unwrap(), None);
 
         let sign_in_state = device_code_sign_in_state(Arc::new(Notify::new()));
         assert_eq!(
             set_device_code_success_message_for_active_attempt(
                 &sign_in_state,
-                &error,
                 &request_frame,
                 &auth_manager,
                 &cancel,

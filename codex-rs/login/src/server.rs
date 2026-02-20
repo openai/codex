@@ -734,16 +734,20 @@ fn login_error_response(
     }
 }
 
-/// Converts OAuth callback errors into a user-facing message.
-fn oauth_callback_error_message(error_code: &str, error_description: Option<&str>) -> String {
-    if error_code == "access_denied"
+/// Returns true when the OAuth callback represents a missing Codex entitlement.
+fn is_missing_codex_entitlement_error(error_code: &str, error_description: Option<&str>) -> bool {
+    error_code == "access_denied"
         && error_description.is_some_and(|description| {
             description
                 .to_ascii_lowercase()
                 .contains("missing_codex_entitlement")
         })
-    {
-        return "Sign-in was denied because this account is missing Codex entitlement.".to_string();
+}
+
+/// Converts OAuth callback errors into a user-facing message.
+fn oauth_callback_error_message(error_code: &str, error_description: Option<&str>) -> String {
+    if is_missing_codex_entitlement_error(error_code, error_description) {
+        return "Codex is not enabled for your workspace. Contact your workspace administrator to request access to Codex.".to_string();
     }
 
     if let Some(description) = error_description
@@ -793,11 +797,31 @@ fn render_login_error_page(
 ) -> Vec<u8> {
     let template = include_str!("assets/error.html");
     let code = error_code.unwrap_or("unknown_error");
-    let description = error_description.unwrap_or(message);
+    let (title, display_message, display_description, help_text) =
+        if is_missing_codex_entitlement_error(code, error_description) {
+            (
+                "You do not have access to Codex".to_string(),
+                "This account is not currently authorized to use Codex in this workspace."
+                    .to_string(),
+                "Contact your workspace administrator to request access to Codex.".to_string(),
+                "Contact your workspace administrator to get access to Codex, then return to Codex and try again."
+                    .to_string(),
+            )
+        } else {
+            (
+                "Sign-in could not be completed".to_string(),
+                message.to_string(),
+                error_description.unwrap_or(message).to_string(),
+                "Return to Codex to retry, switch accounts, or contact your workspace admin if access is restricted."
+                    .to_string(),
+            )
+        };
     template
-        .replace("__ERROR_MESSAGE__", &html_escape(message))
+        .replace("__ERROR_TITLE__", &html_escape(&title))
+        .replace("__ERROR_MESSAGE__", &html_escape(&display_message))
         .replace("__ERROR_CODE__", &html_escape(code))
-        .replace("__ERROR_DESCRIPTION__", &html_escape(description))
+        .replace("__ERROR_DESCRIPTION__", &html_escape(&display_description))
+        .replace("__ERROR_HELP__", &html_escape(&help_text))
         .into_bytes()
 }
 
