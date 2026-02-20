@@ -1943,11 +1943,10 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
-async fn invalid_requested_prefix_rule_falls_back_to_heuristic_execpolicy_amendment() -> Result<()>
-{
+async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
-    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
@@ -1956,13 +1955,13 @@ async fn invalid_requested_prefix_rule_falls_back_to_heuristic_execpolicy_amendm
     let test = builder.build(&server).await?;
 
     let call_id = "invalid-prefix-rule";
-    let command = "echo safe && rm -rf /tmp/codex-prefix-fallback";
+    let command = "touch ~/Documents/hello.txt && rm ~/Documents/hello.txt";
     let event = shell_event_with_prefix_rule(
         call_id,
         command,
         1_000,
         SandboxPermissions::RequireEscalated,
-        Some(vec!["echo".to_string(), "safe".to_string()]),
+        Some(vec!["touch".to_string()]),
     )?;
 
     let _ = mount_sse_once(
@@ -1987,9 +1986,8 @@ async fn invalid_requested_prefix_rule_falls_back_to_heuristic_execpolicy_amendm
     assert_eq!(
         approval.proposed_execpolicy_amendment,
         Some(ExecPolicyAmendment::new(vec![
-            "rm".to_string(),
-            "-rf".to_string(),
-            "/tmp/codex-prefix-fallback".to_string(),
+            "touch".to_string(),
+            "~/Documents/hello.txt".to_string(),
         ]))
     );
 
