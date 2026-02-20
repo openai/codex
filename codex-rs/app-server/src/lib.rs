@@ -49,6 +49,7 @@ use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod bespoke_event_handling;
@@ -66,6 +67,16 @@ mod thread_status;
 mod transport;
 
 pub use crate::transport::AppServerTransport;
+
+const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LogFormat {
+    Default,
+    Json,
+}
+
+type StderrLogLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
 
 /// Control-plane messages from the processor/transport side to the outbound router task.
 ///
@@ -198,6 +209,20 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
     })
 }
 
+impl LogFormat {
+    fn from_env_value(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(str::to_ascii_lowercase) {
+            Some(value) if value == "json" => Self::Json,
+            _ => Self::Default,
+        }
+    }
+}
+
+fn log_format_from_env() -> LogFormat {
+    let value = std::env::var(LOG_FORMAT_ENV_VAR).ok();
+    LogFormat::from_env_value(value.as_deref())
+}
+
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
@@ -238,7 +263,8 @@ pub async fn run_main_with_transport(
                 Some(start_websocket_acceptor(bind_address, transport_event_tx.clone()).await?);
         }
     }
-    let shutdown_when_no_connections = matches!(transport, AppServerTransport::Stdio);
+    let single_client_mode = matches!(transport, AppServerTransport::Stdio);
+    let shutdown_when_no_connections = single_client_mode;
 
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
@@ -341,18 +367,26 @@ pub async fn run_main_with_transport(
         )
     })?;
 
-    // Install a simple subscriber so `tracing` output is visible.  Users can
-    // control the log level with `RUST_LOG`.
-    let stderr_fmt = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr)
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-        .with_filter(EnvFilter::from_default_env());
+    // Install a simple subscriber so `tracing` output is visible. Users can
+    // control the log level with `RUST_LOG` and switch to JSON logs with
+    // `LOG_FORMAT=json`.
+    let stderr_fmt: StderrLogLayer = match log_format_from_env() {
+        LogFormat::Json => tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(std::io::stderr)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+            .with_filter(EnvFilter::from_default_env())
+            .boxed(),
+        LogFormat::Default => tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+            .with_filter(EnvFilter::from_default_env())
+            .boxed(),
+    };
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
-
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
     let _ = tracing_subscriber::registry()
@@ -439,6 +473,7 @@ pub async fn run_main_with_transport(
             outgoing: outgoing_message_sender,
             codex_linux_sandbox_exe,
             config: Arc::new(config),
+            single_client_mode,
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
@@ -591,4 +626,25 @@ pub async fn run_main_with_transport(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LogFormat;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn log_format_from_env_value_matches_json_values_case_insensitively() {
+        assert_eq!(LogFormat::from_env_value(Some("json")), LogFormat::Json);
+        assert_eq!(LogFormat::from_env_value(Some("JSON")), LogFormat::Json);
+        assert_eq!(LogFormat::from_env_value(Some("  Json  ")), LogFormat::Json);
+    }
+
+    #[test]
+    fn log_format_from_env_value_defaults_for_non_json_values() {
+        assert_eq!(LogFormat::from_env_value(None), LogFormat::Default);
+        assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
+        assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
+        assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);
+    }
 }

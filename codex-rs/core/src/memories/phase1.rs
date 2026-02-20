@@ -142,7 +142,7 @@ impl RequestContext {
             model_info,
             turn_metadata_header,
             otel_manager: turn_context.otel_manager.clone(),
-            reasoning_effort: turn_context.reasoning_effort,
+            reasoning_effort: Some(phase_one::REASONING_EFFORT),
             reasoning_summary: turn_context.reasoning_summary,
         }
     }

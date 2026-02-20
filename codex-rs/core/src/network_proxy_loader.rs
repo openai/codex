@@ -144,6 +144,9 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
         constraints.dangerously_allow_non_loopback_admin =
             Some(dangerously_allow_non_loopback_admin);
     }
+    if let Some(dangerously_allow_all_unix_sockets) = network.dangerously_allow_all_unix_sockets {
+        constraints.dangerously_allow_all_unix_sockets = Some(dangerously_allow_all_unix_sockets);
+    }
     if let Some(allowed_domains) = network.allowed_domains {
         constraints.allowed_domains = Some(allowed_domains);
     }
@@ -371,5 +374,25 @@ allowed_domains = ["higher.example.com"]
             config.network.denied_domains,
             vec!["api.example.com".to_string()]
         );
+    }
+
+    #[test]
+    fn apply_network_constraints_includes_allow_all_unix_sockets_flag() {
+        let config: toml::Value = toml::from_str(
+            r#"
+[network]
+dangerously_allow_all_unix_sockets = true
+"#,
+        )
+        .expect("network table should parse");
+        let network = network_tables_from_toml(&config)
+            .expect("network table should deserialize")
+            .network
+            .expect("network table should be present");
+
+        let mut constraints = NetworkProxyConstraints::default();
+        apply_network_constraints(network, &mut constraints);
+
+        assert_eq!(constraints.dangerously_allow_all_unix_sockets, Some(true));
     }
 }

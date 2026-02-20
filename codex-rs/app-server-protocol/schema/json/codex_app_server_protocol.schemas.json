@@ -2029,6 +2029,75 @@
         }
       ]
     },
+    "CollabAgentRef": {
+      "properties": {
+        "agent_nickname": {
+          "description": "Optional nickname assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_role": {
+          "description": "Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadId"
+            }
+          ],
+          "description": "Thread ID of the receiver/new agent."
+        }
+      },
+      "required": [
+        "thread_id"
+      ],
+      "type": "object"
+    },
+    "CollabAgentStatusEntry": {
+      "properties": {
+        "agent_nickname": {
+          "description": "Optional nickname assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_role": {
+          "description": "Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentStatus"
+            }
+          ],
+          "description": "Last known status of the agent."
+        },
+        "thread_id": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadId"
+            }
+          ],
+          "description": "Thread ID of the receiver/new agent."
+        }
+      },
+      "required": [
+        "status",
+        "thread_id"
+      ],
+      "type": "object"
+    },
     "CommandExecutionApprovalDecision": {
       "oneOf": [
         {
@@ -2122,6 +2191,17 @@
         },
         "itemId": {
           "type": "string"
+        },
+        "networkApprovalContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkApprovalContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional context for managed-network approval prompts."
         },
         "proposedExecpolicyAmendment": {
           "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
@@ -4602,6 +4682,20 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "new_agent_nickname": {
+              "description": "Optional nickname assigned to the new agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "new_agent_role": {
+              "description": "Optional role assigned to the new agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "new_thread_id": {
               "anyOf": [
                 {
@@ -4707,6 +4801,20 @@
               "description": "Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.",
               "type": "string"
             },
+            "receiver_agent_nickname": {
+              "description": "Optional nickname assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_agent_role": {
+              "description": "Optional role assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "receiver_thread_id": {
               "allOf": [
                 {
@@ -4757,6 +4865,13 @@
               "description": "ID of the waiting call.",
               "type": "string"
             },
+            "receiver_agents": {
+              "description": "Optional nicknames/roles for receivers.",
+              "items": {
+                "$ref": "#/definitions/CollabAgentRef"
+              },
+              "type": "array"
+            },
             "receiver_thread_ids": {
               "description": "Thread ID of the receivers.",
               "items": {
@@ -4792,6 +4907,13 @@
         {
           "description": "Collab interaction: waiting end.",
           "properties": {
+            "agent_statuses": {
+              "description": "Optional receiver metadata paired with final statuses.",
+              "items": {
+                "$ref": "#/definitions/CollabAgentStatusEntry"
+              },
+              "type": "array"
+            },
             "call_id": {
               "description": "ID of the waiting call.",
               "type": "string"
@@ -4875,6 +4997,20 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "receiver_agent_nickname": {
+              "description": "Optional nickname assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_agent_role": {
+              "description": "Optional role assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "receiver_thread_id": {
               "allOf": [
                 {
@@ -4924,6 +5060,20 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "receiver_agent_nickname": {
+              "description": "Optional nickname assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_agent_role": {
+              "description": "Optional role assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "receiver_thread_id": {
               "allOf": [
                 {
@@ -4963,6 +5113,20 @@
             "call_id": {
               "description": "Identifier for the collab tool call.",
               "type": "string"
+            },
+            "receiver_agent_nickname": {
+              "description": "Optional nickname assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_agent_role": {
+              "description": "Optional role assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "receiver_thread_id": {
               "allOf": [
@@ -9485,6 +9649,20 @@
           "properties": {
             "thread_spawn": {
               "properties": {
+                "agent_nickname": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "agent_role": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "depth": {
                   "format": "int32",
                   "type": "integer"
@@ -13342,6 +13520,12 @@
               "null"
             ]
           },
+          "dangerouslyAllowAllUnixSockets": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "dangerouslyAllowNonLoopbackAdmin": {
             "type": [
               "boolean",
@@ -15146,6 +15330,20 @@
             "properties": {
               "thread_spawn": {
                 "properties": {
+                  "agent_nickname": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "agent_role": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "depth": {
                     "format": "int32",
                     "type": "integer"
@@ -15272,6 +15470,20 @@
       },
       "Thread": {
         "properties": {
+          "agentNickname": {
+            "description": "Optional random unique nickname assigned to an AgentControl-spawned sub-agent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agentRole": {
+            "description": "Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cliVersion": {
             "description": "Version of the CLI that created the thread.",
             "type": "string"

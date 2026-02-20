@@ -716,6 +716,20 @@
           "properties": {
             "thread_spawn": {
               "properties": {
+                "agent_nickname": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "agent_role": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "depth": {
                   "format": "int32",
                   "type": "integer"
@@ -777,6 +791,20 @@
     },
     "Thread": {
       "properties": {
+        "agentNickname": {
+          "description": "Optional random unique nickname assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agentRole": {
+          "description": "Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "cliVersion": {
           "description": "Version of the CLI that created the thread.",
           "type": "string"
