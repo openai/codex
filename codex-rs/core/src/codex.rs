@@ -1735,6 +1735,20 @@ impl Session {
         let mut completed_regular_turns: Vec<CompletedRegularTurn<'_>> = Vec::new();
         let mut compaction_epoch = 0usize;
         let mut saw_turn_lifecycle_events = false;
+        let mut finish_active_turn = |ended_turn_id: Option<&str>| {
+            if let Some(active_id) = active_turn_id
+                && ended_turn_id == Some(active_id)
+                && active_turn_saw_user_message
+            {
+                completed_regular_turns.push(CompletedRegularTurn {
+                    context_item: active_turn_context,
+                    compaction_epoch_at_completion: compaction_epoch,
+                });
+            }
+            active_turn_id = None;
+            active_turn_saw_user_message = false;
+            active_turn_context = None;
+        };
 
         for item in rollout_items {
             match item {
@@ -1760,32 +1774,11 @@ impl Session {
                 }
                 RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
                     saw_turn_lifecycle_events = true;
-                    if active_turn_id == Some(event.turn_id.as_str())
-                        && active_turn_saw_user_message
-                    {
-                        completed_regular_turns.push(CompletedRegularTurn {
-                            context_item: active_turn_context,
-                            compaction_epoch_at_completion: compaction_epoch,
-                        });
-                    }
-                    active_turn_id = None;
-                    active_turn_saw_user_message = false;
-                    active_turn_context = None;
+                    finish_active_turn(Some(event.turn_id.as_str()));
                 }
                 RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
                     saw_turn_lifecycle_events = true;
-                    if let Some(active_id) = active_turn_id
-                        && event.turn_id.as_deref() == Some(active_id)
-                        && active_turn_saw_user_message
-                    {
-                        completed_regular_turns.push(CompletedRegularTurn {
-                            context_item: active_turn_context,
-                            compaction_epoch_at_completion: compaction_epoch,
-                        });
-                    }
-                    active_turn_id = None;
-                    active_turn_saw_user_message = false;
-                    active_turn_context = None;
+                    finish_active_turn(event.turn_id.as_deref());
                 }
                 RolloutItem::Compacted(_) => {
                     compaction_epoch = compaction_epoch.saturating_add(1);

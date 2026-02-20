@@ -363,7 +363,7 @@ async fn summarize_context_three_requests_and_instructions() {
     codex.submit(Op::Shutdown).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    // Verify rollout contains APITurn entries for each API call and a Compacted entry.
+    // Verify rollout contains regular sampling TurnContext entries and a Compacted entry.
     println!("rollout path: {}", rollout_path.display());
     let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
         panic!(
@@ -371,7 +371,7 @@ async fn summarize_context_three_requests_and_instructions() {
             rollout_path.display()
         )
     });
-    let mut api_turn_count = 0usize;
+    let mut regular_turn_context_count = 0usize;
     let mut saw_compacted_summary = false;
     for line in text.lines() {
         let trimmed = line.trim();
@@ -383,7 +383,7 @@ async fn summarize_context_three_requests_and_instructions() {
         };
         match entry.item {
             RolloutItem::TurnContext(_) => {
-                api_turn_count += 1;
+                regular_turn_context_count += 1;
             }
             RolloutItem::Compacted(ci) => {
                 if ci.message == expected_summary_message {
@@ -395,8 +395,8 @@ async fn summarize_context_three_requests_and_instructions() {
     }
 
     assert!(
-        api_turn_count == 3,
-        "expected three APITurn entries in rollout"
+        regular_turn_context_count == 2,
+        "expected two regular sampling TurnContext entries in rollout"
     );
     assert!(
         saw_compacted_summary,
