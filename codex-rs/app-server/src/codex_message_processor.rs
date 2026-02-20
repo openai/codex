@@ -6244,6 +6244,9 @@ async fn handle_pending_thread_resume_request(
         let state = thread_state.lock().await;
         state.active_turn_snapshot()
     };
+    let has_in_progress_turn = active_turn
+        .as_ref()
+        .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
 
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
@@ -6270,9 +6273,17 @@ async fn handle_pending_thread_resume_request(
             return;
         }
     };
-    thread.status = thread_watch_manager
+    let mut status = thread_watch_manager
         .loaded_status_for_thread(&thread.id)
         .await;
+    if let ThreadStatus::Idle | ThreadStatus::NotLoaded = status {
+        if has_in_progress_turn {
+            status = ThreadStatus::Active {
+                active_flags: Vec::new(),
+            };
+        }
+    }
+    thread.status = status;
 
     let ThreadConfigSnapshot {
         model,
