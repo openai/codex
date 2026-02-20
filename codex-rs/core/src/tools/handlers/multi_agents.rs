@@ -288,7 +288,6 @@ mod send_input {
 mod resume_agent {
     use super::*;
     use crate::agent::next_thread_spawn_depth;
-    use crate::rollout::find_thread_path_by_id_str;
     use std::sync::Arc;
 
     #[derive(Debug, Deserialize)]

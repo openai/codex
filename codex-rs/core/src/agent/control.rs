@@ -4,7 +4,6 @@ use crate::agent::status::is_final;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_thread_path_by_id_str;
-use crate::rollout::list::parse_timestamp_uuid_from_filename;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
@@ -14,7 +13,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
@@ -120,20 +118,15 @@ impl AgentControl {
             }) => {
                 // Collab resume callers rebuild a placeholder ThreadSpawn source. Rehydrate the
                 // stored nickname/role from sqlite when available; otherwise leave both unset.
-                let (resumed_agent_nickname, resumed_agent_role) = if let Some(state_db_ctx) =
-                    state_db::get_state_db(&config, None).await
-                {
-                    if let Some(thread_id) = thread_id {
+                let (resumed_agent_nickname, resumed_agent_role) =
+                    if let Some(state_db_ctx) = state_db::get_state_db(&config, None).await {
                         match state_db_ctx.get_thread(thread_id).await {
                             Ok(Some(metadata)) => (metadata.agent_nickname, metadata.agent_role),
                             Ok(None) | Err(_) => (None, None),
                         }
                     } else {
                         (None, None)
-                    }
-                } else {
-                    (None, None)
-                };
+                    };
                 let reserved_agent_nickname = resumed_agent_nickname
                     .as_deref()
                     .map(|agent_nickname| {
@@ -156,7 +149,7 @@ impl AgentControl {
         let rollout_path =
             find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
                 .await?
-                .ok_or_else(CodexErr::ThreadNotFound(thread_id))?;
+                .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?;
 
         let resumed_thread = state
             .resume_thread_from_rollout_with_source(
@@ -308,6 +301,8 @@ mod tests {
     use crate::agent::agent_status_from_event;
     use crate::config::Config;
     use crate::config::ConfigBuilder;
+    use crate::config_loader::LoaderOverrides;
+    use crate::features::Feature;
     use crate::session_prefix::SUBAGENT_NOTIFICATION_OPEN_TAG;
     use assert_matches::assert_matches;
     use codex_protocol::config_types::ModeKind;
@@ -335,6 +330,12 @@ mod tests {
         let config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
             .cli_overrides(cli_overrides)
+            .loader_overrides(LoaderOverrides {
+                #[cfg(target_os = "macos")]
+                managed_preferences_base64: Some(String::new()),
+                macos_managed_config_requirements_base64: Some(String::new()),
+                ..LoaderOverrides::default()
+            })
             .build()
             .await
             .expect("load default test config");
@@ -922,7 +923,20 @@ mod tests {
 
     #[tokio::test]
     async fn resume_thread_subagent_restores_stored_nickname_and_role() {
-        let harness = AgentControlHarness::new().await;
+        let (home, mut config) = test_config().await;
+        config.features.enable(Feature::Sqlite);
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
+            CodexAuth::from_api_key("dummy"),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+        );
+        let control = manager.agent_control();
+        let harness = AgentControlHarness {
+            _home: home,
+            config,
+            manager,
+            control,
+        };
         let (parent_thread_id, _parent_thread) = harness.start_thread().await;
 
         let child_thread_id = harness
@@ -970,9 +984,6 @@ mod tests {
             .session_source
             .get_nickname()
             .expect("spawned sub-agent should have a nickname");
-        let rollout_path = child_thread
-            .rollout_path()
-            .expect("child rollout path should exist");
         let state_db = child_thread
             .state_db()
             .expect("sqlite state db should be available for nickname resume test");
@@ -1000,7 +1011,7 @@ mod tests {
             .control
             .resume_agent_from_rollout(
                 harness.config.clone(),
-                rollout_path,
+                child_thread_id,
                 SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id,
                     depth: 1,
