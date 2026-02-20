@@ -20,7 +20,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
-use codex_utils_sanitizer::redact_secrets;
+use codex_secrets::redact_secrets;
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::Value;
