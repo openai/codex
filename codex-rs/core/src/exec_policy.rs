@@ -415,7 +415,7 @@ pub fn format_exec_policy_error_with_source(error: &ExecPolicyError) -> String {
     }
 }
 
-pub(crate) async fn load_exec_policy_with_warning(
+async fn load_exec_policy_with_warning(
     config_stack: &ConfigLayerStack,
 ) -> Result<(Policy, Option<ExecPolicyError>), ExecPolicyError> {
     match load_exec_policy(config_stack).await {
@@ -808,20 +808,6 @@ mod tests {
         .expect("ConfigLayerStack")
     }
 
-    fn config_stack_for_dot_codex_folder_with_requirements(
-        dot_codex_folder: &Path,
-        requirements: ConfigRequirements,
-    ) -> ConfigLayerStack {
-        let dot_codex_folder = AbsolutePathBuf::from_absolute_path(dot_codex_folder)
-            .expect("absolute dot_codex_folder");
-        let layer = ConfigLayerEntry::new(
-            ConfigLayerSource::Project { dot_codex_folder },
-            TomlValue::Table(Default::default()),
-        );
-        ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())
-            .expect("ConfigLayerStack")
-    }
-
     #[tokio::test]
     async fn returns_empty_policy_when_no_policy_files_exist() {
         let temp_dir = tempdir().expect("create temp dir");
@@ -951,8 +937,13 @@ mod tests {
             )),
             ..ConfigRequirements::default()
         };
+        let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+        let layer = ConfigLayerEntry::new(
+            ConfigLayerSource::Project { dot_codex_folder },
+            TomlValue::Table(Default::default()),
+        );
         let config_stack =
-            config_stack_for_dot_codex_folder_with_requirements(temp_dir.path(), requirements);
+            ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())?;
 
         let policy = load_exec_policy(&config_stack).await?;
         let (allowed, denied) = policy.compiled_network_domains();

@@ -7,8 +7,9 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
+use crate::exec_policy::ExecPolicyError;
 use crate::exec_policy::format_exec_policy_error_with_source;
-use crate::exec_policy::load_exec_policy_with_warning;
+use crate::exec_policy::load_exec_policy;
 use anyhow::Context;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -52,7 +53,13 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
     .await
     .context("failed to load Codex config")?;
 
-    let (exec_policy, warning) = load_exec_policy_with_warning(&config_layer_stack).await?;
+    let (exec_policy, warning) = match load_exec_policy(&config_layer_stack).await {
+        Ok(policy) => (policy, None),
+        Err(err @ ExecPolicyError::ParsePolicy { .. }) => {
+            (codex_execpolicy::Policy::empty(), Some(err))
+        }
+        Err(err) => return Err(err.into()),
+    };
     if let Some(err) = warning.as_ref() {
         tracing::warn!(
             "failed to parse execpolicy while building network proxy state: {}",
