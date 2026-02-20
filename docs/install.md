@@ -27,7 +27,7 @@ rustup component add clippy
 # Install helper tools used by the workspace justfile:
 cargo install just
 # Optional: install nextest for the `just test` helper
-cargo install cargo-nextest
+cargo install --locked cargo-nextest
 
 # Build Codex.
 cargo build
