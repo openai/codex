@@ -1,5 +1,6 @@
 use crate::error::ApiError;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::ServiceTier as ServiceTierConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -158,6 +159,8 @@ pub struct ResponsesApiRequest {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<ServiceTierConfig>,
 }
 
 impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
@@ -177,6 +180,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             prompt_cache_key: request.prompt_cache_key.clone(),
             text: request.text.clone(),
             client_metadata: None,
+            service_tier: request.service_tier,
         }
     }
 }
@@ -201,6 +205,7 @@ pub struct ResponseCreateWsRequest {
     pub text: Option<TextControls>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_metadata: Option<HashMap<String, String>>,
+    pub service_tier: Option<ServiceTierConfig>,
 }
 
 #[derive(Debug, Serialize)]

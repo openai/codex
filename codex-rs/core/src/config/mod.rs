@@ -62,6 +62,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
@@ -390,6 +391,9 @@ pub struct Config {
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
+
+    /// Optional OpenAI Responses API `service_tier` (e.g. `flex`).
+    pub model_service_tier: Option<ServiceTier>,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
@@ -1105,6 +1109,8 @@ pub struct ConfigToml {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
+    /// Optional OpenAI Responses API `service_tier` (e.g. `flex`).
+    pub model_service_tier: Option<ServiceTier>,
 
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
@@ -1219,6 +1225,7 @@ impl From<ConfigToml> for UserSavedConfig {
             model_reasoning_effort: config_toml.model_reasoning_effort,
             model_reasoning_summary: config_toml.model_reasoning_summary,
             model_verbosity: config_toml.model_verbosity,
+            model_service_tier: config_toml.model_service_tier,
             tools: config_toml.tools.map(From::from),
             profile: config_toml.profile,
             profiles,
@@ -2039,6 +2046,7 @@ impl Config {
             model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
             model_catalog,
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
+            model_service_tier: config_profile.model_service_tier.or(cfg.model_service_tier),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
@@ -4451,6 +4459,7 @@ approval_policy = "on-failure"
 model_reasoning_effort = "high"
 model_reasoning_summary = "detailed"
 model_verbosity = "high"
+model_service_tier = "flex"
 "#;
 
         let cfg: ConfigToml = toml::from_str(toml).expect("TOML deserialization should succeed");
@@ -4581,6 +4590,7 @@ model_verbosity = "high"
                 model_supports_reasoning_summaries: None,
                 model_catalog: None,
                 model_verbosity: None,
+                model_service_tier: None,
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
@@ -4700,6 +4710,7 @@ model_verbosity = "high"
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: None,
+            model_service_tier: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -4817,6 +4828,7 @@ model_verbosity = "high"
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: None,
+            model_service_tier: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -4920,6 +4932,7 @@ model_verbosity = "high"
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: Some(Verbosity::High),
+            model_service_tier: Some(ServiceTier::Flex),
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,

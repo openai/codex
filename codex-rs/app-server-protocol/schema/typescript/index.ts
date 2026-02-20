@@ -185,6 +185,7 @@ export type { SendUserTurnParams } from "./SendUserTurnParams";
 export type { SendUserTurnResponse } from "./SendUserTurnResponse";
 export type { ServerNotification } from "./ServerNotification";
 export type { ServerRequest } from "./ServerRequest";
+export type { ServiceTier } from "./ServiceTier";
 export type { SessionConfiguredEvent } from "./SessionConfiguredEvent";
 export type { SessionConfiguredNotification } from "./SessionConfiguredNotification";
 export type { SessionNetworkProxyRuntime } from "./SessionNetworkProxyRuntime";

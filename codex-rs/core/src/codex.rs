@@ -1327,6 +1327,7 @@ impl Session {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
+                config.model_service_tier,
                 config.features.enabled(Feature::ResponsesWebsockets)
                     || config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::ResponsesWebsocketsV2),
@@ -7434,6 +7435,7 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
+                config.model_service_tier,
                 model_info.prefer_websockets
                     || config.features.enabled(Feature::ResponsesWebsockets)
                     || config.features.enabled(Feature::ResponsesWebsocketsV2),
@@ -7590,6 +7592,7 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
+                config.model_service_tier,
                 model_info.prefer_websockets
                     || config.features.enabled(Feature::ResponsesWebsockets)
                     || config.features.enabled(Feature::ResponsesWebsocketsV2),

@@ -49,6 +49,17 @@ pub enum Verbosity {
     High,
 }
 
+/// Controls latency/cost class for OpenAI Responses API requests.
+/// Serialized with lowercase values to match the OpenAI API.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ServiceTier {
+    Auto,
+    Default,
+    Flex,
+}
+
 #[derive(
     Deserialize, Debug, Clone, Copy, PartialEq, Default, Serialize, Display, JsonSchema, TS,
 )]

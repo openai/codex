@@ -65,6 +65,7 @@ use codex_otel::OtelManager;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::ServiceTier as ServiceTierConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -118,6 +119,7 @@ struct ModelClientState {
     provider: ModelProviderInfo,
     session_source: SessionSource,
     model_verbosity: Option<VerbosityConfig>,
+    model_service_tier: Option<ServiceTierConfig>,
     enable_responses_websockets: bool,
     enable_responses_websockets_v2: bool,
     enable_request_compression: bool,
@@ -209,6 +211,7 @@ impl ModelClient {
         provider: ModelProviderInfo,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
+        model_service_tier: Option<ServiceTierConfig>,
         enable_responses_websockets: bool,
         enable_responses_websockets_v2: bool,
         enable_request_compression: bool,
@@ -224,6 +227,7 @@ impl ModelClient {
                 provider,
                 session_source,
                 model_verbosity,
+                model_service_tier,
                 enable_responses_websockets,
                 enable_responses_websockets_v2,
                 enable_request_compression,
@@ -547,6 +551,7 @@ impl ModelClientSession {
             include,
             prompt_cache_key,
             text,
+            service_tier: self.client.state.model_service_tier,
         };
         Ok(request)
     }
@@ -1223,6 +1228,7 @@ mod tests {
             ThreadId::new(),
             provider,
             session_source,
+            None,
             None,
             false,
             false,
