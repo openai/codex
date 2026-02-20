@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_exec_command_sse_response;
+use app_test_support::create_exec_command_sse_response_for_command;
 use app_test_support::create_fake_rollout;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
@@ -26,6 +27,10 @@ use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TextElement;
+use codex_app_server_protocol::ThreadDecrementElicitationParams;
+use codex_app_server_protocol::ThreadDecrementElicitationResponse;
+use codex_app_server_protocol::ThreadIncrementElicitationParams;
+use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -45,12 +50,14 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_cargo_bin::find_resource;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::Path;
 use tempfile::TempDir;
+use tokio::process::Command;
 use tokio::time::timeout;
 
 #[cfg(windows)]
@@ -1717,6 +1724,207 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "relies on local Python fixture scripts and POSIX unified exec timing"
+)]
+async fn thread_elicitation_pauses_unified_exec_stopwatch() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+    let state_dir = tmp.path().join("elicitation_state");
+    std::fs::create_dir(&state_dir)?;
+
+    let orchestrator_script =
+        find_resource!("tests/fixtures/elicitation_stopwatch/orchestrator.py")?;
+    let trigger_script =
+        find_resource!("tests/fixtures/elicitation_stopwatch/trigger_elicitation.py")?;
+
+    let responses = vec![
+        create_exec_command_sse_response_for_command(
+            vec![
+                "python3".to_string(),
+                trigger_script.to_string_lossy().to_string(),
+                "--state-dir".to_string(),
+                state_dir.to_string_lossy().to_string(),
+            ],
+            30_000,
+            "uexec-elicitation",
+        )?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+    create_config_toml_with_sandbox(
+        &codex_home,
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::UnifiedExec, true)]),
+        "danger-full-access",
+    )?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run the local approval fixture".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(workspace.clone()),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+
+    let started_command = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification = serde_json::from_value(
+                notif
+                    .params
+                    .clone()
+                    .expect("item/started should include params"),
+            )?;
+            if let ThreadItem::CommandExecution { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution { id, status, .. } = started_command else {
+        unreachable!("loop ensures we break on command execution items");
+    };
+    assert_eq!(id, "uexec-elicitation");
+    assert_eq!(status, CommandExecutionStatus::InProgress);
+
+    run_elicitation_orchestrator(
+        &orchestrator_script,
+        &state_dir,
+        "wait-for-request",
+        Some(5),
+    )
+    .await?;
+
+    let increment_request_id = mcp
+        .send_thread_increment_elicitation_request(ThreadIncrementElicitationParams {
+            thread_id: thread.id.clone(),
+        })
+        .await?;
+    let increment_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(increment_request_id)),
+    )
+    .await??;
+    let ThreadIncrementElicitationResponse { count, paused } =
+        to_response::<ThreadIncrementElicitationResponse>(increment_response)?;
+    assert_eq!(count, 1);
+    assert!(paused);
+
+    // Hold longer than the default 10s unified-exec timeout. If the stopwatch is not paused,
+    // the command exits/times out and the model will issue the second /responses request.
+    assert!(
+        timeout(
+            std::time::Duration::from_secs(11),
+            read_completed_command_execution_item(&mut mcp),
+        )
+        .await
+        .is_err(),
+        "command execution should remain in progress while elicitation is active"
+    );
+    let requests_during_pause = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests while paused");
+    assert_eq!(
+        requests_during_pause.len(),
+        1,
+        "unexpected extra inference request while elicitation pause was active"
+    );
+
+    let decrement_request_id = mcp
+        .send_thread_decrement_elicitation_request(ThreadDecrementElicitationParams {
+            thread_id: thread.id.clone(),
+        })
+        .await?;
+    let decrement_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(decrement_request_id)),
+    )
+    .await??;
+    let ThreadDecrementElicitationResponse { count, paused } =
+        to_response::<ThreadDecrementElicitationResponse>(decrement_response)?;
+    assert_eq!(count, 0);
+    assert!(!paused);
+
+    run_elicitation_orchestrator(&orchestrator_script, &state_dir, "release", None).await?;
+
+    let completed_command = timeout(
+        DEFAULT_READ_TIMEOUT,
+        read_completed_command_execution_item(&mut mcp),
+    )
+    .await??;
+    let ThreadItem::CommandExecution {
+        id,
+        status,
+        exit_code,
+        aggregated_output,
+        ..
+    } = completed_command
+    else {
+        unreachable!("helper only returns command execution items");
+    };
+    assert_eq!(id, "uexec-elicitation");
+    assert_eq!(status, CommandExecutionStatus::Completed);
+    assert_eq!(exit_code, Some(0));
+    let aggregated_output = aggregated_output.expect("expected command output");
+    assert!(aggregated_output.contains("waited for a user approval"));
+    assert!(aggregated_output.contains("approval received"));
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests_after_resume = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests after resume");
+    assert_eq!(requests_after_resume.len(), 2);
+
+    Ok(())
+}
+
+#[tokio::test]
 #[cfg_attr(windows, ignore = "process id reporting differs on Windows")]
 async fn command_execution_notifications_include_process_id() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1851,6 +2059,55 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     .await??;
 
     Ok(())
+}
+
+async fn run_elicitation_orchestrator(
+    orchestrator_script: &Path,
+    state_dir: &Path,
+    command: &str,
+    timeout_seconds: Option<u64>,
+) -> Result<()> {
+    let mut cmd = Command::new("python3");
+    cmd.arg(orchestrator_script)
+        .arg("--state-dir")
+        .arg(state_dir)
+        .arg(command);
+
+    if let Some(timeout_seconds) = timeout_seconds {
+        cmd.arg("--timeout-seconds")
+            .arg(timeout_seconds.to_string());
+    }
+
+    let output = cmd.output().await?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    anyhow::bail!(
+        "orchestrator command `{command}` failed with status {:?}\nstdout:\n{}\nstderr:\n{}",
+        output.status.code(),
+        stdout,
+        stderr,
+    );
+}
+
+async fn read_completed_command_execution_item(mcp: &mut McpProcess) -> Result<ThreadItem> {
+    loop {
+        let notif = mcp
+            .read_stream_until_notification_message("item/completed")
+            .await?;
+        let completed: ItemCompletedNotification = serde_json::from_value(
+            notif
+                .params
+                .clone()
+                .expect("item/completed should include params"),
+        )?;
+        if let ThreadItem::CommandExecution { .. } = completed.item {
+            return Ok(completed.item);
+        }
+    }
 }
 
 // Helper to create a config.toml pointing at the mock model server.

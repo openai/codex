@@ -50,9 +50,18 @@ pub fn create_exec_command_sse_response(call_id: &str) -> anyhow::Result<String>
     let command = std::iter::once(cmd.to_string())
         .chain(args.into_iter().map(str::to_string))
         .collect::<Vec<_>>();
+    create_exec_command_sse_response_for_command(command, 500, call_id)
+}
+
+pub fn create_exec_command_sse_response_for_command(
+    command: Vec<String>,
+    yield_time_ms: u64,
+    call_id: &str,
+) -> anyhow::Result<String> {
+    let command_str = shlex::try_join(command.iter().map(String::as_str))?;
     let tool_call_arguments = serde_json::to_string(&json!({
-        "cmd": command.join(" "),
-        "yield_time_ms": 500
+        "cmd": command_str,
+        "yield_time_ms": yield_time_ms
     }))?;
     Ok(responses::sse(vec![
         responses::ev_response_created("resp-1"),

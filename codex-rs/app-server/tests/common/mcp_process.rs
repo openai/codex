@@ -53,7 +53,9 @@ use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
+use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadReadParams;
@@ -470,6 +472,26 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/read", params).await
+    }
+
+    /// Send a `thread/increment_elicitation` JSON-RPC request.
+    pub async fn send_thread_increment_elicitation_request(
+        &mut self,
+        params: ThreadIncrementElicitationParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/increment_elicitation", params)
+            .await
+    }
+
+    /// Send a `thread/decrement_elicitation` JSON-RPC request.
+    pub async fn send_thread_decrement_elicitation_request(
+        &mut self,
+        params: ThreadDecrementElicitationParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/decrement_elicitation", params)
+            .await
     }
 
     /// Send a `model/list` JSON-RPC request.
