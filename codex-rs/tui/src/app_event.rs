@@ -20,6 +20,7 @@ use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
+use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
 
 use codex_core::features::Feature;
@@ -390,6 +391,12 @@ pub(crate) enum AppEvent {
     },
     /// Dismiss the status-line setup UI without changing config.
     StatusLineSetupCancelled,
+    /// Apply a user-confirmed terminal-title item ordering/selection.
+    TerminalTitleSetup {
+        items: Vec<TerminalTitleItem>,
+    },
+    /// Dismiss the terminal-title setup UI without changing config.
+    TerminalTitleSetupCancelled,
 
     /// Apply a user-confirmed syntax theme selection.
     SyntaxThemeSelected {

@@ -1,0 +1,19 @@
+---
+source: tui/src/bottom_pane/title_setup.rs
+expression: "render_lines(&view, 84)"
+---
+                                                                                    
+  Configure Terminal Title                                                          
+  Select which items to display in the terminal title.                              
+                                                                                    
+  Type to search                                                                    
+  >                                                                                 
+› [x] project        Project name (falls back to current directory name)            
+  [x] status         Compact session status (Ready, Working, Thinking, ...)         
+  [x] thread         Current thread title (omitted until available)                 
+  [ ] git-branch     Current Git branch (omitted when unavailable)                  
+  [ ] model          Current model name                                             
+  [ ] task-progress  Latest task progress from update_plan (omitted until availab…  
+                                                                                    
+  codex | Working | Fix terminal title command                                      
+  Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.

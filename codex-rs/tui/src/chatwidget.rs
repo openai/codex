@@ -39,10 +39,13 @@ use std::time::Instant;
 
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::bottom_pane::TerminalTitleItem;
+use crate::bottom_pane::TerminalTitleSetupView;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
+use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -279,6 +282,7 @@ use codex_file_search::FileMatch;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -291,6 +295,7 @@ const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
     ["model-with-reasoning", "context-remaining", "current-dir"];
+const DEFAULT_TERMINAL_TITLE_ITEMS: [&str; 2] = ["project", "status"];
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -461,6 +466,8 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) model: Option<String>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
+    // Shared latch so we only warn once about invalid terminal-title item IDs.
+    pub(crate) terminal_title_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) otel_manager: OtelManager,
 }
 
@@ -639,6 +646,8 @@ pub(crate) struct ChatWidget {
     saw_plan_update_this_turn: bool,
     // Whether the current turn emitted a proposed plan item.
     saw_plan_item_this_turn: bool,
+    // Latest `update_plan` checklist task counts for terminal-title rendering.
+    last_plan_progress: Option<(usize, usize)>,
     // Incremental buffer for streamed plan content.
     plan_delta_buffer: String,
     // True while a plan item is streaming.
@@ -662,6 +671,10 @@ pub(crate) struct ChatWidget {
     session_network_proxy: Option<codex_protocol::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     status_line_invalid_items_warned: Arc<AtomicBool>,
+    // Shared latch so we only warn once about invalid terminal-title item IDs.
+    terminal_title_invalid_items_warned: Arc<AtomicBool>,
+    // Last terminal title emitted, to avoid writing duplicate OSC updates.
+    last_terminal_title: Option<String>,
     // Cached git branch name for the status line (None if unknown).
     status_line_branch: Option<String>,
     // CWD used to resolve the cached branch; change resets branch state.
@@ -862,6 +875,7 @@ impl ChatWidget {
     fn update_task_running_state(&mut self) {
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        self.refresh_terminal_title();
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -936,6 +950,7 @@ impl ChatWidget {
         self.current_status_header = header.clone();
         self.bottom_pane
             .update_status(header, details, details_capitalization, details_max_lines);
+        self.refresh_terminal_title();
     }
 
     /// Convenience wrapper around [`Self::set_status`];
@@ -966,6 +981,7 @@ impl ChatWidget {
     /// placeholders so the line remains compact and stable.
     pub(crate) fn refresh_status_line(&mut self) {
         let (items, invalid_items) = self.status_line_items_with_invalids();
+        let (title_items, _) = self.terminal_title_items_with_invalids();
         if self.thread_id.is_some()
             && !invalid_items.is_empty()
             && self
@@ -984,7 +1000,9 @@ impl ChatWidget {
             );
             self.on_warning(message);
         }
-        if !items.contains(&StatusLineItem::GitBranch) {
+        if !items.contains(&StatusLineItem::GitBranch)
+            && !title_items.contains(&TerminalTitleItem::GitBranch)
+        {
             self.status_line_branch = None;
             self.status_line_branch_pending = false;
             self.status_line_branch_lookup_complete = false;
@@ -993,13 +1011,17 @@ impl ChatWidget {
         self.bottom_pane.set_status_line_enabled(enabled);
         if !enabled {
             self.set_status_line(None);
+            self.refresh_terminal_title();
             return;
         }
 
         let cwd = self.status_line_cwd().to_path_buf();
         self.sync_status_line_branch_state(&cwd);
 
-        if items.contains(&StatusLineItem::GitBranch) && !self.status_line_branch_lookup_complete {
+        if (items.contains(&StatusLineItem::GitBranch)
+            || title_items.contains(&TerminalTitleItem::GitBranch))
+            && !self.status_line_branch_lookup_complete
+        {
             self.request_status_line_branch(cwd);
         }
 
@@ -1016,6 +1038,7 @@ impl ChatWidget {
             Some(Line::from(parts.join(" · ")))
         };
         self.set_status_line(line);
+        self.refresh_terminal_title();
     }
 
     /// Records that status-line setup was canceled.
@@ -1034,6 +1057,85 @@ impl ChatWidget {
         let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
         self.config.tui_status_line = Some(ids);
         self.refresh_status_line();
+    }
+
+    /// Recomputes and emits the terminal title from config and runtime state.
+    pub(crate) fn refresh_terminal_title(&mut self) {
+        let (items, invalid_items) = self.terminal_title_items_with_invalids();
+        if self.thread_id.is_some()
+            && !invalid_items.is_empty()
+            && self
+                .terminal_title_invalid_items_warned
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            let label = if invalid_items.len() == 1 {
+                "item"
+            } else {
+                "items"
+            };
+            let message = format!(
+                "Ignored invalid terminal title {label}: {}.",
+                proper_join(invalid_items.as_slice())
+            );
+            self.on_warning(message);
+        }
+
+        if items.is_empty() {
+            self.last_terminal_title = None;
+            return;
+        }
+
+        let status_line_uses_git_branch = self
+            .status_line_items_with_invalids()
+            .0
+            .contains(&StatusLineItem::GitBranch);
+        if !items.contains(&TerminalTitleItem::GitBranch) && !status_line_uses_git_branch {
+            self.status_line_branch = None;
+            self.status_line_branch_pending = false;
+            self.status_line_branch_lookup_complete = false;
+        }
+
+        if items.contains(&TerminalTitleItem::GitBranch) {
+            let cwd = self.status_line_cwd().to_path_buf();
+            self.sync_status_line_branch_state(&cwd);
+            if !self.status_line_branch_lookup_complete {
+                self.request_status_line_branch(cwd);
+            }
+        }
+
+        let title = items
+            .iter()
+            .filter_map(|item| self.terminal_title_value_for_item(item))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let title = (!title.is_empty()).then_some(title);
+        if self.last_terminal_title == title {
+            return;
+        }
+        self.last_terminal_title = title.clone();
+
+        let Some(title) = title else {
+            return;
+        };
+        if let Err(err) = set_terminal_title(&title) {
+            tracing::debug!(error = %err, "failed to set terminal title");
+        }
+    }
+
+    /// Records that terminal-title setup was canceled.
+    pub(crate) fn cancel_terminal_title_setup(&self) {
+        tracing::info!("Terminal title setup canceled by user");
+    }
+
+    /// Applies terminal-title item selection from the setup view to in-memory config.
+    ///
+    /// An empty selection persists as an explicit empty list (disables title updates).
+    pub(crate) fn setup_terminal_title(&mut self, items: Vec<TerminalTitleItem>) {
+        tracing::info!("terminal title setup confirmed with items: {items:#?}");
+        let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
+        self.config.tui_terminal_title = Some(ids);
+        self.refresh_terminal_title();
     }
 
     /// Stores async git-branch lookup results for the current status-line cwd.
@@ -1218,6 +1320,7 @@ impl ChatWidget {
     fn on_thread_name_updated(&mut self, event: codex_protocol::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
             self.thread_name = event.thread_name;
+            self.refresh_terminal_title();
             self.request_redraw();
         }
     }
@@ -1907,6 +2010,17 @@ impl ChatWidget {
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
         self.saw_plan_update_this_turn = true;
+        let total = update.plan.len();
+        let completed = update
+            .plan
+            .iter()
+            .filter(|item| match &item.status {
+                StepStatus::Completed => true,
+                StepStatus::Pending | StepStatus::InProgress => false,
+            })
+            .count();
+        self.last_plan_progress = (total > 0).then_some((completed, total));
+        self.refresh_terminal_title();
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
@@ -2749,6 +2863,7 @@ impl ChatWidget {
             feedback_audience,
             model,
             status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
             otel_manager,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
@@ -2855,6 +2970,7 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            last_plan_progress: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
@@ -2866,6 +2982,8 @@ impl ChatWidget {
             current_cwd,
             session_network_proxy: None,
             status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
+            last_terminal_title: None,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -2907,6 +3025,8 @@ impl ChatWidget {
             .bottom_pane
             .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
+        widget.refresh_terminal_title();
+
         widget
     }
 
@@ -2927,6 +3047,7 @@ impl ChatWidget {
             feedback_audience,
             model,
             status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
             otel_manager,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
@@ -3021,6 +3142,7 @@ impl ChatWidget {
             forked_from: None,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            last_plan_progress: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
@@ -3043,6 +3165,8 @@ impl ChatWidget {
             current_cwd,
             session_network_proxy: None,
             status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
+            last_terminal_title: None,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -3070,6 +3194,7 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
+        widget.refresh_terminal_title();
 
         widget
     }
@@ -3093,6 +3218,7 @@ impl ChatWidget {
             feedback_audience,
             model,
             status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
             otel_manager,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
@@ -3198,6 +3324,7 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            last_plan_progress: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
@@ -3209,6 +3336,8 @@ impl ChatWidget {
             current_cwd,
             session_network_proxy: None,
             status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
+            last_terminal_title: None,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -3245,6 +3374,7 @@ impl ChatWidget {
                 ),
         );
         widget.update_collaboration_mode_indicator();
+        widget.refresh_terminal_title();
 
         widget
     }
@@ -3705,6 +3835,9 @@ impl ChatWidget {
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
+            }
+            SlashCommand::Title => {
+                self.open_terminal_title_setup();
             }
             SlashCommand::Statusline => {
                 self.open_status_line_setup();
@@ -4717,6 +4850,15 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(params);
     }
 
+    fn open_terminal_title_setup(&mut self) {
+        let configured_terminal_title_items = self.configured_terminal_title_items();
+        let view = TerminalTitleSetupView::new(
+            Some(configured_terminal_title_items.as_slice()),
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
     /// Parses configured status-line ids into known items and collects unknown ids.
     ///
     /// Unknown ids are deduplicated in insertion order for warning messages.
@@ -4740,6 +4882,35 @@ impl ChatWidget {
     fn configured_status_line_items(&self) -> Vec<String> {
         self.config.tui_status_line.clone().unwrap_or_else(|| {
             DEFAULT_STATUS_LINE_ITEMS
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        })
+    }
+
+    /// Parses configured terminal-title ids into known items and collects unknown ids.
+    ///
+    /// Unknown ids are deduplicated in insertion order for warning messages.
+    fn terminal_title_items_with_invalids(&self) -> (Vec<TerminalTitleItem>, Vec<String>) {
+        let mut invalid = Vec::new();
+        let mut invalid_seen = HashSet::new();
+        let mut items = Vec::new();
+        for id in self.configured_terminal_title_items() {
+            match id.parse::<TerminalTitleItem>() {
+                Ok(item) => items.push(item),
+                Err(_) => {
+                    if invalid_seen.insert(id.clone()) {
+                        invalid.push(format!(r#""{id}""#));
+                    }
+                }
+            }
+        }
+        (items, invalid)
+    }
+
+    fn configured_terminal_title_items(&self) -> Vec<String> {
+        self.config.tui_terminal_title.clone().unwrap_or_else(|| {
+            DEFAULT_TERMINAL_TITLE_ITEMS
                 .iter()
                 .map(ToString::to_string)
                 .collect()
@@ -4774,6 +4945,18 @@ impl ChatWidget {
                 .map(|name| name.to_string_lossy().to_string())
                 .unwrap_or_else(|| format_directory_display(&root, None))
         })
+    }
+
+    fn terminal_title_project_name(&self) -> Option<String> {
+        let project = self.status_line_project_root_name().or_else(|| {
+            let cwd = self.status_line_cwd();
+            Some(
+                cwd.file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| format_directory_display(cwd, None)),
+            )
+        })?;
+        Some(Self::truncate_terminal_title_part(project, 24))
     }
 
     /// Resets git-branch cache state when the status-line cwd changes.
@@ -4879,6 +5062,81 @@ impl ChatWidget {
             )),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
         }
+    }
+
+    fn terminal_title_value_for_item(&self, item: &TerminalTitleItem) -> Option<String> {
+        match item {
+            TerminalTitleItem::Project => self.terminal_title_project_name(),
+            TerminalTitleItem::Status => Some(self.terminal_title_status_text()),
+            TerminalTitleItem::Thread => self.thread_name.as_ref().and_then(|name| {
+                let trimmed = name.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(Self::truncate_terminal_title_part(trimmed.to_string(), 48))
+                }
+            }),
+            TerminalTitleItem::GitBranch => self
+                .status_line_branch
+                .as_ref()
+                .map(|branch| Self::truncate_terminal_title_part(branch.clone(), 32)),
+            TerminalTitleItem::Model => Some(Self::truncate_terminal_title_part(
+                self.model_display_name().to_string(),
+                32,
+            )),
+            TerminalTitleItem::TaskProgress => self.terminal_title_task_progress(),
+        }
+    }
+
+    fn terminal_title_status_text(&self) -> String {
+        if self.mcp_startup_status.is_some() {
+            return "Starting".to_string();
+        }
+
+        if !self.bottom_pane.is_task_running() {
+            return "Ready".to_string();
+        }
+
+        if self.current_status_header == "Working" {
+            return "Working".to_string();
+        }
+
+        if self
+            .current_status_header
+            .starts_with("Waiting for background terminal")
+        {
+            return "Waiting".to_string();
+        }
+
+        if self.current_status_header.starts_with("Undo") {
+            return "Undoing".to_string();
+        }
+
+        "Thinking".to_string()
+    }
+
+    fn terminal_title_task_progress(&self) -> Option<String> {
+        let (completed, total) = self.last_plan_progress?;
+        if total == 0 {
+            return None;
+        }
+        Some(format!("Tasks {completed}/{total}"))
+    }
+
+    fn truncate_terminal_title_part(value: String, max_chars: usize) -> String {
+        if max_chars == 0 {
+            return String::new();
+        }
+
+        let mut chars = value.chars();
+        let head: String = chars.by_ref().take(max_chars).collect();
+        if chars.next().is_none() || max_chars <= 3 {
+            return head;
+        }
+
+        let mut truncated = head.chars().take(max_chars - 3).collect::<String>();
+        truncated.push_str("...");
+        truncated
     }
 
     fn status_line_context_window_size(&self) -> Option<i64> {
@@ -6768,6 +7026,7 @@ impl ChatWidget {
         self.session_header.set_model(effective.model());
         // Keep composer paste affordances aligned with the currently effective model.
         self.sync_image_paste_enabled();
+        self.refresh_terminal_title();
     }
 
     fn model_display_name(&self) -> &str {
