@@ -1589,7 +1589,7 @@ impl Session {
                 self.record_conversation_items(&turn_context, &items).await;
                 {
                     let mut state = self.state.lock().await;
-                    state.set_previous_context_item_raw(Some(turn_context.to_turn_context_item()));
+                    state.set_previous_context_item(Some(turn_context.to_turn_context_item()));
                 }
                 self.set_previous_model(None).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
@@ -1603,7 +1603,7 @@ impl Session {
                     .map(std::string::ToString::to_string);
                 {
                     let mut state = self.state.lock().await;
-                    state.set_previous_context_item_raw(None);
+                    state.set_previous_context_item(None);
                 }
                 self.set_previous_model(previous_model).await;
 
@@ -1685,7 +1685,7 @@ impl Session {
                     .await;
                 {
                     let mut state = self.state.lock().await;
-                    state.set_previous_context_item_raw(Some(turn_context.to_turn_context_item()));
+                    state.set_previous_context_item(Some(turn_context.to_turn_context_item()));
                 }
 
                 // Forked threads should remain file-backed immediately after startup.
@@ -2661,7 +2661,7 @@ impl Session {
 
     pub(crate) async fn clear_previous_context_item(&self) {
         let mut state = self.state.lock().await;
-        state.set_previous_context_item_raw(None);
+        state.set_previous_context_item(None);
     }
 
     /// Persist the latest turn context snapshot and emit any required model-visible context updates.
@@ -2717,7 +2717,7 @@ impl Session {
         }
 
         let mut state = self.state.lock().await;
-        state.set_previous_context_item_raw(Some(turn_context.to_turn_context_item()));
+        state.set_previous_context_item(Some(turn_context.to_turn_context_item()));
     }
 
     pub(crate) async fn update_token_usage_info(

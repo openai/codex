@@ -64,7 +64,7 @@ impl ContextManager {
     ///
     /// When setting `Some(...)`, callers should take care to persist the
     /// appropriate model-visible context diff items.
-    pub(crate) fn set_previous_context_item_raw(&mut self, item: Option<TurnContextItem>) {
+    pub(crate) fn set_previous_context_item(&mut self, item: Option<TurnContextItem>) {
         self.previous_context_item = item;
     }
 
