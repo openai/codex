@@ -320,7 +320,9 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         responses::ev_assistant_message("msg-2", "Done"),
         responses::ev_completed("resp-2"),
     ]))
-    .set_delay(std::time::Duration::from_millis(500));
+    // Keep the second turn in-progress long enough for `thread/resume` to reliably observe
+    // the running-thread state on slower or heavily sandboxed CI runners.
+    .set_delay(std::time::Duration::from_secs(5));
     let _first_response_mock = responses::mount_sse_once(&server, first_body).await;
     let _second_response_mock = responses::mount_response_once(&server, second_response).await;
     let codex_home = TempDir::new()?;
@@ -436,7 +438,9 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         responses::ev_assistant_message("msg-2", "Done"),
         responses::ev_completed("resp-2"),
     ]))
-    .set_delay(std::time::Duration::from_millis(500));
+    // Keep the second turn in-progress long enough for `thread/resume` to reliably observe
+    // the running-thread state on slower or heavily sandboxed CI runners.
+    .set_delay(std::time::Duration::from_secs(5));
     let _first_response_mock = responses::mount_sse_once(&server, first_body).await;
     let _second_response_mock = responses::mount_response_once(&server, second_response).await;
     let codex_home = TempDir::new()?;
