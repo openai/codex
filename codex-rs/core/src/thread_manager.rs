@@ -1,6 +1,7 @@
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::ModelProviderInfo;
+use crate::OPENAI_PROVIDER_ID;
 use crate::agent::AgentControl;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
@@ -139,17 +140,21 @@ pub(crate) struct ThreadManagerState {
 
 impl ThreadManager {
     pub fn new(
-        codex_home: PathBuf,
+        config: &Config,
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
-        model_catalog: Option<ModelsResponse>,
     ) -> Self {
+        let openai_models_provider = config
+            .model_providers
+            .get(OPENAI_PROVIDER_ID)
+            .cloned()
+            .unwrap_or_else(|| ModelProviderInfo::create_openai_provider(None));
         Self::new_with_models_provider(
-            codex_home,
+            config.codex_home.clone(),
             auth_manager,
             session_source,
-            ModelProviderInfo::create_openai_provider(None),
-            model_catalog,
+            openai_models_provider,
+            config.model_catalog.clone(),
         )
     }
 

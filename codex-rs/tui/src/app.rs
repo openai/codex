@@ -34,7 +34,6 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
-use codex_core::OPENAI_PROVIDER_ID;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -1023,17 +1022,10 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
-        let openai_models_provider = config
-            .model_providers
-            .get(OPENAI_PROVIDER_ID)
-            .cloned()
-            .unwrap_or_else(|| codex_core::ModelProviderInfo::create_openai_provider(None));
-        let thread_manager = Arc::new(ThreadManager::new_with_models_provider(
-            config.codex_home.clone(),
+        let thread_manager = Arc::new(ThreadManager::new(
+            &config,
             auth_manager.clone(),
             SessionSource::Cli,
-            openai_models_provider,
-            config.model_catalog.clone(),
         ));
         let mut model = thread_manager
             .get_models_manager()
