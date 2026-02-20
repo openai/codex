@@ -28,6 +28,7 @@ use codex_protocol::protocol::CollabCloseBeginEvent;
 use codex_protocol::protocol::CollabCloseEndEvent;
 use codex_protocol::protocol::CollabResumeBeginEvent;
 use codex_protocol::protocol::CollabResumeEndEvent;
+use codex_protocol::protocol::CollabWaitDiagnosticEvent;
 use codex_protocol::protocol::CollabWaitingBeginEvent;
 use codex_protocol::protocol::CollabWaitingEndEvent;
 use codex_protocol::protocol::SessionSource;
@@ -470,6 +471,37 @@ pub(crate) mod wait {
         pub(crate) timed_out: bool,
     }
 
+    #[derive(Debug)]
+    enum WaitFinalStatusOutcome {
+        Final((ThreadId, AgentStatus)),
+        StreamClosedNonFinal {
+            thread_id: ThreadId,
+            last_observed_status: AgentStatus,
+            fallback_status: AgentStatus,
+            latest_is_final: bool,
+        },
+    }
+
+    fn make_wait_diagnostic(
+        diagnostic_event: &str,
+        thread_id: Option<ThreadId>,
+        receiver_count: usize,
+        timeout_ms: i64,
+        last_observed_status: Option<AgentStatus>,
+        fallback_status: Option<AgentStatus>,
+        latest_is_final: Option<bool>,
+    ) -> CollabWaitDiagnosticEvent {
+        CollabWaitDiagnosticEvent {
+            diagnostic_event: diagnostic_event.to_string(),
+            thread_id,
+            receiver_count: Some(receiver_count),
+            timeout_ms: Some(timeout_ms),
+            last_observed_status,
+            fallback_status,
+            latest_is_final,
+        }
+    }
+
     pub(super) fn should_emit_wait_none_diagnostic(diagnostic_emitted: bool) -> bool {
         !diagnostic_emitted
     }
@@ -538,6 +570,7 @@ pub(crate) mod wait {
 
         let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
         let mut initial_final_statuses = Vec::new();
+        let mut wait_diagnostics: Vec<CollabWaitDiagnosticEvent> = Vec::new();
         for id in &receiver_thread_ids {
             match session.services.agent_control.subscribe_status(*id).await {
                 Ok(rx) => {
@@ -564,6 +597,7 @@ pub(crate) mod wait {
                                     &receiver_agents,
                                 ),
                                 statuses,
+                                diagnostics: wait_diagnostics.clone(),
                             }
                             .into(),
                         )
@@ -587,11 +621,25 @@ pub(crate) mod wait {
             let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
             loop {
                 match timeout_at(deadline, futures.next()).await {
-                    Ok(Some(Some(result))) => {
+                    Ok(Some(WaitFinalStatusOutcome::Final(result))) => {
                         results.push(result);
                         break;
                     }
-                    Ok(Some(None)) => {
+                    Ok(Some(WaitFinalStatusOutcome::StreamClosedNonFinal {
+                        thread_id,
+                        last_observed_status,
+                        fallback_status,
+                        latest_is_final,
+                    })) => {
+                        wait_diagnostics.push(make_wait_diagnostic(
+                            "collab_wait_status_stream_closed_non_final",
+                            Some(thread_id),
+                            receiver_thread_ids.len(),
+                            timeout_ms,
+                            Some(last_observed_status),
+                            Some(fallback_status),
+                            Some(latest_is_final),
+                        ));
                         if should_emit_wait_none_diagnostic(wait_none_diagnostic_emitted) {
                             warn!(
                                 diagnostic_event = "collab_wait_continue_on_none",
@@ -600,6 +648,15 @@ pub(crate) mod wait {
                                 timeout_ms,
                                 "collab wait loop continued after non-final status stream result"
                             );
+                            wait_diagnostics.push(make_wait_diagnostic(
+                                "collab_wait_continue_on_none",
+                                None,
+                                receiver_thread_ids.len(),
+                                timeout_ms,
+                                None,
+                                None,
+                                None,
+                            ));
                             wait_none_diagnostic_emitted = true;
                         }
                         continue;
@@ -611,8 +668,24 @@ pub(crate) mod wait {
                 // Drain the unlikely last elements to prevent race.
                 loop {
                     match futures.next().now_or_never() {
-                        Some(Some(Some(result))) => results.push(result),
-                        Some(Some(None)) => continue,
+                        Some(Some(WaitFinalStatusOutcome::Final(result))) => results.push(result),
+                        Some(Some(WaitFinalStatusOutcome::StreamClosedNonFinal {
+                            thread_id,
+                            last_observed_status,
+                            fallback_status,
+                            latest_is_final,
+                        })) => {
+                            wait_diagnostics.push(make_wait_diagnostic(
+                                "collab_wait_status_stream_closed_non_final",
+                                Some(thread_id),
+                                receiver_thread_ids.len(),
+                                timeout_ms,
+                                Some(last_observed_status),
+                                Some(fallback_status),
+                                Some(latest_is_final),
+                            ));
+                            continue;
+                        }
                         Some(None) | None => break,
                     }
                 }
@@ -631,6 +704,15 @@ pub(crate) mod wait {
                 timeout_ms,
                 "collab wait finished with empty status map (timeout-like outcome)"
             );
+            wait_diagnostics.push(make_wait_diagnostic(
+                "collab_wait_empty_status_map_timeout_like",
+                None,
+                receiver_thread_ids.len(),
+                timeout_ms,
+                None,
+                None,
+                None,
+            ));
         }
         let result = WaitResult {
             status: statuses_map.clone(),
@@ -646,6 +728,7 @@ pub(crate) mod wait {
                     call_id,
                     agent_statuses,
                     statuses: statuses_map,
+                    diagnostics: wait_diagnostics,
                 }
                 .into(),
             )
@@ -665,10 +748,10 @@ pub(crate) mod wait {
         session: Arc<Session>,
         thread_id: ThreadId,
         mut status_rx: Receiver<AgentStatus>,
-    ) -> Option<(ThreadId, AgentStatus)> {
+    ) -> WaitFinalStatusOutcome {
         let mut status = status_rx.borrow().clone();
         if is_final(&status) {
-            return Some((thread_id, status));
+            return WaitFinalStatusOutcome::Final((thread_id, status));
         }
 
         loop {
@@ -685,12 +768,18 @@ pub(crate) mod wait {
                         latest_is_final,
                         "collab wait status stream closed before final status"
                     );
+                    return WaitFinalStatusOutcome::StreamClosedNonFinal {
+                        thread_id,
+                        last_observed_status,
+                        fallback_status: latest,
+                        latest_is_final,
+                    };
                 }
-                return latest_is_final.then_some((thread_id, latest));
+                return WaitFinalStatusOutcome::Final((thread_id, latest));
             }
             status = status_rx.borrow().clone();
             if is_final(&status) {
-                return Some((thread_id, status));
+                return WaitFinalStatusOutcome::Final((thread_id, status));
             }
         }
     }
@@ -986,10 +1075,12 @@ mod tests {
     use crate::ThreadManager;
     use crate::built_in_model_providers;
     use crate::codex::make_session_and_context;
+    use crate::codex::make_session_and_context_with_rx;
     use crate::config::DEFAULT_AGENT_MAX_DEPTH;
     use crate::config::types::ShellEnvironmentPolicy;
     use crate::function_tool::FunctionCallError;
     use crate::protocol::AskForApproval;
+    use crate::protocol::EventMsg;
     use crate::protocol::Op;
     use crate::protocol::SandboxPolicy;
     use crate::protocol::SessionSource;
@@ -1803,6 +1894,72 @@ mod tests {
             }
         );
         assert_eq!(success, None);
+
+        let _ = thread
+            .thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn wait_timeout_emits_structured_timeout_like_diagnostic() {
+        let (mut session, turn, rx_event) = make_session_and_context_with_rx().await;
+        let manager = thread_manager();
+        Arc::get_mut(&mut session)
+            .expect("session should be uniquely owned in test")
+            .services
+            .agent_control = manager.agent_control();
+
+        let config = turn.config.as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+        let invocation = invocation(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            "wait",
+            function_payload(json!({
+                "ids": [agent_id.to_string()],
+                "timeout_ms": MIN_WAIT_TIMEOUT_MS
+            })),
+        );
+
+        let output = MultiAgentHandler
+            .handle(invocation)
+            .await
+            .expect("wait should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: wait::WaitResult =
+            serde_json::from_str(&content).expect("wait result should be json");
+        assert_eq!(result.status, HashMap::new());
+        assert!(result.timed_out);
+
+        let mut saw_wait_end = false;
+        let mut saw_timeout_diag = false;
+        while let Ok(event) = rx_event.try_recv() {
+            if let EventMsg::CollabWaitingEnd(wait_end) = event.msg {
+                saw_wait_end = true;
+                if wait_end
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.diagnostic_event == "collab_wait_empty_status_map_timeout_like")
+                {
+                    saw_timeout_diag = true;
+                    break;
+                }
+            }
+        }
+        assert!(saw_wait_end, "expected a collab waiting end event");
+        assert!(
+            saw_timeout_diag,
+            "expected structured timeout-like diagnostic in collab waiting end event"
+        );
 
         let _ = thread
             .thread
