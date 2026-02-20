@@ -229,10 +229,6 @@ const fn default_enabled() -> bool {
     true
 }
 
-fn is_true(value: &bool) -> bool {
-    *value
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged, deny_unknown_fields, rename_all = "snake_case")]
 pub enum McpServerTransportConfig {
@@ -447,11 +443,17 @@ pub struct AppsDefaultConfig {
     pub enabled: bool,
 
     /// Whether tools with `destructive_hint = true` are allowed by default.
-    #[serde(default = "default_enabled", skip_serializing_if = "is_true")]
+    #[serde(
+        default = "default_enabled",
+        skip_serializing_if = "std::clone::Clone::clone"
+    )]
     pub destructive_enabled: bool,
 
     /// Whether tools with `open_world_hint = true` are allowed by default.
-    #[serde(default = "default_enabled", skip_serializing_if = "is_true")]
+    #[serde(
+        default = "default_enabled",
+        skip_serializing_if = "std::clone::Clone::clone"
+    )]
     pub open_world_enabled: bool,
 }
 
