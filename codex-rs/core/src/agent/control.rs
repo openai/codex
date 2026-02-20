@@ -218,6 +218,23 @@ impl AgentControl {
         thread.agent_status().await
     }
 
+    pub(crate) async fn get_agent_nickname_and_role(
+        &self,
+        agent_id: ThreadId,
+    ) -> Option<(Option<String>, Option<String>)> {
+        let Ok(state) = self.upgrade() else {
+            return None;
+        };
+        let Ok(thread) = state.get_thread(agent_id).await else {
+            return None;
+        };
+        let session_source = thread.config_snapshot().await.session_source;
+        Some((
+            session_source.get_nickname(),
+            session_source.get_agent_role(),
+        ))
+    }
+
     /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.
     pub(crate) async fn subscribe_status(
         &self,

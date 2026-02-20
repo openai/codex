@@ -20,8 +20,10 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
+use codex_protocol::protocol::CollabAgentRef;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::CollabCloseBeginEvent;
 use codex_protocol::protocol::CollabCloseEndEvent;
 use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -33,6 +35,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
 
 pub struct MultiAgentHandler;
 
@@ -171,6 +174,14 @@ mod spawn {
             ),
             Err(_) => (None, AgentStatus::NotFound),
         };
+        let (new_agent_nickname, new_agent_role) = match new_thread_id {
+            Some(thread_id) => {
+                let agent =
+                    collab_agent_ref(session.as_ref(), turn.as_ref(), thread_id, role_name).await;
+                (agent.agent_nickname, agent.agent_role)
+            }
+            None => (None, None),
+        };
         session
             .send_event(
                 &turn,
@@ -178,6 +189,8 @@ mod spawn {
                     call_id,
                     sender_thread_id: session.conversation_id,
                     new_thread_id,
+                    new_agent_nickname,
+                    new_agent_role,
                     prompt,
                     status,
                 }
@@ -228,6 +241,8 @@ mod send_input {
         let receiver_thread_id = agent_id(&args.id)?;
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
+        let receiver_agent =
+            collab_agent_ref(session.as_ref(), turn.as_ref(), receiver_thread_id, None).await;
         if args.interrupt {
             session
                 .services
@@ -266,6 +281,8 @@ mod send_input {
                     call_id,
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
+                    receiver_agent_nickname: receiver_agent.agent_nickname,
+                    receiver_agent_role: receiver_agent.agent_role,
                     prompt,
                     status,
                 }
@@ -308,6 +325,8 @@ mod resume_agent {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: ResumeAgentArgs = parse_arguments(&arguments)?;
         let receiver_thread_id = agent_id(&args.id)?;
+        let receiver_agent =
+            collab_agent_ref(session.as_ref(), turn.as_ref(), receiver_thread_id, None).await;
         let child_depth = next_thread_spawn_depth(&turn.session_source);
         if exceeds_thread_spawn_depth_limit(child_depth, turn.config.agent_max_depth) {
             return Err(FunctionCallError::RespondToModel(
@@ -322,6 +341,8 @@ mod resume_agent {
                     call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
+                    receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
+                    receiver_agent_role: receiver_agent.agent_role.clone(),
                 }
                 .into(),
             )
@@ -359,6 +380,8 @@ mod resume_agent {
                     call_id,
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
+                    receiver_agent_nickname: receiver_agent.agent_nickname,
+                    receiver_agent_role: receiver_agent.agent_role,
                     status: status.clone(),
                 }
                 .into(),
@@ -448,6 +471,12 @@ pub(crate) mod wait {
             .iter()
             .map(|id| agent_id(id))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
+        for receiver_thread_id in &receiver_thread_ids {
+            receiver_agents.push(
+                collab_agent_ref(session.as_ref(), turn.as_ref(), *receiver_thread_id, None).await,
+            );
+        }
 
         // Validate timeout.
         // Very short timeouts encourage busy-polling loops in the orchestrator prompt and can
@@ -468,6 +497,7 @@ pub(crate) mod wait {
                 CollabWaitingBeginEvent {
                     sender_thread_id: session.conversation_id,
                     receiver_thread_ids: receiver_thread_ids.clone(),
+                    receiver_agents: receiver_agents.clone(),
                     call_id: call_id.clone(),
                 }
                 .into(),
@@ -497,6 +527,10 @@ pub(crate) mod wait {
                             CollabWaitingEndEvent {
                                 sender_thread_id: session.conversation_id,
                                 call_id: call_id.clone(),
+                                agent_statuses: build_wait_agent_statuses(
+                                    &statuses,
+                                    &receiver_agents,
+                                ),
                                 statuses,
                             }
                             .into(),
@@ -543,6 +577,7 @@ pub(crate) mod wait {
 
         // Convert payload.
         let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+        let agent_statuses = build_wait_agent_statuses(&statuses_map, &receiver_agents);
         let result = WaitResult {
             status: statuses_map.clone(),
             timed_out: statuses.is_empty(),
@@ -555,6 +590,7 @@ pub(crate) mod wait {
                 CollabWaitingEndEvent {
                     sender_thread_id: session.conversation_id,
                     call_id,
+                    agent_statuses,
                     statuses: statuses_map,
                 }
                 .into(),
@@ -611,6 +647,8 @@ pub mod close_agent {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: CloseAgentArgs = parse_arguments(&arguments)?;
         let agent_id = agent_id(&args.id)?;
+        let receiver_agent =
+            collab_agent_ref(session.as_ref(), turn.as_ref(), agent_id, None).await;
         session
             .send_event(
                 &turn,
@@ -638,6 +676,8 @@ pub mod close_agent {
                             call_id: call_id.clone(),
                             sender_thread_id: session.conversation_id,
                             receiver_thread_id: agent_id,
+                            receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
+                            receiver_agent_role: receiver_agent.agent_role.clone(),
                             status,
                         }
                         .into(),
@@ -664,6 +704,8 @@ pub mod close_agent {
                     call_id,
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id: agent_id,
+                    receiver_agent_nickname: receiver_agent.agent_nickname,
+                    receiver_agent_role: receiver_agent.agent_role,
                     status: status.clone(),
                 }
                 .into(),
@@ -685,6 +727,79 @@ pub mod close_agent {
 fn agent_id(id: &str) -> Result<ThreadId, FunctionCallError> {
     ThreadId::from_string(id)
         .map_err(|e| FunctionCallError::RespondToModel(format!("invalid agent id {id}: {e:?}")))
+}
+
+async fn collab_agent_ref(
+    session: &Session,
+    turn: &TurnContext,
+    thread_id: ThreadId,
+    role_hint: Option<&str>,
+) -> CollabAgentRef {
+    let (mut agent_nickname, mut agent_role) = session
+        .services
+        .agent_control
+        .get_agent_nickname_and_role(thread_id)
+        .await
+        .unwrap_or((None, None));
+
+    if (agent_nickname.is_none() || agent_role.is_none())
+        && let Some(state_db) = crate::state_db::get_state_db(turn.config.as_ref(), None).await
+        && let Ok(Some(metadata)) = state_db.get_thread(thread_id).await
+    {
+        if agent_nickname.is_none() {
+            agent_nickname = metadata.agent_nickname;
+        }
+        if agent_role.is_none() {
+            agent_role = metadata.agent_role;
+        }
+    }
+
+    if agent_role.is_none() {
+        agent_role = role_hint.map(str::to_string);
+    }
+
+    CollabAgentRef {
+        thread_id,
+        agent_nickname,
+        agent_role,
+    }
+}
+
+fn build_wait_agent_statuses(
+    statuses: &HashMap<ThreadId, AgentStatus>,
+    receiver_agents: &[CollabAgentRef],
+) -> Vec<CollabAgentStatusEntry> {
+    if statuses.is_empty() {
+        return Vec::new();
+    }
+
+    let mut entries = Vec::with_capacity(statuses.len());
+    let mut seen = HashMap::with_capacity(receiver_agents.len());
+    for receiver_agent in receiver_agents {
+        seen.insert(receiver_agent.thread_id, ());
+        if let Some(status) = statuses.get(&receiver_agent.thread_id) {
+            entries.push(CollabAgentStatusEntry {
+                thread_id: receiver_agent.thread_id,
+                agent_nickname: receiver_agent.agent_nickname.clone(),
+                agent_role: receiver_agent.agent_role.clone(),
+                status: status.clone(),
+            });
+        }
+    }
+
+    let mut extras = statuses
+        .iter()
+        .filter(|(thread_id, _)| !seen.contains_key(thread_id))
+        .map(|(thread_id, status)| CollabAgentStatusEntry {
+            thread_id: *thread_id,
+            agent_nickname: None,
+            agent_role: None,
+            status: status.clone(),
+        })
+        .collect::<Vec<_>>();
+    extras.sort_by(|left, right| left.thread_id.to_string().cmp(&right.thread_id.to_string()));
+    entries.extend(extras);
+    entries
 }
 
 fn collab_spawn_error(err: CodexErr) -> FunctionCallError {
