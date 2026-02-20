@@ -127,9 +127,9 @@ async fn run_compact_task_inner(
     let mut client_session = sess.services.model_client.new_session();
     // Reuse one client session so turn-scoped state (sticky routing, websocket append tracking)
     // survives retries within this compact turn.
-
-    let rollout_item = RolloutItem::TurnContext(turn_context.to_turn_context_item());
-    sess.persist_rollout_items(&[rollout_item]).await;
+    // Intentionally do not persist `RolloutItem::TurnContext` for local compaction:
+    // that marker is reserved for regular sampling turns so resume/fork hydrates the
+    // previous user-turn model, not a `/compact` task model.
 
     loop {
         // Clone is required because of the loop

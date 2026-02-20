@@ -1600,7 +1600,7 @@ impl Session {
                 let rollout_items = resumed_history.history;
                 let restored_tool_selection =
                     Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
-                let previous_model = Self::last_rollout_model_name(&rollout_items)
+                let previous_model = Self::last_rollout_regular_turn_model_name(&rollout_items)
                     .map(std::string::ToString::to_string);
                 {
                     let mut state = self.state.lock().await;
@@ -1610,8 +1610,8 @@ impl Session {
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr = turn_context.model_info.slug.as_str();
-                if let Some(prev) =
-                    Self::last_rollout_model_name(&rollout_items).filter(|p| *p != curr)
+                if let Some(prev) = Self::last_rollout_regular_turn_model_name(&rollout_items)
+                    .filter(|p| *p != curr)
                 {
                     warn!("resuming session with different model: previous={prev}, current={curr}");
                     self.send_event(
@@ -1652,7 +1652,7 @@ impl Session {
             InitialHistory::Forked(rollout_items) => {
                 let restored_tool_selection =
                     Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
-                let previous_model = Self::last_rollout_model_name(&rollout_items)
+                let previous_model = Self::last_rollout_regular_turn_model_name(&rollout_items)
                     .map(std::string::ToString::to_string);
                 self.set_previous_model(previous_model).await;
 
@@ -1698,7 +1698,13 @@ impl Session {
         }
     }
 
-    fn last_rollout_model_name(rollout_items: &[RolloutItem]) -> Option<&str> {
+    /// Returns the model from the last persisted regular sampling turn.
+    ///
+    /// `RolloutItem::TurnContext` markers are emitted from the regular sampling
+    /// path (`try_run_sampling_request`). Local compaction intentionally avoids
+    /// writing `TurnContext` markers so `/compact` does not overwrite this
+    /// baseline.
+    fn last_rollout_regular_turn_model_name(rollout_items: &[RolloutItem]) -> Option<&str> {
         rollout_items.iter().rev().find_map(|it| {
             if let RolloutItem::TurnContext(ctx) = it {
                 Some(ctx.model.as_str())
@@ -3938,8 +3944,6 @@ mod handlers {
         }
 
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-        sess.set_previous_model(Some(turn_context.model_info.slug.clone()))
-            .await;
 
         let mut history = sess.clone_history().await;
         history.drop_last_n_user_turns(num_turns);
@@ -4444,6 +4448,11 @@ pub(crate) async fn run_turn(
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+        .await;
+    // Track the previous-model baseline from the regular user-turn path only so
+    // standalone tasks (compact/shell/review/undo) cannot suppress future
+    // `<model_switch>` injections.
+    sess.set_previous_model(Some(turn_context.model_info.slug.clone()))
         .await;
 
     if !skill_items.is_empty() {
@@ -5524,6 +5533,8 @@ async fn try_run_sampling_request(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
+    // Persist a regular-turn context marker so resume/fork can recover the last
+    // user-turn model even when `reference_context_item` is intentionally cleared.
     let rollout_item = RolloutItem::TurnContext(turn_context.to_turn_context_item());
 
     feedback_tags!(
@@ -6771,6 +6782,8 @@ mod tests {
             },
         ];
         sess.record_into_history(&turn_2, tc.as_ref()).await;
+        sess.set_previous_model(Some("previous-regular-model".to_string()))
+            .await;
 
         handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
 
@@ -6785,7 +6798,7 @@ mod tests {
         assert_eq!(expected, history.raw_items());
         assert_eq!(
             sess.previous_model().await,
-            Some(tc.model_info.slug.clone())
+            Some("previous-regular-model".to_string())
         );
     }
 
@@ -7754,7 +7767,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_task_hydrates_previous_model() {
+    async fn spawn_task_does_not_update_previous_model_for_non_run_turn_tasks() {
         let (sess, tc, _rx) = make_session_and_context_with_rx().await;
         sess.set_previous_model(None).await;
         let input = vec![UserInput::Text {
@@ -7773,10 +7786,7 @@ mod tests {
         .await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-        assert_eq!(
-            sess.previous_model().await,
-            Some(tc.model_info.slug.clone())
-        );
+        assert_eq!(sess.previous_model().await, None);
     }
 
     #[tokio::test]
