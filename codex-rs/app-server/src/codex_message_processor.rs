@@ -6907,15 +6907,6 @@ fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     }
 }
 
-fn thread_agent_nickname(source: &codex_protocol::protocol::SessionSource) -> Option<String> {
-    match source {
-        codex_protocol::protocol::SessionSource::SubAgent(
-            codex_protocol::protocol::SubAgentSource::ThreadSpawn { agent_nickname, .. },
-        ) => agent_nickname.clone(),
-        _ => None,
-    }
-}
-
 fn with_thread_spawn_agent_nickname(
     source: codex_protocol::protocol::SessionSource,
     agent_nickname: Option<String>,
@@ -6978,7 +6969,7 @@ fn build_thread_from_snapshot(
         path,
         cwd: config_snapshot.cwd.clone(),
         cli_version: env!("CARGO_PKG_VERSION").to_string(),
-        agent_nickname: thread_agent_nickname(&config_snapshot.session_source),
+        agent_nickname: config_snapshot.session_source.get_nickname(),
         source: config_snapshot.session_source.clone().into(),
         git_info: None,
         turns: Vec::new(),
@@ -7017,7 +7008,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         path: Some(path),
         cwd,
         cli_version,
-        agent_nickname: thread_agent_nickname(&source),
+        agent_nickname: source.get_nickname(),
         source: source.into(),
         git_info,
         turns: Vec::new(),
