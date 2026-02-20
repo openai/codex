@@ -432,7 +432,7 @@ async fn run_websocket_inbound_loop(
                     }
                     Some(Ok(WebSocketMessage::Ping(payload))) => {
                         if writer_control_tx
-                            .send(WebSocketMessage::Pong(payload))
+                            .try_send(WebSocketMessage::Pong(payload))
                             .await
                             .is_err()
                         {
