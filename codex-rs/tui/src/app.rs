@@ -38,9 +38,11 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::ConstraintError;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::config_loader::RequirementSource;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -228,6 +230,16 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
         history_cell::new_warning_event(message),
     )));
+}
+
+fn is_managed_requirement_constraint_error(err: &ConstraintError) -> bool {
+    matches!(
+        err,
+        ConstraintError::InvalidValue {
+            requirement_source,
+            ..
+        } if !matches!(requirement_source, RequirementSource::Unknown)
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -651,21 +663,31 @@ impl App {
     }
 
     fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
-        if let Some(policy) = self.runtime_approval_policy_override.as_ref()
-            && let Err(err) = config.permissions.approval_policy.set(*policy)
+        if let Some(policy) = self.runtime_approval_policy_override
+            && let Err(err) = config.permissions.approval_policy.set(policy)
         {
             tracing::warn!(%err, "failed to carry forward approval policy override");
-            self.chat_widget.add_error_message(format!(
-                "Failed to carry forward approval policy override: {err}"
-            ));
+            if is_managed_requirement_constraint_error(&err) {
+                self.runtime_approval_policy_override =
+                    Some(config.permissions.approval_policy.value());
+            } else {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to carry forward approval policy override: {err}"
+                ));
+            }
         }
-        if let Some(policy) = self.runtime_sandbox_policy_override.as_ref()
-            && let Err(err) = config.permissions.sandbox_policy.set(policy.clone())
+        if let Some(policy) = self.runtime_sandbox_policy_override.clone()
+            && let Err(err) = config.permissions.sandbox_policy.set(policy)
         {
             tracing::warn!(%err, "failed to carry forward sandbox policy override");
-            self.chat_widget.add_error_message(format!(
-                "Failed to carry forward sandbox policy override: {err}"
-            ));
+            if is_managed_requirement_constraint_error(&err) {
+                self.runtime_sandbox_policy_override =
+                    Some(config.permissions.sandbox_policy.get().clone());
+            } else {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to carry forward sandbox policy override: {err}"
+                ));
+            }
         }
     }
 
@@ -2179,13 +2201,17 @@ impl App {
                 }
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
-                self.runtime_approval_policy_override = Some(policy);
                 if let Err(err) = self.config.permissions.approval_policy.set(policy) {
                     tracing::warn!(%err, "failed to set approval policy on app config");
-                    self.chat_widget
-                        .add_error_message(format!("Failed to set approval policy: {err}"));
+                    self.runtime_approval_policy_override =
+                        Some(self.config.permissions.approval_policy.value());
+                    if !is_managed_requirement_constraint_error(&err) {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to set approval policy: {err}"));
+                    }
                     return Ok(AppRunControl::Continue);
                 }
+                self.runtime_approval_policy_override = Some(policy);
                 self.chat_widget.set_approval_policy(policy);
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
@@ -2199,8 +2225,12 @@ impl App {
 
                 if let Err(err) = self.config.permissions.sandbox_policy.set(policy) {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
-                    self.chat_widget
-                        .add_error_message(format!("Failed to set sandbox policy: {err}"));
+                    self.runtime_sandbox_policy_override =
+                        Some(self.config.permissions.sandbox_policy.get().clone());
+                    if !is_managed_requirement_constraint_error(&err) {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to set sandbox policy: {err}"));
+                    }
                     return Ok(AppRunControl::Continue);
                 }
                 if let Err(err) = self.chat_widget.set_sandbox_policy(policy_for_chat) {
@@ -3011,6 +3041,28 @@ mod tests {
             ))),
             false
         );
+    }
+
+    #[test]
+    fn managed_requirement_constraint_error_detects_invalid_value_with_known_source() {
+        let err = ConstraintError::InvalidValue {
+            field_name: "sandbox_mode",
+            candidate: "WorkspaceWrite".to_string(),
+            allowed: "[ReadOnly]".to_string(),
+            requirement_source: RequirementSource::CloudRequirements,
+        };
+        assert!(is_managed_requirement_constraint_error(&err));
+    }
+
+    #[test]
+    fn managed_requirement_constraint_error_ignores_unknown_source() {
+        let err = ConstraintError::InvalidValue {
+            field_name: "sandbox_mode",
+            candidate: "WorkspaceWrite".to_string(),
+            allowed: "[ReadOnly]".to_string(),
+            requirement_source: RequirementSource::Unknown,
+        };
+        assert!(!is_managed_requirement_constraint_error(&err));
     }
 
     #[test]

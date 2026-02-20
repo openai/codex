@@ -3350,6 +3350,8 @@ mod handlers {
     use codex_protocol::protocol::WarningEvent;
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
+    use crate::config::ConstraintError;
+    use crate::config_loader::RequirementSource;
     use crate::context_manager::is_user_turn_boundary;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
@@ -3372,12 +3374,37 @@ mod handlers {
         sess.close_unified_exec_processes().await;
     }
 
+    fn disallowed_setting_update_warning(err: &ConstraintError) -> Option<String> {
+        match err {
+            ConstraintError::InvalidValue {
+                field_name,
+                requirement_source,
+                ..
+            } if matches!(*field_name, "approval_policy" | "sandbox_mode")
+                && !matches!(requirement_source, RequirementSource::Unknown) =>
+            {
+                Some(format!(
+                    "Requested `{field_name}` is disallowed by requirements; continuing with the current value. Details: {err}"
+                ))
+            }
+            _ => None,
+        }
+    }
+
     pub async fn override_turn_context(
         sess: &Session,
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
         if let Err(err) = sess.update_settings(updates).await {
+            if let Some(message) = disallowed_setting_update_warning(&err) {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Warning(WarningEvent { message }),
+                })
+                .await;
+                return;
+            }
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
@@ -6898,6 +6925,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn override_turn_context_disallowed_sandbox_update_emits_warning() {
+        let (sess, _tc, rx) = make_session_and_context_with_rx().await;
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.sandbox_policy =
+                Constrained::new(SandboxPolicy::new_read_only_policy(), |candidate| {
+                    if matches!(candidate, SandboxPolicy::ReadOnly { .. }) {
+                        Ok(())
+                    } else {
+                        Err(crate::config::ConstraintError::InvalidValue {
+                            field_name: "sandbox_mode",
+                            candidate: "WorkspaceWrite".to_string(),
+                            allowed: "[ReadOnly]".to_string(),
+                            requirement_source: RequirementSource::CloudRequirements,
+                        })
+                    }
+                })
+                .expect("set constrained sandbox policy");
+        }
+
+        handlers::override_turn_context(
+            sess.as_ref(),
+            "sub-override".to_string(),
+            SessionSettingsUpdate {
+                sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let evt = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for event")
+            .expect("event");
+        match evt.msg {
+            EventMsg::Warning(event) => {
+                assert!(
+                    event
+                        .message
+                        .contains("Requested `sandbox_mode` is disallowed")
+                );
+                assert!(event.message.contains("continuing with the current value"));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+
+        let state = sess.state.lock().await;
+        assert_eq!(
+            *state.session_configuration.sandbox_policy.get(),
+            SandboxPolicy::new_read_only_policy()
+        );
+    }
+
+    #[tokio::test]
     async fn set_rate_limits_updates_plan_type_when_present() {
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = build_test_config(codex_home.path()).await;
@@ -8496,5 +8578,33 @@ mod tests {
         );
 
         pretty_assertions::assert_eq!(output, expected);
+    }
+
+    #[tokio::test]
+    async fn session_configuration_apply_rejects_disallowed_approval_policy_update() {
+        let mut session_configuration = make_session_configuration_for_tests().await;
+        session_configuration.approval_policy =
+            Constrained::allow_only(AskForApproval::UnlessTrusted);
+
+        let err = match session_configuration.apply(&SessionSettingsUpdate {
+            approval_policy: Some(AskForApproval::OnRequest),
+            ..Default::default()
+        }) {
+            Ok(_) => panic!("disallowed approval policy update should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            crate::config::ConstraintError::InvalidValue {
+                candidate,
+                allowed,
+                ..
+            } if candidate == "OnRequest" && allowed == "[UnlessTrusted]"
+        ));
+        assert_eq!(
+            session_configuration.approval_policy.value(),
+            AskForApproval::UnlessTrusted
+        );
     }
 }
