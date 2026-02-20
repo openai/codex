@@ -72,6 +72,12 @@ impl SessionTaskContext {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct TaskRunOutput {
+    pub(crate) last_agent_message: Option<String>,
+    pub(crate) abort_reason: Option<TurnAbortReason>,
+}
+
 /// Async task that drives a [`Session`] turn.
 ///
 /// Implementations encapsulate a specific Codex workflow (regular chat,
@@ -100,7 +106,7 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String>;
+    ) -> TaskRunOutput;
 
     /// Gives the task a chance to perform cleanup after an abort.
     ///
@@ -138,7 +144,11 @@ impl Session {
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
-                    let last_agent_message = task_for_run
+                    let model_slug = ctx_for_finish.model_info.slug.clone();
+                    let TaskRunOutput {
+                        last_agent_message,
+                        abort_reason,
+                    } = task_for_run
                         .run(
                             Arc::clone(&session_ctx),
                             ctx,
@@ -148,7 +158,15 @@ impl Session {
                         .await;
                     let sess = session_ctx.clone_session();
                     sess.flush_rollout().await;
-                    if !task_cancellation_token.is_cancelled() {
+                    // Update previous model before TurnComplete is emitted so
+                    // immediately following turns observe the correct switch state.
+                    sess.set_previous_model(Some(model_slug)).await;
+                    if let Some(reason) = abort_reason {
+                        // Emit TurnAborted from the spawn site so the rollout flush above
+                        // makes the interrupt marker durable before clients observe the event.
+                        sess.emit_turn_aborted(ctx_for_finish.as_ref(), reason)
+                            .await;
+                    } else if !task_cancellation_token.is_cancelled() {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                         sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
                             .await;
@@ -231,18 +249,25 @@ impl Session {
     pub(crate) async fn finish_turn_without_completion_event(&self, turn_context: &TurnContext) {
         let mut active = self.active_turn.lock().await;
         let mut pending_input = Vec::<ResponseInputItem>::new();
+        let mut removed_handle: Option<Arc<AbortOnDropHandle<()>>> = None;
         let mut should_clear_active_turn = false;
         if let Some(at) = active.as_mut()
-            && at.remove_task(&turn_context.sub_id)
+            && let Some(task) = at.remove_task(&turn_context.sub_id)
         {
+            removed_handle = Some(task.handle);
             let mut ts = at.turn_state.lock().await;
             pending_input = ts.take_pending_input();
-            should_clear_active_turn = true;
+            should_clear_active_turn = at.is_empty();
         }
         if should_clear_active_turn {
             *active = None;
         }
         drop(active);
+        if let Some(handle) = removed_handle
+            && let Ok(handle) = Arc::try_unwrap(handle)
+        {
+            drop(handle.detach());
+        }
         if !pending_input.is_empty() {
             let pending_response_items = pending_input
                 .into_iter()
@@ -289,25 +314,6 @@ impl Session {
         turn_context: &TurnContext,
         reason: TurnAbortReason,
     ) {
-        self.emit_turn_aborted_inner(turn_context, reason, true)
-            .await;
-    }
-
-    pub(crate) async fn emit_turn_aborted_without_rollout_flush(
-        self: &Arc<Self>,
-        turn_context: &TurnContext,
-        reason: TurnAbortReason,
-    ) {
-        self.emit_turn_aborted_inner(turn_context, reason, false)
-            .await;
-    }
-
-    async fn emit_turn_aborted_inner(
-        self: &Arc<Self>,
-        turn_context: &TurnContext,
-        reason: TurnAbortReason,
-        flush_rollout_before_event: bool,
-    ) {
         if reason == TurnAbortReason::Interrupted {
             let marker = ResponseItem::Message {
                 id: None,
@@ -324,11 +330,9 @@ impl Session {
                 .await;
             self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
                 .await;
-            if flush_rollout_before_event {
-                // Ensure the marker is durably visible before emitting TurnAborted: some clients
-                // synchronously re-read the rollout on receipt of the abort event.
-                self.flush_rollout().await;
-            }
+            // Ensure the marker is durably visible before emitting TurnAborted: some clients
+            // synchronously re-read the rollout on receipt of the abort event.
+            self.flush_rollout().await;
         }
 
         let event = EventMsg::TurnAborted(TurnAbortedEvent {

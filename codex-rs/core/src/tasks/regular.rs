@@ -16,6 +16,7 @@ use tracing::trace_span;
 
 use super::SessionTask;
 use super::SessionTaskContext;
+use super::TaskRunOutput;
 
 pub(crate) struct RegularTask {
     prewarmed_session: Mutex<Option<ModelClientSession>>,
@@ -73,7 +74,7 @@ impl SessionTask for RegularTask {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> TaskRunOutput {
         let sess = session.clone_session();
         let run_turn_span = trace_span!("run_turn");
         sess.set_server_reasoning_included(false).await;

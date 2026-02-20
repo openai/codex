@@ -248,6 +248,7 @@ use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::TaskRunOutput;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolDispatchOutput;
@@ -4773,9 +4774,9 @@ pub(crate) async fn run_turn(
     input: Vec<UserInput>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
-) -> Option<String> {
+) -> TaskRunOutput {
     if input.is_empty() {
-        return None;
+        return TaskRunOutput::default();
     }
 
     let model_info = turn_context.model_info.clone();
@@ -4796,7 +4797,7 @@ pub(crate) async fn run_turn(
         .is_err()
     {
         error!("Failed to run pre-sampling compact");
-        return None;
+        return TaskRunOutput::default();
     }
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
@@ -4819,7 +4820,7 @@ pub(crate) async fn run_turn(
             .await
         {
             Ok(mcp_tools) => mcp_tools,
-            Err(_) => return None,
+            Err(_) => return TaskRunOutput::default(),
         };
         connectors::with_app_enabled_state(
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
@@ -4930,6 +4931,7 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let mut server_model_warning_emitted_for_turn = false;
+    let mut abort_reason = None;
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
@@ -5007,11 +5009,9 @@ pub(crate) async fn run_turn(
                     cancellation_token.cancel();
                     sess.finish_turn_without_completion_event(turn_context.as_ref())
                         .await;
-                    sess.emit_turn_aborted_without_rollout_flush(
-                        &turn_context,
-                        TurnAbortReason::Interrupted,
-                    )
-                    .await;
+                    // Defer TurnAborted emission until run_turn unwinds so the caller can
+                    // flush the rollout marker without blocking the in-flight tool loop.
+                    abort_reason = Some(TurnAbortReason::Interrupted);
                     break;
                 }
                 let total_usage_tokens = sess.get_total_token_usage().await;
@@ -5041,7 +5041,7 @@ pub(crate) async fn run_turn(
                     .await
                     .is_err()
                     {
-                        return None;
+                        return TaskRunOutput::default();
                     }
                     continue;
                 }
@@ -5103,7 +5103,7 @@ pub(crate) async fn run_turn(
                             }),
                         )
                         .await;
-                        return None;
+                        return TaskRunOutput::default();
                     }
                     break;
                 }
@@ -5139,7 +5139,10 @@ pub(crate) async fn run_turn(
         }
     }
 
-    last_agent_message
+    TaskRunOutput {
+        last_agent_message,
+        abort_reason,
+    }
 }
 
 async fn run_pre_sampling_compact(
@@ -8978,10 +8981,10 @@ mod tests {
             _ctx: Arc<TurnContext>,
             _input: Vec<UserInput>,
             cancellation_token: CancellationToken,
-        ) -> Option<String> {
+        ) -> TaskRunOutput {
             if self.listen_to_cancellation_token {
                 cancellation_token.cancelled().await;
-                return None;
+                return TaskRunOutput::default();
             }
             loop {
                 sleep(Duration::from_secs(60)).await;
