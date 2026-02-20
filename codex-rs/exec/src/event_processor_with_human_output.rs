@@ -801,6 +801,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::RequestUserInput(_)
             | EventMsg::CollabResumeBegin(_)
             | EventMsg::CollabResumeEnd(_)
+            | EventMsg::Conversation(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
         }
         CodexStatus::Running

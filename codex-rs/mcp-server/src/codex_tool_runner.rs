@@ -374,6 +374,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::CollabCloseEnd(_)
                     | EventMsg::CollabResumeBegin(_)
                     | EventMsg::CollabResumeEnd(_)
+                    | EventMsg::Conversation(_)
                     | EventMsg::DeprecationNotice(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that
