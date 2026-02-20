@@ -1983,9 +1983,10 @@ pub struct TurnContextNetworkItem {
     pub denied_domains: Vec<String>,
 }
 
-/// Persist TurnContextItem only when the same turn also persists the
-/// corresponding model-visible context updates (diffs or full reinjection), so resume/fork
-/// does not hydrate a context baseline that was never recorded in history.
+/// Persist only when the same turn also persists the corresponding
+/// model-visible context updates (diffs or full reinjection), so
+/// resume/fork does not use a `reference_context_item` whose context
+/// was never actually visible to the model.
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
