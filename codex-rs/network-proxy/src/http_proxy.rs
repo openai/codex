@@ -1,5 +1,4 @@
 use crate::config::NetworkMode;
-use crate::metadata::attempt_id_from_proxy_authorization;
 use crate::network_policy::BlockDecisionAuditEventArgs;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkDecisionSource;
@@ -164,8 +163,6 @@ async fn http_connect_accept(
     }
 
     let client = client_addr(&req);
-    let network_attempt_id = request_network_attempt_id(&req);
-
     let enabled = app_state
         .enabled()
         .await
@@ -193,7 +190,6 @@ async fn http_connect_accept(
         method: Some("CONNECT".to_string()),
         command: None,
         exec_policy_hint: None,
-        attempt_id: network_attempt_id.clone(),
     });
 
     match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
@@ -218,7 +214,6 @@ async fn http_connect_accept(
                     method: Some("CONNECT".to_string()),
                     mode: None,
                     protocol: "http-connect".to_string(),
-                    attempt_id: network_attempt_id.clone(),
                     decision: Some(details.decision.as_str().to_string()),
                     source: Some(details.source.as_str().to_string()),
                     port: Some(authority.port),
@@ -272,7 +267,6 @@ async fn http_connect_accept(
                 method: Some("CONNECT".to_string()),
                 mode: Some(NetworkMode::Limited),
                 protocol: "http-connect".to_string(),
-                attempt_id: network_attempt_id,
                 decision: Some(details.decision.as_str().to_string()),
                 source: Some(details.source.as_str().to_string()),
                 port: Some(authority.port),
@@ -391,8 +385,6 @@ async fn http_plain_proxy(
         }
     };
     let client = client_addr(&req);
-    let network_attempt_id = request_network_attempt_id(&req);
-
     let method_allowed = match app_state
         .method_allowed(req.method().as_str())
         .await
@@ -571,7 +563,6 @@ async fn http_plain_proxy(
         method: Some(req.method().as_str().to_string()),
         command: None,
         exec_policy_hint: None,
-        attempt_id: network_attempt_id.clone(),
     });
 
     match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
@@ -596,7 +587,6 @@ async fn http_plain_proxy(
                     method: Some(req.method().as_str().to_string()),
                     mode: None,
                     protocol: "http".to_string(),
-                    attempt_id: network_attempt_id.clone(),
                     decision: Some(details.decision.as_str().to_string()),
                     source: Some(details.source.as_str().to_string()),
                     port: Some(port),
@@ -642,7 +632,6 @@ async fn http_plain_proxy(
                 method: Some(req.method().as_str().to_string()),
                 mode: Some(NetworkMode::Limited),
                 protocol: "http".to_string(),
-                attempt_id: network_attempt_id,
                 decision: Some(details.decision.as_str().to_string()),
                 source: Some(details.source.as_str().to_string()),
                 port: Some(port),
@@ -722,12 +711,6 @@ fn client_addr<T: ExtensionsRef>(input: &T) -> Option<String> {
         .extensions()
         .get::<SocketInfo>()
         .map(|info| info.peer_addr().to_string())
-}
-
-fn request_network_attempt_id(req: &Request) -> Option<String> {
-    // Some HTTP stacks normalize proxy credentials into `authorization`; accept both.
-    attempt_id_from_proxy_authorization(req.headers().get("proxy-authorization"))
-        .or_else(|| attempt_id_from_proxy_authorization(req.headers().get("authorization")))
 }
 
 fn remove_hop_by_hop_request_headers(headers: &mut HeaderMap) {
@@ -833,7 +816,6 @@ async fn proxy_disabled_response(
             method,
             mode: None,
             protocol: protocol.as_policy_protocol().to_string(),
-            attempt_id: None,
             decision: Some("deny".to_string()),
             source: Some("proxy_state".to_string()),
             port: Some(port),
@@ -910,8 +892,6 @@ mod tests {
     use crate::reasons::REASON_NOT_ALLOWED;
     use crate::reasons::REASON_UNIX_SOCKET_UNSUPPORTED;
     use crate::runtime::network_proxy_state_for_policy;
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD;
     use pretty_assertions::assert_eq;
     use rama_http::Method;
     use rama_http::Request;
@@ -1095,36 +1075,6 @@ mod tests {
         assert_eq!(event.field("server.address"), Some("unix-socket"));
         assert_eq!(event.field("server.port"), Some("0"));
         assert_eq!(event.field("http.request.method"), Some("GET"));
-    }
-
-    #[test]
-    fn request_network_attempt_id_reads_proxy_authorization_header() {
-        let encoded = STANDARD.encode("codex-net-attempt-attempt-1:");
-        let req = Request::builder()
-            .method(Method::GET)
-            .uri("http://example.com")
-            .header("proxy-authorization", format!("Basic {encoded}"))
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(
-            request_network_attempt_id(&req),
-            Some("attempt-1".to_string())
-        );
-    }
-
-    #[test]
-    fn request_network_attempt_id_reads_authorization_header_fallback() {
-        let encoded = STANDARD.encode("codex-net-attempt-attempt-2:");
-        let req = Request::builder()
-            .method(Method::GET)
-            .uri("http://example.com")
-            .header("authorization", format!("Basic {encoded}"))
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(
-            request_network_attempt_id(&req),
-            Some("attempt-2".to_string())
-        );
     }
 
     #[test]
