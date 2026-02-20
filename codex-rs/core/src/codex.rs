@@ -5715,6 +5715,17 @@ async fn drain_in_flight(
             Ok(indexed) => {
                 let IndexedToolDispatchOutput { seq, output } = indexed;
                 if output.interrupt_turn {
+                    // Preserve any already-completed earlier tool outputs before short-circuiting.
+                    // FuturesUnordered may yield the interrupting result before lower-sequence
+                    // completions that were buffered waiting on an even earlier slow tool.
+                    let _dropped_later_ready = ready.split_off(&seq);
+                    for (_ready_seq, ready_output) in std::mem::take(&mut ready) {
+                        sess.record_conversation_items(
+                            &turn_context,
+                            &[ready_output.response_input.into()],
+                        )
+                        .await;
+                    }
                     sess.record_conversation_items(&turn_context, &[output.response_input.into()])
                         .await;
                     return Ok(true);
@@ -6112,6 +6123,7 @@ mod tests {
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
     use crate::tools::ToolRouter;
+    use crate::tools::context::ToolDispatchOutput;
     use crate::tools::context::ToolInvocation;
     use crate::tools::context::ToolOutput;
     use crate::tools::context::ToolPayload;
@@ -8404,6 +8416,108 @@ mod tests {
         }
         // No extra events should be emitted after an abort.
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn drain_in_flight_flushes_buffered_earlier_results_before_interrupt() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+
+        let mut in_flight: FuturesUnordered<
+            BoxFuture<'static, CodexResult<IndexedToolDispatchOutput>>,
+        > = FuturesUnordered::new();
+
+        let (slow_tx, slow_rx) = tokio::sync::oneshot::channel::<()>();
+        let _slow_tx = slow_tx;
+        in_flight.push(Box::pin(async move {
+            let _ = slow_rx.await;
+            Ok(IndexedToolDispatchOutput {
+                seq: 0,
+                output: ToolDispatchOutput {
+                    response_input: ResponseInputItem::FunctionCallOutput {
+                        call_id: "slow-call".to_string(),
+                        output: FunctionCallOutputPayload {
+                            body: FunctionCallOutputBody::Text("slow".to_string()),
+                            ..Default::default()
+                        },
+                    },
+                    interrupt_turn: false,
+                },
+            })
+        }));
+
+        in_flight.push(Box::pin(async move {
+            Ok(IndexedToolDispatchOutput {
+                seq: 1,
+                output: ToolDispatchOutput {
+                    response_input: ResponseInputItem::FunctionCallOutput {
+                        call_id: "fast-call".to_string(),
+                        output: FunctionCallOutputPayload {
+                            body: FunctionCallOutputBody::Text("fast".to_string()),
+                            ..Default::default()
+                        },
+                    },
+                    interrupt_turn: false,
+                },
+            })
+        }));
+
+        let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(10)).await;
+            let _ = interrupt_tx.send(());
+        });
+        in_flight.push(Box::pin(async move {
+            let _ = interrupt_rx.await;
+            Ok(IndexedToolDispatchOutput {
+                seq: 2,
+                output: ToolDispatchOutput {
+                    response_input: ResponseInputItem::FunctionCallOutput {
+                        call_id: "interrupt-call".to_string(),
+                        output: FunctionCallOutputPayload {
+                            body: FunctionCallOutputBody::Text("interrupt".to_string()),
+                            ..Default::default()
+                        },
+                    },
+                    interrupt_turn: true,
+                },
+            })
+        }));
+
+        let interrupted = drain_in_flight(&mut in_flight, Arc::clone(&sess), Arc::clone(&tc))
+            .await
+            .expect("drain_in_flight should succeed");
+        assert!(interrupted);
+
+        let history = sess.clone_history().await;
+        let fast_item = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
+            call_id: "fast-call".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("fast".to_string()),
+                ..Default::default()
+            },
+        });
+        let interrupt_item = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
+            call_id: "interrupt-call".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("interrupt".to_string()),
+                ..Default::default()
+            },
+        });
+
+        let fast_idx = history
+            .raw_items()
+            .iter()
+            .position(|item| item == &fast_item)
+            .expect("buffered earlier tool result should be recorded");
+        let interrupt_idx = history
+            .raw_items()
+            .iter()
+            .position(|item| item == &interrupt_item)
+            .expect("interrupting tool result should be recorded");
+        assert!(
+            fast_idx < interrupt_idx,
+            "buffered earlier tool result should be recorded before interrupt result"
+        );
     }
 
     #[tokio::test]
