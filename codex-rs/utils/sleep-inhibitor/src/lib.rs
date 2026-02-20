@@ -25,18 +25,11 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows_inhibitor as imp;
 
-use std::fmt::Debug;
-
 /// Keeps the machine awake while a turn is in progress when enabled.
 #[derive(Debug)]
 pub struct SleepInhibitor {
     enabled: bool,
     platform: imp::SleepInhibitor,
-}
-
-pub(crate) trait PlatformSleepInhibitor: Debug {
-    fn acquire(&mut self);
-    fn release(&mut self);
 }
 
 impl SleepInhibitor {

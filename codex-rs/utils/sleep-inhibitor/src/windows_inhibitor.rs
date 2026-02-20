@@ -1,4 +1,3 @@
-use crate::PlatformSleepInhibitor;
 use std::ffi::OsStr;
 use std::iter::once;
 use std::os::windows::ffi::OsStrExt;
@@ -28,10 +27,8 @@ impl WindowsSleepInhibitor {
     pub(crate) fn new() -> Self {
         Self::default()
     }
-}
 
-impl PlatformSleepInhibitor for WindowsSleepInhibitor {
-    fn acquire(&mut self) {
+    pub(crate) fn acquire(&mut self) {
         if self.request.is_some() {
             return;
         }
@@ -49,7 +46,7 @@ impl PlatformSleepInhibitor for WindowsSleepInhibitor {
         }
     }
 
-    fn release(&mut self) {
+    pub(crate) fn release(&mut self) {
         self.request = None;
     }
 }

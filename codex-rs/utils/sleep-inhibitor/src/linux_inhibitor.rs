@@ -1,4 +1,3 @@
-use crate::PlatformSleepInhibitor;
 use std::os::unix::process::CommandExt;
 use std::process::Child;
 use std::process::Command;
@@ -40,10 +39,8 @@ impl LinuxSleepInhibitor {
     pub(crate) fn new() -> Self {
         Self::default()
     }
-}
 
-impl PlatformSleepInhibitor for LinuxSleepInhibitor {
-    fn acquire(&mut self) {
+    pub(crate) fn acquire(&mut self) {
         if let InhibitState::Active { backend, child } = &mut self.state {
             match child.try_wait() {
                 Ok(None) => return,
@@ -145,7 +142,7 @@ impl PlatformSleepInhibitor for LinuxSleepInhibitor {
         }
     }
 
-    fn release(&mut self) {
+    pub(crate) fn release(&mut self) {
         match std::mem::take(&mut self.state) {
             InhibitState::Inactive => {}
             InhibitState::Active { backend, mut child } => {

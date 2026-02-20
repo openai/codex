@@ -1,15 +1,12 @@
 #[derive(Debug, Default)]
 pub(crate) struct SleepInhibitor;
-use crate::PlatformSleepInhibitor;
 
 impl SleepInhibitor {
     pub(crate) fn new() -> Self {
         Self
     }
-}
 
-impl PlatformSleepInhibitor for SleepInhibitor {
-    fn acquire(&mut self) {}
+    pub(crate) fn acquire(&mut self) {}
 
-    fn release(&mut self) {}
+    pub(crate) fn release(&mut self) {}
 }
