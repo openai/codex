@@ -6098,6 +6098,7 @@ impl CodexMessageProcessor {
             reason,
             thread_id,
             include_logs,
+            extra_log_files,
         } = params;
 
         let conversation_id = match thread_id.as_deref() {
@@ -6127,15 +6128,19 @@ impl CodexMessageProcessor {
         } else {
             None
         };
+        let mut attachment_paths = validated_rollout_path.into_iter().collect::<Vec<_>>();
+        if let Some(extra_log_files) = extra_log_files {
+            attachment_paths.extend(extra_log_files);
+        }
+
         let session_source = self.thread_manager.session_source();
 
         let upload_result = tokio::task::spawn_blocking(move || {
-            let rollout_path_ref = validated_rollout_path.as_deref();
             snapshot.upload_feedback(
                 &classification,
                 reason.as_deref(),
                 include_logs,
-                rollout_path_ref,
+                &attachment_paths,
                 Some(session_source),
             )
         })
@@ -6239,6 +6244,9 @@ async fn handle_pending_thread_resume_request(
         let state = thread_state.lock().await;
         state.active_turn_snapshot()
     };
+    let has_in_progress_turn = active_turn
+        .as_ref()
+        .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
 
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
@@ -6265,9 +6273,17 @@ async fn handle_pending_thread_resume_request(
             return;
         }
     };
-    thread.status = thread_watch_manager
+    let mut status = thread_watch_manager
         .loaded_status_for_thread(&thread.id)
         .await;
+    if let ThreadStatus::Idle | ThreadStatus::NotLoaded = status {
+        if has_in_progress_turn {
+            status = ThreadStatus::Active {
+                active_flags: Vec::new(),
+            };
+        }
+    }
+    thread.status = status;
 
     let ThreadConfigSnapshot {
         model,

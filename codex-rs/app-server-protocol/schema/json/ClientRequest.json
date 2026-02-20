@@ -507,6 +507,15 @@
         "classification": {
           "type": "string"
         },
+        "extraLogFiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "includeLogs": {
           "type": "boolean"
         },
