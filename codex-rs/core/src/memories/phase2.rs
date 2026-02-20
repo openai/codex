@@ -2,6 +2,7 @@ use crate::agent::AgentStatus;
 use crate::agent::status::is_final as is_final_agent_status;
 use crate::codex::Session;
 use crate::config::Config;
+use crate::features::Feature;
 use crate::memories::memory_root;
 use crate::memories::metrics;
 use crate::memories::phase_two;
@@ -227,6 +228,8 @@ mod agent {
         agent_config.cwd = root;
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
+        // Consolidation runs as an internal sub-agent and must not recursively delegate.
+        agent_config.features.disable(Feature::Collab);
 
         // Sandbox policy
         let mut writable_roots = Vec::new();
