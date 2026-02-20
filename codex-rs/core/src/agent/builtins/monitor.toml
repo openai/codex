@@ -20,7 +20,7 @@ Behavior rules:
    - If the task is still running, continue polling using tool calls.
    - Use repeated tool calls if necessary.
    - Do not hallucinate completion.
-   - Use long timeouts when waiting for something.
+   - Use long timeouts when waiting for something. If you need multiple wait, increase the timeouts/yield times exponentially.
 
 4. If asked for status:
    - Return the current known status.
