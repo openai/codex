@@ -1390,7 +1390,7 @@
       "description": "Agent-related settings (thread limits, etc.)."
     },
     "allow_login_shell": {
-      "description": "Whether shell-based tools may request login shell semantics.",
+      "description": "Whether the model may request a login shell for shell-based tools. Default to `true`\n\nIf `true`, the model may request a login shell (`login = true`), and omitting `login` defaults to using a login shell. If `false`, the model can never use a login shell: `login = true` requests are rejected, and omitting `login` defaults to a non-login shell.",
       "type": "boolean"
     },
     "analytics": {
