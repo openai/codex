@@ -1718,8 +1718,13 @@ impl Session {
     fn last_rollout_regular_turn_context_lookup(
         rollout_items: &[RolloutItem],
     ) -> (Option<&TurnContextItem>, bool) {
+        // Reverse scan over rollout items. `ThreadRolledBack(num_turns)` is naturally handled by
+        // skipping the next `num_turns` completed turn spans we encounter while walking backward.
+        //
+        // "Active turn" here means: we have seen `TurnComplete`/`TurnAborted` and are currently
+        // scanning backward through that completed turn until its matching `TurnStarted`.
         let mut turns_to_skip_due_to_rollback = 0usize;
-        let mut saw_surviving_compaction_after_current_turn = false;
+        let mut saw_surviving_compaction_after_candidate = false;
         let mut active_turn_id: Option<&str> = None;
         let mut active_turn_is_rolled_back = false;
         let mut active_turn_context: Option<&TurnContextItem> = None;
@@ -1728,11 +1733,15 @@ impl Session {
         for item in rollout_items.iter().rev() {
             match item {
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    // Rollbacks count completed turns, not `TurnContextItem`s. We must continue
+                    // ignoring all items inside each skipped turn until we reach its
+                    // corresponding `TurnStarted`.
                     let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
                     turns_to_skip_due_to_rollback =
                         turns_to_skip_due_to_rollback.saturating_add(num_turns);
                 }
                 RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
+                    // Enter the reverse "turn span" for this completed turn.
                     active_turn_id = Some(event.turn_id.as_str());
                     active_turn_is_rolled_back = turns_to_skip_due_to_rollback > 0;
                     if active_turn_is_rolled_back {
@@ -1742,6 +1751,8 @@ impl Session {
                     active_turn_contains_compaction = false;
                 }
                 RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
+                    // Same reverse-turn handling as `TurnComplete`. Some aborted turns may not
+                    // have a turn id; in that case we cannot match `TurnContextItem`s to them.
                     active_turn_id = event.turn_id.as_deref();
                     active_turn_is_rolled_back = turns_to_skip_due_to_rollback > 0;
                     if active_turn_is_rolled_back {
@@ -1756,11 +1767,14 @@ impl Session {
                             if let Some(context_item) = active_turn_context {
                                 return (
                                     Some(context_item),
-                                    saw_surviving_compaction_after_current_turn,
+                                    saw_surviving_compaction_after_candidate,
                                 );
                             }
+                            // No `TurnContextItem` in this surviving turn; keep scanning older
+                            // turns, but remember if this turn compacted so the eventual
+                            // candidate reports "compaction happened after it".
                             if active_turn_contains_compaction {
-                                saw_surviving_compaction_after_current_turn = true;
+                                saw_surviving_compaction_after_candidate = true;
                             }
                         }
                         active_turn_id = None;
@@ -1770,18 +1784,28 @@ impl Session {
                     }
                 }
                 RolloutItem::TurnContext(ctx) => {
+                    // Ignore turn contexts unless we are inside a non-rolled-back completed turn
+                    // span whose id matches this item.
                     if let (Some(active_id), Some(turn_id)) =
                         (active_turn_id, ctx.turn_id.as_deref())
+                        && !active_turn_is_rolled_back
                         && active_id == turn_id
                     {
+                        // Reverse scan sees the latest `TurnContextItem` for the turn first.
                         active_turn_context.get_or_insert(ctx);
                     }
                 }
                 RolloutItem::Compacted(_) => {
                     if active_turn_id.is_some() {
+                        if active_turn_is_rolled_back {
+                            continue;
+                        }
+                        // Compaction inside the currently scanned turn is only "after" the
+                        // eventual candidate if this turn has no `TurnContextItem` and we keep
+                        // scanning into older turns.
                         active_turn_contains_compaction = true;
                     } else {
-                        saw_surviving_compaction_after_current_turn = true;
+                        saw_surviving_compaction_after_candidate = true;
                     }
                 }
                 _ => {}
