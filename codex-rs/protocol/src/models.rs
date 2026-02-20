@@ -240,20 +240,35 @@ impl DeveloperInstructions {
     }
 
     pub fn from(approval_policy: AskForApproval, exec_policy: &Policy) -> DeveloperInstructions {
+        let on_request_instructions = || {
+            let command_prefixes = format_allow_prefixes(exec_policy.get_allowed_prefixes());
+            match command_prefixes {
+                Some(prefixes) => {
+                    format!(
+                        "{APPROVAL_POLICY_ON_REQUEST_RULE}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
+                    )
+                }
+                None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
+            }
+        };
         let text = match approval_policy {
             AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
             AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.to_string(),
             AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.to_string(),
-            AskForApproval::OnRequest => {
-                let command_prefixes = format_allow_prefixes(exec_policy.get_allowed_prefixes());
-                match command_prefixes {
-                    Some(prefixes) => {
-                        format!(
-                            "{APPROVAL_POLICY_ON_REQUEST_RULE}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
-                        )
-                    }
-                    None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
-                }
+            AskForApproval::OnRequest => on_request_instructions(),
+            AskForApproval::Reject(reject_config) => {
+                let on_request_instructions = on_request_instructions();
+                let sandbox_approval = reject_config.sandbox_approval;
+                let rules = reject_config.rules;
+                let mcp_elicitations = reject_config.mcp_elicitations;
+                format!(
+                    "{on_request_instructions}\n\n\
+                     Approval policy is `reject`.\n\
+                     - `sandbox_approval`: {sandbox_approval}\n\
+                     - `rules`: {rules}\n\
+                     - `mcp_elicitations`: {mcp_elicitations}\n\
+                     When a category is `true`, requests in that category are auto-rejected instead of prompting the user."
+                )
             }
         };
 

@@ -222,6 +222,20 @@
           "type": "string"
         },
         {
+          "additionalProperties": false,
+          "description": "Fine-grained rejection controls for approval prompts.\n\nWhen a field is `true`, prompts of that category are automatically rejected instead of shown to the user.",
+          "properties": {
+            "reject": {
+              "$ref": "#/definitions/RejectConfig"
+            }
+          },
+          "required": [
+            "reject"
+          ],
+          "title": "RejectAskForApproval",
+          "type": "object"
+        },
+        {
           "description": "Never ask the user to approve commands. Failures are immediately returned to the model, and never escalated to the user for approval.",
           "enum": [
             "never"
@@ -2692,6 +2706,17 @@
           "properties": {
             "message": {
               "type": "string"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/v2/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "type": {
               "enum": [
@@ -6938,6 +6963,28 @@
         }
       ]
     },
+    "RejectConfig": {
+      "properties": {
+        "mcp_elicitations": {
+          "description": "Reject MCP elicitation prompts.",
+          "type": "boolean"
+        },
+        "rules": {
+          "description": "Reject prompts triggered by execpolicy `prompt` rules.",
+          "type": "boolean"
+        },
+        "sandbox_approval": {
+          "description": "Reject approval prompts related to sandbox escalation.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mcp_elicitations",
+        "rules",
+        "sandbox_approval"
+      ],
+      "type": "object"
+    },
     "RemoteSkillSummary": {
       "properties": {
         "description": {
@@ -8106,6 +8153,26 @@
             "params"
           ],
           "title": "Thread/startedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/status/changed"
+              ],
+              "title": "Thread/status/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadStatusChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/status/changedNotification",
           "type": "object"
         },
         {
@@ -10815,13 +10882,46 @@
         "type": "object"
       },
       "AskForApproval": {
-        "enum": [
-          "untrusted",
-          "on-failure",
-          "on-request",
-          "never"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "enum": [
+              "untrusted",
+              "on-failure",
+              "on-request",
+              "never"
+            ],
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reject": {
+                "properties": {
+                  "mcp_elicitations": {
+                    "type": "boolean"
+                  },
+                  "rules": {
+                    "type": "boolean"
+                  },
+                  "sandbox_approval": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "mcp_elicitations",
+                  "rules",
+                  "sandbox_approval"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "reject"
+            ],
+            "title": "RejectAskForApproval",
+            "type": "object"
+          }
+        ]
       },
       "AuthMode": {
         "description": "Authentication mode for OpenAI-backed providers.",
@@ -15251,6 +15351,14 @@
             ],
             "description": "Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.)."
           },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadStatus"
+              }
+            ],
+            "description": "Current runtime status for the thread."
+          },
           "turns": {
             "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
             "items": {
@@ -15272,10 +15380,18 @@
           "modelProvider",
           "preview",
           "source",
+          "status",
           "turns",
           "updatedAt"
         ],
         "type": "object"
+      },
+      "ThreadActiveFlag": {
+        "enum": [
+          "waitingOnApproval",
+          "waitingOnUserInput"
+        ],
+        "type": "string"
       },
       "ThreadArchiveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -16456,6 +16572,98 @@
           "thread"
         ],
         "title": "ThreadStartedNotification",
+        "type": "object"
+      },
+      "ThreadStatus": {
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "notLoaded"
+                ],
+                "title": "NotLoadedThreadStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "NotLoadedThreadStatus",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "idle"
+                ],
+                "title": "IdleThreadStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "IdleThreadStatus",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "systemError"
+                ],
+                "title": "SystemErrorThreadStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "SystemErrorThreadStatus",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "activeFlags": {
+                "items": {
+                  "$ref": "#/definitions/v2/ThreadActiveFlag"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "active"
+                ],
+                "title": "ActiveThreadStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "activeFlags",
+              "type"
+            ],
+            "title": "ActiveThreadStatus",
+            "type": "object"
+          }
+        ]
+      },
+      "ThreadStatusChangedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/ThreadStatus"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "threadId"
+        ],
+        "title": "ThreadStatusChangedNotification",
         "type": "object"
       },
       "ThreadTokenUsage": {

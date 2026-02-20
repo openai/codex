@@ -62,6 +62,7 @@ mod message_processor;
 mod models;
 mod outgoing_message;
 mod thread_state;
+mod thread_status;
 mod transport;
 
 pub use crate::transport::AppServerTransport;
@@ -237,7 +238,8 @@ pub async fn run_main_with_transport(
                 Some(start_websocket_acceptor(bind_address, transport_event_tx.clone()).await?);
         }
     }
-    let shutdown_when_no_connections = matches!(transport, AppServerTransport::Stdio);
+    let single_client_mode = matches!(transport, AppServerTransport::Stdio);
+    let shutdown_when_no_connections = single_client_mode;
 
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
@@ -438,6 +440,7 @@ pub async fn run_main_with_transport(
             outgoing: outgoing_message_sender,
             codex_linux_sandbox_exe,
             config: Arc::new(config),
+            single_client_mode,
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
@@ -550,14 +553,12 @@ pub async fn run_main_with_transport(
                                         connection_state.session.initialized.then_some(*connection_id)
                                     })
                                     .collect();
-                                if !initialized_connection_ids.is_empty() {
-                                    processor
-                                        .try_attach_thread_listener(
-                                            thread_id,
-                                            initialized_connection_ids,
-                                        )
-                                        .await;
-                                }
+                                processor
+                                    .try_attach_thread_listener(
+                                        thread_id,
+                                        initialized_connection_ids,
+                                    )
+                                    .await;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                                 // TODO(jif) handle lag.

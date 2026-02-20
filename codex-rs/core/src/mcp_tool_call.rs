@@ -323,7 +323,7 @@ const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
 #[derive(Debug, Serialize)]
 struct McpToolApprovalKey {
     server: String,
-    connector_id: String,
+    connector_id: Option<String>,
     tool_name: String,
 }
 
@@ -336,9 +336,6 @@ async fn maybe_request_mcp_tool_approval(
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
-    if server != CODEX_APPS_MCP_SERVER_NAME {
-        return None;
-    }
     if approval_mode == AppToolApproval::Approve {
         return None;
     }
@@ -353,13 +350,16 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     let approval_key = if approval_mode == AppToolApproval::Auto {
-        metadata
-            .and_then(|metadata| metadata.connector_id.as_deref())
-            .map(|connector_id| McpToolApprovalKey {
+        let connector_id = metadata.and_then(|metadata| metadata.connector_id.clone());
+        if server == CODEX_APPS_MCP_SERVER_NAME && connector_id.is_none() {
+            None
+        } else {
+            Some(McpToolApprovalKey {
                 server: server.to_string(),
-                connector_id: connector_id.to_string(),
+                connector_id,
                 tool_name: tool_name.to_string(),
             })
+        }
     } else {
         None
     };
@@ -372,11 +372,12 @@ async fn maybe_request_mcp_tool_approval(
     let question_id = format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}");
     let question = build_mcp_tool_approval_question(
         question_id.clone(),
+        server,
         tool_name,
         metadata.and_then(|metadata| metadata.tool_title.as_deref()),
         metadata.and_then(|metadata| metadata.connector_name.as_deref()),
         annotations,
-        approval_mode == AppToolApproval::Auto && approval_key.is_some(),
+        approval_key.is_some(),
     );
     let args = RequestUserInputArgs {
         questions: vec![question],
@@ -388,8 +389,7 @@ async fn maybe_request_mcp_tool_approval(
         parse_mcp_tool_approval_response(response, &question_id),
         approval_mode,
     );
-    if approval_mode == AppToolApproval::Auto
-        && matches!(decision, McpToolApprovalDecision::AcceptAndRemember)
+    if matches!(decision, McpToolApprovalDecision::AcceptAndRemember)
         && let Some(key) = approval_key
     {
         remember_mcp_tool_approval(sess, key).await;
@@ -459,6 +459,7 @@ async fn lookup_mcp_app_usage_metadata(
 
 fn build_mcp_tool_approval_question(
     question_id: String,
+    server: &str,
     tool_name: &str,
     tool_title: Option<&str>,
     connector_name: Option<&str>,
@@ -478,7 +479,13 @@ fn build_mcp_tool_approval_question(
     let tool_label = tool_title.unwrap_or(tool_name);
     let app_label = connector_name
         .map(|name| format!("The {name} app"))
-        .unwrap_or_else(|| "This app".to_string());
+        .unwrap_or_else(|| {
+            if server == CODEX_APPS_MCP_SERVER_NAME {
+                "This app".to_string()
+            } else {
+                format!("The {server} MCP server")
+            }
+        });
     let question = format!(
         "{app_label} wants to run the tool \"{tool_label}\", which {reason}. Allow this action?"
     );
@@ -644,6 +651,52 @@ mod tests {
                 AppToolApproval::Prompt,
             ),
             McpToolApprovalDecision::Accept
+        );
+    }
+
+    #[test]
+    fn custom_mcp_tool_question_mentions_server_name() {
+        let question = build_mcp_tool_approval_question(
+            "q".to_string(),
+            "custom_server",
+            "run_action",
+            Some("Run Action"),
+            None,
+            Some(&annotations(Some(false), Some(true), None)),
+            true,
+        );
+
+        assert_eq!(question.header, "Approve app tool call?");
+        assert_eq!(
+            question.question,
+            "The custom_server MCP server wants to run the tool \"Run Action\", which may modify or delete data. Allow this action?"
+        );
+        assert!(
+            question
+                .options
+                .expect("options")
+                .into_iter()
+                .map(|option| option.label)
+                .any(|label| label == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER)
+        );
+    }
+
+    #[test]
+    fn codex_apps_tool_question_keeps_legacy_app_label() {
+        let question = build_mcp_tool_approval_question(
+            "q".to_string(),
+            CODEX_APPS_MCP_SERVER_NAME,
+            "run_action",
+            Some("Run Action"),
+            None,
+            Some(&annotations(Some(false), Some(true), None)),
+            true,
+        );
+
+        assert!(
+            question
+                .question
+                .starts_with("This app wants to run the tool \"Run Action\"")
         );
     }
 
