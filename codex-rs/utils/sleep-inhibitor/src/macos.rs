@@ -10,7 +10,10 @@ use tracing::warn;
     clippy::all
 )]
 mod iokit {
-    include!(concat!(env!("OUT_DIR"), "/iokit_bindings.rs"));
+    #[link(name = "IOKit", kind = "framework")]
+    unsafe extern "C" {}
+
+    include!("iokit_bindings.rs");
 }
 
 type IOPMAssertionID = iokit::IOPMAssertionID;

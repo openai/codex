@@ -10,6 +10,3 @@ workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
 tracing = { workspace = true }
-
-[build-dependencies]
-bindgen = { version = "0.71", default-features = false, features = ["runtime"] }
