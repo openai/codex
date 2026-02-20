@@ -1402,12 +1402,14 @@ mod tests {
     use crate::protocol::v2;
     use anyhow::Result;
     use pretty_assertions::assert_eq;
+    use serial_test::serial;
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;
 
     #[test]
+    #[serial(app_server_protocol_ts)]
     fn generated_ts_optional_nullable_fields_only_in_params() -> Result<()> {
         // Assert that "?: T | null" only appears in generated *Params types.
         let output_dir = std::env::temp_dir().join(format!("codex_ts_types_{}", Uuid::now_v7()));
@@ -1642,6 +1644,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(app_server_protocol_ts)]
     fn generate_ts_with_experimental_api_retains_experimental_entries() -> Result<()> {
         let output_dir =
             std::env::temp_dir().join(format!("codex_ts_types_experimental_{}", Uuid::now_v7()));

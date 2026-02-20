@@ -2,10 +2,12 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_app_server_protocol::read_schema_fixture_tree;
 use codex_app_server_protocol::write_schema_fixtures;
+use serial_test::serial;
 use similar::TextDiff;
 use std::path::Path;
 
 #[test]
+#[serial(app_server_protocol_ts)]
 fn schema_fixtures_match_generated() -> Result<()> {
     let schema_root = schema_root()?;
     let fixture_tree = read_tree(&schema_root)?;

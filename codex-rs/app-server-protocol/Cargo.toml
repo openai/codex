@@ -31,5 +31,6 @@ uuid = { workspace = true, features = ["serde", "v7"] }
 anyhow = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
 similar = { workspace = true }
 tempfile = { workspace = true }
