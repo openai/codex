@@ -2208,6 +2208,10 @@ pub struct Thread {
     pub cli_version: String,
     /// Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.).
     pub source: SessionSource,
+    /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
+    pub agent_nickname: Option<String>,
+    /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
+    pub agent_role: Option<String>,
     /// Optional Git metadata captured when the thread was created.
     pub git_info: Option<GitInfo>,
     /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`

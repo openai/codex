@@ -156,7 +156,11 @@ mod spawn {
             .spawn_agent(
                 config,
                 input_items,
-                Some(thread_spawn_source(session.conversation_id, child_depth)),
+                Some(thread_spawn_source(
+                    session.conversation_id,
+                    child_depth,
+                    role_name,
+                )),
             )
             .await
             .map_err(collab_spawn_error);
@@ -284,7 +288,6 @@ mod send_input {
 mod resume_agent {
     use super::*;
     use crate::agent::next_thread_spawn_depth;
-    use crate::rollout::find_thread_path_by_id_str;
     use std::sync::Arc;
 
     #[derive(Debug, Deserialize)]
@@ -331,15 +334,7 @@ mod resume_agent {
             .await;
         let error = if matches!(status, AgentStatus::NotFound) {
             // If the thread is no longer active, attempt to restore it from rollout.
-            match try_resume_closed_agent(
-                &session,
-                &turn,
-                receiver_thread_id,
-                &args.id,
-                child_depth,
-            )
-            .await
-            {
+            match try_resume_closed_agent(&session, &turn, receiver_thread_id, child_depth).await {
                 Ok(resumed_status) => {
                     status = resumed_status;
                     None
@@ -388,33 +383,16 @@ mod resume_agent {
         session: &Arc<Session>,
         turn: &Arc<TurnContext>,
         receiver_thread_id: ThreadId,
-        receiver_id: &str,
         child_depth: i32,
     ) -> Result<AgentStatus, FunctionCallError> {
-        let rollout_path = find_thread_path_by_id_str(
-            turn.config.codex_home.as_path(),
-            receiver_id,
-        )
-        .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "tool failed: failed to locate rollout for agent {receiver_thread_id}: {err}"
-            ))
-        })?
-        .ok_or_else(|| {
-            FunctionCallError::RespondToModel(format!(
-                "agent with id {receiver_thread_id} not found"
-            ))
-        })?;
-
         let config = build_agent_resume_config(turn.as_ref(), child_depth)?;
         let resumed_thread_id = session
             .services
             .agent_control
             .resume_agent_from_rollout(
                 config,
-                rollout_path,
-                thread_spawn_source(session.conversation_id, child_depth),
+                receiver_thread_id,
+                thread_spawn_source(session.conversation_id, child_depth, None),
             )
             .await
             .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
@@ -733,10 +711,16 @@ fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
     }
 }
 
-fn thread_spawn_source(parent_thread_id: ThreadId, depth: i32) -> SessionSource {
+fn thread_spawn_source(
+    parent_thread_id: ThreadId,
+    depth: i32,
+    agent_role: Option<&str>,
+) -> SessionSource {
     SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id,
         depth,
+        agent_nickname: None,
+        agent_role: agent_role.map(str::to_string),
     })
 }
 
@@ -1068,6 +1052,8 @@ mod tests {
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
             depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_nickname: None,
+            agent_role: None,
         });
 
         let invocation = invocation(
@@ -1104,6 +1090,8 @@ mod tests {
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
             depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_nickname: None,
+            agent_role: None,
         });
 
         let invocation = invocation(
@@ -1487,6 +1475,8 @@ mod tests {
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
             depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_nickname: None,
+            agent_role: None,
         });
 
         let invocation = invocation(
