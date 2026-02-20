@@ -358,6 +358,14 @@ client_request_definitions! {
         params: v2::ConfigBatchWriteParams,
         response: v2::ConfigWriteResponse,
     },
+    ClaudeMigrationRun => "claudeMigration/import" {
+        params: v2::ClaudeMigrationRunParams,
+        response: v2::ClaudeMigrationRunResponse,
+    },
+    ClaudeMigrationSetState => "claudeMigration/state/set" {
+        params: v2::ClaudeMigrationSetStateParams,
+        response: v2::ClaudeMigrationSetStateResponse,
+    },
 
     ConfigRequirementsRead => "configRequirements/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
@@ -806,6 +814,7 @@ server_notification_definitions! {
     ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
+    ClaudeMigrationAvailable => "claudeMigration/available" (v2::ClaudeMigrationAvailableNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
     FuzzyFileSearchSessionCompleted => "fuzzyFileSearch/sessionCompleted" (FuzzyFileSearchSessionCompletedNotification),
 

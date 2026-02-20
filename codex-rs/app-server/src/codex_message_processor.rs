@@ -32,6 +32,11 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
+use codex_app_server_protocol::ClaudeMigrationAvailableNotification;
+use codex_app_server_protocol::ClaudeMigrationDetected;
+use codex_app_server_protocol::ClaudeMigrationProposed;
+use codex_app_server_protocol::ClaudeMigrationScope;
+use codex_app_server_protocol::ClaudeMigrationState;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
@@ -526,6 +531,10 @@ impl CodexMessageProcessor {
         match request {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled in MessageProcessor");
+            }
+            ClientRequest::ClaudeMigrationRun { .. }
+            | ClientRequest::ClaudeMigrationSetState { .. } => {
+                panic!("Claude import RPCs should be handled in MessageProcessor");
             }
             // === v2 Thread/Turn APIs ===
             ClientRequest::ThreadStart { request_id, params } => {
@@ -2069,6 +2078,49 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::ThreadStarted(notif))
                     .await;
+
+                {
+                    match codex_core::claude_migration::detect_claude_repo_migration(
+                        thread.cwd.as_path(),
+                    )
+                    .await
+                    {
+                        Ok(Some(available)) => {
+                            self.outgoing
+                                .send_server_notification(ServerNotification::ClaudeMigrationAvailable(
+                                    ClaudeMigrationAvailableNotification {
+                                        scope: ClaudeMigrationScope::Repo,
+                                        state: match available.marker_state {
+                                            codex_core::claude_migration::ClaudeMigrationMarkerState::Pending => ClaudeMigrationState::Pending,
+                                            codex_core::claude_migration::ClaudeMigrationMarkerState::Imported => ClaudeMigrationState::Imported,
+                                            codex_core::claude_migration::ClaudeMigrationMarkerState::Never => ClaudeMigrationState::Never,
+                                        },
+                                        repo_root: Some(available.repo_root.display().to_string()),
+                                        detected: ClaudeMigrationDetected {
+                                            claude_home_exists: None,
+                                            settings_json: None,
+                                            claude_md: available.detected.claude_md,
+                                            skills_count: None,
+                                            agents_md_exists: Some(available.detected.agents_md_exists),
+                                            mcp_json: Some(available.detected.mcp_json),
+                                            prior_codex_thread_count: None,
+                                        },
+                                        proposed: ClaudeMigrationProposed {
+                                            config_keys: Vec::new(),
+                                            copy_agents_md: available.proposed.copied_agents_md,
+                                            skills_to_copy: Vec::new(),
+                                            mcp_servers_to_add: available.proposed.imported_mcp_servers,
+                                        },
+                                    },
+                                ))
+                                .await;
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            tracing::warn!(error = %err, "failed to detect Claude repo import availability");
+                        }
+                    }
+                }
             }
             Err(err) => {
                 let error = JSONRPCErrorError {

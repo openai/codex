@@ -16,6 +16,15 @@ use async_trait::async_trait;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
+use codex_app_server_protocol::ClaudeMigrationAvailableNotification;
+use codex_app_server_protocol::ClaudeMigrationDetected;
+use codex_app_server_protocol::ClaudeMigrationProposed;
+use codex_app_server_protocol::ClaudeMigrationRunParams;
+use codex_app_server_protocol::ClaudeMigrationRunResponse;
+use codex_app_server_protocol::ClaudeMigrationScope;
+use codex_app_server_protocol::ClaudeMigrationSetStateParams;
+use codex_app_server_protocol::ClaudeMigrationSetStateResponse;
+use codex_app_server_protocol::ClaudeMigrationState;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -39,6 +48,7 @@ use codex_core::auth::ExternalAuthRefreshReason;
 use codex_core::auth::ExternalAuthRefresher;
 use codex_core::auth::ExternalAuthTokens;
 use codex_core::config::Config;
+use codex_core::config::ConfigToml;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::default_client::SetOriginatorError;
@@ -53,6 +63,7 @@ use tokio::sync::broadcast;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use toml::Value as TomlValue;
+use tracing::warn;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -341,6 +352,26 @@ impl MessageProcessor {
         }
 
         match codex_request {
+            ClientRequest::ClaudeMigrationRun { request_id, params } => {
+                self.handle_claude_migration_run(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::ClaudeMigrationSetState { request_id, params } => {
+                self.handle_claude_migration_set_state(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
             ClientRequest::ConfigRead { request_id, params } => {
                 self.handle_config_read(
                     ConnectionRequestId {
@@ -404,6 +435,56 @@ impl MessageProcessor {
             self.outgoing
                 .send_server_notification(ServerNotification::ConfigWarning(notification))
                 .await;
+        }
+
+        let effective_toml = self.config.config_layer_stack.effective_config();
+        let config_toml: ConfigToml = match effective_toml.try_into() {
+            Ok(config_toml) => config_toml,
+            Err(err) => {
+                warn!(error = %err, "failed to deserialize config for Claude import detection");
+                return;
+            }
+        };
+
+        match codex_core::claude_migration::detect_claude_home_migration(
+            &self.config.codex_home,
+            &config_toml,
+            self.config.model_provider_id.as_str(),
+            codex_core::claude_migration::CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD,
+        )
+        .await
+        {
+            Ok(Some(available)) => {
+                let notification = ServerNotification::ClaudeMigrationAvailable(
+                    ClaudeMigrationAvailableNotification {
+                        scope: ClaudeMigrationScope::Home,
+                        state: core_marker_state_to_v2(available.marker_state),
+                        repo_root: None,
+                        detected: ClaudeMigrationDetected {
+                            claude_home_exists: Some(available.detected.claude_home_exists),
+                            settings_json: Some(available.detected.settings_json),
+                            claude_md: available.detected.claude_md,
+                            skills_count: Some(available.detected.skills_count as u32),
+                            agents_md_exists: None,
+                            mcp_json: None,
+                            prior_codex_thread_count: Some(
+                                available.prior_codex_thread_count as u32,
+                            ),
+                        },
+                        proposed: ClaudeMigrationProposed {
+                            config_keys: available.proposed.imported_config_keys,
+                            copy_agents_md: available.proposed.imported_user_agents_md,
+                            skills_to_copy: available.proposed.imported_skills,
+                            mcp_servers_to_add: Vec::new(),
+                        },
+                    },
+                );
+                self.outgoing.send_server_notification(notification).await;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                warn!(error = %err, "failed to detect Claude home import availability");
+            }
         }
     }
 
@@ -469,6 +550,225 @@ impl MessageProcessor {
         match self.config_api.config_requirements_read().await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_claude_migration_run(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ClaudeMigrationRunParams,
+    ) {
+        let effective_toml = self.config.config_layer_stack.effective_config();
+        let config_toml: ConfigToml = match effective_toml.try_into() {
+            Ok(config_toml) => config_toml,
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("invalid config for Claude import: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
+
+        match params.scope {
+            ClaudeMigrationScope::Home => {
+                match codex_core::claude_migration::apply_claude_home_migration(
+                    &self.config.codex_home,
+                    &config_toml,
+                )
+                .await
+                {
+                    Ok(summary) => {
+                        self.outgoing
+                            .send_response(
+                                request_id,
+                                ClaudeMigrationRunResponse {
+                                    scope: ClaudeMigrationScope::Home,
+                                    state: ClaudeMigrationState::Imported,
+                                    repo_root: None,
+                                    imported_config_keys: summary.imported_config_keys,
+                                    copied_skills: summary.imported_skills,
+                                    copied_agents_md: summary.imported_user_agents_md,
+                                    imported_mcp_servers: Vec::new(),
+                                },
+                            )
+                            .await;
+                    }
+                    Err(err) => {
+                        self.outgoing
+                            .send_error(
+                                request_id,
+                                JSONRPCErrorError {
+                                    code: INVALID_REQUEST_ERROR_CODE,
+                                    message: format!("Claude home import failed: {err}"),
+                                    data: None,
+                                },
+                            )
+                            .await;
+                    }
+                }
+            }
+            ClaudeMigrationScope::Repo => {
+                let Some(cwd) = params.cwd.as_deref() else {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INVALID_REQUEST_ERROR_CODE,
+                                message: "cwd is required for repo import".to_string(),
+                                data: None,
+                            },
+                        )
+                        .await;
+                    return;
+                };
+                let cwd_path = PathBuf::from(cwd);
+                match codex_core::claude_migration::apply_claude_repo_migration(&cwd_path).await {
+                    Ok(summary) => {
+                        let repo_root = cwd_path
+                            .ancestors()
+                            .find(|ancestor| ancestor.join(".git").exists())
+                            .unwrap_or(cwd_path.as_path())
+                            .display()
+                            .to_string();
+                        self.outgoing
+                            .send_response(
+                                request_id,
+                                ClaudeMigrationRunResponse {
+                                    scope: ClaudeMigrationScope::Repo,
+                                    state: ClaudeMigrationState::Imported,
+                                    repo_root: Some(repo_root),
+                                    imported_config_keys: Vec::new(),
+                                    copied_skills: Vec::new(),
+                                    copied_agents_md: summary.copied_agents_md,
+                                    imported_mcp_servers: summary.imported_mcp_servers,
+                                },
+                            )
+                            .await;
+                    }
+                    Err(err) => {
+                        self.outgoing
+                            .send_error(
+                                request_id,
+                                JSONRPCErrorError {
+                                    code: INVALID_REQUEST_ERROR_CODE,
+                                    message: format!("Claude repo import failed: {err}"),
+                                    data: None,
+                                },
+                            )
+                            .await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn handle_claude_migration_set_state(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ClaudeMigrationSetStateParams,
+    ) {
+        let core_state = match v2_marker_state_to_core(params.state) {
+            Some(state) => state,
+            None => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: "pending is not writable via RPC".to_string(),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
+
+        let result = match params.scope {
+            ClaudeMigrationScope::Home => {
+                codex_core::claude_migration::set_claude_home_migration_state(
+                    &self.config.codex_home,
+                    core_state,
+                )
+                .await
+            }
+            ClaudeMigrationScope::Repo => {
+                let Some(cwd) = params.cwd.as_deref() else {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INVALID_REQUEST_ERROR_CODE,
+                                message: "cwd is required for repo state updates".to_string(),
+                                data: None,
+                            },
+                        )
+                        .await;
+                    return;
+                };
+                codex_core::claude_migration::set_claude_repo_migration_state(
+                    &PathBuf::from(cwd),
+                    core_state,
+                )
+                .await
+            }
+        };
+
+        match result {
+            Ok(()) => {
+                self.outgoing
+                    .send_response(request_id, ClaudeMigrationSetStateResponse::default())
+                    .await
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("failed to update Claude import state: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await
+            }
+        }
+    }
+}
+
+fn core_marker_state_to_v2(
+    state: codex_core::claude_migration::ClaudeMigrationMarkerState,
+) -> ClaudeMigrationState {
+    match state {
+        codex_core::claude_migration::ClaudeMigrationMarkerState::Pending => {
+            ClaudeMigrationState::Pending
+        }
+        codex_core::claude_migration::ClaudeMigrationMarkerState::Imported => {
+            ClaudeMigrationState::Imported
+        }
+        codex_core::claude_migration::ClaudeMigrationMarkerState::Never => {
+            ClaudeMigrationState::Never
+        }
+    }
+}
+
+fn v2_marker_state_to_core(
+    state: ClaudeMigrationState,
+) -> Option<codex_core::claude_migration::ClaudeMigrationMarkerState> {
+    match state {
+        ClaudeMigrationState::Pending => None,
+        ClaudeMigrationState::Imported => {
+            Some(codex_core::claude_migration::ClaudeMigrationMarkerState::Imported)
+        }
+        ClaudeMigrationState::Never => {
+            Some(codex_core::claude_migration::ClaudeMigrationMarkerState::Never)
         }
     }
 }

@@ -561,6 +561,94 @@ pub struct NetworkRequirements {
     pub allow_local_binding: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ClaudeMigrationScope {
+    Home,
+    Repo,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase", export_to = "v2/")]
+pub enum ClaudeMigrationState {
+    Pending,
+    Imported,
+    Never,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ClaudeMigrationDetected {
+    pub claude_home_exists: Option<bool>,
+    pub settings_json: Option<bool>,
+    pub claude_md: bool,
+    pub skills_count: Option<u32>,
+    pub agents_md_exists: Option<bool>,
+    pub mcp_json: Option<bool>,
+    pub prior_codex_thread_count: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ClaudeMigrationProposed {
+    pub config_keys: Vec<String>,
+    pub copy_agents_md: bool,
+    pub skills_to_copy: Vec<String>,
+    pub mcp_servers_to_add: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ClaudeMigrationAvailableNotification {
+    pub scope: ClaudeMigrationScope,
+    pub state: ClaudeMigrationState,
+    pub repo_root: Option<String>,
+    pub detected: ClaudeMigrationDetected,
+    pub proposed: ClaudeMigrationProposed,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ClaudeMigrationRunParams {
+    pub scope: ClaudeMigrationScope,
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ClaudeMigrationRunResponse {
+    pub scope: ClaudeMigrationScope,
+    pub state: ClaudeMigrationState,
+    pub repo_root: Option<String>,
+    pub imported_config_keys: Vec<String>,
+    pub copied_skills: Vec<String>,
+    pub copied_agents_md: bool,
+    pub imported_mcp_servers: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ClaudeMigrationSetStateParams {
+    pub scope: ClaudeMigrationScope,
+    pub state: ClaudeMigrationState,
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ClaudeMigrationSetStateResponse {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export_to = "v2/")]
