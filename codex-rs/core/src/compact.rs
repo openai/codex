@@ -212,10 +212,11 @@ async fn run_compact_task_inner(
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
 
+    let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
+
     // Mid-turn compaction is the only callsite that must inject initial context above the last user message
     // in the replacement history (preturn callsites simply inject initial context after the compaction item,
     // but for mid-turn compaction the model has been trained to expect the compaction item last).
-    let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
     if matches!(callsite, CompactCallsite::MidTurn) {
         let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
         new_history =
@@ -292,7 +293,7 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
 pub(crate) async fn process_compacted_history(
     sess: &Session,
     turn_context: &TurnContext,
-    compacted_history: Vec<ResponseItem>,
+    mut compacted_history: Vec<ResponseItem>,
     callsite: CompactCallsite,
 ) -> Vec<ResponseItem> {
     // Mid-turn compaction is the only callsite that must inject initial context above the last user message
@@ -304,13 +305,6 @@ pub(crate) async fn process_compacted_history(
         Vec::new()
     };
 
-    process_compacted_history_with_initial_context(compacted_history, initial_context)
-}
-
-fn process_compacted_history_with_initial_context(
-    mut compacted_history: Vec<ResponseItem>,
-    initial_context: Vec<ResponseItem>,
-) -> Vec<ResponseItem> {
     compacted_history.retain(should_keep_compacted_history_item);
     insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context)
 }
@@ -837,8 +831,10 @@ do things
             },
         ];
 
+        let mut refreshed = compacted_history;
+        refreshed.retain(should_keep_compacted_history_item);
         let refreshed =
-            process_compacted_history_with_initial_context(compacted_history, initial_context);
+            insert_initial_context_before_last_real_user_or_summary(refreshed, initial_context);
         let expected = vec![
             ResponseItem::Message {
                 id: None,
@@ -947,8 +943,10 @@ keep me updated
             },
         ];
 
+        let mut refreshed = compacted_history;
+        refreshed.retain(should_keep_compacted_history_item);
         let refreshed =
-            process_compacted_history_with_initial_context(compacted_history, initial_context);
+            insert_initial_context_before_last_real_user_or_summary(refreshed, initial_context);
         let expected = vec![
             ResponseItem::Message {
                 id: None,
@@ -1084,8 +1082,10 @@ keep me updated
             phase: None,
         }];
 
+        let mut refreshed = compacted_history;
+        refreshed.retain(should_keep_compacted_history_item);
         let refreshed =
-            process_compacted_history_with_initial_context(compacted_history, initial_context);
+            insert_initial_context_before_last_real_user_or_summary(refreshed, initial_context);
         let expected = vec![
             ResponseItem::Message {
                 id: None,
@@ -1150,8 +1150,10 @@ keep me updated
             phase: None,
         }];
 
+        let mut refreshed = compacted_history;
+        refreshed.retain(should_keep_compacted_history_item);
         let refreshed =
-            process_compacted_history_with_initial_context(compacted_history, initial_context);
+            insert_initial_context_before_last_real_user_or_summary(refreshed, initial_context);
         let expected = vec![
             ResponseItem::Message {
                 id: None,
