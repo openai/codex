@@ -26,6 +26,10 @@ pub struct Cli {
     #[arg(long, short = 'm', global = true)]
     pub model: Option<String>,
 
+    /// Collaboration mode to run for this turn.
+    #[arg(long = "collaboration-mode", value_enum, global = true)]
+    pub collaboration_mode: Option<CollaborationModeCliArg>,
+
     /// Use open-source provider.
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
@@ -247,6 +251,13 @@ pub enum Color {
     Never,
     #[default]
     Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum CollaborationModeCliArg {
+    Default,
+    Plan,
 }
 
 #[cfg(test)]

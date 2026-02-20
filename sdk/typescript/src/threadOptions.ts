@@ -6,6 +6,8 @@ export type ModelReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhig
 
 export type WebSearchMode = "disabled" | "cached" | "live";
 
+export type CollaborationMode = "default" | "plan";
+
 export type ThreadOptions = {
   model?: string;
   sandboxMode?: SandboxMode;
@@ -17,4 +19,5 @@ export type ThreadOptions = {
   webSearchEnabled?: boolean;
   approvalPolicy?: ApprovalMode;
   additionalDirectories?: string[];
+  collaborationMode?: CollaborationMode;
 };

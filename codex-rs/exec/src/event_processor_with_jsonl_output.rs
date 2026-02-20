@@ -25,7 +25,10 @@ use crate::exec_events::McpToolCallItemResult;
 use crate::exec_events::McpToolCallStatus;
 use crate::exec_events::PatchApplyStatus;
 use crate::exec_events::PatchChangeKind;
+use crate::exec_events::PlanDeltaEvent;
+use crate::exec_events::PlanItem;
 use crate::exec_events::ReasoningItem;
+use crate::exec_events::RequestUserInputEvent;
 use crate::exec_events::ThreadErrorEvent;
 use crate::exec_events::ThreadEvent;
 use crate::exec_events::ThreadItem;
@@ -121,12 +124,30 @@ impl EventProcessorWithJsonOutput {
             protocol::EventMsg::SessionConfigured(ev) => self.handle_session_configured(ev),
             protocol::EventMsg::ThreadNameUpdated(_) => Vec::new(),
             protocol::EventMsg::AgentMessage(ev) => self.handle_agent_message(ev),
+            protocol::EventMsg::ItemStarted(protocol::ItemStartedEvent {
+                item: codex_protocol::items::TurnItem::Plan(item),
+                ..
+            }) => {
+                let item = ThreadItem {
+                    id: item.id.clone(),
+                    details: ThreadItemDetails::Plan(PlanItem {
+                        text: item.text.clone(),
+                    }),
+                };
+                vec![ThreadEvent::ItemStarted(ItemStartedEvent { item })]
+            }
             protocol::EventMsg::ItemCompleted(protocol::ItemCompletedEvent {
                 item: codex_protocol::items::TurnItem::Plan(item),
                 ..
             }) => {
                 self.last_proposed_plan = Some(item.text.clone());
-                Vec::new()
+                let item = ThreadItem {
+                    id: item.id.clone(),
+                    details: ThreadItemDetails::Plan(PlanItem {
+                        text: item.text.clone(),
+                    }),
+                };
+                vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
             }
             protocol::EventMsg::AgentReasoning(ev) => self.handle_reasoning_event(ev),
             protocol::EventMsg::ExecCommandBegin(ev) => self.handle_exec_command_begin(ev),
@@ -161,6 +182,17 @@ impl EventProcessorWithJsonOutput {
             }
             protocol::EventMsg::TurnStarted(ev) => self.handle_task_started(ev),
             protocol::EventMsg::TurnComplete(_) => self.handle_task_complete(),
+            protocol::EventMsg::PlanDelta(ev) => vec![ThreadEvent::PlanDelta(PlanDeltaEvent {
+                item_id: ev.item_id.clone(),
+                delta: ev.delta.clone(),
+            })],
+            protocol::EventMsg::RequestUserInput(ev) => {
+                vec![ThreadEvent::RequestUserInput(RequestUserInputEvent {
+                    id: ev.turn_id.clone(),
+                    call_id: ev.call_id.clone(),
+                    questions: ev.questions.clone(),
+                })]
+            }
             protocol::EventMsg::Error(ev) => {
                 let error = ThreadErrorEvent {
                     message: ev.message.clone(),

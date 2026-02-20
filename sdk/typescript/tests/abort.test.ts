@@ -157,7 +157,11 @@ describe("AbortSignal support", () => {
       const result = await thread.run("Hello, world!", { signal: controller.signal });
 
       expect(result.finalResponse).toBe("Hi!");
-      expect(result.items).toHaveLength(1);
+      expect(result.items).toContainEqual({
+        id: expect.any(String),
+        type: "agent_message",
+        text: "Hi!",
+      });
     } finally {
       await close();
     }

@@ -78,6 +78,13 @@ export type AgentMessageItem = {
   text: string;
 };
 
+/** Proposed implementation plan emitted in plan mode. */
+export type PlanItem = {
+  id: string;
+  type: "plan";
+  text: string;
+};
+
 /** Agent's reasoning summary. */
 export type ReasoningItem = {
   id: string;
@@ -118,6 +125,7 @@ export type TodoListItem = {
 /** Canonical union of thread items and their type-specific payloads. */
 export type ThreadItem =
   | AgentMessageItem
+  | PlanItem
   | ReasoningItem
   | CommandExecutionItem
   | FileChangeItem

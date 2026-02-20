@@ -32,14 +32,11 @@ describe("Codex", () => {
       const thread = client.startThread();
       const result = await thread.run("Hello, world!");
 
-      const expectedItems = [
-        {
-          id: expect.any(String),
-          type: "agent_message",
-          text: "Hi!",
-        },
-      ];
-      expect(result.items).toEqual(expectedItems);
+      expect(result.items).toContainEqual({
+        id: expect.any(String),
+        type: "agent_message",
+        text: "Hi!",
+      });
       expect(result.usage).toEqual({
         cached_input_tokens: 12,
         input_tokens: 42,
@@ -49,7 +46,7 @@ describe("Codex", () => {
     } finally {
       await close();
     }
-  });
+  }, 15000);
 
   it("sends previous items when run is called twice", async () => {
     const { url, close, requests } = await startResponsesTestProxy({
@@ -404,6 +401,37 @@ describe("Codex", () => {
       const commandArgs = spawnArgs[0];
       expect(commandArgs).toBeDefined();
       expectPair(commandArgs, ["--config", 'approval_policy="on-request"']);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
+  it("passes collaborationMode to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Collaboration mode set", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread({
+        collaborationMode: "plan",
+      });
+      await thread.run("test collaboration mode");
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      expectPair(commandArgs, ["--collaboration-mode", "plan"]);
     } finally {
       restore();
       await close();

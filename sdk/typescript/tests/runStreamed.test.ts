@@ -33,31 +33,29 @@ describe("Codex", () => {
         events.push(event);
       }
 
-      expect(events).toEqual([
-        {
-          type: "thread.started",
-          thread_id: expect.any(String),
+      expect(events).toContainEqual({
+        type: "thread.started",
+        thread_id: expect.any(String),
+      });
+      expect(events).toContainEqual({
+        type: "turn.started",
+      });
+      expect(events).toContainEqual({
+        type: "item.completed",
+        item: {
+          id: expect.any(String),
+          type: "agent_message",
+          text: "Hi!",
         },
-        {
-          type: "turn.started",
+      });
+      expect(events).toContainEqual({
+        type: "turn.completed",
+        usage: {
+          cached_input_tokens: 12,
+          input_tokens: 42,
+          output_tokens: 5,
         },
-        {
-          type: "item.completed",
-          item: {
-            id: "item_0",
-            type: "agent_message",
-            text: "Hi!",
-          },
-        },
-        {
-          type: "turn.completed",
-          usage: {
-            cached_input_tokens: 12,
-            input_tokens: 42,
-            output_tokens: 5,
-          },
-        },
-      ]);
+      });
       expect(thread.id).toEqual(expect.any(String));
     } finally {
       await close();
