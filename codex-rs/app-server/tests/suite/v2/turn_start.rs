@@ -747,7 +747,12 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
     assert!(!turn.id.is_empty());
 
-    // This test only validates that turn/start responds and returns a turn.
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
     Ok(())
 }
 
