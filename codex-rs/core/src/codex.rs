@@ -1600,16 +1600,29 @@ impl Session {
                 let rollout_items = resumed_history.history;
                 let restored_tool_selection =
                     Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
-                let previous_model = Self::last_rollout_regular_turn_context_item(&rollout_items)
-                    .map(|ctx| ctx.model.clone());
+                let (previous_regular_turn_context_item, crossed_compaction_after_turn) =
+                    Self::last_rollout_regular_turn_context_lookup(&rollout_items);
+                let previous_model =
+                    previous_regular_turn_context_item.map(|ctx| ctx.model.clone());
+                let curr = turn_context.model_info.slug.as_str();
+                let can_seed_reference_context_item = !crossed_compaction_after_turn
+                    && previous_regular_turn_context_item.is_some_and(|ctx| ctx.model == curr);
+                let reference_context_item = if can_seed_reference_context_item {
+                    previous_regular_turn_context_item.cloned()
+                } else {
+                    // Keep the baseline empty when compaction may have stripped the referenced
+                    // context diffs, or when resuming on a different model. The first resumed
+                    // turn will then do full reinjection (which also preserves personality spec
+                    // when the model changes).
+                    None
+                };
                 {
                     let mut state = self.state.lock().await;
-                    state.set_reference_context_item(None);
+                    state.set_reference_context_item(reference_context_item);
                 }
                 self.set_previous_model(previous_model.clone()).await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
-                let curr = turn_context.model_info.slug.as_str();
                 if let Some(prev) = previous_model.as_deref().filter(|p| *p != curr) {
                     warn!("resuming session with different model: previous={prev}, current={curr}");
                     self.send_event(
@@ -1650,8 +1663,10 @@ impl Session {
             InitialHistory::Forked(rollout_items) => {
                 let restored_tool_selection =
                     Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
-                let previous_model = Self::last_rollout_regular_turn_context_item(&rollout_items)
-                    .map(|ctx| ctx.model.clone());
+                let (previous_regular_turn_context_item, _) =
+                    Self::last_rollout_regular_turn_context_lookup(&rollout_items);
+                let previous_model =
+                    previous_regular_turn_context_item.map(|ctx| ctx.model.clone());
                 self.set_previous_model(previous_model).await;
 
                 // Always add response items to conversation history
@@ -1696,19 +1711,22 @@ impl Session {
         }
     }
 
-    /// Returns the `TurnContextItem` from the latest completed user turn.
+    /// Returns `(last_regular_turn_context_item, crossed_compaction_after_turn)`, where the
+    /// context item comes from the latest completed user turn and the boolean indicates whether a
+    /// compaction was recorded after that turn in the rollback-adjusted rollout view.
     ///
     /// This derives turn membership from persisted turn lifecycle events so
     /// compact/shell-only turns (which have no user message event) do not
     /// overwrite the previous-model baseline. `ThreadRolledBack` markers are
     /// applied so resume/fork uses the post-rollback history view.
-    fn last_rollout_regular_turn_context_item(
+    fn last_rollout_regular_turn_context_lookup(
         rollout_items: &[RolloutItem],
-    ) -> Option<&TurnContextItem> {
+    ) -> (Option<&TurnContextItem>, bool) {
         let mut active_turn_id: Option<&str> = None;
         let mut active_turn_saw_user_message = false;
         let mut active_turn_context: Option<&TurnContextItem> = None;
-        let mut user_turn_contexts: Vec<Option<&TurnContextItem>> = Vec::new();
+        let mut user_turn_contexts: Vec<(Option<&TurnContextItem>, usize)> = Vec::new();
+        let mut compaction_count = 0usize;
         let mut saw_turn_lifecycle = false;
 
         for item in rollout_items {
@@ -1738,7 +1756,7 @@ impl Session {
                     if active_turn_id == Some(event.turn_id.as_str())
                         && active_turn_saw_user_message
                     {
-                        user_turn_contexts.push(active_turn_context);
+                        user_turn_contexts.push((active_turn_context, compaction_count));
                     }
                     active_turn_id = None;
                     active_turn_saw_user_message = false;
@@ -1750,11 +1768,14 @@ impl Session {
                         && event.turn_id.as_deref() == Some(active_id)
                         && active_turn_saw_user_message
                     {
-                        user_turn_contexts.push(active_turn_context);
+                        user_turn_contexts.push((active_turn_context, compaction_count));
                     }
                     active_turn_id = None;
                     active_turn_saw_user_message = false;
                     active_turn_context = None;
+                }
+                RolloutItem::Compacted(_) => {
+                    compaction_count = compaction_count.saturating_add(1);
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                     let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
@@ -1765,15 +1786,34 @@ impl Session {
             }
         }
 
-        let last_user_turn_context = user_turn_contexts.into_iter().rev().flatten().next();
-        if last_user_turn_context.is_some() || saw_turn_lifecycle {
-            return last_user_turn_context;
+        if let Some((Some(context_item), compaction_count_at_turn)) = user_turn_contexts
+            .into_iter()
+            .rev()
+            .find(|(ctx, _)| ctx.is_some())
+        {
+            return (
+                Some(context_item),
+                compaction_count > compaction_count_at_turn,
+            );
+        }
+        if saw_turn_lifecycle {
+            return (None, false);
         }
 
-        rollout_items.iter().rev().find_map(|item| match item {
-            RolloutItem::TurnContext(ctx) => Some(ctx),
-            _ => None,
-        })
+        let mut saw_compaction_after_last_turn_context = false;
+        for item in rollout_items.iter().rev() {
+            match item {
+                RolloutItem::Compacted(_) => {
+                    saw_compaction_after_last_turn_context = true;
+                }
+                RolloutItem::TurnContext(ctx) => {
+                    return (Some(ctx), saw_compaction_after_last_turn_context);
+                }
+                _ => {}
+            }
+        }
+
+        (None, false)
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -6575,6 +6615,102 @@ mod tests {
             session.previous_model().await,
             Some(previous_model.to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_resumed_seeds_reference_context_item_without_compaction() {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_context_item = turn_context.to_turn_context_item();
+        let turn_id = previous_context_item
+            .turn_id
+            .clone()
+            .expect("turn context should have turn_id");
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "seed".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::TurnContext(previous_context_item.clone()),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id,
+                    last_agent_message: None,
+                },
+            )),
+        ];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(
+            session.reference_context_item().await,
+            Some(previous_context_item)
+        );
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_resumed_does_not_seed_reference_context_item_after_compaction()
+    {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_context_item = turn_context.to_turn_context_item();
+        let turn_id = previous_context_item
+            .turn_id
+            .clone()
+            .expect("turn context should have turn_id");
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "seed".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::TurnContext(previous_context_item),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id,
+                    last_agent_message: None,
+                },
+            )),
+            RolloutItem::Compacted(CompactedItem {
+                message: String::new(),
+                replacement_history: Some(Vec::new()),
+            }),
+        ];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(session.reference_context_item().await, None);
     }
 
     #[tokio::test]
