@@ -32,6 +32,14 @@ pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CompactCallsite {
+    PreTurn,
+    PreTurnModelSwitch,
+    MidTurn,
+    Manual,
+}
+
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
     provider.is_openai()
 }
@@ -64,7 +72,7 @@ pub(crate) fn extract_trailing_model_switch_update_for_compaction_request(
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    reinject_initial_context: bool,
+    callsite: CompactCallsite,
 ) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
@@ -73,7 +81,7 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(sess, turn_context, input, reinject_initial_context).await?;
+    run_compact_task_inner(sess, turn_context, input, callsite).await?;
     Ok(())
 }
 
@@ -88,14 +96,14 @@ pub(crate) async fn run_compact_task(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
-    run_compact_task_inner(sess.clone(), turn_context, input, false).await
+    run_compact_task_inner(sess.clone(), turn_context, input, CompactCallsite::Manual).await
 }
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-    reinject_initial_context: bool,
+    callsite: CompactCallsite,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -204,7 +212,10 @@ async fn run_compact_task_inner(
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
 
-    let initial_context = if reinject_initial_context {
+    // Mid-turn compaction is the only callsite that must rebuild with full initial context
+    // immediately so follow-up sampling in the same turn sees the canonical context block
+    // above the latest real user message.
+    let initial_context = if matches!(callsite, CompactCallsite::MidTurn) {
         sess.build_initial_context(turn_context.as_ref()).await
     } else {
         Vec::new()

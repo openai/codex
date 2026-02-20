@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::compact::CompactCallsite;
 use crate::compact::extract_trailing_model_switch_update_for_compaction_request;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
@@ -25,9 +26,9 @@ use tracing::info;
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    reinject_initial_context: bool,
+    callsite: CompactCallsite,
 ) -> CodexResult<()> {
-    run_remote_compact_task_inner(&sess, &turn_context, reinject_initial_context).await?;
+    run_remote_compact_task_inner(&sess, &turn_context, callsite).await?;
     Ok(())
 }
 
@@ -42,17 +43,15 @@ pub(crate) async fn run_remote_compact_task(
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_compact_task_inner(&sess, &turn_context, false).await
+    run_remote_compact_task_inner(&sess, &turn_context, CompactCallsite::Manual).await
 }
 
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    reinject_initial_context: bool,
+    callsite: CompactCallsite,
 ) -> CodexResult<()> {
-    if let Err(err) =
-        run_remote_compact_task_inner_impl(sess, turn_context, reinject_initial_context).await
-    {
+    if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context, callsite).await {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
         );
@@ -65,7 +64,7 @@ async fn run_remote_compact_task_inner(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    reinject_initial_context: bool,
+    callsite: CompactCallsite,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
@@ -127,7 +126,10 @@ async fn run_remote_compact_task_inner_impl(
             Err(err)
         })
         .await?;
-    if reinject_initial_context {
+    // Mid-turn compaction is the only callsite that must rebuild with full initial context
+    // immediately so follow-up sampling in the same turn sees the canonical context block
+    // above the latest real user message.
+    if matches!(callsite, CompactCallsite::MidTurn) {
         let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
         new_history = crate::compact::process_compacted_history(new_history, &initial_context);
     } else {
