@@ -426,6 +426,14 @@ impl NetworkProxy {
         self.admin_addr
     }
 
+    pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
+        self.state.add_allowed_domain(host).await
+    }
+
+    pub async fn add_denied_domain(&self, host: &str) -> Result<()> {
+        self.state.add_denied_domain(host).await
+    }
+
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         self.apply_to_env_for_attempt(env, None);
     }

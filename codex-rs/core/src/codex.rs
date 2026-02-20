@@ -41,6 +41,8 @@ use crate::turn_metadata::TurnMetadataState;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_execpolicy::Decision as ExecPolicyDecision;
+use codex_execpolicy::NetworkRuleProtocol as ExecPolicyNetworkRuleProtocol;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -50,6 +52,8 @@ use codex_hooks::HooksConfig;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::approvals::NetworkPolicyAmendment;
+use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
@@ -175,6 +179,7 @@ use crate::protocol::McpServerRefreshConfig;
 use crate::protocol::ModelRerouteEvent;
 use crate::protocol::ModelRerouteReason;
 use crate::protocol::NetworkApprovalContext;
+use crate::protocol::NetworkApprovalProtocol;
 use crate::protocol::Op;
 use crate::protocol::PlanDeltaEvent;
 use crate::protocol::RateLimitSnapshot;
@@ -2198,6 +2203,105 @@ impl Session {
         }
     }
 
+    pub(crate) async fn persist_network_policy_amendment(
+        &self,
+        amendment: &NetworkPolicyAmendment,
+        network_approval_context: &NetworkApprovalContext,
+    ) -> anyhow::Result<()> {
+        let codex_home = self
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .codex_home()
+            .clone();
+        let protocol = match network_approval_context.protocol {
+            NetworkApprovalProtocol::Http => ExecPolicyNetworkRuleProtocol::Http,
+            NetworkApprovalProtocol::Https => ExecPolicyNetworkRuleProtocol::Https,
+            NetworkApprovalProtocol::Socks5Tcp => ExecPolicyNetworkRuleProtocol::Socks5Tcp,
+            NetworkApprovalProtocol::Socks5Udp => ExecPolicyNetworkRuleProtocol::Socks5Udp,
+        };
+        let (decision, action_verb) = match amendment.action {
+            NetworkPolicyRuleAction::Allow => (ExecPolicyDecision::Allow, "Allow"),
+            NetworkPolicyRuleAction::Deny => (ExecPolicyDecision::Forbidden, "Deny"),
+        };
+        let protocol_label = match network_approval_context.protocol {
+            NetworkApprovalProtocol::Http => "http",
+            NetworkApprovalProtocol::Https => "https_connect",
+            NetworkApprovalProtocol::Socks5Tcp => "socks5_tcp",
+            NetworkApprovalProtocol::Socks5Udp => "socks5_udp",
+        };
+        let justification = format!(
+            "{action_verb} {protocol_label} access to {}",
+            amendment.host
+        );
+
+        if let Some(started_network_proxy) = self.services.network_proxy.as_ref() {
+            let proxy = started_network_proxy.proxy();
+            match amendment.action {
+                NetworkPolicyRuleAction::Allow => proxy
+                    .add_allowed_domain(&amendment.host)
+                    .await
+                    .map_err(|err| {
+                    anyhow::anyhow!("failed to update runtime allowlist: {err}")
+                })?,
+                NetworkPolicyRuleAction::Deny => proxy
+                    .add_denied_domain(&amendment.host)
+                    .await
+                    .map_err(|err| anyhow::anyhow!("failed to update runtime denylist: {err}"))?,
+            }
+        }
+
+        self.services
+            .exec_policy
+            .append_network_rule_and_update(
+                &codex_home,
+                &amendment.host,
+                protocol,
+                decision,
+                Some(justification),
+            )
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!("failed to persist network policy amendment to execpolicy: {err}")
+            })?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn record_network_policy_amendment_message(
+        &self,
+        sub_id: &str,
+        amendment: &NetworkPolicyAmendment,
+    ) {
+        let (action, list_name) = match amendment.action {
+            NetworkPolicyRuleAction::Allow => ("Allowed", "allowlist"),
+            NetworkPolicyRuleAction::Deny => ("Denied", "denylist"),
+        };
+        let text = format!(
+            "{action} network rule saved in execpolicy ({list_name}): {}",
+            amendment.host
+        );
+        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
+
+        if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
+            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
+                .await;
+            return;
+        }
+
+        if self
+            .inject_response_items(vec![ResponseInputItem::Message {
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText { text }],
+            }])
+            .await
+            .is_err()
+        {
+            warn!("no active turn found to record network policy amendment message for {sub_id}");
+        }
+    }
+
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `call_id` + `approval_id` so matching responses are delivered
@@ -2235,6 +2339,12 @@ impl Session {
         }
 
         let parsed_cmd = parse_command(&command);
+        let proposed_network_policy_amendments = network_approval_context.as_ref().map(|context| {
+            vec![
+                NetworkPolicyAmendment::allow(context.host.clone()),
+                NetworkPolicyAmendment::deny(context.host.clone()),
+            ]
+        });
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
             approval_id,
@@ -2244,6 +2354,7 @@ impl Session {
             reason,
             network_approval_context,
             proposed_execpolicy_amendment,
+            proposed_network_policy_amendments,
             parsed_cmd,
         });
         self.send_event(turn_context, event).await;
