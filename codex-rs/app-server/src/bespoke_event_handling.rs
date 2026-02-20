@@ -109,12 +109,8 @@ use tracing::error;
 type JsonValue = serde_json::Value;
 
 enum CommandExecutionApprovalPresentation {
-    Network {
-        network_approval_context: V2NetworkApprovalContext,
-    },
-    Command {
-        completion_item: CommandExecutionCompletionItem,
-    },
+    Network(V2NetworkApprovalContext),
+    Command(CommandExecutionCompletionItem),
 }
 
 struct CommandExecutionCompletionItem {
@@ -301,9 +297,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     let presentation = if let Some(network_approval_context) =
                         network_approval_context.map(V2NetworkApprovalContext::from)
                     {
-                        CommandExecutionApprovalPresentation::Network {
-                            network_approval_context,
-                        }
+                        CommandExecutionApprovalPresentation::Network(network_approval_context)
                     } else {
                         let command_string = shlex_join(&command);
                         let completion_item = CommandExecutionCompletionItem {
@@ -311,14 +305,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                             cwd: cwd.clone(),
                             command_actions: command_actions.clone(),
                         };
-                        CommandExecutionApprovalPresentation::Command { completion_item }
+                        CommandExecutionApprovalPresentation::Command(completion_item)
                     };
                     let (network_approval_context, command, cwd, command_actions, completion_item) =
                         match presentation {
-                            CommandExecutionApprovalPresentation::Network {
+                            CommandExecutionApprovalPresentation::Network(
                                 network_approval_context,
-                            } => (Some(network_approval_context), None, None, None, None),
-                            CommandExecutionApprovalPresentation::Command { completion_item } => (
+                            ) => (Some(network_approval_context), None, None, None, None),
+                            CommandExecutionApprovalPresentation::Command(completion_item) => (
                                 None,
                                 Some(completion_item.command.clone()),
                                 Some(completion_item.cwd.clone()),
