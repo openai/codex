@@ -19,15 +19,18 @@ use crate::CodexAuth;
 use crate::SandboxState;
 use crate::config::Config;
 use crate::config::types::AppsConfigToml;
+use crate::default_client::is_first_party_chat_originator;
+use crate::default_client::originator;
 use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::with_codex_apps_mcp;
-use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::token_data::TokenData;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
+const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
 
 #[derive(Clone, PartialEq, Eq)]
 struct AccessibleConnectorsCacheKey {
@@ -47,10 +50,20 @@ struct CachedAccessibleConnectors {
 static ACCESSIBLE_CONNECTORS_CACHE: LazyLock<StdMutex<Option<CachedAccessibleConnectors>>> =
     LazyLock::new(|| StdMutex::new(None));
 
+#[derive(Debug, Clone)]
+pub struct AccessibleConnectorsStatus {
+    pub connectors: Vec<AppInfo>,
+    pub codex_apps_ready: bool,
+}
+
 pub async fn list_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> anyhow::Result<Vec<AppInfo>> {
-    list_accessible_connectors_from_mcp_tools_with_options(config, false).await
+    Ok(
+        list_accessible_connectors_from_mcp_tools_with_options_and_status(config, false)
+            .await?
+            .connectors,
+    )
 }
 
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
@@ -63,15 +76,29 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
     let auth_manager = auth_manager_from_config(config);
     let auth = auth_manager.auth().await;
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    read_cached_accessible_connectors(&cache_key)
+    read_cached_accessible_connectors(&cache_key).map(filter_disallowed_connectors)
 }
 
 pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<Vec<AppInfo>> {
+    Ok(
+        list_accessible_connectors_from_mcp_tools_with_options_and_status(config, force_refetch)
+            .await?
+            .connectors,
+    )
+}
+
+pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
+    config: &Config,
+    force_refetch: bool,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
     if !config.features.enabled(Feature::Apps) {
-        return Ok(Vec::new());
+        return Ok(AccessibleConnectorsStatus {
+            connectors: Vec::new(),
+            codex_apps_ready: true,
+        });
     }
 
     let auth_manager = auth_manager_from_config(config);
@@ -79,12 +106,19 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
-        return Ok(cached_connectors);
+        let cached_connectors = filter_disallowed_connectors(cached_connectors);
+        return Ok(AccessibleConnectorsStatus {
+            connectors: cached_connectors,
+            codex_apps_ready: true,
+        });
     }
 
     let mcp_servers = with_codex_apps_mcp(HashMap::new(), true, auth.as_ref(), config);
     if mcp_servers.is_empty() {
-        return Ok(Vec::new());
+        return Ok(AccessibleConnectorsStatus {
+            connectors: Vec::new(),
+            codex_apps_ready: true,
+        });
     }
 
     let auth_status_entries =
@@ -107,6 +141,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
         &config.permissions.approval_policy,
         tx_event,
         sandbox_state,
+        config.codex_home.clone(),
+        codex_apps_tools_cache_key(auth.as_ref()),
     )
     .await;
 
@@ -120,23 +156,45 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
         );
     }
 
+    let mut tools = mcp_connection_manager.list_all_tools().await;
+    let mut should_reload_tools = false;
     let codex_apps_ready = if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
-        let timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
-        mcp_connection_manager
-            .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
-            .await
+        let immediate_ready = mcp_connection_manager
+            .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::ZERO)
+            .await;
+        if immediate_ready {
+            true
+        } else if tools.is_empty() {
+            let timeout = cfg
+                .startup_timeout_sec
+                .unwrap_or(CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS);
+            let ready = mcp_connection_manager
+                .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
+                .await;
+            should_reload_tools = ready;
+            ready
+        } else {
+            false
+        }
     } else {
         false
     };
+    if should_reload_tools {
+        tools = mcp_connection_manager.list_all_tools().await;
+    }
+    if codex_apps_ready {
+        cancel_token.cancel();
+    }
 
-    let tools = mcp_connection_manager.list_all_tools().await;
-    cancel_token.cancel();
-
-    let accessible_connectors = accessible_connectors_from_mcp_tools(&tools);
+    let accessible_connectors =
+        filter_disallowed_connectors(accessible_connectors_from_mcp_tools(&tools));
     if codex_apps_ready || !accessible_connectors.is_empty() {
         write_cached_accessible_connectors(cache_key, &accessible_connectors);
     }
-    Ok(accessible_connectors)
+    Ok(AccessibleConnectorsStatus {
+        connectors: accessible_connectors,
+        codex_apps_ready,
+    })
 }
 
 fn accessible_connectors_cache_key(
@@ -288,6 +346,48 @@ pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> 
     connectors
 }
 
+const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
+    "asdk_app_6938a94a61d881918ef32cb999ff937c",
+    "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
+    "connector_68de829bf7648191acd70a907364c67c",
+    "connector_68e004f14af881919eb50893d3d9f523",
+    "connector_69272cb413a081919685ec3c88d1744e",
+];
+const FIRST_PARTY_CHAT_DISALLOWED_CONNECTOR_IDS: &[&str] =
+    &["connector_0f9c9d4592e54d0a9a12b3f44a1e2010"];
+const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
+
+pub fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
+    filter_disallowed_connectors_for_originator(connectors, originator().value.as_str())
+}
+
+pub(crate) fn is_connector_id_allowed(connector_id: &str) -> bool {
+    is_connector_id_allowed_for_originator(connector_id, originator().value.as_str())
+}
+
+fn filter_disallowed_connectors_for_originator(
+    connectors: Vec<AppInfo>,
+    originator_value: &str,
+) -> Vec<AppInfo> {
+    connectors
+        .into_iter()
+        .filter(|connector| {
+            is_connector_id_allowed_for_originator(connector.id.as_str(), originator_value)
+        })
+        .collect()
+}
+
+fn is_connector_id_allowed_for_originator(connector_id: &str, originator_value: &str) -> bool {
+    let disallowed_connector_ids = if is_first_party_chat_originator(originator_value) {
+        FIRST_PARTY_CHAT_DISALLOWED_CONNECTOR_IDS
+    } else {
+        DISALLOWED_CONNECTOR_IDS
+    };
+
+    !connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX)
+        && !disallowed_connector_ids.contains(&connector_id)
+}
+
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
     let effective_config = config.config_layer_stack.effective_config();
     let apps_config = effective_config.as_table()?.get("apps")?.clone();
@@ -367,4 +467,68 @@ pub fn connector_name_slug(name: &str) -> String {
 
 fn format_connector_label(name: &str, _id: &str) -> String {
     name.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn app(id: &str) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            is_accessible: false,
+            is_enabled: true,
+        }
+    }
+
+    #[test]
+    fn filter_disallowed_connectors_allows_non_disallowed_connectors() {
+        let filtered = filter_disallowed_connectors(vec![app("asdk_app_hidden"), app("alpha")]);
+        assert_eq!(filtered, vec![app("asdk_app_hidden"), app("alpha")]);
+    }
+
+    #[test]
+    fn filter_disallowed_connectors_filters_openai_prefix() {
+        let filtered = filter_disallowed_connectors(vec![
+            app("connector_openai_foo"),
+            app("connector_openai_bar"),
+            app("gamma"),
+        ]);
+        assert_eq!(filtered, vec![app("gamma")]);
+    }
+
+    #[test]
+    fn filter_disallowed_connectors_filters_disallowed_connector_ids() {
+        let filtered = filter_disallowed_connectors(vec![
+            app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
+            app("delta"),
+        ]);
+        assert_eq!(filtered, vec![app("delta")]);
+    }
+
+    #[test]
+    fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
+        let filtered = filter_disallowed_connectors_for_originator(
+            vec![
+                app("connector_openai_foo"),
+                app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
+                app("connector_0f9c9d4592e54d0a9a12b3f44a1e2010"),
+            ],
+            "codex_atlas",
+        );
+        assert_eq!(
+            filtered,
+            vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c"),]
+        );
+    }
 }

@@ -572,6 +572,8 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             call_id: "call-10".to_string(),
             sender_thread_id,
             new_thread_id: Some(new_thread_id),
+            new_agent_nickname: None,
+            new_agent_role: None,
             prompt: prompt.clone(),
             status: AgentStatus::Running,
         }),
@@ -623,6 +625,7 @@ fn collab_wait_end_without_begin_synthesizes_failed_item() {
         EventMsg::CollabWaitingEnd(CollabWaitingEndEvent {
             sender_thread_id,
             call_id: "call-11".to_string(),
+            agent_statuses: Vec::new(),
             statuses: statuses.clone(),
         }),
     );

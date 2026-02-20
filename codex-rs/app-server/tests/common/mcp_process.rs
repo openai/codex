@@ -61,6 +61,7 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
+use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnSteerParams;
@@ -572,6 +573,63 @@ impl McpProcess {
         self.send_request("turn/interrupt", params).await
     }
 
+    /// Deterministically clean up an intentionally in-flight turn.
+    ///
+    /// Some tests assert behavior while a turn is still running. Returning from those tests
+    /// without an explicit interrupt + `codex/event/turn_aborted` wait can leave in-flight work
+    /// racing teardown and intermittently show up as `LEAK` in nextest.
+    ///
+    /// In rare races, the turn can also fail or complete on its own after we send
+    /// `turn/interrupt` but before the server emits the interrupt response. The helper treats a
+    /// buffered matching `turn/completed` notification as sufficient terminal cleanup in that
+    /// case so teardown does not flap on timing.
+    pub async fn interrupt_turn_and_wait_for_aborted(
+        &mut self,
+        thread_id: String,
+        turn_id: String,
+        read_timeout: std::time::Duration,
+    ) -> anyhow::Result<()> {
+        let interrupt_request_id = self
+            .send_turn_interrupt_request(TurnInterruptParams {
+                thread_id: thread_id.clone(),
+                turn_id: turn_id.clone(),
+            })
+            .await?;
+        match tokio::time::timeout(
+            read_timeout,
+            self.read_stream_until_response_message(RequestId::Integer(interrupt_request_id)),
+        )
+        .await
+        {
+            Ok(result) => {
+                result.with_context(|| "failed while waiting for turn interrupt response")?;
+            }
+            Err(err) => {
+                if self.pending_turn_completed_notification(&thread_id, &turn_id) {
+                    return Ok(());
+                }
+                return Err(err).with_context(|| "timed out waiting for turn interrupt response");
+            }
+        }
+        match tokio::time::timeout(
+            read_timeout,
+            self.read_stream_until_notification_message("codex/event/turn_aborted"),
+        )
+        .await
+        {
+            Ok(result) => {
+                result.with_context(|| "failed while waiting for turn aborted notification")?;
+            }
+            Err(err) => {
+                if self.pending_turn_completed_notification(&thread_id, &turn_id) {
+                    return Ok(());
+                }
+                return Err(err).with_context(|| "timed out waiting for turn aborted notification");
+            }
+        }
+        Ok(())
+    }
+
     /// Send a `turn/steer` JSON-RPC request (v2).
     pub async fn send_turn_steer_request(
         &mut self,
@@ -938,6 +996,25 @@ impl McpProcess {
             return self.pending_messages.remove(pos);
         }
         None
+    }
+
+    fn pending_turn_completed_notification(&self, thread_id: &str, turn_id: &str) -> bool {
+        self.pending_messages.iter().any(|message| {
+            let JSONRPCMessage::Notification(notification) = message else {
+                return false;
+            };
+            if notification.method != "turn/completed" {
+                return false;
+            }
+            let Some(params) = notification.params.as_ref() else {
+                return false;
+            };
+            let Ok(payload) = serde_json::from_value::<TurnCompletedNotification>(params.clone())
+            else {
+                return false;
+            };
+            payload.thread_id == thread_id && payload.turn.id == turn_id
+        })
     }
 
     fn message_request_id(message: &JSONRPCMessage) -> Option<&RequestId> {
