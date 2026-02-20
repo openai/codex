@@ -32,6 +32,15 @@ pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
+/// Controls whether compaction replacement history must include canonical initial context.
+///
+/// Pre-turn/manual compaction variants use `DoNotInject`: they replace history with a summary and
+/// clear `reference_context_item`, so the next regular turn will fully reinject canonical context
+/// after compaction.
+///
+/// Mid-turn compaction must use `BeforeLastUserMessage` because the model is trained to see the
+/// compaction summary as the last item in history after mid-turn compaction; we therefore inject
+/// canonical context into the replacement history just above the last real user message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InitialContextInjection {
     BeforeLastUserMessage,
