@@ -1698,19 +1698,82 @@ impl Session {
         }
     }
 
-    /// Returns the model from the last persisted regular sampling turn.
+    /// Returns the model from the latest completed user turn that persisted a
+    /// `RolloutItem::TurnContext` marker.
     ///
-    /// `RolloutItem::TurnContext` markers are emitted from the regular sampling
-    /// path (`try_run_sampling_request`). Local compaction intentionally avoids
-    /// writing `TurnContext` markers so `/compact` does not overwrite this
-    /// baseline.
+    /// This derives turn membership from persisted turn lifecycle events so
+    /// compact/shell-only turns (which have no user message event) do not
+    /// overwrite the previous-model baseline. `ThreadRolledBack` markers are
+    /// applied so resume/fork uses the post-rollback history view.
     fn last_rollout_regular_turn_model_name(rollout_items: &[RolloutItem]) -> Option<&str> {
-        rollout_items.iter().rev().find_map(|it| {
-            if let RolloutItem::TurnContext(ctx) = it {
-                Some(ctx.model.as_str())
-            } else {
-                None
+        let mut active_turn_id: Option<&str> = None;
+        let mut active_turn_saw_user_message = false;
+        let mut active_turn_model: Option<&str> = None;
+        let mut user_turn_models: Vec<Option<&str>> = Vec::new();
+        let mut saw_turn_lifecycle = false;
+
+        for item in rollout_items {
+            match item {
+                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
+                    saw_turn_lifecycle = true;
+                    active_turn_id = Some(event.turn_id.as_str());
+                    active_turn_saw_user_message = false;
+                    active_turn_model = None;
+                }
+                RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
+                    saw_turn_lifecycle = true;
+                    if active_turn_id.is_some() {
+                        active_turn_saw_user_message = true;
+                    }
+                }
+                RolloutItem::TurnContext(ctx) => {
+                    if let (Some(active_id), Some(turn_id)) =
+                        (active_turn_id, ctx.turn_id.as_deref())
+                        && active_id == turn_id
+                    {
+                        active_turn_model = Some(ctx.model.as_str());
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
+                    saw_turn_lifecycle = true;
+                    if active_turn_id == Some(event.turn_id.as_str())
+                        && active_turn_saw_user_message
+                    {
+                        user_turn_models.push(active_turn_model);
+                    }
+                    active_turn_id = None;
+                    active_turn_saw_user_message = false;
+                    active_turn_model = None;
+                }
+                RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
+                    saw_turn_lifecycle = true;
+                    if let Some(active_id) = active_turn_id
+                        && event.turn_id.as_deref() == Some(active_id)
+                        && active_turn_saw_user_message
+                    {
+                        user_turn_models.push(active_turn_model);
+                    }
+                    active_turn_id = None;
+                    active_turn_saw_user_message = false;
+                    active_turn_model = None;
+                }
+                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                    let new_len = user_turn_models.len().saturating_sub(num_turns);
+                    user_turn_models.truncate(new_len);
+                }
+                _ => {}
             }
+        }
+
+        let last_user_turn_model = user_turn_models.into_iter().rev().flatten().next();
+        if last_user_turn_model.is_some() || saw_turn_lifecycle {
+            return last_user_turn_model;
+        }
+
+        rollout_items.iter().rev().find_map(|item| match item {
+            RolloutItem::TurnContext(ctx) => Some(ctx.model.as_str()),
+            _ => None,
         })
     }
 

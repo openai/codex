@@ -16,11 +16,9 @@ Scenario: First post-resume turn where resumed config model differs from rollout
 02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 03:message/user:seed resume history
 04:message/assistant:recorded before resume
-05:message/developer:<PERMISSIONS_INSTRUCTIONS>
-06:message/developer:<personality_spec> The user has requested a new communication style. Future messages should adhe...
-07:message/user:<AGENTS_MD>
-08:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-09:message/developer:<PERMISSIONS_INSTRUCTIONS>
-10:message/developer:<model_switch>\nThe user was previously using a different model. Please continue the conversatio...
-11:message/developer:<personality_spec> The user has requested a new communication style. Future messages should adhe...
-12:message/user:resume and change personality
+05:message/developer:<model_switch>\nThe user was previously using a different model. Please continue the conversatio...
+06:message/developer:<PERMISSIONS_INSTRUCTIONS>
+07:message/developer:<personality_spec> The user has requested a new communication style. Future messages should adhe...
+08:message/user:<AGENTS_MD>
+09:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+10:message/user:resume and change personality
