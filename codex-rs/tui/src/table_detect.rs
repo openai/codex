@@ -36,13 +36,8 @@ pub(crate) fn parse_table_segments(line: &str) -> Option<Vec<&str>> {
         return None;
     }
 
-    let mut content = trimmed;
-    if let Some(without_leading) = content.strip_prefix('|') {
-        content = without_leading;
-    }
-    if let Some(without_trailing) = content.strip_suffix('|') {
-        content = without_trailing;
-    }
+    let content = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let content = content.strip_suffix('|').unwrap_or(content);
 
     let segments: Vec<&str> = split_unescaped_pipe(content)
         .iter()
@@ -85,7 +80,7 @@ pub(crate) fn is_table_header_line(line: &str) -> bool {
 
 /// Whether a single segment matches the `---`, `:---`, `---:`, or `:---:`
 /// alignment-colon syntax used in markdown table delimiter rows.
-pub(crate) fn is_table_delimiter_segment(segment: &str) -> bool {
+fn is_table_delimiter_segment(segment: &str) -> bool {
     let trimmed = segment.trim();
     if trimmed.is_empty() {
         return false;
@@ -129,20 +124,12 @@ pub(crate) enum FenceKind {
 /// limits (>3 spaces → not a fence), blockquote prefix stripping, and
 /// backtick/tilde marker matching.
 pub(crate) struct FenceTracker {
-    in_fence: bool,
-    fence_char: char,
-    fence_len: usize,
-    fence_kind: FenceKind,
+    state: Option<(char, usize, FenceKind)>,
 }
 
 impl FenceTracker {
     pub(crate) fn new() -> Self {
-        Self {
-            in_fence: false,
-            fence_char: '\0',
-            fence_len: 0,
-            fence_kind: FenceKind::Other,
-        }
+        Self { state: None }
     }
 
     /// Process one raw source line and update fence state.
@@ -162,36 +149,29 @@ impl FenceTracker {
         let trimmed = &raw_line[leading_spaces..];
         let fence_scan_text = strip_blockquote_prefix(trimmed);
         if let Some((marker, len)) = parse_fence_marker(fence_scan_text) {
-            if !self.in_fence {
+            if let Some((open_char, open_len, _)) = self.state {
+                // Close the current fence if the marker matches.
+                if marker == open_char
+                    && len >= open_len
+                    && fence_scan_text[len..].trim().is_empty()
+                {
+                    self.state = None;
+                }
+            } else {
                 // Opening a new fence.
-                self.in_fence = true;
-                self.fence_char = marker;
-                self.fence_len = len;
-                self.fence_kind = if is_markdown_fence_info(fence_scan_text, len) {
+                let kind = if is_markdown_fence_info(fence_scan_text, len) {
                     FenceKind::Markdown
                 } else {
                     FenceKind::Other
                 };
-            } else if marker == self.fence_char
-                && len >= self.fence_len
-                && fence_scan_text[len..].trim().is_empty()
-            {
-                // Closing the current fence.
-                self.in_fence = false;
-                self.fence_char = '\0';
-                self.fence_len = 0;
-                self.fence_kind = FenceKind::Other;
+                self.state = Some((marker, len, kind));
             }
         }
     }
 
     /// Current fence context for the most-recently-advanced line.
     pub(crate) fn kind(&self) -> FenceKind {
-        if self.in_fence {
-            self.fence_kind
-        } else {
-            FenceKind::Outside
-        }
+        self.state.map_or(FenceKind::Outside, |(_, _, k)| k)
     }
 }
 
@@ -201,23 +181,15 @@ impl FenceTracker {
 /// The input should already have leading whitespace and blockquote prefixes
 /// stripped.
 pub(crate) fn parse_fence_marker(line: &str) -> Option<(char, usize)> {
-    let mut chars = line.chars();
-    let first = chars.next()?;
-    if first != '`' && first != '~' {
+    let first = line.as_bytes().first().copied()?;
+    if first != b'`' && first != b'~' {
         return None;
     }
-    let mut len = 1usize;
-    for ch in chars {
-        if ch == first {
-            len += 1;
-        } else {
-            break;
-        }
-    }
+    let len = line.bytes().take_while(|&b| b == first).count();
     if len < 3 {
         return None;
     }
-    Some((first, len))
+    Some((first as char, len))
 }
 
 /// Whether the info string after a fence marker indicates markdown content.

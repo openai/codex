@@ -38,7 +38,6 @@ use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
-use crate::wrapping::word_wrap_lines;
 use base64::Engine;
 use codex_app_server_protocol::McpServerStatus;
 use codex_config::types::McpServerTransportConfig;
