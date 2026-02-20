@@ -376,15 +376,6 @@ pub struct AnalyticsConfig {
     pub additional: HashMap<String, JsonValue>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export_to = "v2/")]
-pub enum AppDisabledReason {
-    Unknown,
-    User,
-    AdminPolicy,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
@@ -400,20 +391,10 @@ pub enum AppToolApproval {
 pub struct AppsDefaultConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    pub disabled_reason: Option<AppDisabledReason>,
-    #[serde(default)]
-    pub disable_destructive: bool,
-    #[serde(default)]
-    pub disable_open_world: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export_to = "v2/")]
-pub struct AppToolsDefaultConfig {
-    pub enabled: Option<bool>,
-    pub disabled_reason: Option<AppDisabledReason>,
-    pub approval: Option<AppToolApproval>,
+    #[serde(default = "default_enabled")]
+    pub destructive_enabled: bool,
+    #[serde(default = "default_enabled")]
+    pub open_world_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -421,16 +402,13 @@ pub struct AppToolsDefaultConfig {
 #[ts(export_to = "v2/")]
 pub struct AppToolConfig {
     pub enabled: Option<bool>,
-    pub disabled_reason: Option<AppDisabledReason>,
-    pub approval: Option<AppToolApproval>,
+    pub approval_mode: Option<AppToolApproval>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct AppToolsConfig {
-    #[serde(default, rename = "_default")]
-    pub default: Option<AppToolsDefaultConfig>,
     #[serde(default, flatten)]
     pub tools: HashMap<String, AppToolConfig>,
 }
@@ -441,9 +419,10 @@ pub struct AppToolsConfig {
 pub struct AppConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    pub disabled_reason: Option<AppDisabledReason>,
-    pub disable_destructive: Option<bool>,
-    pub disable_open_world: Option<bool>,
+    pub destructive_enabled: Option<bool>,
+    pub open_world_enabled: Option<bool>,
+    pub default_tools_approval_mode: Option<AppToolApproval>,
+    pub default_tools_enabled: Option<bool>,
     pub tools: Option<AppToolsConfig>,
 }
 

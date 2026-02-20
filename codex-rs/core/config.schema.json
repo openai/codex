@@ -79,25 +79,29 @@
       "additionalProperties": false,
       "description": "Config values for a single app/connector.",
       "properties": {
-        "disable_destructive": {
-          "description": "Disable tools with `destructive_hint = true` for this app.",
-          "type": "boolean"
-        },
-        "disable_open_world": {
-          "description": "Disable tools with `open_world_hint = true` for this app.",
-          "type": "boolean"
-        },
-        "disabled_reason": {
+        "default_tools_approval_mode": {
           "allOf": [
             {
-              "$ref": "#/definitions/AppDisabledReason"
+              "$ref": "#/definitions/AppToolApproval"
             }
           ],
-          "description": "Reason this app was disabled."
+          "description": "Approval mode for tools in this app unless a tool override exists."
+        },
+        "default_tools_enabled": {
+          "description": "Whether tools are enabled by default for this app.",
+          "type": "boolean"
+        },
+        "destructive_enabled": {
+          "description": "Whether tools with `destructive_hint = true` are allowed for this app.",
+          "type": "boolean"
         },
         "enabled": {
           "default": true,
           "description": "When `false`, Codex does not surface this app.",
+          "type": "boolean"
+        },
+        "open_world_enabled": {
+          "description": "Whether tools with `open_world_hint = true` are allowed for this app.",
           "type": "boolean"
         },
         "tools": {
@@ -111,14 +115,6 @@
       },
       "type": "object"
     },
-    "AppDisabledReason": {
-      "enum": [
-        "unknown",
-        "user",
-        "admin_policy"
-      ],
-      "type": "string"
-    },
     "AppToolApproval": {
       "enum": [
         "auto",
@@ -131,21 +127,13 @@
       "additionalProperties": false,
       "description": "Per-tool settings for a single app tool.",
       "properties": {
-        "approval": {
+        "approval_mode": {
           "allOf": [
             {
               "$ref": "#/definitions/AppToolApproval"
             }
           ],
           "description": "Approval mode for this tool."
-        },
-        "disabled_reason": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AppDisabledReason"
-            }
-          ],
-          "description": "Reason this tool was disabled."
         },
         "enabled": {
           "description": "Whether this tool is enabled. `Some(true)` explicitly allows this tool.",
@@ -159,43 +147,6 @@
         "$ref": "#/definitions/AppToolConfig"
       },
       "description": "Tool settings for a single app.",
-      "properties": {
-        "_default": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AppToolsDefaultConfig"
-            }
-          ],
-          "description": "Defaults for all tools in this app."
-        }
-      },
-      "type": "object"
-    },
-    "AppToolsDefaultConfig": {
-      "additionalProperties": false,
-      "description": "Default settings that apply to all tools within a single app.",
-      "properties": {
-        "approval": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AppToolApproval"
-            }
-          ],
-          "description": "Approval mode for tools in this app unless a tool override exists."
-        },
-        "disabled_reason": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AppDisabledReason"
-            }
-          ],
-          "description": "Reason tools were disabled by default for this app."
-        },
-        "enabled": {
-          "description": "Whether tools are enabled by default for this app.",
-          "type": "boolean"
-        }
-      },
       "type": "object"
     },
     "AppsConfigToml": {
@@ -219,25 +170,17 @@
       "additionalProperties": false,
       "description": "Default settings that apply to all apps.",
       "properties": {
-        "disable_destructive": {
-          "description": "Disable tools with `destructive_hint = true` by default.",
+        "destructive_enabled": {
+          "description": "Whether tools with `destructive_hint = true` are allowed by default.",
           "type": "boolean"
-        },
-        "disable_open_world": {
-          "description": "Disable tools with `open_world_hint = true` by default.",
-          "type": "boolean"
-        },
-        "disabled_reason": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AppDisabledReason"
-            }
-          ],
-          "description": "Reason apps were disabled by default."
         },
         "enabled": {
           "default": true,
           "description": "When `false`, apps are disabled unless overridden by per-app settings.",
+          "type": "boolean"
+        },
+        "open_world_enabled": {
+          "description": "Whether tools with `open_world_hint = true` are allowed by default.",
           "type": "boolean"
         }
       },

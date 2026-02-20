@@ -19,31 +19,37 @@
     },
     "AppConfig": {
       "properties": {
-        "disable_destructive": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "disable_open_world": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "disabled_reason": {
+        "default_tools_approval_mode": {
           "anyOf": [
             {
-              "$ref": "#/definitions/AppDisabledReason"
+              "$ref": "#/definitions/AppToolApproval"
             },
             {
               "type": "null"
             }
           ]
         },
+        "default_tools_enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "destructive_enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "enabled": {
           "default": true,
           "type": "boolean"
+        },
+        "open_world_enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "tools": {
           "anyOf": [
@@ -58,14 +64,6 @@
       },
       "type": "object"
     },
-    "AppDisabledReason": {
-      "enum": [
-        "unknown",
-        "user",
-        "admin_policy"
-      ],
-      "type": "string"
-    },
     "AppToolApproval": {
       "enum": [
         "auto",
@@ -76,20 +74,10 @@
     },
     "AppToolConfig": {
       "properties": {
-        "approval": {
+        "approval_mode": {
           "anyOf": [
             {
               "$ref": "#/definitions/AppToolApproval"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "disabled_reason": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AppDisabledReason"
             },
             {
               "type": "null"
@@ -106,50 +94,6 @@
       "type": "object"
     },
     "AppToolsConfig": {
-      "properties": {
-        "_default": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AppToolsDefaultConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "type": "object"
-    },
-    "AppToolsDefaultConfig": {
-      "properties": {
-        "approval": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AppToolApproval"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "disabled_reason": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AppDisabledReason"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "enabled": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
       "type": "object"
     },
     "AppsConfig": {
@@ -170,25 +114,15 @@
     },
     "AppsDefaultConfig": {
       "properties": {
-        "disable_destructive": {
-          "default": false,
+        "destructive_enabled": {
+          "default": true,
           "type": "boolean"
-        },
-        "disable_open_world": {
-          "default": false,
-          "type": "boolean"
-        },
-        "disabled_reason": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AppDisabledReason"
-            },
-            {
-              "type": "null"
-            }
-          ]
         },
         "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "open_world_enabled": {
           "default": true,
           "type": "boolean"
         }
