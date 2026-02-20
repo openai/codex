@@ -74,6 +74,12 @@ pub enum ToolOutput {
     },
 }
 
+#[derive(Clone, Debug)]
+pub struct ToolDispatchOutput {
+    pub response_input: ResponseInputItem,
+    pub interrupt_turn: bool,
+}
+
 impl ToolOutput {
     pub fn log_preview(&self) -> String {
         match self {

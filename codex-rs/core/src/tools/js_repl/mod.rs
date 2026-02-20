@@ -1071,8 +1071,8 @@ impl JsReplManager {
             )
             .await
         {
-            Ok(response) => {
-                if let ResponseInputItem::FunctionCallOutput { output, .. } = &response
+            Ok(output) => {
+                if let ResponseInputItem::FunctionCallOutput { output, .. } = &output.response_input
                     && let Some(items) = output.content_items()
                 {
                     let mut has_image = false;
@@ -1107,7 +1107,7 @@ impl JsReplManager {
                     }
                 }
 
-                match serde_json::to_value(response) {
+                match serde_json::to_value(output.response_input) {
                     Ok(value) => RunToolResult {
                         id: req.id,
                         ok: true,

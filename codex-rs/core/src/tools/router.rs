@@ -5,6 +5,7 @@ use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolDispatchOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ConfiguredToolSpec;
@@ -144,7 +145,7 @@ impl ToolRouter {
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
         source: ToolCallSource,
-    ) -> Result<ResponseInputItem, FunctionCallError> {
+    ) -> Result<ToolDispatchOutput, FunctionCallError> {
         let ToolCall {
             tool_name,
             call_id,
@@ -161,7 +162,7 @@ impl ToolRouter {
                 "direct tool calls are disabled; use js_repl and codex.tool(...) instead"
                     .to_string(),
             );
-            return Ok(Self::failure_response(
+            return Ok(Self::failure_output(
                 failure_call_id,
                 payload_outputs_custom,
                 err,
@@ -180,7 +181,7 @@ impl ToolRouter {
         match self.registry.dispatch(invocation).await {
             Ok(response) => Ok(response),
             Err(FunctionCallError::Fatal(message)) => Err(FunctionCallError::Fatal(message)),
-            Err(err) => Ok(Self::failure_response(
+            Err(err) => Ok(Self::failure_output(
                 failure_call_id,
                 payload_outputs_custom,
                 err,
@@ -188,13 +189,13 @@ impl ToolRouter {
         }
     }
 
-    fn failure_response(
+    fn failure_output(
         call_id: String,
         payload_outputs_custom: bool,
         err: FunctionCallError,
-    ) -> ResponseInputItem {
+    ) -> ToolDispatchOutput {
         let message = err.to_string();
-        if payload_outputs_custom {
+        let response_input = if payload_outputs_custom {
             ResponseInputItem::CustomToolCallOutput {
                 call_id,
                 output: message,
@@ -207,6 +208,10 @@ impl ToolRouter {
                     success: Some(false),
                 },
             }
+        };
+        ToolDispatchOutput {
+            response_input,
+            interrupt_turn: false,
         }
     }
 }
@@ -262,7 +267,7 @@ mod tests {
             .dispatch_tool_call(session, turn, tracker, call, ToolCallSource::Direct)
             .await?;
 
-        match response {
+        match response.response_input {
             ResponseInputItem::FunctionCallOutput { output, .. } => {
                 let content = output.text_content().unwrap_or_default();
                 assert!(
@@ -315,7 +320,7 @@ mod tests {
             .dispatch_tool_call(session, turn, tracker, call, ToolCallSource::JsRepl)
             .await?;
 
-        match response {
+        match response.response_input {
             ResponseInputItem::FunctionCallOutput { output, .. } => {
                 let content = output.text_content().unwrap_or_default();
                 assert!(

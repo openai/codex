@@ -249,6 +249,7 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolDispatchOutput;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
 use crate::tools::js_repl::JsReplHandle;
 use crate::tools::js_repl::resolve_compatible_node;
@@ -2757,14 +2758,6 @@ impl Session {
         sub_id: &str,
         response: RequestUserInputResponse,
     ) {
-        if response.interrupted {
-            let mut active = self.active_turn.lock().await;
-            if let Some(at) = active.as_mut() {
-                let mut ts = at.turn_state.lock().await;
-                ts.mark_request_user_input_interrupted();
-            }
-        }
-
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -2782,17 +2775,6 @@ impl Session {
             None => {
                 warn!("No pending user input found for sub_id: {sub_id}");
             }
-        }
-    }
-
-    pub async fn take_request_user_input_interrupted(&self) -> bool {
-        let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => {
-                let mut ts = at.turn_state.lock().await;
-                ts.take_request_user_input_interrupted()
-            }
-            None => false,
         }
     }
 
@@ -5017,10 +4999,10 @@ pub(crate) async fn run_turn(
             Ok(sampling_request_output) => {
                 let SamplingRequestResult {
                     needs_follow_up,
-                    request_user_input_interrupted,
+                    interrupted_tool_result,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
-                if request_user_input_interrupted {
+                if interrupted_tool_result {
                     cancellation_token.cancel();
                     sess.finish_turn_without_completion_event(turn_context.as_ref())
                         .await;
@@ -5637,7 +5619,7 @@ async fn built_tools(
 #[derive(Debug)]
 struct SamplingRequestResult {
     needs_follow_up: bool,
-    request_user_input_interrupted: bool,
+    interrupted_tool_result: bool,
     last_agent_message: Option<String>,
 }
 
@@ -6153,22 +6135,24 @@ async fn handle_assistant_item_done_in_plan_mode(
 }
 
 async fn drain_in_flight(
-    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
+    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ToolDispatchOutput>>>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
+    let mut interrupted_tool_result = false;
     while let Some(res) = in_flight.next().await {
         match res {
-            Ok(response_input) => {
-                sess.record_conversation_items(&turn_context, &[response_input.into()])
+            Ok(output) => {
+                sess.record_conversation_items(&turn_context, &[output.response_input.into()])
                     .await;
+                interrupted_tool_result |= output.interrupt_turn;
             }
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));
             }
         }
     }
-    Ok(())
+    Ok(interrupted_tool_result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6224,7 +6208,7 @@ async fn try_run_sampling_request(
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
     );
-    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
+    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ToolDispatchOutput>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
@@ -6408,7 +6392,7 @@ async fn try_run_sampling_request(
 
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
-                    request_user_input_interrupted: false,
+                    interrupted_tool_result: false,
                     last_agent_message,
                 });
             }
@@ -6500,12 +6484,13 @@ async fn try_run_sampling_request(
     )
     .await;
 
-    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    let interrupted_tool_result =
+        drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
     if let Ok(result) = outcome.as_mut()
-        && sess.take_request_user_input_interrupted().await
+        && interrupted_tool_result
     {
         result.needs_follow_up = false;
-        result.request_user_input_interrupted = true;
+        result.interrupted_tool_result = true;
     }
 
     if should_emit_turn_diff {
