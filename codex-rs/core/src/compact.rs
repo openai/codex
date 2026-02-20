@@ -33,11 +33,9 @@ pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_pref
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CompactCallsite {
-    PreTurn,
-    PreTurnModelSwitch,
-    MidTurn,
-    Manual,
+pub(crate) enum InjectTurnContextBeforeLastUserMessage {
+    TurnContext,
+    DontInjectTurnContext,
 }
 
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
@@ -72,7 +70,7 @@ pub(crate) fn extract_trailing_model_switch_update_for_compaction_request(
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    callsite: CompactCallsite,
+    inject_turn_context_before_last_user_message: InjectTurnContextBeforeLastUserMessage,
 ) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
@@ -81,7 +79,13 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(sess, turn_context, input, callsite).await?;
+    run_compact_task_inner(
+        sess,
+        turn_context,
+        input,
+        inject_turn_context_before_last_user_message,
+    )
+    .await?;
     Ok(())
 }
 
@@ -96,14 +100,20 @@ pub(crate) async fn run_compact_task(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
-    run_compact_task_inner(sess.clone(), turn_context, input, CompactCallsite::Manual).await
+    run_compact_task_inner(
+        sess.clone(),
+        turn_context,
+        input,
+        InjectTurnContextBeforeLastUserMessage::DontInjectTurnContext,
+    )
+    .await
 }
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-    callsite: CompactCallsite,
+    inject_turn_context_before_last_user_message: InjectTurnContextBeforeLastUserMessage,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -213,10 +223,10 @@ async fn run_compact_task_inner(
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
 
-    // Mid-turn compaction is the only callsite that must inject initial context above the last user message
-    // in the replacement history (preturn callsites simply inject initial context after the compaction item,
-    // but for mid-turn compaction the model has been trained to expect the compaction item last).
-    if matches!(callsite, CompactCallsite::MidTurn) {
+    if matches!(
+        inject_turn_context_before_last_user_message,
+        InjectTurnContextBeforeLastUserMessage::TurnContext
+    ) {
         let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
@@ -293,12 +303,15 @@ pub(crate) async fn process_compacted_history(
     sess: &Session,
     turn_context: &TurnContext,
     mut compacted_history: Vec<ResponseItem>,
-    callsite: CompactCallsite,
+    inject_turn_context_before_last_user_message: InjectTurnContextBeforeLastUserMessage,
 ) -> Vec<ResponseItem> {
-    // Mid-turn compaction is the only callsite that must inject initial context above the last user message
-    // in the replacement history (preturn callsites simply inject initial context after the compaction item,
-    // but for mid-turn compaction the model has been trained to expect the compaction item last).
-    let initial_context = if matches!(callsite, CompactCallsite::MidTurn) {
+    // Mid-turn compaction is the only path that must inject initial context above the last user
+    // message in the replacement history. Pre-turn compaction instead injects context after the
+    // compaction item, but mid-turn compaction keeps the compaction item last for model training.
+    let initial_context = if matches!(
+        inject_turn_context_before_last_user_message,
+        InjectTurnContextBeforeLastUserMessage::TurnContext
+    ) {
         sess.build_initial_context(turn_context).await
     } else {
         Vec::new()

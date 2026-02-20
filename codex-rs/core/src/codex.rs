@@ -18,7 +18,7 @@ use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
-use crate::compact::CompactCallsite;
+use crate::compact::InjectTurnContextBeforeLastUserMessage;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
@@ -4628,9 +4628,13 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
-                    if run_auto_compact(&sess, &turn_context, CompactCallsite::MidTurn)
-                        .await
-                        .is_err()
+                    if run_auto_compact(
+                        &sess,
+                        &turn_context,
+                        InjectTurnContextBeforeLastUserMessage::TurnContext,
+                    )
+                    .await
+                    .is_err()
                     {
                         return None;
                     }
@@ -4757,7 +4761,12 @@ async fn run_pre_sampling_compact(
         .unwrap_or(i64::MAX);
     // Compact if the total usage tokens are greater than the auto compact limit
     if total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(sess, turn_context, CompactCallsite::PreTurn).await?;
+        run_auto_compact(
+            sess,
+            turn_context,
+            InjectTurnContextBeforeLastUserMessage::DontInjectTurnContext,
+        )
+        .await?;
         compacted = true;
     }
     Ok(compacted)
@@ -4800,7 +4809,7 @@ async fn maybe_run_previous_model_inline_compact(
         run_auto_compact(
             sess,
             &previous_model_turn_context,
-            CompactCallsite::PreTurnModelSwitch,
+            InjectTurnContextBeforeLastUserMessage::DontInjectTurnContext,
         )
         .await?;
         return Ok(true);
@@ -4811,13 +4820,22 @@ async fn maybe_run_previous_model_inline_compact(
 async fn run_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    callsite: CompactCallsite,
+    inject_turn_context_before_last_user_message: InjectTurnContextBeforeLastUserMessage,
 ) -> CodexResult<()> {
     if should_use_remote_compact_task(&turn_context.provider) {
-        run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context), callsite)
-            .await?;
+        run_inline_remote_auto_compact_task(
+            Arc::clone(sess),
+            Arc::clone(turn_context),
+            inject_turn_context_before_last_user_message,
+        )
+        .await?;
     } else {
-        run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context), callsite).await?;
+        run_inline_auto_compact_task(
+            Arc::clone(sess),
+            Arc::clone(turn_context),
+            inject_turn_context_before_last_user_message,
+        )
+        .await?;
     }
     Ok(())
 }
