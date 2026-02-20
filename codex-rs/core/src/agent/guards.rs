@@ -349,7 +349,7 @@ mod tests {
             .expect("reserve second slot");
         let second_name = second
             .reserve_agent_nickname(&["alpha"])
-            .expect("name should be re-used after pool reset");
+            .expect("name should be reused after pool reset");
         assert_eq!(second_name, "alpha");
         let active_agents = guards
             .active_agents
