@@ -370,7 +370,8 @@ impl NetworkApprovalService {
                                 .await;
                         }
                         Err(err) => {
-                            let message = format!("Failed to apply network policy amendment: {err}");
+                            let message =
+                                format!("Failed to apply network policy amendment: {err}");
                             warn!("{message}");
                             session
                                 .send_event_raw(Event {
@@ -399,7 +400,8 @@ impl NetworkApprovalService {
                                 .await;
                         }
                         Err(err) => {
-                            let message = format!("Failed to apply network policy amendment: {err}");
+                            let message =
+                                format!("Failed to apply network policy amendment: {err}");
                             warn!("{message}");
                             session
                                 .send_event_raw(Event {
@@ -409,8 +411,10 @@ impl NetworkApprovalService {
                                 .await;
                         }
                     }
-                    self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByUser)
-                        .await;
+                    self.record_outcome_for_single_active_call(
+                        NetworkApprovalOutcome::DeniedByUser,
+                    )
+                    .await;
                     cache_session_deny = true;
                     PendingApprovalDecision::Deny
                 }
