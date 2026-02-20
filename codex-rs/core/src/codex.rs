@@ -5007,6 +5007,10 @@ pub(crate) async fn run_turn(
                 } = sampling_request_output;
                 if interrupted_tool_result {
                     cancellation_token.cancel();
+                    // Keep interrupt cleanup consistent with abort_all_tasks(): a parallel
+                    // unified-exec tool call may still be running when request_user_input
+                    // returns an interrupted result.
+                    sess.close_unified_exec_processes().await;
                     sess.finish_turn_without_completion_event(turn_context.as_ref())
                         .await;
                     // Defer TurnAborted emission until run_turn unwinds so the caller can
