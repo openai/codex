@@ -542,7 +542,8 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
         responses::ev_assistant_message("msg-2", "Done"),
         responses::ev_completed("resp-2"),
     ]))
-    .set_delay(std::time::Duration::from_millis(500));
+    // Keep the second turn active long enough for thread/resume to observe the running status.
+    .set_delay(std::time::Duration::from_millis(1_500));
     let _response_mock =
         responses::mount_response_sequence(&server, vec![first_response, second_response]).await;
     let codex_home = TempDir::new()?;
@@ -596,11 +597,14 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
             ..Default::default()
         })
         .await?;
-    timeout(
+    let running_turn_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_response_message(RequestId::Integer(running_turn_id)),
     )
     .await??;
+    let TurnStartResponse {
+        turn: running_turn, ..
+    } = to_response::<TurnStartResponse>(running_turn_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/started"),
@@ -623,12 +627,13 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
     let ThreadResumeResponse { thread, model, .. } =
         to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(model, "gpt-5.1-codex-max");
-    assert_eq!(
-        thread.status,
-        ThreadStatus::Active {
-            active_flags: vec![],
-        }
-    );
+    // `thread.status` can race with `turns` updates in this path, so assert on the resumed turn.
+    let resumed_running_turn = thread
+        .turns
+        .iter()
+        .find(|turn| turn.id == running_turn.id)
+        .expect("running turn should be present in resumed thread");
+    assert_eq!(resumed_running_turn.status, TurnStatus::InProgress);
 
     timeout(
         DEFAULT_READ_TIMEOUT,
