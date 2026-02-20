@@ -1041,7 +1041,7 @@ pub struct ConfigToml {
 
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
-    pub background_terminal_timeout: Option<u64>,
+    pub background_terminal_max_timeout: Option<u64>,
 
     /// Optional absolute path to the Node runtime used by `js_repl`.
     pub js_repl_node_path: Option<AbsolutePathBuf>,
@@ -1759,7 +1759,7 @@ impl Config {
             .transpose()?
             .unwrap_or_default();
         let background_terminal_max_timeout = cfg
-            .background_terminal_timeout
+            .background_terminal_max_timeout
             .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
             .max(MIN_EMPTY_YIELD_TIME_MS);
 
