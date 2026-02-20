@@ -5954,6 +5954,7 @@ impl CodexMessageProcessor {
                             ) => {
                                 handle_pending_thread_resume_request(
                                     conversation_id,
+                                    codex_home.as_path(),
                                     &thread_state,
                                     &thread_watch_manager,
                                     &outgoing_for_task,
@@ -6263,6 +6264,7 @@ impl CodexMessageProcessor {
 
 async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
+    codex_home: &Path,
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
@@ -6301,6 +6303,11 @@ async fn handle_pending_thread_resume_request(
     thread.status = thread_watch_manager
         .loaded_status_for_thread(&thread.id)
         .await;
+
+    match find_thread_name_by_id(codex_home, &conversation_id).await {
+        Ok(thread_name) => thread.thread_name = thread_name,
+        Err(err) => warn!("Failed to read thread name for {conversation_id}: {err}"),
+    }
 
     let ThreadConfigSnapshot {
         model,
