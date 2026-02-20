@@ -1952,6 +1952,9 @@ pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
     Compacted(CompactedItem),
+    /// Regular-turn sampling marker. Persist only when the same turn also persists the
+    /// corresponding model-visible context updates (diffs or full reinjection), so resume/fork
+    /// does not hydrate a context baseline that was never recorded in history.
     TurnContext(TurnContextItem),
     EventMsg(EventMsg),
 }

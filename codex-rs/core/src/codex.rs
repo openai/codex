@@ -5646,6 +5646,9 @@ async fn try_run_sampling_request(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
+    // Persist one TurnContext marker per sampling request (not just per user turn) so rollout
+    // analysis can reconstruct API-turn boundaries. `run_turn` persists model-visible context
+    // diffs/full reinjection earlier in the same regular turn before reaching this path.
     let rollout_item = RolloutItem::TurnContext(turn_context.to_turn_context_item());
 
     feedback_tags!(
