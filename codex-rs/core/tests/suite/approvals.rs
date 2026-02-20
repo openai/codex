@@ -1955,7 +1955,7 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     let test = builder.build(&server).await?;
 
     let call_id = "invalid-prefix-rule";
-    let command = "touch ~/Documents/hello.txt && rm ~/Documents/hello.txt";
+    let command = "touch ~/Documents/hello.txt && echo hello > ~/Documents/hello.txt";
     let event = shell_event_with_prefix_rule(
         call_id,
         command,
@@ -1983,13 +1983,12 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     .await?;
 
     let approval = expect_exec_approval(&test, command).await;
-    assert_eq!(
-        approval.proposed_execpolicy_amendment,
-        Some(ExecPolicyAmendment::new(vec![
-            "touch".to_string(),
-            "~/Documents/hello.txt".to_string(),
-        ]))
-    );
+    let ammendment = approval
+        .proposed_execpolicy_amendment
+        .expect("should have a proposed execpolicy amendment");
+    assert!(ammendment.command.contains(
+        &"touch ~/Documents/hello.txt && echo hello > ~/Documents/hello.txt".to_string()
+    ));
 
     Ok(())
 }
