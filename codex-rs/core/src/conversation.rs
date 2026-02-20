@@ -2,6 +2,9 @@ use crate::api_bridge::map_api_error;
 use crate::default_client::default_headers;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use async_channel::Receiver;
+use async_channel::Sender;
+use async_channel::TrySendError;
 use codex_api::Provider as ApiProvider;
 use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
@@ -9,7 +12,6 @@ use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeWebsocketClient;
 use http::HeaderMap;
 use tokio::sync::Mutex;
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::error;
 use tracing::warn;
@@ -24,8 +26,8 @@ pub(crate) struct RealtimeConversationManager {
 
 #[allow(dead_code)]
 struct ConversationState {
-    audio_tx: mpsc::Sender<RealtimeAudioFrame>,
-    text_tx: mpsc::Sender<String>,
+    audio_tx: Sender<RealtimeAudioFrame>,
+    text_tx: Sender<String>,
     task: JoinHandle<()>,
 }
 
@@ -43,7 +45,7 @@ impl RealtimeConversationManager {
         extra_headers: HeaderMap,
         prompt: String,
         session_id: Option<String>,
-    ) -> CodexResult<mpsc::Receiver<RealtimeEvent>> {
+    ) -> CodexResult<Receiver<RealtimeEvent>> {
         let previous_state = {
             let mut guard = self.state.lock().await;
             guard.take()
@@ -62,9 +64,11 @@ impl RealtimeConversationManager {
 
         let writer = connection.writer();
         let events = connection.events();
-        let (audio_tx, mut audio_rx) = mpsc::channel::<RealtimeAudioFrame>(AUDIO_IN_QUEUE_CAPACITY);
-        let (text_tx, mut text_rx) = mpsc::channel::<String>(TEXT_IN_QUEUE_CAPACITY);
-        let (events_tx, events_rx) = mpsc::channel::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
+        let (audio_tx, audio_rx) =
+            async_channel::bounded::<RealtimeAudioFrame>(AUDIO_IN_QUEUE_CAPACITY);
+        let (text_tx, text_rx) = async_channel::bounded::<String>(TEXT_IN_QUEUE_CAPACITY);
+        let (events_tx, events_rx) =
+            async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
         let task = tokio::spawn(async move {
             loop {
@@ -72,14 +76,14 @@ impl RealtimeConversationManager {
                     biased;
                     text = text_rx.recv() => {
                         match text {
-                            Some(text) => {
+                            Ok(text) => {
                                 if let Err(err) = writer.send_conversation_item_create(text).await {
                                     let mapped_error = map_api_error(err);
                                     warn!("failed to send input text: {mapped_error}");
                                     break;
                                 }
                             }
-                            None => {
+                            Err(_) => {
                                 break;
                             }
                         }
@@ -97,6 +101,11 @@ impl RealtimeConversationManager {
                                 }
                             }
                             Ok(None) => {
+                                let _ = events_tx
+                                    .send(RealtimeEvent::Error(
+                                        "realtime websocket connection is closed".to_string(),
+                                    ))
+                                    .await;
                                 break;
                             }
                             Err(err) => {
@@ -115,14 +124,14 @@ impl RealtimeConversationManager {
                     }
                     frame = audio_rx.recv() => {
                         match frame {
-                            Some(frame) => {
+                            Ok(frame) => {
                                 if let Err(err) = writer.send_audio_frame(frame).await {
                                     let mapped_error = map_api_error(err);
                                     error!("failed to send input audio: {mapped_error}");
                                     break;
                                 }
                             }
-                            None => {
+                            Err(_) => {
                                 break;
                             }
                         }
@@ -154,11 +163,11 @@ impl RealtimeConversationManager {
 
         match sender.try_send(frame) {
             Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => {
+            Err(TrySendError::Full(_)) => {
                 warn!("dropping input audio frame due to full queue");
                 Ok(())
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(CodexErr::InvalidRequest(
+            Err(TrySendError::Closed(_)) => Err(CodexErr::InvalidRequest(
                 "conversation is not running".to_string(),
             )),
         }
@@ -183,7 +192,7 @@ impl RealtimeConversationManager {
         Ok(())
     }
 
-    pub(crate) async fn shutdown(&self) {
+    pub(crate) async fn shutdown(&self) -> CodexResult<()> {
         let state = {
             let mut guard = self.state.lock().await;
             guard.take()
@@ -193,5 +202,6 @@ impl RealtimeConversationManager {
             state.task.abort();
             let _ = state.task.await;
         }
+        Ok(())
     }
 }

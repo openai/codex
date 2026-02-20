@@ -281,7 +281,8 @@ pub struct CodexSpawnOk {
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
-pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 64;
+pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
+pub(crate) const EVENT_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
 
@@ -301,7 +302,7 @@ impl Codex {
         persist_extended_history: bool,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
-        let (tx_event, rx_event) = async_channel::unbounded();
+        let (tx_event, rx_event) = async_channel::bounded(EVENT_CHANNEL_CAPACITY);
 
         let loaded_skills = skills_manager.skills_for_config(&config);
 
@@ -3159,6 +3160,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::CleanBackgroundTerminals => {
                 handlers::clean_background_terminals(&sess).await;
             }
+            Op::Conversation { cmd } => {
+                handlers::conversation(&sess, sub.id.clone(), cmd).await;
+            }
             Op::OverrideTurnContext {
                 cwd,
                 approval_policy,
@@ -3316,8 +3320,14 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
+    use codex_api::AuthProvider;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
+    use codex_protocol::protocol::ConversationClosedEvent;
+    use codex_protocol::protocol::ConversationCommand;
+    use codex_protocol::protocol::ConversationEvent;
+    use codex_protocol::protocol::ConversationRealtimeEvent;
+    use codex_protocol::protocol::ConversationStartedEvent;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -3326,6 +3336,7 @@ mod handlers {
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::RealtimeEvent;
     use codex_protocol::protocol::RemoteSkillDownloadedEvent;
     use codex_protocol::protocol::RemoteSkillHazelnutScope;
     use codex_protocol::protocol::RemoteSkillProductSurface;
@@ -3348,6 +3359,8 @@ mod handlers {
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
+    use http::HeaderMap;
+    use http::HeaderValue;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tracing::info;
@@ -3359,6 +3372,179 @@ mod handlers {
 
     pub async fn clean_background_terminals(sess: &Arc<Session>) {
         sess.close_unified_exec_processes().await;
+    }
+
+    pub async fn conversation(sess: &Arc<Session>, sub_id: String, cmd: ConversationCommand) {
+        match cmd {
+            ConversationCommand::Start(params) => {
+                let config = sess.get_config().await;
+                let auth = sess.services.auth_manager.auth().await;
+                let api_provider = match config
+                    .model_provider
+                    .to_api_provider(auth.as_ref().map(crate::CodexAuth::auth_mode))
+                {
+                    Ok(provider) => provider,
+                    Err(err) => {
+                        send_conversation_error(
+                            sess,
+                            sub_id,
+                            err.to_string(),
+                            CodexErrorInfo::BadRequest,
+                        )
+                        .await;
+                        return;
+                    }
+                };
+                let api_auth = match crate::api_bridge::auth_provider_from_auth(
+                    auth,
+                    &config.model_provider,
+                ) {
+                    Ok(auth) => auth,
+                    Err(err) => {
+                        send_conversation_error(
+                            sess,
+                            sub_id,
+                            err.to_string(),
+                            CodexErrorInfo::BadRequest,
+                        )
+                        .await;
+                        return;
+                    }
+                };
+
+                let mut extra_headers = HeaderMap::new();
+                if let Some(token) = api_auth.bearer_token()
+                    && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
+                {
+                    extra_headers.insert(http::header::AUTHORIZATION, header);
+                }
+                if let Some(account_id) = api_auth.account_id()
+                    && let Ok(header) = HeaderValue::from_str(&account_id)
+                {
+                    extra_headers.insert("ChatGPT-Account-ID", header);
+                }
+
+                let requested_session_id = params
+                    .session_id
+                    .or_else(|| Some(sess.conversation_id.to_string()));
+                let events_rx = match sess
+                    .conversation
+                    .start(
+                        api_provider,
+                        extra_headers,
+                        params.prompt,
+                        requested_session_id.clone(),
+                    )
+                    .await
+                {
+                    Ok(events_rx) => events_rx,
+                    Err(err) => {
+                        send_conversation_error(
+                            sess,
+                            sub_id,
+                            err.to_string(),
+                            CodexErrorInfo::Other,
+                        )
+                        .await;
+                        return;
+                    }
+                };
+
+                sess.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Conversation(ConversationEvent::Started(
+                        ConversationStartedEvent {
+                            session_id: requested_session_id,
+                        },
+                    )),
+                })
+                .await;
+
+                let sess_clone = Arc::clone(sess);
+                tokio::spawn(async move {
+                    while let Ok(event) = events_rx.recv().await {
+                        let is_error = matches!(&event, RealtimeEvent::Error(_));
+                        sess_clone
+                            .send_event_raw(Event {
+                                id: sub_id.clone(),
+                                msg: EventMsg::Conversation(ConversationEvent::Realtime(
+                                    ConversationRealtimeEvent { payload: event },
+                                )),
+                            })
+                            .await;
+
+                        if is_error {
+                            sess_clone
+                                .send_event_raw(Event {
+                                    id: sub_id.clone(),
+                                    msg: EventMsg::Conversation(ConversationEvent::Closed(
+                                        ConversationClosedEvent {
+                                            reason: Some("transport_closed".to_string()),
+                                        },
+                                    )),
+                                })
+                                .await;
+                            break;
+                        }
+                    }
+                });
+            }
+            ConversationCommand::Audio(params) => {
+                if let Err(err) = sess.conversation.audio_in(params.frame).await {
+                    send_conversation_error(
+                        sess,
+                        sub_id,
+                        err.to_string(),
+                        CodexErrorInfo::BadRequest,
+                    )
+                    .await;
+                }
+            }
+            ConversationCommand::Text(params) => {
+                if let Err(err) = sess.conversation.text_in(params.text).await {
+                    send_conversation_error(
+                        sess,
+                        sub_id,
+                        err.to_string(),
+                        CodexErrorInfo::BadRequest,
+                    )
+                    .await;
+                }
+            }
+            ConversationCommand::Close => match sess.conversation.shutdown().await {
+                Ok(()) => {
+                    sess.send_event_raw(Event {
+                        id: sub_id,
+                        msg: EventMsg::Conversation(ConversationEvent::Closed(
+                            ConversationClosedEvent {
+                                reason: Some("requested".to_string()),
+                            },
+                        )),
+                    })
+                    .await;
+                }
+                Err(err) => {
+                    send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other)
+                        .await;
+                }
+            },
+        }
+    }
+
+    async fn send_conversation_error(
+        sess: &Arc<Session>,
+        sub_id: String,
+        message: String,
+        codex_error_info: CodexErrorInfo,
+    ) {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::Error(ErrorEvent {
+                message,
+                codex_error_info: Some(codex_error_info),
+            }),
+        })
+        .await;
     }
 
     pub async fn override_turn_context(
@@ -4004,7 +4190,7 @@ mod handlers {
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-        sess.conversation.shutdown().await;
+        let _ = sess.conversation.shutdown().await;
         sess.services
             .unified_exec_manager
             .terminate_all_processes()

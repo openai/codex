@@ -85,6 +85,51 @@ pub struct McpServerRefreshConfig {
     pub mcp_oauth_credentials_store_mode: Value,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+#[ts(tag = "cmd")]
+pub enum ConversationCommand {
+    Start(ConversationStartParams),
+    Audio(ConversationAudioParams),
+    Text(ConversationTextParams),
+    Close,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ConversationStartParams {
+    pub prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeAudioFrame {
+    pub data: String,
+    pub sample_rate: u32,
+    pub num_channels: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub samples_per_channel: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub enum RealtimeEvent {
+    SessionCreated { session_id: String },
+    SessionUpdated { backend_prompt: Option<String> },
+    AudioOut(RealtimeAudioFrame),
+    ConversationItemAdded(Value),
+    Error(String),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ConversationAudioParams {
+    pub frame: RealtimeAudioFrame,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ConversationTextParams {
+    pub text: String,
+}
+
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -97,6 +142,12 @@ pub enum Op {
 
     /// Terminate all running background terminal processes for this thread.
     CleanBackgroundTerminals,
+
+    /// Realtime conversation control and media operations.
+    Conversation {
+        #[serde(flatten)]
+        cmd: ConversationCommand,
+    },
 
     /// Legacy user input.
     ///
@@ -869,6 +920,9 @@ pub enum EventMsg {
     /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
 
+    /// Realtime conversation lifecycle and streaming events.
+    Conversation(ConversationEvent),
+
     /// Model routing changed from the requested model to a different model.
     ModelReroute(ModelRerouteEvent),
 
@@ -1046,6 +1100,31 @@ pub enum EventMsg {
     CollabResumeBegin(CollabResumeBeginEvent),
     /// Collab interaction: resume end.
     CollabResumeEnd(CollabResumeEndEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "event", rename_all = "snake_case")]
+#[ts(tag = "event")]
+pub enum ConversationEvent {
+    Started(ConversationStartedEvent),
+    Realtime(ConversationRealtimeEvent),
+    Closed(ConversationClosedEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ConversationStartedEvent {
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ConversationRealtimeEvent {
+    pub payload: RealtimeEvent,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ConversationClosedEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl From<CollabAgentSpawnBeginEvent> for EventMsg {
@@ -2900,6 +2979,65 @@ mod tests {
             codex_error_info: Some(CodexErrorInfo::Other),
         };
         assert!(event.affects_turn_status());
+    }
+
+    #[test]
+    fn conversation_op_serializes_with_cmd_tag() {
+        let audio = Op::Conversation {
+            cmd: ConversationCommand::Audio(ConversationAudioParams {
+                frame: RealtimeAudioFrame {
+                    data: "AQID".to_string(),
+                    sample_rate: 24_000,
+                    num_channels: 1,
+                    samples_per_channel: Some(480),
+                },
+            }),
+        };
+        let start = Op::Conversation {
+            cmd: ConversationCommand::Start(ConversationStartParams {
+                prompt: "be helpful".to_string(),
+                session_id: Some("conv_1".to_string()),
+            }),
+        };
+        let text = Op::Conversation {
+            cmd: ConversationCommand::Text(ConversationTextParams {
+                text: "hello".to_string(),
+            }),
+        };
+        let close = Op::Conversation {
+            cmd: ConversationCommand::Close,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&start).unwrap(),
+            json!({
+                "type": "conversation",
+                "cmd": "start",
+                "prompt": "be helpful",
+                "session_id": "conv_1"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&audio).unwrap(),
+            json!({
+                "type": "conversation",
+                "cmd": "audio",
+                "frame": {
+                    "data": "AQID",
+                    "sample_rate": 24000,
+                    "num_channels": 1,
+                    "samples_per_channel": 480
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(serde_json::to_value(&text).unwrap()).unwrap(),
+            text
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(serde_json::to_value(&close).unwrap()).unwrap(),
+            close
+        );
     }
 
     #[test]
