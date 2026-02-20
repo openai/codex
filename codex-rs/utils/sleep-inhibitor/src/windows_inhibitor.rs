@@ -70,7 +70,7 @@ impl PowerRequest {
         // SAFETY: `context` points to a valid `REASON_CONTEXT` for the duration
         // of the call and Windows copies the relevant data before returning.
         let handle = unsafe { PowerCreateRequest(&context) };
-        if handle == 0 || handle == INVALID_HANDLE_VALUE {
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             let error = std::io::Error::last_os_error();
             return Err(format!("PowerCreateRequest failed: {error}"));
         }
