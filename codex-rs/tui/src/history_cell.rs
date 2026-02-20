@@ -786,6 +786,7 @@ pub fn new_approval_decision_cell(
     decision: codex_protocol::protocol::ReviewDecision,
 ) -> Box<dyn HistoryCell> {
     use codex_protocol::protocol::ReviewDecision::*;
+    use codex_protocol::protocol::NetworkPolicyRuleAction;
 
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
         Approved => {
@@ -830,29 +831,27 @@ pub fn new_approval_decision_cell(
         }
         NetworkPolicyAmendment {
             network_policy_amendment,
-        } => {
-            let host = Span::from(network_policy_amendment.host).dim();
-            match network_policy_amendment.action {
-                codex_protocol::protocol::NetworkPolicyRuleAction::Allow => (
-                    "✔ ".green(),
-                    vec![
-                        "You ".into(),
-                        "approved".bold(),
-                        " future network access to ".into(),
-                        host,
-                    ],
-                ),
-                codex_protocol::protocol::NetworkPolicyRuleAction::Deny => (
-                    "✗ ".red(),
-                    vec![
-                        "You ".into(),
-                        "blocked".bold(),
-                        " future network access to ".into(),
-                        host,
-                    ],
-                ),
-            }
-        }
+        } => match network_policy_amendment.action {
+            NetworkPolicyRuleAction::Allow => (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "approved".bold(),
+                    " codex to always allow network access to ".into(),
+                    Span::from(network_policy_amendment.host).dim(),
+                ],
+            ),
+            NetworkPolicyRuleAction::Deny => (
+                "✗ ".red(),
+                vec![
+                    "You ".into(),
+                    "denied".bold(),
+                    " codex network access to ".into(),
+                    Span::from(network_policy_amendment.host).dim(),
+                    " and saved that rule".into(),
+                ],
+            ),
+        },
         Denied => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             (

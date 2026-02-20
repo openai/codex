@@ -4,6 +4,7 @@
 import type { CommandAction } from "./CommandAction";
 import type { ExecPolicyAmendment } from "./ExecPolicyAmendment";
 import type { NetworkApprovalContext } from "./NetworkApprovalContext";
+import type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
 
 export type CommandExecutionRequestApprovalParams = { threadId: string, turnId: string, itemId: string, 
 /**
@@ -21,7 +22,7 @@ approvalId?: string | null,
  */
 reason?: string | null, 
 /**
- * Optional context for managed-network approval prompts.
+ * Optional context for a managed-network approval prompt.
  */
 networkApprovalContext?: NetworkApprovalContext | null, 
 /**
@@ -39,4 +40,8 @@ commandActions?: Array<CommandAction> | null,
 /**
  * Optional proposed execpolicy amendment to allow similar commands without prompting.
  */
-proposedExecpolicyAmendment?: ExecPolicyAmendment | null, };
+proposedExecpolicyAmendment?: ExecPolicyAmendment | null, 
+/**
+ * Optional proposed network policy amendments (allow/deny host) for future requests.
+ */
+proposedNetworkPolicyAmendments?: Array<NetworkPolicyAmendment> | null, };
