@@ -22,6 +22,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_linux_aarch64_bazel;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
@@ -1523,6 +1524,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approval_matrix_covers_all_modes() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    skip_if_linux_aarch64_bazel!(Ok(()));
 
     for scenario in scenarios() {
         run_scenario(&scenario).await?;

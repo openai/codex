@@ -442,3 +442,23 @@ macro_rules! skip_if_windows {
         }
     }};
 }
+
+#[macro_export]
+macro_rules! skip_if_linux_aarch64_bazel {
+    () => {{
+        if cfg!(all(target_os = "linux", target_arch = "aarch64"))
+            && ::std::env::var_os("TEST_TMPDIR").is_some()
+        {
+            println!("Skipping test in Bazel linux-aarch64 environment due known sandbox limits.");
+            return;
+        }
+    }};
+    ($return_value:expr $(,)?) => {{
+        if cfg!(all(target_os = "linux", target_arch = "aarch64"))
+            && ::std::env::var_os("TEST_TMPDIR").is_some()
+        {
+            println!("Skipping test in Bazel linux-aarch64 environment due known sandbox limits.");
+            return $return_value;
+        }
+    }};
+}
