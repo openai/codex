@@ -60,10 +60,10 @@ impl TerminalTitleItem {
 
     pub(crate) fn render(&self) -> &'static str {
         match self {
-            TerminalTitleItem::Project => "codex",
-            TerminalTitleItem::Status => "Working",
-            TerminalTitleItem::Thread => "Fix terminal title command",
-            TerminalTitleItem::GitBranch => "feat/title-command",
+            TerminalTitleItem::Project => "my-project",
+            TerminalTitleItem::Status => "Working...",
+            TerminalTitleItem::Thread => "Investigate flaky test",
+            TerminalTitleItem::GitBranch => "feat/awesome-feature",
             TerminalTitleItem::Model => "gpt-5.2-codex",
             TerminalTitleItem::TaskProgress => "Tasks 2/5",
         }

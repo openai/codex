@@ -15,5 +15,5 @@ expression: "render_lines(&view, 84)"
   [ ] model          Current model name                                             
   [ ] task-progress  Latest task progress from update_plan (omitted until availab…  
                                                                                     
-  codex | Working | Fix terminal title command                                      
+  my-project | Working... | Investigate flaky test                                  
   Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.
