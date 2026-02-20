@@ -493,6 +493,7 @@ impl ThreadManagerState {
     }
 
     /// Spawn a new thread with optional history and register it with the manager.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_thread(
         &self,
         config: Config,
