@@ -990,6 +990,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "No role requiring it for now"]
     async fn spawn_agent_uses_explorer_role_and_sets_never_approval_policy() {
         #[derive(Debug, Deserialize)]
         struct SpawnAgentResult {

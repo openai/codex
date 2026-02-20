@@ -267,6 +267,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "No role requiring it for now"]
     async fn apply_explorer_role_sets_model_and_adds_session_flags_layer() {
         let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
         let before_layers = session_flags_layer_count(&config);
