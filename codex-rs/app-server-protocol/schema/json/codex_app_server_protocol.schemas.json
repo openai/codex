@@ -577,6 +577,54 @@
             },
             "method": {
               "enum": [
+                "thread/increment_elicitation"
+              ],
+              "title": "Thread/incrementElicitationRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadIncrementElicitationParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/incrementElicitationRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/decrement_elicitation"
+              ],
+              "title": "Thread/decrementElicitationRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadDecrementElicitationParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/decrementElicitationRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/name/set"
               ],
               "title": "Thread/name/setRequestMethod",
@@ -15359,6 +15407,38 @@
         "title": "ThreadCompactStartResponse",
         "type": "object"
       },
+      "ThreadDecrementElicitationParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadDecrementElicitationParams",
+        "type": "object"
+      },
+      "ThreadDecrementElicitationResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "count": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "paused": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "count",
+          "paused"
+        ],
+        "title": "ThreadDecrementElicitationResponse",
+        "type": "object"
+      },
       "ThreadForkParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
@@ -15476,6 +15556,38 @@
       },
       "ThreadId": {
         "type": "string"
+      },
+      "ThreadIncrementElicitationParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadIncrementElicitationParams",
+        "type": "object"
+      },
+      "ThreadIncrementElicitationResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "count": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "paused": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "count",
+          "paused"
+        ],
+        "title": "ThreadIncrementElicitationResponse",
+        "type": "object"
       },
       "ThreadItem": {
         "oneOf": [

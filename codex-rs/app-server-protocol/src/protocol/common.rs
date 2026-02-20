@@ -202,6 +202,14 @@ client_request_definitions! {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
     },
+    ThreadIncrementElicitation => "thread/increment_elicitation" {
+        params: v2::ThreadIncrementElicitationParams,
+        response: v2::ThreadIncrementElicitationResponse,
+    },
+    ThreadDecrementElicitation => "thread/decrement_elicitation" {
+        params: v2::ThreadDecrementElicitationParams,
+        response: v2::ThreadDecrementElicitationResponse,
+    },
     ThreadSetName => "thread/name/set" {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,

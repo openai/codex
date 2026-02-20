@@ -2588,6 +2588,17 @@
       ],
       "type": "object"
     },
+    "ThreadDecrementElicitationParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadForkParams": {
       "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
       "properties": {
@@ -2660,6 +2671,17 @@
     },
     "ThreadId": {
       "type": "string"
+    },
+    "ThreadIncrementElicitationParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
     },
     "ThreadListParams": {
       "properties": {
@@ -3521,6 +3543,54 @@
         "params"
       ],
       "title": "Thread/archiveRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/increment_elicitation"
+          ],
+          "title": "Thread/incrementElicitationRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadIncrementElicitationParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/incrementElicitationRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/decrement_elicitation"
+          ],
+          "title": "Thread/decrementElicitationRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadDecrementElicitationParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/decrementElicitationRequest",
       "type": "object"
     },
     {

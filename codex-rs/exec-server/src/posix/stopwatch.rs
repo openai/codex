@@ -90,7 +90,7 @@ impl Stopwatch {
         result
     }
 
-    async fn pause(&self) {
+    pub(crate) async fn pause(&self) {
         let mut guard = self.inner.lock().await;
         guard.active_pauses += 1;
         if guard.active_pauses == 1
@@ -101,7 +101,7 @@ impl Stopwatch {
         }
     }
 
-    async fn resume(&self) {
+    pub(crate) async fn resume(&self) {
         let mut guard = self.inner.lock().await;
         if guard.active_pauses == 0 {
             return;

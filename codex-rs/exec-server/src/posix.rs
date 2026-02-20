@@ -82,6 +82,7 @@ mod mcp;
 mod mcp_escalation_policy;
 mod socket;
 mod stopwatch;
+mod stopwatch_controller;
 
 pub use mcp::ExecResult;
 

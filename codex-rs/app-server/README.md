@@ -122,6 +122,8 @@ Example with notification opt-out:
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
+- `thread/increment_elicitation` — atomically increment a thread-scoped out-of-band elicitation counter and pause shell-tool timeout stopwatches while the counter is above zero; returns `{ count, paused }`.
+- `thread/decrement_elicitation` — atomically decrement that counter and resume shell-tool timeout stopwatches when it reaches zero; returns `{ count, paused }`.
 - `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
@@ -307,6 +309,18 @@ Use `thread/unarchive` to move an archived rollout back into the sessions direct
 { "method": "thread/unarchive", "id": 24, "params": { "threadId": "thr_b" } }
 { "id": 24, "result": { "thread": { "id": "thr_b" } } }
 { "method": "thread/unarchived", "params": { "threadId": "thr_b" } }
+```
+
+### Example: Pause command timeout stopwatches for out-of-band approval
+
+Use `thread/increment_elicitation` and `thread/decrement_elicitation` to bracket external approval flows (for example, a downstream CLI waiting on user approval). While `count > 0`, active shell-tool timeout stopwatches are paused.
+
+```json
+{ "method": "thread/increment_elicitation", "id": 24, "params": { "threadId": "thr_b" } }
+{ "id": 24, "result": { "count": 1, "paused": true } }
+
+{ "method": "thread/decrement_elicitation", "id": 25, "params": { "threadId": "thr_b" } }
+{ "id": 25, "result": { "count": 0, "paused": false } }
 ```
 
 ### Example: Trigger thread compaction

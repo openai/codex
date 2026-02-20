@@ -4,8 +4,11 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use anyhow::Result;
+use codex_core::MCP_OUT_OF_BAND_ELICITATION_STATE_CAPABILITY;
+use codex_core::MCP_OUT_OF_BAND_ELICITATION_STATE_METHOD;
 use codex_core::MCP_SANDBOX_STATE_CAPABILITY;
 use codex_core::MCP_SANDBOX_STATE_METHOD;
+use codex_core::OutOfBandElicitationState;
 use codex_core::SandboxState;
 use codex_core::protocol::SandboxPolicy;
 use codex_execpolicy::Policy;
@@ -32,11 +35,13 @@ use crate::posix::escalate_server::EscalateServer;
 use crate::posix::escalate_server::{self};
 use crate::posix::mcp_escalation_policy::McpEscalationPolicy;
 use crate::posix::stopwatch::Stopwatch;
+use crate::posix::stopwatch_controller::StopwatchController;
 
 /// Path to our patched bash.
 const CODEX_BASH_PATH_ENV_VAR: &str = "CODEX_BASH_PATH";
 
 const SANDBOX_STATE_CAPABILITY_VERSION: &str = "1.0.0";
+const OUT_OF_BAND_ELICITATION_STATE_CAPABILITY_VERSION: &str = "1.0.0";
 
 pub(crate) fn get_bash_path() -> Result<PathBuf> {
     std::env::var(CODEX_BASH_PATH_ENV_VAR)
@@ -83,6 +88,7 @@ pub struct ExecTool {
     policy: Arc<RwLock<Policy>>,
     preserve_program_paths: bool,
     sandbox_state: Arc<RwLock<Option<SandboxState>>>,
+    stopwatch_controller: StopwatchController,
 }
 
 #[tool_router]
@@ -100,6 +106,7 @@ impl ExecTool {
             policy,
             preserve_program_paths,
             sandbox_state: Arc::new(RwLock::new(None)),
+            stopwatch_controller: StopwatchController::default(),
         }
     }
 
@@ -116,6 +123,7 @@ impl ExecTool {
                 .unwrap_or(codex_core::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
         );
         let stopwatch = Stopwatch::new(effective_timeout);
+        let stopwatch_id = self.stopwatch_controller.register(stopwatch.clone()).await;
         let cancel_token = stopwatch.cancellation_token();
         let sandbox_state =
             self.sandbox_state
@@ -141,8 +149,9 @@ impl ExecTool {
 
         let result = escalate_server
             .exec(params, cancel_token, &sandbox_state)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            .await;
+        self.stopwatch_controller.unregister(stopwatch_id).await;
+        let result = result.map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::json(
             ExecResult::from(result),
         )?]))
@@ -168,6 +177,15 @@ impl ServerHandler for ExecTool {
         experimental_capabilities.insert(
             MCP_SANDBOX_STATE_CAPABILITY.to_string(),
             sandbox_state_capability,
+        );
+        let mut out_of_band_elicitation_state_capability = JsonObject::new();
+        out_of_band_elicitation_state_capability.insert(
+            "version".to_string(),
+            serde_json::Value::String(OUT_OF_BAND_ELICITATION_STATE_CAPABILITY_VERSION.to_string()),
+        );
+        experimental_capabilities.insert(
+            MCP_OUT_OF_BAND_ELICITATION_STATE_CAPABILITY.to_string(),
+            out_of_band_elicitation_state_capability,
         );
         ServerInfo {
             protocol_version: ProtocolVersion::V_2025_06_18,
@@ -197,27 +215,47 @@ impl ServerHandler for ExecTool {
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CustomResult, McpError> {
         let CustomRequest { method, params, .. } = request;
-        if method != MCP_SANDBOX_STATE_METHOD {
-            return Err(McpError::method_not_found::<CodexSandboxStateUpdateMethod>());
+        match method.as_ref() {
+            MCP_SANDBOX_STATE_METHOD => {
+                let Some(params) = params else {
+                    return Err(McpError::invalid_params(
+                        "missing params for sandbox state request".to_string(),
+                        None,
+                    ));
+                };
+
+                let Ok(sandbox_state) = serde_json::from_value::<SandboxState>(params.clone())
+                else {
+                    return Err(McpError::invalid_params(
+                        "failed to deserialize sandbox state".to_string(),
+                        Some(params),
+                    ));
+                };
+
+                *self.sandbox_state.write().await = Some(sandbox_state);
+                Ok(CustomResult::new(json!({})))
+            }
+            MCP_OUT_OF_BAND_ELICITATION_STATE_METHOD => {
+                let Some(params) = params else {
+                    return Err(McpError::invalid_params(
+                        "missing params for out-of-band elicitation state request".to_string(),
+                        None,
+                    ));
+                };
+
+                let Ok(state) = serde_json::from_value::<OutOfBandElicitationState>(params.clone())
+                else {
+                    return Err(McpError::invalid_params(
+                        "failed to deserialize out-of-band elicitation state".to_string(),
+                        Some(params),
+                    ));
+                };
+
+                self.stopwatch_controller.set_paused(state.paused).await;
+                Ok(CustomResult::new(json!({})))
+            }
+            _ => Err(McpError::method_not_found::<CodexSandboxStateUpdateMethod>()),
         }
-
-        let Some(params) = params else {
-            return Err(McpError::invalid_params(
-                "missing params for sandbox state request".to_string(),
-                None,
-            ));
-        };
-
-        let Ok(sandbox_state) = serde_json::from_value::<SandboxState>(params.clone()) else {
-            return Err(McpError::invalid_params(
-                "failed to deserialize sandbox state".to_string(),
-                Some(params),
-            ));
-        };
-
-        *self.sandbox_state.write().await = Some(sandbox_state);
-
-        Ok(CustomResult::new(json!({})))
     }
 }
 

@@ -2399,6 +2399,20 @@ impl Session {
             .await
     }
 
+    pub(crate) async fn notify_out_of_band_elicitation_pause_state(
+        &self,
+        paused: bool,
+    ) -> anyhow::Result<()> {
+        self.services
+            .mcp_connection_manager
+            .read()
+            .await
+            .notify_out_of_band_elicitation_state_change(&crate::OutOfBandElicitationState {
+                paused,
+            })
+            .await
+    }
+
     /// Records input items: always append to conversation history and
     /// persist these response items to rollout.
     pub(crate) async fn record_conversation_items(

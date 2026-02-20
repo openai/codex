@@ -128,8 +128,12 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadDecrementElicitationParams;
+use codex_app_server_protocol::ThreadDecrementElicitationResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadIncrementElicitationParams;
+use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -542,6 +546,14 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadIncrementElicitation { request_id, params } => {
+                self.thread_increment_elicitation(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadDecrementElicitation { request_id, params } => {
+                self.thread_decrement_elicitation(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadSetName { request_id, params } => {
@@ -2165,6 +2177,79 @@ impl CodexMessageProcessor {
             }
             Err(err) => {
                 self.outgoing.send_error(request_id, err).await;
+            }
+        }
+    }
+
+    async fn thread_increment_elicitation(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadIncrementElicitationParams,
+    ) {
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match thread.increment_out_of_band_elicitation_count().await {
+            Ok(count) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        ThreadIncrementElicitationResponse {
+                            count,
+                            paused: count > 0,
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to increment out-of-band elicitation counter: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn thread_decrement_elicitation(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadDecrementElicitationParams,
+    ) {
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match thread.decrement_out_of_band_elicitation_count().await {
+            Ok(count) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        ThreadDecrementElicitationResponse {
+                            count,
+                            paused: count > 0,
+                        },
+                    )
+                    .await;
+            }
+            Err(CodexErr::InvalidRequest(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to decrement out-of-band elicitation counter: {err}"),
+                )
+                .await;
             }
         }
     }
