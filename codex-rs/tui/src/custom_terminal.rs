@@ -121,6 +121,8 @@ where
     /// Last known position of the cursor. Used to find the new area when the viewport is inlined
     /// and the terminal resized.
     pub last_known_cursor_pos: Position,
+    /// Count of visible history rows rendered above the viewport in inline mode.
+    visible_history_rows: u16,
 }
 
 impl<B> Drop for Terminal<B>
@@ -161,6 +163,7 @@ where
             viewport_area: Rect::new(0, cursor_pos.y, 0, 0),
             last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
+            visible_history_rows: 0,
         })
     }
 
@@ -228,6 +231,7 @@ where
         self.current_buffer_mut().resize(area);
         self.previous_buffer_mut().resize(area);
         self.viewport_area = area;
+        self.visible_history_rows = self.visible_history_rows.min(area.top());
     }
 
     /// Queries the backend for size and resizes if it doesn't match the previous size.
@@ -397,6 +401,25 @@ where
         std::io::Write::flush(&mut self.backend)?;
         self.previous_buffer_mut().reset();
         Ok(())
+    }
+
+    /// Clear the entire visible screen (not just the viewport) and force a full redraw.
+    pub fn clear_visible_screen(&mut self) -> io::Result<()> {
+        self.backend.clear_region(ClearType::All)?;
+        self.visible_history_rows = 0;
+        self.previous_buffer_mut().reset();
+        Ok(())
+    }
+
+    pub fn visible_history_rows(&self) -> u16 {
+        self.visible_history_rows
+    }
+
+    pub(crate) fn note_history_rows_inserted(&mut self, inserted_rows: u16) {
+        self.visible_history_rows = self
+            .visible_history_rows
+            .saturating_add(inserted_rows)
+            .min(self.viewport_area.top());
     }
 
     /// Clears the inactive buffer and swaps it with the current buffer

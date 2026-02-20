@@ -18,8 +18,10 @@ use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::SessionInfoCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+use crate::history_cell::UserHistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
@@ -78,6 +80,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use std::any::TypeId;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -678,6 +681,79 @@ impl App {
 
         self.chat_widget
             .add_info_message(format!("Opened {url} in your browser."), None);
+    }
+
+    fn clear_ui_replay_cells_for_latest_initialization(&self) -> Vec<Arc<dyn HistoryCell>> {
+        if self.transcript_cells.is_empty() {
+            return Vec::new();
+        }
+
+        let latest_init_idx = self.clear_ui_latest_initialization_idx();
+        let user_type = TypeId::of::<UserHistoryCell>();
+        let end_idx = self
+            .transcript_cells
+            .iter()
+            .enumerate()
+            .skip(latest_init_idx.saturating_add(1))
+            .find_map(|(idx, cell)| (cell.as_any().type_id() == user_type).then_some(idx))
+            .unwrap_or(self.transcript_cells.len());
+
+        self.transcript_cells[latest_init_idx..end_idx].to_vec()
+    }
+
+    fn clear_ui_latest_initialization_idx(&self) -> usize {
+        let session_info_type = TypeId::of::<SessionInfoCell>();
+        self.transcript_cells
+            .iter()
+            .rposition(|cell| cell.as_any().type_id() == session_info_type)
+            .unwrap_or(0)
+    }
+
+    fn replay_history_cells_to_terminal(
+        &mut self,
+        tui: &mut tui::Tui,
+        cells: Vec<Arc<dyn HistoryCell>>,
+    ) {
+        let width = tui.terminal.last_known_screen_size.width;
+        for cell in cells {
+            let mut display = cell.display_lines(width);
+            if display.is_empty() {
+                continue;
+            }
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, Line::from(""));
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+            tui.insert_history_lines(display);
+        }
+    }
+
+    fn clear_terminal_ui(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let replay_cells = self.clear_ui_replay_cells_for_latest_initialization();
+        if tui.is_alt_screen_active() {
+            tui.terminal.clear_visible_screen()?;
+        } else {
+            let old_visible_history_rows = tui.terminal.visible_history_rows();
+            tui.terminal.clear_scrollback()?;
+            tui.terminal.clear_visible_screen()?;
+            if old_visible_history_rows > 0 {
+                let mut area = tui.terminal.viewport_area;
+                // Purge + full clear wipes the terminal contents, but does not relocate the
+                // inline viewport. Move it back to the top of the previously visible Codex
+                // history so replay does not reappear with a blank gap above it.
+                area.y = area.y.saturating_sub(old_visible_history_rows);
+                tui.terminal.set_viewport_area(area);
+            }
+        }
+        self.has_emitted_history_lines = false;
+
+        if !replay_cells.is_empty() {
+            self.replay_history_cells_to_terminal(tui, replay_cells);
+        }
+        Ok(())
     }
 
     async fn shutdown_current_thread(&mut self) {
@@ -1457,6 +1533,10 @@ impl App {
                     }
                     self.chat_widget.add_plain_history_lines(lines);
                 }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::ClearUi => {
+                self.clear_terminal_ui(tui)?;
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenResumePicker => {
@@ -3022,6 +3102,19 @@ mod tests {
     use tempfile::tempdir;
     use tokio::time;
 
+    fn lines_to_single_string(lines: &[Line<'_>]) -> String {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
         let temp_dir = tempdir()?;
@@ -3277,6 +3370,73 @@ mod tests {
             Some((active_thread_id, primary_thread_id))
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn clear_ui_replay_cells_for_latest_initialization_keeps_only_preamble_before_user_turn()
+    {
+        let mut app = make_test_app().await;
+
+        let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(UserHistoryCell {
+                message: text.to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>
+        };
+        let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from(text.to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>
+        };
+        let make_header = |is_first| -> Arc<dyn HistoryCell> {
+            let event = SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            };
+            Arc::new(new_session_info(
+                app.chat_widget.config_ref(),
+                app.chat_widget.current_model(),
+                event,
+                is_first,
+                None,
+            )) as Arc<dyn HistoryCell>
+        };
+
+        app.transcript_cells = vec![
+            make_header(true),
+            user_cell("old user"),
+            agent_cell("old answer"),
+            make_header(false),
+            Arc::new(crate::history_cell::new_info_event(
+                "startup tip".to_string(),
+                None,
+            )) as Arc<dyn HistoryCell>,
+            user_cell("current user"),
+            agent_cell("current answer"),
+        ];
+
+        let replay = app.clear_ui_replay_cells_for_latest_initialization();
+        let rendered: Vec<Vec<Line<'static>>> =
+            replay.iter().map(|cell| cell.display_lines(80)).collect();
+
+        assert_eq!(replay.len(), 2);
+        assert!(lines_to_single_string(&rendered[0]).contains("gpt-test"));
+        assert!(lines_to_single_string(&rendered[1]).contains("startup tip"));
     }
 
     async fn make_test_app() -> App {
