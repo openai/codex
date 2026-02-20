@@ -51,6 +51,18 @@ pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bo
     provider.is_openai()
 }
 
+fn is_model_switch_developer_message(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { role, content, .. } if role == "developer" => {
+            matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }] if text.starts_with("<model_switch>\n")
+            )
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn extract_trailing_model_switch_update_for_compaction_request(
     history: &mut ContextManager,
 ) -> Option<ResponseItem> {
@@ -64,7 +76,7 @@ pub(crate) fn extract_trailing_model_switch_update_for_compaction_request(
         .rev()
         .find_map(|(i, item)| {
             let is_trailing = last_user_turn_boundary_index.is_none_or(|boundary| i > boundary);
-            if is_trailing && Session::is_model_switch_developer_message(item) {
+            if is_trailing && is_model_switch_developer_message(item) {
                 Some(i)
             } else {
                 None
@@ -604,7 +616,7 @@ mod tests {
             history
                 .raw_items()
                 .iter()
-                .all(|item| !Session::is_model_switch_developer_message(item))
+                .all(|item| !is_model_switch_developer_message(item))
         );
     }
 
@@ -659,7 +671,7 @@ mod tests {
             history
                 .raw_items()
                 .iter()
-                .any(Session::is_model_switch_developer_message)
+                .any(is_model_switch_developer_message)
         );
     }
 
