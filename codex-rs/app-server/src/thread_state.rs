@@ -50,6 +50,8 @@ pub(crate) struct ThreadState {
     pub(crate) listener_generation: u64,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
+    known_turn_ids: HashSet<String>,
+    known_turn_ids_seeded: bool,
     listener_thread: Option<Weak<CodexThread>>,
     subscribed_connections: HashSet<ConnectionId>,
 }
@@ -112,8 +114,35 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
+    pub(crate) fn active_turn_id(&self) -> Option<&str> {
+        self.current_turn_history.active_turn_id()
+    }
+
+    pub(crate) fn has_known_turn_id(&self, turn_id: &str) -> bool {
+        self.known_turn_ids.contains(turn_id)
+    }
+
+    pub(crate) fn known_turn_ids_seeded(&self) -> bool {
+        self.known_turn_ids_seeded
+    }
+
+    pub(crate) fn seed_known_turn_ids(&mut self, turn_ids: impl IntoIterator<Item = String>) {
+        if self.known_turn_ids_seeded {
+            return;
+        }
+        self.known_turn_ids.extend(turn_ids);
+        self.known_turn_ids_seeded = true;
+    }
+
+    pub(crate) fn remember_turn_id(&mut self, turn_id: impl Into<String>) {
+        self.known_turn_ids.insert(turn_id.into());
+    }
+
     pub(crate) fn track_current_turn_event(&mut self, event: &EventMsg) {
         self.current_turn_history.handle_event(event);
+        if let Some(active_turn_id) = self.current_turn_history.active_turn_id() {
+            self.known_turn_ids.insert(active_turn_id.to_string());
+        }
         if !self.current_turn_history.has_active_turn() {
             self.current_turn_history.reset();
         }

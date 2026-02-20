@@ -82,6 +82,43 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_start_uses_caller_supplied_thread_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let requested_thread_id = "018f2b7a-5d5d-7c39-9d6b-9f3f88d4f1c2".to_string();
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            thread_id: Some(requested_thread_id.clone()),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+    assert_eq!(thread.id, requested_thread_id);
+
+    let notif: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/started"),
+    )
+    .await??;
+    let started: ThreadStartedNotification =
+        serde_json::from_value(notif.params.expect("params must be present"))?;
+    assert_eq!(started.thread.id, thread.id);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_respects_project_config_from_cwd() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 

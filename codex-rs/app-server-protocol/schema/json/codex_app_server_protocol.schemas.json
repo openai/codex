@@ -16725,6 +16725,13 @@
                 "type": "null"
               }
             ]
+          },
+          "threadId": {
+            "description": "Optional caller-supplied thread ID (UUID). If omitted, the server generates a new thread ID.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "title": "ThreadStartParams",
@@ -17304,6 +17311,13 @@
           },
           "threadId": {
             "type": "string"
+          },
+          "turnId": {
+            "description": "Optional caller-supplied turn ID (UUID). If omitted, the server generates a new turn ID.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

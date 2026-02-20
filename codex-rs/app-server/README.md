@@ -119,7 +119,7 @@ Example with notification opt-out:
 
 ## API Overview
 
-- `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
+- `thread/start` — create a new thread; optionally supply `threadId` (UUID) to pre-assign the thread id. Emits `thread/started` and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, and `cwd` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
@@ -132,7 +132,7 @@ Example with notification opt-out:
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
+- `turn/start` — add user input to a thread and begin Codex generation; optionally supply `turnId` (UUID) to pre-assign the turn id. Responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
@@ -163,6 +163,8 @@ Start a fresh thread when you need a new Codex conversation.
 
 ```json
 { "method": "thread/start", "id": 10, "params": {
+    // Optionally pre-assign the thread id (must be a UUID string).
+    "threadId": "018f2b7a-5d5d-7c39-9d6b-9f3f88d4f1c2",
     // Optionally set config settings. If not specified, will use the user's
     // current config settings.
     "model": "gpt-5.1-codex",
@@ -344,6 +346,8 @@ You can optionally specify config overrides on the new turn. If specified, these
 ```json
 { "method": "turn/start", "id": 30, "params": {
     "threadId": "thr_123",
+    // Optionally pre-assign the turn id (must be a UUID string).
+    "turnId": "018f2b7a-5d5d-7c39-9d6b-9f3f88d4f1c3",
     "input": [ { "type": "text", "text": "Run tests" } ],
     // Below are optional config overrides
     "cwd": "/Users/me/project",

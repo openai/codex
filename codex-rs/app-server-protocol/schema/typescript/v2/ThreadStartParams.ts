@@ -6,7 +6,11 @@ import type { JsonValue } from "../serde_json/JsonValue";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxMode } from "./SandboxMode";
 
-export type ThreadStartParams = {model?: string | null, modelProvider?: string | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null, /**
+export type ThreadStartParams = {/**
+ * Optional caller-supplied thread ID (UUID). If omitted, the server
+ * generates a new thread ID.
+ */
+threadId?: string | null, model?: string | null, modelProvider?: string | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null, /**
  * If true, opt into emitting raw Responses API items on the event stream.
  * This is for internal use only (e.g. Codex Cloud).
  */

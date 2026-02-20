@@ -300,6 +300,7 @@ impl Codex {
         agent_control: AgentControl,
         dynamic_tools: Vec<DynamicToolSpec>,
         persist_extended_history: bool,
+        requested_thread_id: Option<ThreadId>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -429,6 +430,7 @@ impl Codex {
             skills_manager,
             file_watcher,
             agent_control,
+            requested_thread_id,
         )
         .instrument(session_init_span)
         .await
@@ -469,6 +471,7 @@ impl Codex {
     /// Use sparingly: prefer `submit()` so Codex is responsible for generating
     /// unique IDs for each submission.
     pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
+        self.session.reserve_submission_id(&sub.id).await?;
         self.tx_sub
             .send(sub)
             .await
@@ -524,6 +527,7 @@ pub(crate) struct Session {
     features: Features,
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    submitted_ids: Mutex<HashSet<String>>,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
@@ -1003,6 +1007,7 @@ impl Session {
         skills_manager: Arc<SkillsManager>,
         file_watcher: Arc<FileWatcher>,
         agent_control: AgentControl,
+        requested_thread_id: Option<ThreadId>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1020,7 +1025,7 @@ impl Session {
 
         let (conversation_id, rollout_params) = match &initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
-                let conversation_id = ThreadId::default();
+                let conversation_id = requested_thread_id.unwrap_or_default();
                 (
                     conversation_id,
                     RolloutRecorderParams::new(
@@ -1358,6 +1363,7 @@ impl Session {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
+            submitted_ids: Mutex::new(HashSet::new()),
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
@@ -1772,6 +1778,17 @@ impl Session {
     pub(crate) async fn set_previous_model(&self, previous_model: Option<String>) {
         let mut state = self.state.lock().await;
         state.set_previous_model(previous_model);
+    }
+
+    async fn reserve_submission_id(&self, submission_id: &str) -> CodexResult<()> {
+        let mut submitted_ids = self.submitted_ids.lock().await;
+        if submitted_ids.insert(submission_id.to_string()) {
+            return Ok(());
+        }
+
+        Err(CodexErr::InvalidRequest(format!(
+            "duplicate submission id: {submission_id}"
+        )))
     }
 
     fn maybe_refresh_shell_snapshot_for_cwd(
@@ -7314,6 +7331,7 @@ mod tests {
             Arc::new(SkillsManager::new(config.codex_home.clone())),
             Arc::new(FileWatcher::noop()),
             AgentControl::default(),
+            None,
         )
         .await;
 
@@ -7468,6 +7486,7 @@ mod tests {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
+            submitted_ids: Mutex::new(HashSet::new()),
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
@@ -7624,6 +7643,7 @@ mod tests {
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
+            submitted_ids: Mutex::new(HashSet::new()),
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),

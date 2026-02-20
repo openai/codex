@@ -1546,6 +1546,10 @@ pub struct CommandExecResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadStartParams {
+    /// Optional caller-supplied thread ID (UUID). If omitted, the server
+    /// generates a new thread ID.
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     #[ts(optional = nullable)]
     pub model: Option<String>,
     #[ts(optional = nullable)]
@@ -2402,6 +2406,10 @@ pub enum TurnStatus {
 #[ts(export_to = "v2/")]
 pub struct TurnStartParams {
     pub thread_id: String,
+    /// Optional caller-supplied turn ID (UUID). If omitted, the server
+    /// generates a new turn ID.
+    #[ts(optional = nullable)]
+    pub turn_id: Option<String>,
     pub input: Vec<UserInput>,
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]

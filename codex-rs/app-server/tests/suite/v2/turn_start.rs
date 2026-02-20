@@ -19,6 +19,7 @@ use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PatchApplyStatus;
@@ -131,6 +132,199 @@ async fn turn_start_sends_originator_header() -> Result<()> {
             .expect("originator header missing");
         assert_eq!(originator.to_str()?, TEST_ORIGINATOR);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_uses_caller_supplied_turn_id() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let requested_turn_id = "018f2b7a-5d5d-7c39-9d6b-9f3f88d4f1d3".to_string();
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            turn_id: Some(requested_turn_id.clone()),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn: started_turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    assert_eq!(started_turn.id, requested_turn_id);
+
+    let notif: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/started"),
+    )
+    .await??;
+    let started: TurnStartedNotification =
+        serde_json::from_value(notif.params.expect("turn/started params"))?;
+    assert_eq!(started.thread_id, thread.id);
+    assert_eq!(started.turn.id, started_turn.id);
+
+    let completed_notif: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let completed: TurnCompletedNotification =
+        serde_json::from_value(completed_notif.params.expect("turn/completed params"))?;
+    assert_eq!(completed.turn.id, started_turn.id);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_rejects_non_uuid_turn_id() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            turn_id: Some("not-a-uuid".to_string()),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    assert!(err.error.message.contains("invalid turnId"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_rejects_duplicate_turn_id() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let requested_turn_id = "018f2b7a-5d5d-7c39-9d6b-9f3f88d4f1d4".to_string();
+    let first_turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            turn_id: Some(requested_turn_id.clone()),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(first_turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let second_turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            turn_id: Some(requested_turn_id.to_uppercase()),
+            input: vec![V2UserInput::Text {
+                text: "Hello again".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(second_turn_req)),
+    )
+    .await??;
+    assert!(err.error.message.contains("turnId already exists"));
 
     Ok(())
 }
@@ -1101,6 +1295,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     let first_turn = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            turn_id: None,
             input: vec![V2UserInput::Text {
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
@@ -1138,6 +1333,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     let second_turn = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            turn_id: None,
             input: vec![V2UserInput::Text {
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
