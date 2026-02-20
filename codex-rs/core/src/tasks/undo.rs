@@ -7,6 +7,7 @@ use crate::protocol::UndoStartedEvent;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::TaskRunOutput;
 use async_trait::async_trait;
 use codex_git::RestoreGhostCommitOptions;
 use codex_git::restore_ghost_commit_with_options;
@@ -37,7 +38,7 @@ impl SessionTask for UndoTask {
         ctx: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> TaskRunOutput {
         let _ = session
             .session
             .services
@@ -61,7 +62,7 @@ impl SessionTask for UndoTask {
                 }),
             )
             .await;
-            return None;
+            return TaskRunOutput::default();
         }
 
         let history = sess.clone_history().await;
@@ -86,7 +87,7 @@ impl SessionTask for UndoTask {
             completed.message = Some("No ghost snapshot available to undo.".to_string());
             sess.send_event(ctx.as_ref(), EventMsg::UndoCompleted(completed))
                 .await;
-            return None;
+            return TaskRunOutput::default();
         };
 
         let commit_id = ghost_commit.id().to_string();
@@ -122,6 +123,6 @@ impl SessionTask for UndoTask {
 
         sess.send_event(ctx.as_ref(), EventMsg::UndoCompleted(completed))
             .await;
-        None
+        TaskRunOutput::default()
     }
 }

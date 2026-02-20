@@ -4,6 +4,7 @@ use crate::protocol::WarningEvent;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::TaskRunOutput;
 use async_trait::async_trait;
 use codex_git::CreateGhostCommitOptions;
 use codex_git::GhostSnapshotReport;
@@ -38,7 +39,7 @@ impl SessionTask for GhostSnapshotTask {
         ctx: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> TaskRunOutput {
         tokio::task::spawn(async move {
             let token = self.token;
             let warnings_enabled = !ctx.ghost_snapshot.disable_warnings;
@@ -152,7 +153,7 @@ impl SessionTask for GhostSnapshotTask {
                 Err(err) => warn!("failed to mark ghost snapshot ready: {err}"),
             }
         });
-        None
+        TaskRunOutput::default()
     }
 }
 
