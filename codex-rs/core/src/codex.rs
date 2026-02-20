@@ -413,6 +413,7 @@ impl Codex {
 
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
+        let session_source_for_diag = session_source_clone.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
         let session_init_span = info_span!("session_init");
@@ -433,6 +434,12 @@ impl Codex {
         .instrument(session_init_span)
         .await
         .map_err(|e| {
+            warn!(
+                diagnostic_event = "session_init_failed_before_final_status",
+                pending_status = ?AgentStatus::PendingInit,
+                session_source = ?session_source_for_diag,
+                "session initialization failed before final agent status emission"
+            );
             error!("Failed to create session: {e:#}");
             map_session_init_error(&e, &config.codex_home)
         })?;
