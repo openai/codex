@@ -344,26 +344,22 @@ fn insert_initial_context_before_last_real_user_or_summary(
     mut compacted_history: Vec<ResponseItem>,
     initial_context: Vec<ResponseItem>,
 ) -> Vec<ResponseItem> {
-    let last_real_user_index = compacted_history
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(
-            |(i, item)| match crate::event_mapping::parse_turn_item(item) {
-                Some(TurnItem::UserMessage(user)) if !is_summary_message(&user.message()) => {
-                    Some(i)
-                }
-                _ => None,
-            },
-        );
-    let insertion_index = last_real_user_index.or_else(|| {
-        compacted_history.iter().rposition(|item| {
-            matches!(
-                crate::event_mapping::parse_turn_item(item),
-                Some(TurnItem::UserMessage(_))
-            )
-        })
-    });
+    let mut last_user_or_summary_index = None;
+    let mut last_real_user_index = None;
+    for (i, item) in compacted_history.iter().enumerate().rev() {
+        let Some(TurnItem::UserMessage(user)) = crate::event_mapping::parse_turn_item(item) else {
+            continue;
+        };
+        // Compaction summaries are encoded as user messages, so track both:
+        // the last real user message (preferred insertion point) and the last
+        // user-message-like item (fallback summary insertion point).
+        last_user_or_summary_index.get_or_insert(i);
+        if !is_summary_message(&user.message()) {
+            last_real_user_index = Some(i);
+            break;
+        }
+    }
+    let insertion_index = last_real_user_index.or(last_user_or_summary_index);
 
     // Re-inject canonical context from the current session since we stripped it
     // from the pre-compaction history. Prefer placing it before the last real
