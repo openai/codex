@@ -71,6 +71,7 @@ use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_core::CodexThread;
+use codex_core::find_thread_name_by_id;
 use codex_core::parse_command::shlex_join;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -96,11 +97,13 @@ use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUse
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::error;
+use tracing::warn;
 
 type JsonValue = serde_json::Value;
 
@@ -113,6 +116,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
     api_version: ApiVersion,
     fallback_model_provider: String,
+    codex_home: &Path,
 ) {
     let Event {
         id: event_turn_id,
@@ -1107,6 +1111,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
                             Ok(items) => {
                                 thread.turns = build_turns_from_rollout_items(&items);
+                                match find_thread_name_by_id(codex_home, &conversation_id).await {
+                                    Ok(name) => {
+                                        thread.thread_name = name;
+                                    }
+                                    Err(err) => {
+                                        warn!(
+                                            "Failed to read thread name for {conversation_id}: {err}"
+                                        );
+                                    }
+                                }
                                 ThreadRollbackResponse { thread }
                             }
                             Err(err) => {

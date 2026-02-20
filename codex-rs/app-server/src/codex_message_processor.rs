@@ -2345,7 +2345,9 @@ impl CodexMessageProcessor {
         .await;
 
         match result {
-            Ok(thread) => {
+            Ok(mut thread) => {
+                self.attach_thread_name(thread_id.clone(), &mut thread)
+                    .await;
                 let thread_id = thread.id.clone();
                 let response = ThreadUnarchiveResponse { thread };
                 self.outgoing.send_response(request_id, response).await;
@@ -5773,6 +5775,7 @@ impl CodexMessageProcessor {
         }
         let outgoing_for_task = self.outgoing.clone();
         let fallback_model_provider = self.config.model_provider_id.clone();
+        let codex_home = self.config.codex_home.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -5848,6 +5851,7 @@ impl CodexMessageProcessor {
                             thread_state.clone(),
                             api_version,
                             fallback_model_provider.clone(),
+                            codex_home.as_path(),
                         )
                         .await;
                     }
