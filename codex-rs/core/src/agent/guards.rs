@@ -27,7 +27,8 @@ pub(crate) struct Guards {
 struct ActiveAgents {
     threads_set: HashSet<ThreadId>,
     thread_agent_nicknames: HashMap<ThreadId, String>,
-    active_agent_nicknames: HashSet<String>,
+    used_agent_nicknames: HashSet<String>,
+    nickname_reset_count: usize,
 }
 
 fn session_depth(session_source: &SessionSource) -> i32 {
@@ -72,11 +73,7 @@ impl Guards {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let removed = active_agents.threads_set.remove(&thread_id);
-            if let Some(agent_nickname) = active_agents.thread_agent_nicknames.remove(&thread_id) {
-                active_agents
-                    .active_agent_nicknames
-                    .remove(agent_nickname.as_str());
-            }
+            active_agents.thread_agent_nicknames.remove(&thread_id);
             removed
         };
         if removed {
@@ -92,7 +89,7 @@ impl Guards {
         active_agents.threads_set.insert(thread_id);
         if let Some(agent_nickname) = agent_nickname {
             active_agents
-                .active_agent_nicknames
+                .used_agent_nicknames
                 .insert(agent_nickname.clone());
             active_agents
                 .thread_agent_nicknames
@@ -100,29 +97,34 @@ impl Guards {
         }
     }
 
-    fn reserve_agent_nickname(&self, names: &[&str]) -> Option<String> {
+    fn reserve_agent_nickname(&self, names: &[&str], preferred: Option<&str>) -> Option<String> {
         let mut active_agents = self
             .active_agents
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let available_names: Vec<&str> = names
-            .iter()
-            .copied()
-            .filter(|name| !active_agents.active_agent_nicknames.contains(*name))
-            .collect();
-        let agent_nickname = available_names.choose(&mut rand::rng())?.to_string();
+        let agent_nickname = if let Some(preferred) = preferred {
+            preferred.to_string()
+        } else {
+            if names.is_empty() {
+                return None;
+            }
+            let available_names: Vec<&str> = names
+                .iter()
+                .copied()
+                .filter(|name| !active_agents.used_agent_nicknames.contains(*name))
+                .collect();
+            if let Some(name) = available_names.choose(&mut rand::rng()) {
+                (*name).to_string()
+            } else {
+                active_agents.used_agent_nicknames.clear();
+                active_agents.nickname_reset_count += 1;
+                names.choose(&mut rand::rng())?.to_string()
+            }
+        };
         active_agents
-            .active_agent_nicknames
+            .used_agent_nicknames
             .insert(agent_nickname.clone());
         Some(agent_nickname)
-    }
-
-    fn release_reserved_agent_nickname(&self, agent_nickname: &str) {
-        let mut active_agents = self
-            .active_agents
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        active_agents.active_agent_nicknames.remove(agent_nickname);
     }
 
     fn try_increment_spawned(&self, max_threads: usize) -> bool {
@@ -152,9 +154,20 @@ pub(crate) struct SpawnReservation {
 
 impl SpawnReservation {
     pub(crate) fn reserve_agent_nickname(&mut self, names: &[&str]) -> Result<String> {
-        let agent_nickname = self.state.reserve_agent_nickname(names).ok_or_else(|| {
-            CodexErr::UnsupportedOperation("no available agent nicknames".to_string())
-        })?;
+        self.reserve_agent_nickname_with_preference(names, None)
+    }
+
+    pub(crate) fn reserve_agent_nickname_with_preference(
+        &mut self,
+        names: &[&str],
+        preferred: Option<&str>,
+    ) -> Result<String> {
+        let agent_nickname = self
+            .state
+            .reserve_agent_nickname(names, preferred)
+            .ok_or_else(|| {
+                CodexErr::UnsupportedOperation("no available agent nicknames".to_string())
+            })?;
         self.reserved_agent_nickname = Some(agent_nickname.clone());
         Ok(agent_nickname)
     }
@@ -177,10 +190,6 @@ impl SpawnReservation {
 
 impl Drop for SpawnReservation {
     fn drop(&mut self) {
-        if let Some(agent_nickname) = self.reserved_agent_nickname.take() {
-            self.state
-                .release_reserved_agent_nickname(agent_nickname.as_str());
-        }
         if self.active {
             self.state.total_count.fetch_sub(1, Ordering::AcqRel);
         }
@@ -308,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn reserved_agent_nickname_is_released_when_spawn_fails() {
+    fn failed_spawn_keeps_nickname_marked_used() {
         let guards = Arc::new(Guards::default());
         let mut reservation = guards.reserve_spawn_slot(None).expect("reserve slot");
         let agent_nickname = reservation
@@ -319,13 +328,13 @@ mod tests {
 
         let mut reservation = guards.reserve_spawn_slot(None).expect("reserve slot");
         let agent_nickname = reservation
-            .reserve_agent_nickname(&["alpha"])
-            .expect("name released after failed spawn");
-        assert_eq!(agent_nickname, "alpha");
+            .reserve_agent_nickname(&["alpha", "beta"])
+            .expect("unused name should still be preferred");
+        assert_eq!(agent_nickname, "beta");
     }
 
     #[test]
-    fn agent_nickname_stays_unique_until_thread_is_released() {
+    fn agent_nickname_resets_used_pool_when_exhausted() {
         let guards = Arc::new(Guards::default());
         let mut first = guards.reserve_spawn_slot(None).expect("reserve first slot");
         let first_name = first
@@ -333,18 +342,56 @@ mod tests {
             .expect("reserve first agent name");
         let first_id = ThreadId::new();
         first.commit(first_id);
+        assert_eq!(first_name, "alpha");
 
         let mut second = guards
             .reserve_spawn_slot(None)
             .expect("reserve second slot");
-        let err = second.reserve_agent_nickname(&["alpha"]);
-        assert!(err.is_err());
+        let second_name = second
+            .reserve_agent_nickname(&["alpha"])
+            .expect("name should be re-used after pool reset");
+        assert_eq!(second_name, "alpha");
+        let active_agents = guards
+            .active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(active_agents.nickname_reset_count, 1);
+    }
+
+    #[test]
+    fn released_nickname_stays_used_until_pool_reset() {
+        let guards = Arc::new(Guards::default());
+
+        let mut first = guards.reserve_spawn_slot(None).expect("reserve first slot");
+        let first_name = first
+            .reserve_agent_nickname(&["alpha"])
+            .expect("reserve first agent name");
+        let first_id = ThreadId::new();
+        first.commit(first_id);
+        assert_eq!(first_name, "alpha");
 
         guards.release_spawned_thread(first_id);
 
+        let mut second = guards
+            .reserve_spawn_slot(None)
+            .expect("reserve second slot");
         let second_name = second
-            .reserve_agent_nickname(&["alpha"])
-            .expect("name available after release");
-        assert_eq!(second_name, first_name);
+            .reserve_agent_nickname(&["alpha", "beta"])
+            .expect("released name should still be marked used");
+        assert_eq!(second_name, "beta");
+        let second_id = ThreadId::new();
+        second.commit(second_id);
+        guards.release_spawned_thread(second_id);
+
+        let mut third = guards.reserve_spawn_slot(None).expect("reserve third slot");
+        let third_name = third
+            .reserve_agent_nickname(&["alpha", "beta"])
+            .expect("pool reset should permit a duplicate");
+        assert!(third_name == "alpha" || third_name == "beta");
+        let active_agents = guards
+            .active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(active_agents.nickname_reset_count, 1);
     }
 }

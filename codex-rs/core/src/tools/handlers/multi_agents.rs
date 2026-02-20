@@ -335,15 +335,7 @@ mod resume_agent {
             .await;
         let error = if matches!(status, AgentStatus::NotFound) {
             // If the thread is no longer active, attempt to restore it from rollout.
-            match try_resume_closed_agent(
-                &session,
-                &turn,
-                receiver_thread_id,
-                &args.id,
-                child_depth,
-            )
-            .await
-            {
+            match try_resume_closed_agent(&session, &turn, receiver_thread_id, child_depth).await {
                 Ok(resumed_status) => {
                     status = resumed_status;
                     None
@@ -392,32 +384,15 @@ mod resume_agent {
         session: &Arc<Session>,
         turn: &Arc<TurnContext>,
         receiver_thread_id: ThreadId,
-        receiver_id: &str,
         child_depth: i32,
     ) -> Result<AgentStatus, FunctionCallError> {
-        let rollout_path = find_thread_path_by_id_str(
-            turn.config.codex_home.as_path(),
-            receiver_id,
-        )
-        .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "tool failed: failed to locate rollout for agent {receiver_thread_id}: {err}"
-            ))
-        })?
-        .ok_or_else(|| {
-            FunctionCallError::RespondToModel(format!(
-                "agent with id {receiver_thread_id} not found"
-            ))
-        })?;
-
         let config = build_agent_resume_config(turn.as_ref(), child_depth)?;
         let resumed_thread_id = session
             .services
             .agent_control
             .resume_agent_from_rollout(
                 config,
-                rollout_path,
+                receiver_thread_id,
                 thread_spawn_source(session.conversation_id, child_depth, None),
             )
             .await
