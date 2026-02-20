@@ -1590,7 +1590,7 @@ impl Session {
                 self.record_conversation_items(&turn_context, &items).await;
                 {
                     let mut state = self.state.lock().await;
-                    state.set_previous_context_item(Some(turn_context.to_turn_context_item()));
+                    state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
                 }
                 self.set_previous_model(None).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
@@ -1604,7 +1604,7 @@ impl Session {
                     .map(std::string::ToString::to_string);
                 {
                     let mut state = self.state.lock().await;
-                    state.set_previous_context_item(None);
+                    state.set_reference_context_item(None);
                 }
                 self.set_previous_model(previous_model).await;
 
@@ -1686,7 +1686,7 @@ impl Session {
                     .await;
                 {
                     let mut state = self.state.lock().await;
-                    state.set_previous_context_item(Some(turn_context.to_turn_context_item()));
+                    state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
                 }
 
                 // Forked threads should remain file-backed immediately after startup.
@@ -2655,42 +2655,42 @@ impl Session {
         state.clone_history()
     }
 
-    pub(crate) async fn previous_context_item(&self) -> Option<TurnContextItem> {
+    pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
         let state = self.state.lock().await;
-        state.previous_context_item()
+        state.reference_context_item()
     }
 
-    pub(crate) async fn clear_previous_context_item(&self) {
+    pub(crate) async fn clear_reference_context_item(&self) {
         let mut state = self.state.lock().await;
-        state.set_previous_context_item(None);
+        state.set_reference_context_item(None);
     }
 
     /// Persist the latest turn context snapshot and emit any required model-visible context updates.
     ///
-    /// When the previous snapshot is missing (or `force_full_context_injection` is true), this
+    /// When the reference snapshot is missing (or `force_full_context_injection` is true), this
     /// injects full initial context. Otherwise, it emits only settings diff items.
     ///
     /// If full context is injected and a model switch occurred, this appends the `<model_switch>`
     /// developer message so model-specific instructions are not lost.
     ///
     /// Invariant: this is the only runtime path that writes a non-`None`
-    /// `previous_context_item`. Non-regular tasks intentionally do not update that
-    /// baseline; `previous_context_item` tracks the latest regular model turn.
-    pub(crate) async fn record_context_updates_and_set_previous_context_item(
+    /// `reference_context_item`. Non-regular tasks intentionally do not update that
+    /// baseline; `reference_context_item` tracks the latest regular model turn.
+    pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
         resumed_model: Option<&str>,
         force_full_context_injection: bool,
         emit_raw_events: bool,
     ) {
-        let previous_context_item = self.previous_context_item().await;
+        let reference_context_item = self.reference_context_item().await;
         let settings_update_items = self.build_settings_update_items(
-            previous_context_item.as_ref(),
+            reference_context_item.as_ref(),
             resumed_model,
             turn_context,
         );
         let should_inject_full_context =
-            force_full_context_injection || previous_context_item.is_none();
+            force_full_context_injection || reference_context_item.is_none();
         let context_items = if should_inject_full_context {
             let mut initial_context = self.build_initial_context(turn_context).await;
             // Full reinjection bypasses the pure diff item list, so explicitly preserve a
@@ -2718,7 +2718,7 @@ impl Session {
         }
 
         let mut state = self.state.lock().await;
-        state.set_previous_context_item(Some(turn_context.to_turn_context_item()));
+        state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -3509,7 +3509,7 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
-        // Standalone shell tasks do not update `previous_context_item`; that
+        // Standalone shell tasks do not update `reference_context_item`; that
         // baseline is owned by regular model turns only.
     }
 
@@ -4328,7 +4328,7 @@ pub(crate) async fn run_turn(
     };
 
     let previous_model = sess.previous_model().await;
-    sess.record_context_updates_and_set_previous_context_item(
+    sess.record_context_updates_and_set_reference_context_item(
         turn_context.as_ref(),
         previous_model.as_deref(),
         pre_sampling_compacted,
@@ -6504,14 +6504,24 @@ mod tests {
         assert_eq!(expected, history_before_seed.raw_items());
 
         session
-            .record_context_updates_and_set_previous_context_item(&turn_context, None, false, false)
+            .record_context_updates_and_set_reference_context_item(
+                &turn_context,
+                None,
+                false,
+                false,
+            )
             .await;
         expected.extend(session.build_initial_context(&turn_context).await);
         let history_after_seed = session.clone_history().await;
         assert_eq!(expected, history_after_seed.raw_items());
 
         session
-            .record_context_updates_and_set_previous_context_item(&turn_context, None, false, false)
+            .record_context_updates_and_set_reference_context_item(
+                &turn_context,
+                None,
+                false,
+                false,
+            )
             .await;
         let history_after_second_seed = session.clone_history().await;
         assert_eq!(expected, history_after_second_seed.raw_items());
@@ -7800,9 +7810,9 @@ mod tests {
         .expect("rebuild config layer stack with network requirements");
         current_context.config = Arc::new(config);
 
-        let previous_context_item = previous_context.to_turn_context_item();
+        let reference_context_item = previous_context.to_turn_context_item();
         let update_items = session.build_settings_update_items(
-            Some(&previous_context_item),
+            Some(&reference_context_item),
             None,
             &current_context,
         );
@@ -7825,17 +7835,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_context_updates_and_set_previous_context_item_injects_full_context_when_baseline_missing()
+    async fn record_context_updates_and_set_reference_context_item_injects_full_context_when_baseline_missing()
      {
         let (session, turn_context) = make_session_and_context().await;
         session
-            .record_context_updates_and_set_previous_context_item(&turn_context, None, false, false)
+            .record_context_updates_and_set_reference_context_item(
+                &turn_context,
+                None,
+                false,
+                false,
+            )
             .await;
         let history = session.clone_history().await;
         let initial_context = session.build_initial_context(&turn_context).await;
         assert_eq!(history.raw_items().to_vec(), initial_context);
 
-        let current_context = session.previous_context_item().await;
+        let current_context = session.reference_context_item().await;
         assert_eq!(
             serde_json::to_value(current_context).expect("serialize current context item"),
             serde_json::to_value(Some(turn_context.to_turn_context_item()))
@@ -7844,7 +7859,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_context_updates_and_set_previous_context_item_reinjects_full_context_after_clear()
+    async fn record_context_updates_and_set_reference_context_item_reinjects_full_context_after_clear()
      {
         let (session, turn_context) = make_session_and_context().await;
         let compacted_summary = ResponseItem::Message {
@@ -7860,15 +7875,25 @@ mod tests {
             .record_into_history(std::slice::from_ref(&compacted_summary), &turn_context)
             .await;
         session
-            .record_context_updates_and_set_previous_context_item(&turn_context, None, false, false)
+            .record_context_updates_and_set_reference_context_item(
+                &turn_context,
+                None,
+                false,
+                false,
+            )
             .await;
-        session.clear_previous_context_item().await;
+        session.clear_reference_context_item().await;
         session
             .replace_history(vec![compacted_summary.clone()])
             .await;
 
         session
-            .record_context_updates_and_set_previous_context_item(&turn_context, None, false, false)
+            .record_context_updates_and_set_reference_context_item(
+                &turn_context,
+                None,
+                false,
+                false,
+            )
             .await;
 
         let history = session.clone_history().await;
@@ -7878,9 +7903,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_user_shell_command_does_not_set_previous_context_item() {
+    async fn run_user_shell_command_does_not_set_reference_context_item() {
         let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
-        session.clear_previous_context_item().await;
+        session.clear_reference_context_item().await;
 
         handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
             .await;
@@ -7899,7 +7924,7 @@ mod tests {
         }
 
         assert!(
-            session.previous_context_item().await.is_none(),
+            session.reference_context_item().await.is_none(),
             "standalone shell tasks should not mutate previous context"
         );
     }

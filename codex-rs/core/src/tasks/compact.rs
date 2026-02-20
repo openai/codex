@@ -41,7 +41,7 @@ impl SessionTask for CompactTask {
             crate::compact::run_compact_task(session.clone(), ctx, input).await
         };
         if compact_result.is_ok() {
-            session.clear_previous_context_item().await;
+            session.clear_reference_context_item().await;
         }
 
         None
