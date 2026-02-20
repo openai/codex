@@ -2102,7 +2102,7 @@ impl Session {
     }
     fn build_settings_update_items(
         &self,
-        previous_context: Option<&TurnContextItem>,
+        reference_context_item: Option<&TurnContextItem>,
         previous_user_turn_model: Option<&str>,
         current_context: &TurnContext,
     ) -> Vec<ResponseItem> {
@@ -2113,7 +2113,7 @@ impl Session {
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
         crate::context_manager::updates::build_settings_update_items(
-            previous_context,
+            reference_context_item,
             previous_user_turn_model,
             current_context,
             shell.as_ref(),
