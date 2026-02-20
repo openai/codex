@@ -4,7 +4,7 @@
 //! - macOS: Uses native IOKit power assertions instead of spawning `caffeinate`.
 //! - Linux: Spawns `systemd-inhibit` or `gnome-session-inhibit` while active.
 //! - Windows: Uses `PowerCreateRequest` + `PowerSetRequest` with
-//!   `PowerRequestExecutionRequired`.
+//!   `PowerRequestSystemRequired`.
 //! - Other platforms: No-op backend.
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
