@@ -238,7 +238,7 @@ fn agent_label_spans(agent: AgentLabel<'_>) -> Vec<Span<'static>> {
     let role = agent.role.map(str::trim).filter(|role| !role.is_empty());
 
     if let Some(nickname) = nickname {
-        spans.push(Span::from(nickname.to_string()).yellow().bold());
+        spans.push(Span::from(nickname.to_string()).light_blue().bold());
     } else if let Some(thread_id) = agent.thread_id {
         spans.push(Span::from(thread_id.to_string()).dim());
     } else {
@@ -508,7 +508,7 @@ mod tests {
         let lines = cell.display_lines(200);
         let title = &lines[0];
         assert_eq!(title.spans[2].content.as_ref(), "Robie");
-        assert_eq!(title.spans[2].style.fg, Some(Color::Yellow));
+        assert_eq!(title.spans[2].style.fg, Some(Color::LightBlue));
         assert!(title.spans[2].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(title.spans[4].content.as_ref(), "[explorer]");
         assert!(title.spans[4].style.add_modifier.contains(Modifier::DIM));

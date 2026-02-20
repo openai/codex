@@ -1475,7 +1475,18 @@ mod tests {
                         .file_stem()
                         .and_then(|stem| stem.to_str())
                         .is_some_and(|stem| {
-                            stem.ends_with("Params") || stem == "InitializeCapabilities"
+                            stem.ends_with("Params")
+                                || stem == "InitializeCapabilities"
+                                || matches!(
+                                    stem,
+                                    "CollabAgentRef"
+                                        | "CollabAgentStatusEntry"
+                                        | "CollabAgentSpawnEndEvent"
+                                        | "CollabAgentInteractionEndEvent"
+                                        | "CollabCloseEndEvent"
+                                        | "CollabResumeBeginEvent"
+                                        | "CollabResumeEndEvent"
+                                )
                         });
 
                     let contents = fs::read_to_string(&path)?;
