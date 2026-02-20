@@ -1605,15 +1605,11 @@ impl Session {
                 let previous_model =
                     previous_regular_turn_context_item.map(|ctx| ctx.model.clone());
                 let curr = turn_context.model_info.slug.as_str();
-                let can_seed_reference_context_item = !crossed_compaction_after_turn
-                    && previous_regular_turn_context_item.is_some_and(|ctx| ctx.model == curr);
-                let reference_context_item = if can_seed_reference_context_item {
+                let reference_context_item = if !crossed_compaction_after_turn {
                     previous_regular_turn_context_item.cloned()
                 } else {
                     // Keep the baseline empty when compaction may have stripped the referenced
-                    // context diffs, or when resuming on a different model. The first resumed
-                    // turn will then do full reinjection (which also preserves personality spec
-                    // when the model changes).
+                    // context diffs so the first resumed regular turn fully reinjects context.
                     None
                 };
                 {
@@ -2798,6 +2794,9 @@ impl Session {
                     turn_context,
                 )
             {
+                // TODO(ccunningham): When a model switch changes the effective personality
+                // instructions, inject the updated personality spec alongside <model_switch>
+                // here so resume/model-switch paths can avoid forcing full reinjection.
                 initial_context.insert(0, model_switch_item);
             }
             initial_context
