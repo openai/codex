@@ -149,6 +149,8 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadSubmitOpParams;
+use codex_app_server_protocol::ThreadSubmitOpResponse;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnarchivedNotification;
@@ -584,6 +586,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadRead { request_id, params } => {
                 self.thread_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadSubmitOp { request_id, params } => {
+                self.thread_submit_op(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::SkillsList { request_id, params } => {
@@ -2782,6 +2788,46 @@ impl CodexMessageProcessor {
         );
         let response = ThreadReadResponse { thread };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn thread_submit_op(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadSubmitOpParams,
+    ) {
+        let ThreadSubmitOpParams { thread_id, op } = params;
+
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let op = match serde_json::from_value::<Op>(op) {
+            Ok(op) => op,
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("invalid core op payload: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        match thread.submit(op).await {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadSubmitOpResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to submit op: {err}"))
+                    .await;
+            }
+        }
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
