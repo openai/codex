@@ -1252,9 +1252,7 @@ fn image_data_url_payload_does_not_dominate_message_estimate() {
             ContentItem::InputText {
                 text: "Here is the screenshot".to_string(),
             },
-            ContentItem::InputImage {
-                image_url: image_url.clone(),
-            },
+            ContentItem::InputImage { image_url },
         ],
         end_turn: None,
         phase: None,
@@ -1289,9 +1287,7 @@ fn image_data_url_payload_does_not_dominate_function_call_output_estimate() {
             FunctionCallOutputContentItem::InputText {
                 text: "Screenshot captured".to_string(),
             },
-            FunctionCallOutputContentItem::InputImage {
-                image_url: image_url.clone(),
-            },
+            FunctionCallOutputContentItem::InputImage { image_url },
         ]),
     };
 
