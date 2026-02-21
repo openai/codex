@@ -95,7 +95,9 @@ Actions accept a single key or multiple keys:
 Some defaults intentionally include multiple variants for one logical shortcut
 because terminal modifier reporting can differ by platform/emulator. For
 example, `?` may arrive as plain `?` or `shift-?`, and control chords may
-arrive with or without `SHIFT`.
+arrive with or without `SHIFT`. Shifted letter bindings are also matched
+compatibly when terminals report uppercase letters without explicit `SHIFT`
+(for example, `shift-i` matching `I`).
 
 Aliases like `escape`, `pageup`, and `pgdn` are normalized.
 

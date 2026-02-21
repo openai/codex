@@ -73,6 +73,8 @@ yank = ["ctrl-y"]
 
 [tui.keymap.vim_normal]
 # Vim normal-mode actions for modal editing.
+# Shifted letter bindings also match uppercase event forms reported without
+# explicit SHIFT by some terminals.
 enter_insert = "i"
 append_after_cursor = "a"
 append_line_end = "shift-a"

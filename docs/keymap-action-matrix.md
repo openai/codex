@@ -24,6 +24,9 @@ For runtime behavior, safety invariants, and testing guidance, see
   - `composer.toggle_shortcuts`: `?` and `shift-?`
   - `approval.open_fullscreen`: `ctrl-a` and `ctrl-shift-a`
   - `onboarding.toggle_animation`: `ctrl-.` and `ctrl-shift-.`
+- Shifted letter bindings are also matched compatibly across terminal variants
+  when reported as uppercase letters without explicit `SHIFT` (for example
+  `shift-i` matching `I`, `shift-a` matching `A`, and `shift-o` matching `O`).
 - Keep these paired defaults unless/until key-event normalization is made
   platform-consistent at a lower layer.
 
