@@ -689,6 +689,9 @@ impl App {
                 codex_core::terminal::TerminalName::AppleTerminal
             );
 
+        // Drop queued history insertions so stale transcript lines cannot be flushed after /clear.
+        tui.clear_pending_history_lines();
+
         if is_alt_screen_active {
             tui.terminal.clear_visible_screen()?;
         } else if use_apple_terminal_clear_workaround {
