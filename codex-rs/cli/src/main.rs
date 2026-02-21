@@ -434,32 +434,42 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     let cmd_str = action.command_str();
     println!("Updating Codex via `{cmd_str}`...");
 
-    let status = {
-        #[cfg(windows)]
-        {
-            // On Windows, run via cmd.exe so .CMD/.BAT are correctly resolved (PATHEXT semantics).
-            std::process::Command::new("cmd")
-                .args(["/C", &cmd_str])
-                .status()?
-        }
-        #[cfg(not(windows))]
-        {
-            let (cmd, args) = action.command_args();
-            let command_path = crate::wsl_paths::normalize_for_wsl(cmd);
-            let normalized_args: Vec<String> = args
-                .iter()
-                .map(crate::wsl_paths::normalize_for_wsl)
-                .collect();
-            std::process::Command::new(&command_path)
-                .args(&normalized_args)
-                .status()?
-        }
-    };
+    let (command, args) = update_command(action);
+    let status = std::process::Command::new(&command).args(&args).status()?;
     if !status.success() {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }
     println!("\n🎉 Update ran successfully! Please restart Codex.");
     Ok(())
+}
+
+fn update_command(action: UpdateAction) -> (String, Vec<String>) {
+    #[cfg(windows)]
+    {
+        build_windows_update_command(action)
+    }
+    #[cfg(not(windows))]
+    {
+        let (cmd, args) = action.command_args();
+        let command_path = crate::wsl_paths::normalize_for_wsl(cmd);
+        let normalized_args = args
+            .iter()
+            .map(|arg| crate::wsl_paths::normalize_for_wsl(arg))
+            .collect();
+        (command_path, normalized_args)
+    }
+}
+
+fn build_windows_update_command(action: UpdateAction) -> (String, Vec<String>) {
+    let (cmd, args) = action.command_args();
+    let mut full_args = vec![
+        "/d".to_string(),
+        "/s".to_string(),
+        "/c".to_string(),
+        cmd.to_string(),
+    ];
+    full_args.extend(args.iter().map(|arg| arg.to_string()));
+    ("cmd".to_string(), full_args)
 }
 
 fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
@@ -1437,5 +1447,16 @@ mod tests {
             .to_overrides()
             .expect_err("feature should be rejected");
         assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
+    }
+
+    #[test]
+    fn windows_wrapped_update_command_includes_tool_and_args() {
+        let (command, args) = build_windows_update_command(UpdateAction::NpmGlobalLatest);
+
+        assert_eq!(command, "cmd");
+        assert_eq!(
+            args,
+            vec!["/d", "/s", "/c", "npm", "install", "-g", "@openai/codex"]
+        );
     }
 }
