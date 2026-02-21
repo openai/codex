@@ -5468,6 +5468,11 @@ fn agent_message_text(item: &codex_protocol::items::AgentMessageItem) -> String 
 
 fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
     match msg {
+        EventMsg::AgentMessage(event) => Some(event.message.clone()),
+        EventMsg::ItemCompleted(event) => match &event.item {
+            TurnItem::AgentMessage(item) => Some(agent_message_text(item)),
+            _ => None,
+        },
         EventMsg::ExecCommandBegin(event) => {
             let command = event.command.join(" ");
             Some(format!(
@@ -6097,6 +6102,7 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
 
+    use crate::protocol::AgentMessageEvent;
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
     use crate::protocol::ExecCommandBeginEvent;
@@ -6210,6 +6216,35 @@ mod tests {
         let text = realtime_text_for_event(&event).expect("expected mirrored text");
         assert!(text.contains("Exec command started: echo hi"));
         assert!(text.contains("Working directory: /tmp"));
+    }
+
+    #[test]
+    fn realtime_text_for_event_includes_agent_message() {
+        let event = EventMsg::AgentMessage(AgentMessageEvent {
+            message: "assistant text".to_string(),
+            phase: None,
+        });
+
+        let text = realtime_text_for_event(&event).expect("expected mirrored text");
+        assert_eq!(text, "assistant text");
+    }
+
+    #[test]
+    fn realtime_text_for_event_includes_completed_agent_message_item() {
+        let event = EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::AgentMessage(codex_protocol::items::AgentMessageItem {
+                id: "item-1".to_string(),
+                content: vec![codex_protocol::items::AgentMessageContent::Text {
+                    text: "assistant from item".to_string(),
+                }],
+                phase: None,
+            }),
+        });
+
+        let text = realtime_text_for_event(&event).expect("expected mirrored text");
+        assert_eq!(text, "assistant from item");
     }
 
     #[test]
