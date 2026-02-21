@@ -3,7 +3,8 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_core::CODEX_APPLY_PATCH_ARG1;
+use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_utils_home_dir::find_codex_home;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
@@ -46,7 +47,7 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     }
 
     let argv1 = args.next().unwrap_or_default();
-    if argv1 == CODEX_APPLY_PATCH_ARG1 {
+    if argv1 == CODEX_CORE_APPLY_PATCH_ARG1 {
         let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
         let exit_code = match patch_arg {
             Some(patch_arg) => {
@@ -58,7 +59,7 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
                 }
             }
             None => {
-                eprintln!("Error: {CODEX_APPLY_PATCH_ARG1} requires a UTF-8 PATCH argument.");
+                eprintln!("Error: {CODEX_CORE_APPLY_PATCH_ARG1} requires a UTF-8 PATCH argument.");
                 1
             }
         };
@@ -139,7 +140,7 @@ const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
 fn load_dotenv() {
-    if let Ok(codex_home) = codex_core::config::find_codex_home()
+    if let Ok(codex_home) = find_codex_home()
         && let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env"))
     {
         set_filtered(iter);
@@ -175,7 +176,7 @@ where
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.
 pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGuard> {
-    let codex_home = codex_core::config::find_codex_home()?;
+    let codex_home = find_codex_home()?;
     #[cfg(not(debug_assertions))]
     {
         // Guard against placing helpers in system temp directories outside debug builds.
@@ -242,7 +243,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
                 &batch_script,
                 format!(
                     r#"@echo off
-"{}" {CODEX_APPLY_PATCH_ARG1} %*
+"{}" {CODEX_CORE_APPLY_PATCH_ARG1} %*
 "#,
                     exe.display()
                 ),

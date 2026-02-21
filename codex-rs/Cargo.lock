@@ -1398,8 +1398,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
- "codex-core",
  "codex-linux-sandbox",
+ "codex-utils-home-dir",
  "dotenvy",
  "tempfile",
  "tokio",
@@ -1735,6 +1735,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "codex-apply-patch",
  "codex-arg0",
  "codex-cloud-requirements",
  "codex-core",
