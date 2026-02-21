@@ -6,25 +6,25 @@ use codex_protocol::protocol::SandboxPolicy;
 #[test]
 fn detects_proc_mount_invalid_argument_failure() {
     let stderr = "bwrap: Can't mount proc on /newroot/proc: Invalid argument";
-    assert_eq!(is_proc_mount_failure(stderr), true);
+    assert!(is_proc_mount_failure(stderr));
 }
 
 #[test]
 fn detects_proc_mount_operation_not_permitted_failure() {
     let stderr = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted";
-    assert_eq!(is_proc_mount_failure(stderr), true);
+    assert!(is_proc_mount_failure(stderr));
 }
 
 #[test]
 fn detects_proc_mount_permission_denied_failure() {
     let stderr = "bwrap: Can't mount proc on /newroot/proc: Permission denied";
-    assert_eq!(is_proc_mount_failure(stderr), true);
+    assert!(is_proc_mount_failure(stderr));
 }
 
 #[test]
 fn ignores_non_proc_mount_errors() {
     let stderr = "bwrap: Can't bind mount /dev/null: Operation not permitted";
-    assert_eq!(is_proc_mount_failure(stderr), false);
+    assert!(!is_proc_mount_failure(stderr));
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn inserts_unshare_net_when_network_isolation_requested() {
             network_mode: BwrapNetworkMode::Isolated,
         },
     );
-    assert_eq!(argv.contains(&"--unshare-net".to_string()), true);
+    assert!(argv.contains(&"--unshare-net".to_string()));
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
             network_mode: BwrapNetworkMode::ProxyOnly,
         },
     );
-    assert_eq!(argv.contains(&"--unshare-net".to_string()), true);
+    assert!(argv.contains(&"--unshare-net".to_string()));
 }
 
 #[test]
@@ -142,13 +142,13 @@ fn managed_proxy_inner_command_requires_route_spec() {
             vec!["/bin/true".to_string()],
         )
     });
-    assert_eq!(result.is_err(), true);
+    assert!(result.is_err());
 }
 
 #[test]
 fn apply_seccomp_then_exec_without_bwrap_panics() {
     let result = std::panic::catch_unwind(|| ensure_inner_stage_mode_is_valid(true, false));
-    assert_eq!(result.is_err(), true);
+    assert!(result.is_err());
 }
 
 #[test]
