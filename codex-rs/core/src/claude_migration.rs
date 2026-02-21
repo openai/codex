@@ -27,7 +27,7 @@ use toml_edit::Item as TomlItem;
 use toml_edit::value;
 
 pub const CLAUDE_MIGRATION_STATE_RELATIVE_PATH: &str = "state/claude_migration_state.json";
-pub const CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD: usize = 3000;
+pub const CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
