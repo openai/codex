@@ -324,7 +324,9 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
 /// - Prefer immediately before the last real user message.
 /// - If no real user messages remain, insert before the compaction summary so
 ///   the summary stays last.
-/// - If there are no user messages at all, append the context.
+/// - If there are no user messages, insert before the last compaction item so
+///   that item remains last (remote compaction may return only compaction items).
+/// - If there are no user messages or compaction items, append the context.
 pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
     mut compacted_history: Vec<ResponseItem>,
     initial_context: Vec<ResponseItem>,
@@ -344,12 +346,19 @@ pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
             break;
         }
     }
-    let insertion_index = last_real_user_index.or(last_user_or_summary_index);
+    let last_compaction_index = compacted_history
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, item)| matches!(item, ResponseItem::Compaction { .. }).then_some(i));
+    let insertion_index = last_real_user_index
+        .or(last_user_or_summary_index)
+        .or(last_compaction_index);
 
     // Re-inject canonical context from the current session since we stripped it
     // from the pre-compaction history. Prefer placing it before the last real
     // user message; if there is no real user message left, place it before the
-    // summary so the compaction item remains last.
+    // summary or compaction item so the compaction item remains last.
     if let Some(insertion_index) = insertion_index {
         compacted_history.splice(insertion_index..insertion_index, initial_context);
     } else {
@@ -1055,6 +1064,42 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
+            },
+        ];
+        assert_eq!(refreshed, expected);
+    }
+
+    #[test]
+    fn insert_initial_context_before_last_real_user_or_summary_keeps_compaction_last() {
+        let compacted_history = vec![ResponseItem::Compaction {
+            encrypted_content: "encrypted".to_string(),
+        }];
+        let initial_context = vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "fresh permissions".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let refreshed = insert_initial_context_before_last_real_user_or_summary(
+            compacted_history,
+            initial_context,
+        );
+        let expected = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "fresh permissions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Compaction {
+                encrypted_content: "encrypted".to_string(),
             },
         ];
         assert_eq!(refreshed, expected);

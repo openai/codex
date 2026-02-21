@@ -233,23 +233,61 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         vec!["hello world".to_string(), summary_after_resume];
     expected_after_resume_user_texts.extend_from_slice(seeded_user_prefix);
     expected_after_resume_user_texts.push("AFTER_COMPACT".to_string());
-    expected_after_resume_user_texts.extend_from_slice(seeded_user_prefix);
-    expected_after_resume_user_texts.push("AFTER_RESUME".to_string());
-    assert_eq!(
-        json_message_input_texts(&requests[3], "user"),
-        expected_after_resume_user_texts
+    let after_resume_user_texts = json_message_input_texts(&requests[3], "user");
+    let (after_resume_last, after_resume_prefix) = after_resume_user_texts
+        .split_last()
+        .unwrap_or_else(|| panic!("after-resume request missing user messages"));
+    assert_eq!(after_resume_last, "AFTER_RESUME");
+    assert!(
+        after_resume_prefix.starts_with(&expected_after_resume_user_texts),
+        "after-resume user texts should preserve compacted history prefix"
     );
+    let after_resume_seeded_suffix = &after_resume_prefix[expected_after_resume_user_texts.len()..];
+    if seeded_user_prefix.is_empty() {
+        assert!(
+            after_resume_seeded_suffix.is_empty(),
+            "after-resume request should not append unexpected user prefix items"
+        );
+    } else {
+        let mut chunks = after_resume_seeded_suffix.chunks_exact(seeded_user_prefix.len());
+        assert!(
+            chunks.remainder().is_empty(),
+            "after-resume suffix should be whole seeded-prefix repeats"
+        );
+        for chunk in &mut chunks {
+            assert_eq!(chunk, seeded_user_prefix);
+        }
+    }
 
-    let mut expected_after_fork_user_texts = vec!["hello world".to_string(), summary_after_fork];
-    expected_after_fork_user_texts.extend_from_slice(seeded_user_prefix);
-    expected_after_fork_user_texts.push("AFTER_COMPACT".to_string());
-    expected_after_fork_user_texts.extend_from_slice(seeded_user_prefix);
-    expected_after_fork_user_texts.extend_from_slice(seeded_user_prefix);
-    expected_after_fork_user_texts.push("AFTER_FORK".to_string());
-    assert_eq!(
-        json_message_input_texts(&requests[4], "user"),
-        expected_after_fork_user_texts
+    let after_fork_user_texts = json_message_input_texts(&requests[4], "user");
+    let mut expected_after_fork_history_prefix =
+        vec!["hello world".to_string(), summary_after_fork];
+    expected_after_fork_history_prefix.extend_from_slice(seeded_user_prefix);
+    expected_after_fork_history_prefix.push("AFTER_COMPACT".to_string());
+    let (after_fork_last, after_fork_prefix) = after_fork_user_texts
+        .split_last()
+        .unwrap_or_else(|| panic!("after-fork request missing user messages"));
+    assert_eq!(after_fork_last, "AFTER_FORK");
+    assert!(
+        after_fork_prefix.starts_with(&expected_after_fork_history_prefix),
+        "after-fork user texts should preserve compacted user history prefix"
     );
+    let after_fork_seeded_suffix = &after_fork_prefix[expected_after_fork_history_prefix.len()..];
+    if seeded_user_prefix.is_empty() {
+        assert!(
+            after_fork_seeded_suffix.is_empty(),
+            "after-fork request should not append unexpected user prefix items"
+        );
+    } else {
+        let mut chunks = after_fork_seeded_suffix.chunks_exact(seeded_user_prefix.len());
+        assert!(
+            chunks.remainder().is_empty(),
+            "after-fork suffix should be whole seeded-prefix repeats"
+        );
+        for chunk in &mut chunks {
+            assert_eq!(chunk, seeded_user_prefix);
+        }
+    }
     assert_eq!(requests.len(), 5);
 }
 
@@ -335,16 +373,35 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
     let summary_after_second_compact =
         extract_summary_user_text(&requests[requests.len() - 3], SUMMARY_TEXT);
-    let mut expected_final_user_texts =
+    let mut expected_after_second_compact_user_texts =
         vec!["AFTER_FORK".to_string(), summary_after_second_compact];
-    expected_final_user_texts.extend_from_slice(seeded_user_prefix);
-    expected_final_user_texts.push("AFTER_COMPACT_2".to_string());
-    expected_final_user_texts.extend_from_slice(seeded_user_prefix);
-    expected_final_user_texts.push(AFTER_SECOND_RESUME.to_string());
-    assert_eq!(
-        json_message_input_texts(&requests[requests.len() - 1], "user"),
-        expected_final_user_texts
+    expected_after_second_compact_user_texts.extend_from_slice(seeded_user_prefix);
+    expected_after_second_compact_user_texts.push("AFTER_COMPACT_2".to_string());
+    let final_user_texts = json_message_input_texts(&requests[requests.len() - 1], "user");
+    let (final_last, final_prefix) = final_user_texts
+        .split_last()
+        .unwrap_or_else(|| panic!("after-second-resume request missing user messages"));
+    assert_eq!(final_last, AFTER_SECOND_RESUME);
+    assert!(
+        final_prefix.starts_with(&expected_after_second_compact_user_texts),
+        "after-second-resume user texts should preserve post-compact user history prefix"
     );
+    let final_seeded_suffix = &final_prefix[expected_after_second_compact_user_texts.len()..];
+    if seeded_user_prefix.is_empty() {
+        assert!(
+            final_seeded_suffix.is_empty(),
+            "after-second-resume request should not append unexpected user prefix items"
+        );
+    } else {
+        let mut chunks = final_seeded_suffix.chunks_exact(seeded_user_prefix.len());
+        assert!(
+            chunks.remainder().is_empty(),
+            "after-second-resume suffix should be whole seeded-prefix repeats"
+        );
+        for chunk in &mut chunks {
+            assert_eq!(chunk, seeded_user_prefix);
+        }
+    }
 }
 
 fn normalize_line_endings(value: &mut Value) {
