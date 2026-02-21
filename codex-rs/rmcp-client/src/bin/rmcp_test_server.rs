@@ -15,20 +15,21 @@ use rmcp::model::ServerInfo;
 use rmcp::model::Tool;
 use serde::Deserialize;
 use serde_json::json;
+use tokio::sync::RwLock;
 use tokio::task;
 
 #[derive(Clone)]
 struct TestToolServer {
-    tools: Arc<Vec<Tool>>,
+    tools: Arc<RwLock<Vec<Tool>>>,
 }
 pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
     (tokio::io::stdin(), tokio::io::stdout())
 }
 impl TestToolServer {
     fn new() -> Self {
-        let tools = vec![Self::echo_tool()];
+        let tools = vec![Self::echo_tool(), Self::trigger_list_changed_tool()];
         Self {
-            tools: Arc::new(tools),
+            tools: Arc::new(RwLock::new(tools)),
         }
     }
 
@@ -60,6 +61,40 @@ struct EchoArgs {
     env_var: Option<String>,
 }
 
+impl TestToolServer {
+    fn new_tool() -> Tool {
+        #[expect(clippy::expect_used)]
+        let schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .expect("new_tool schema should deserialize");
+
+        Tool::new(
+            Cow::Borrowed("new_tool"),
+            Cow::Borrowed("A tool added dynamically via trigger_list_changed."),
+            Arc::new(schema),
+        )
+    }
+
+    fn trigger_list_changed_tool() -> Tool {
+        #[expect(clippy::expect_used)]
+        let schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .expect("trigger_list_changed schema should deserialize");
+
+        Tool::new(
+            Cow::Borrowed("trigger_list_changed"),
+            Cow::Borrowed("Adds new_tool to the list and sends notifications/tools/list_changed."),
+            Arc::new(schema),
+        )
+    }
+}
+
 impl ServerHandler for TestToolServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -79,7 +114,7 @@ impl ServerHandler for TestToolServer {
         let tools = self.tools.clone();
         async move {
             Ok(ListToolsResult {
-                tools: (*tools).clone(),
+                tools: tools.read().await.clone(),
                 next_cursor: None,
                 meta: None,
             })
@@ -89,7 +124,7 @@ impl ServerHandler for TestToolServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         match request.name.as_ref() {
             "echo" => {
@@ -118,6 +153,19 @@ impl ServerHandler for TestToolServer {
                     is_error: Some(false),
                     meta: None,
                 })
+            }
+            "trigger_list_changed" => {
+                self.tools.write().await.push(Self::new_tool());
+                // Yield to let rmcp flush the call_tool response before sending
+                // the notification on the same transport.
+                let peer = context.peer.clone();
+                tokio::spawn(async move {
+                    tokio::task::yield_now().await;
+                    let _ = peer.notify_tool_list_changed().await;
+                });
+                Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+                    "tool list change triggered",
+                )]))
             }
             other => Err(McpError::invalid_params(
                 format!("unknown tool: {other}"),
