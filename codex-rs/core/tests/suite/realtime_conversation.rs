@@ -161,7 +161,7 @@ async fn conversation_transport_close_emits_closed_event() -> Result<()> {
         "type": "session.created",
         "session": { "id": "sess_1" }
     })];
-    let server = start_websocket_server(vec![vec![session_created]]).await;
+    let server = start_websocket_server(vec![vec![], vec![session_created]]).await;
 
     let mut builder = test_codex();
     let test = builder.build_with_websocket_server(&server).await?;
