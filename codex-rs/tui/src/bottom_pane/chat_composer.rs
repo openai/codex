@@ -3734,13 +3734,16 @@ impl ChatComposer {
             // convert/remove the temporary named element before inserting the
             // recording/transcribing placeholder.
             if let Some(id) = self.voice_state.space_hold_element_id.take() {
-                let replacement = self
+                let replacement = if self
                     .textarea
                     .named_element_range(&id)
                     .and_then(|range| self.textarea.text()[..range.start].chars().next_back())
                     .is_some_and(|ch| ch == ' ')
-                    .then_some("")
-                    .unwrap_or(" ");
+                {
+                    ""
+                } else {
+                    " "
+                };
                 let _ = self.textarea.replace_element_by_id(&id, replacement);
             }
             // Clear pending state before starting capture
