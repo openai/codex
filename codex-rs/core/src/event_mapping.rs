@@ -24,10 +24,35 @@ use crate::session_prefix::is_session_prefix;
 use crate::user_shell_command::is_user_shell_command_text;
 use crate::web_search::web_search_action_detail;
 
-fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
+pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {
     if UserInstructions::is_user_instructions(message)
         || SkillInstructions::is_skill_instructions(message)
     {
+        return true;
+    }
+
+    message.iter().any(|content_item| match content_item {
+        ContentItem::InputText { text } => {
+            is_session_prefix(text)
+                || is_user_shell_command_text(text)
+                || UserInstructions::is_user_instructions_text(text)
+                || SkillInstructions::is_skill_instructions_text(text)
+        }
+        ContentItem::OutputText { text } => is_session_prefix(text),
+        ContentItem::InputImage { .. } => false,
+    })
+}
+
+pub(crate) fn is_contextual_user_message(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+
+    role == "user" && is_contextual_user_message_content(content)
+}
+
+fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
+    if is_contextual_user_message_content(message) {
         return None;
     }
 
@@ -44,9 +69,6 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 {
                     continue;
                 }
-                if is_session_prefix(text) || is_user_shell_command_text(text) {
-                    return None;
-                }
                 content.push(UserInput::Text {
                     text: text.clone(),
                     // Model input content does not carry UI element ranges.
@@ -59,9 +81,6 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 });
             }
             ContentItem::OutputText { text } => {
-                if is_session_prefix(text) {
-                    return None;
-                }
                 warn!("Output text in user message: {}", text);
             }
         }
@@ -340,6 +359,22 @@ mod tests {
                 }],
                 end_turn: None,
             phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: "<environment_context>ctx</environment_context>".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text:
+                            "# AGENTS.md instructions for dir\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
+                                .to_string(),
+                    },
+                ],
+                end_turn: None,
+                phase: None,
             },
         ];
 

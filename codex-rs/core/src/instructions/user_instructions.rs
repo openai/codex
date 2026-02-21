@@ -16,10 +16,14 @@ pub(crate) struct UserInstructions {
 }
 
 impl UserInstructions {
+    pub(crate) fn is_user_instructions_text(text: &str) -> bool {
+        text.starts_with(USER_INSTRUCTIONS_PREFIX)
+            || text.starts_with(USER_INSTRUCTIONS_OPEN_TAG_LEGACY)
+    }
+
     pub fn is_user_instructions(message: &[ContentItem]) -> bool {
         if let [ContentItem::InputText { text }] = message {
-            text.starts_with(USER_INSTRUCTIONS_PREFIX)
-                || text.starts_with(USER_INSTRUCTIONS_OPEN_TAG_LEGACY)
+            Self::is_user_instructions_text(text)
         } else {
             false
         }
@@ -53,9 +57,13 @@ pub(crate) struct SkillInstructions {
 }
 
 impl SkillInstructions {
+    pub(crate) fn is_skill_instructions_text(text: &str) -> bool {
+        text.starts_with(SKILL_INSTRUCTIONS_PREFIX)
+    }
+
     pub fn is_skill_instructions(message: &[ContentItem]) -> bool {
         if let [ContentItem::InputText { text }] = message {
-            text.starts_with(SKILL_INSTRUCTIONS_PREFIX)
+            Self::is_skill_instructions_text(text)
         } else {
             false
         }
