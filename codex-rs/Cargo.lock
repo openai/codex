@@ -1470,6 +1470,7 @@ dependencies = [
  "codex-arg0",
  "codex-chatgpt",
  "codex-cloud-tasks",
+ "codex-config",
  "codex-core",
  "codex-exec",
  "codex-execpolicy",
@@ -1600,10 +1601,13 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "sha2",
  "thiserror 2.0.18",
  "tokio",
  "toml 0.9.11+spec-1.1.0",
+ "toml_edit 0.24.0+spec-1.1.0",
+ "tracing",
 ]
 
 [[package]]
@@ -1681,7 +1685,6 @@ dependencies = [
  "seccompiler",
  "serde",
  "serde_json",
- "serde_path_to_error",
  "serde_yaml",
  "serial_test",
  "sha1",

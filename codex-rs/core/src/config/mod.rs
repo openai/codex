@@ -117,8 +117,6 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 
-pub const CONFIG_TOML_FILE: &str = "config.toml";
-
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
     let codex_home = tempdir().expect("create temp dir");
@@ -2302,6 +2300,7 @@ mod tests {
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
     use crate::features::Feature;
+    use codex_config::CONFIG_TOML_FILE;
 
     use super::*;
     use core_test_support::test_absolute_path;
