@@ -35,6 +35,7 @@ const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
+    pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
@@ -96,6 +97,7 @@ impl ToolsConfig {
 
         Self {
             shell_type,
+            allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
             agent_roles: BTreeMap::new(),
@@ -110,6 +112,11 @@ impl ToolsConfig {
 
     pub fn with_agent_roles(mut self, agent_roles: BTreeMap<String, AgentRoleConfig>) -> Self {
         self.agent_roles = agent_roles;
+        self
+    }
+
+    pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {
+        self.allow_login_shell = allow_login_shell;
         self
     }
 }
@@ -211,7 +218,7 @@ fn create_approval_parameters() -> BTreeMap<String, JsonSchema> {
     properties
 }
 
-fn create_exec_command_tool() -> ToolSpec {
+fn create_exec_command_tool(allow_login_shell: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "cmd".to_string(),
@@ -232,14 +239,6 @@ fn create_exec_command_tool() -> ToolSpec {
             "shell".to_string(),
             JsonSchema::String {
                 description: Some("Shell binary to launch. Defaults to the user's default shell.".to_string()),
-            },
-        ),
-        (
-            "login".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
-                ),
             },
         ),
         (
@@ -269,6 +268,16 @@ fn create_exec_command_tool() -> ToolSpec {
             },
         ),
     ]);
+    if allow_login_shell {
+        properties.insert(
+            "login".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
+                ),
+            },
+        );
+    }
     properties.extend(create_approval_parameters());
 
     ToolSpec::Function(ResponsesApiTool {
@@ -385,7 +394,7 @@ Examples of valid command strings:
     })
 }
 
-fn create_shell_command_tool() -> ToolSpec {
+fn create_shell_command_tool(allow_login_shell: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "command".to_string(),
@@ -402,6 +411,14 @@ fn create_shell_command_tool() -> ToolSpec {
             },
         ),
         (
+            "timeout_ms".to_string(),
+            JsonSchema::Number {
+                description: Some("The timeout for the command in milliseconds".to_string()),
+            },
+        ),
+    ]);
+    if allow_login_shell {
+        properties.insert(
             "login".to_string(),
             JsonSchema::Boolean {
                 description: Some(
@@ -409,14 +426,8 @@ fn create_shell_command_tool() -> ToolSpec {
                         .to_string(),
                 ),
             },
-        ),
-        (
-            "timeout_ms".to_string(),
-            JsonSchema::Number {
-                description: Some("The timeout for the command in milliseconds".to_string()),
-            },
-        ),
-    ]);
+        );
+    }
     properties.extend(create_approval_parameters());
 
     let description = if cfg!(windows) {
@@ -1068,7 +1079,24 @@ fn create_list_dir_tool() -> ToolSpec {
 }
 
 fn create_js_repl_tool() -> ToolSpec {
-    const JS_REPL_FREEFORM_GRAMMAR: &str = r#"start: /[\s\S]*/"#;
+    // Keep JS input freeform, but block the most common malformed payload shapes
+    // (JSON wrappers, quoted strings, and markdown fences) before they reach the
+    // runtime `reject_json_or_quoted_source` validation. The API's regex engine
+    // does not support look-around, so this uses a "first significant token"
+    // pattern rather than negative lookaheads.
+    const JS_REPL_FREEFORM_GRAMMAR: &str = r#"
+start: pragma_source | plain_source
+
+pragma_source: PRAGMA_LINE NEWLINE js_source
+plain_source: PLAIN_JS_SOURCE
+
+js_source: JS_SOURCE
+
+PRAGMA_LINE: /[ \t]*\/\/ codex-js-repl:[^\r\n]*/
+NEWLINE: /\r?\n/
+PLAIN_JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
+JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
+"#;
 
     ToolSpec::Freeform(FreeformTool {
         name: "js_repl".to_string(),
@@ -1445,7 +1473,10 @@ pub(crate) fn build_specs(
             builder.push_spec_with_parallel_support(ToolSpec::LocalShell {}, true);
         }
         ConfigShellToolType::UnifiedExec => {
-            builder.push_spec_with_parallel_support(create_exec_command_tool(), true);
+            builder.push_spec_with_parallel_support(
+                create_exec_command_tool(config.allow_login_shell),
+                true,
+            );
             builder.push_spec(create_write_stdin_tool());
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
@@ -1454,7 +1485,10 @@ pub(crate) fn build_specs(
             // Do nothing.
         }
         ConfigShellToolType::ShellCommand => {
-            builder.push_spec_with_parallel_support(create_shell_command_tool(), true);
+            builder.push_spec_with_parallel_support(
+                create_shell_command_tool(config.allow_login_shell),
+                true,
+            );
         }
     }
 
@@ -1799,7 +1833,7 @@ mod tests {
         // Build expected from the same helpers used by the builder.
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
         for spec in [
-            create_exec_command_tool(),
+            create_exec_command_tool(true),
             create_write_stdin_tool(),
             PLAN_TOOL.clone(),
             create_request_user_input_tool(),
@@ -1920,6 +1954,21 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
+    }
+
+    #[test]
+    fn js_repl_freeform_grammar_blocks_common_non_js_prefixes() {
+        let ToolSpec::Freeform(FreeformTool { format, .. }) = create_js_repl_tool() else {
+            panic!("js_repl should use a freeform tool spec");
+        };
+
+        assert_eq!(format.syntax, "lark");
+        assert!(format.definition.contains("PRAGMA_LINE"));
+        assert!(format.definition.contains("`[^`]"));
+        assert!(format.definition.contains("``[^`]"));
+        assert!(format.definition.contains("PLAIN_JS_SOURCE"));
+        assert!(format.definition.contains("codex-js-repl:"));
+        assert!(!format.definition.contains("(?!"));
     }
 
     fn assert_model_tools(
@@ -2758,7 +2807,7 @@ Examples of valid command strings:
 
     #[test]
     fn test_shell_command_tool() {
-        let tool = super::create_shell_command_tool();
+        let tool = super::create_shell_command_tool(true);
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool

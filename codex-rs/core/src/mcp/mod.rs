@@ -24,13 +24,14 @@ use crate::features::Feature;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::SandboxState;
+use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 const OPENAI_CONNECTORS_MCP_BASE_URL: &str = "https://api.openai.com";
-const OPENAI_CONNECTORS_MCP_PATH: &str = "/v1/connectors/mcp/";
+const OPENAI_CONNECTORS_MCP_PATH: &str = "/v1/connectors/gateways/flat/mcp";
 
 // Legacy vs new MCP gateway
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +209,8 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         &config.permissions.approval_policy,
         tx_event,
         sandbox_state,
+        config.codex_home.clone(),
+        codex_apps_tools_cache_key(auth.as_ref()),
     )
     .await;
 

@@ -139,6 +139,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) config: Arc<Config>,
+    pub(crate) single_client_mode: bool,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
@@ -154,6 +155,7 @@ impl MessageProcessor {
             outgoing,
             codex_linux_sandbox_exe,
             config,
+            single_client_mode,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
@@ -184,6 +186,7 @@ impl MessageProcessor {
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
             cloud_requirements: cloud_requirements.clone(),
+            single_client_mode,
             feedback,
         });
         let config_api = ConfigApi::new(

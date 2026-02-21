@@ -1491,6 +1491,7 @@ impl CodexClient {
             item_id,
             approval_id,
             reason,
+            network_approval_context,
             command,
             cwd,
             command_actions,
@@ -1505,6 +1506,9 @@ impl CodexClient {
         self.command_approval_item_ids.push(item_id.clone());
         if let Some(reason) = reason.as_deref() {
             println!("< reason: {reason}");
+        }
+        if let Some(network_approval_context) = network_approval_context.as_ref() {
+            println!("< network approval context: {network_approval_context:?}");
         }
         if let Some(command) = command.as_deref() {
             println!("< command: {command}");
