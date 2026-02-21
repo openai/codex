@@ -3277,6 +3277,7 @@ async fn mcp_tool_call_begin_elicitation_end_deferred_during_active_stream() {
                 "properties": {},
             })),
             url: Some("https://example.com/elicitation".to_string()),
+            elicitation_id: Some("elicitation-url-1".to_string()),
         }),
     });
     chat.handle_codex_event(Event {
@@ -3349,6 +3350,7 @@ async fn mcp_tool_call_elicitation_can_be_resolved_after_stream_queue_flush() {
                 "properties": {},
             })),
             url: None,
+            elicitation_id: None,
         }),
     });
     chat.handle_codex_event(Event {

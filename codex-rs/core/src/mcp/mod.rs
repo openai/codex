@@ -1,5 +1,6 @@
 pub mod auth;
 pub(crate) mod elicitation_form;
+pub(crate) mod elicitation_url;
 mod skill_dependencies;
 pub(crate) use skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 

@@ -155,6 +155,9 @@ use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::effective_mcp_servers;
+use crate::mcp::elicitation_url::build_url_elicitation_outcome_from_user_input;
+use crate::mcp::elicitation_url::build_url_elicitation_request_user_input_args;
+use crate::mcp::elicitation_url::is_url_elicitation_request;
 use crate::mcp::is_apps_mcp_gateway_elicitation_flow_active;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
@@ -2330,10 +2333,18 @@ impl Session {
         &self,
         elicitation: codex_protocol::approvals::ElicitationRequestEvent,
     ) {
-        let response = if let Some((turn_context, cancellation_token)) =
+        let (response, completion_elicitation_id) = if let Some((
+            turn_context,
+            cancellation_token,
+        )) =
             self.active_turn_context_and_cancellation_token().await
         {
-            let args = build_mcp_elicitation_request_user_input_args(&elicitation);
+            let is_url_elicitation = is_url_elicitation_request(&elicitation);
+            let args = if is_url_elicitation {
+                build_url_elicitation_request_user_input_args(&elicitation)
+            } else {
+                build_mcp_elicitation_request_user_input_args(&elicitation)
+            };
             let call_id = format!("mcp_elicitation_request_{}", turn_context.sub_id);
             let turn_sub_id = turn_context.sub_id.clone();
             let user_input = tokio::select! {
@@ -2347,22 +2358,46 @@ impl Session {
                 }
                 response = self.request_user_input(turn_context.as_ref(), call_id, args) => response,
             };
-            build_mcp_elicitation_response_from_user_input(user_input, &elicitation)
-        } else {
-            ElicitationResponse {
-                action: ElicitationAction::Cancel,
-                content: None,
+            if is_url_elicitation {
+                let outcome =
+                    build_url_elicitation_outcome_from_user_input(user_input, &elicitation);
+                (outcome.response, outcome.completion_elicitation_id)
+            } else {
+                (
+                    build_mcp_elicitation_response_from_user_input(user_input, &elicitation),
+                    None,
+                )
             }
+        } else {
+            (
+                ElicitationResponse {
+                    action: ElicitationAction::Cancel,
+                    content: None,
+                },
+                None,
+            )
         };
 
+        let server_name = elicitation.server_name.clone();
         let request_id = protocol_request_id_to_rmcp(&elicitation.id);
         if let Err(err) = self
-            .resolve_elicitation(elicitation.server_name, request_id, response)
+            .resolve_elicitation(server_name.clone(), request_id, response)
             .await
         {
             warn!(
                 error = %err,
                 "failed to resolve codex_apps MCP elicitation request"
+            );
+            return;
+        }
+        if let Some(elicitation_id) = completion_elicitation_id
+            && let Err(err) = self
+                .complete_url_elicitation(server_name, elicitation_id)
+                .await
+        {
+            warn!(
+                error = %err,
+                "failed to send codex_apps url elicitation completion notification"
             );
         }
     }
@@ -2664,6 +2699,19 @@ impl Session {
             .read()
             .await
             .resolve_elicitation(server_name, id, response)
+            .await
+    }
+
+    pub async fn complete_url_elicitation(
+        &self,
+        server_name: String,
+        elicitation_id: String,
+    ) -> anyhow::Result<()> {
+        self.services
+            .mcp_connection_manager
+            .read()
+            .await
+            .complete_url_elicitation(server_name, elicitation_id)
             .await
     }
 

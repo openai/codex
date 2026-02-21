@@ -309,7 +309,7 @@ impl ElicitationRequestManager {
                     }
                     rmcp::model::NumberOrString::Number(value) => ProtocolRequestId::Integer(value),
                 };
-                let (message, requested_schema, url) = match elicitation {
+                let (message, requested_schema, url, elicitation_id) = match elicitation {
                     CreateElicitationRequestParams::FormElicitationParams {
                         message,
                         requested_schema,
@@ -322,10 +322,19 @@ impl ElicitationRequestManager {
                             None
                         },
                         None,
+                        None,
                     ),
                     CreateElicitationRequestParams::UrlElicitationParams {
-                        message, url, ..
-                    } => (message, None, mcp_elicitations_enabled.then_some(url)),
+                        message,
+                        url,
+                        elicitation_id,
+                        ..
+                    } => (
+                        message,
+                        None,
+                        mcp_elicitations_enabled.then_some(url),
+                        mcp_elicitations_enabled.then_some(elicitation_id),
+                    ),
                 };
                 let _ = tx_event
                     .send(Event {
@@ -336,6 +345,7 @@ impl ElicitationRequestManager {
                             message,
                             requested_schema,
                             url,
+                            elicitation_id,
                         }),
                     })
                     .await;
@@ -703,6 +713,24 @@ impl McpConnectionManager {
         self.elicitation_requests
             .resolve(server_name, id, response)
             .await
+    }
+
+    pub async fn complete_url_elicitation(
+        &self,
+        server_name: String,
+        elicitation_id: String,
+    ) -> Result<()> {
+        let managed_client = self.client_by_name(&server_name).await?;
+        managed_client
+            .client
+            .send_custom_notification(
+                "notifications/elicitation/complete",
+                Some(serde_json::json!({ "elicitationId": elicitation_id })),
+            )
+            .await
+            .with_context(|| {
+                format!("failed sending url elicitation completion for `{server_name}`")
+            })
     }
 
     pub(crate) async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
@@ -1237,7 +1265,7 @@ fn elicitation_capability_for_server(server_name: &str) -> Option<ElicitationCap
             form: Some(FormElicitationCapability {
                 schema_validation: None,
             }),
-            url: None,
+            url: Some(UrlElicitationCapability {}),
         })
     } else {
         None
@@ -2117,7 +2145,7 @@ mod tests {
         .boxed()
         .shared();
         let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, false   );
+        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, false);
         let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
         manager.clients.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
@@ -2145,7 +2173,7 @@ mod tests {
                 form: Some(FormElicitationCapability {
                     schema_validation: None
                 }),
-                url: None,
+                url: Some(UrlElicitationCapability {}),
             })
         ));
 

@@ -2840,6 +2840,12 @@
                 "string",
                 "null"
               ]
+            },
+            "elicitation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [

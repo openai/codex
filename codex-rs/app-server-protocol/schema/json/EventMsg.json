@@ -1779,6 +1779,12 @@
                 "string",
                 "null"
               ]
+            },
+            "elicitation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
@@ -7027,6 +7033,12 @@
           "type": "string"
         },
         "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "elicitation_id": {
           "type": [
             "string",
             "null"
