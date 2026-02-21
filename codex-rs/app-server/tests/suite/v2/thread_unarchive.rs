@@ -142,14 +142,16 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     );
     assert_eq!(unarchived_thread.status, ThreadStatus::NotLoaded);
 
-    // Wire contract: thread title field is `name`.
+    // Wire contract: thread title field is `name`, serialized as null when unset.
     let thread_json = unarchive_result
         .get("thread")
         .and_then(Value::as_object)
         .expect("thread/unarchive result.thread must be an object");
-    assert!(
-        thread_json.contains_key("name"),
-        "thread/unarchive must include `thread.name` on the wire (null when absent)"
+    assert_eq!(unarchived_thread.name, None);
+    assert_eq!(
+        thread_json.get("name"),
+        Some(&Value::Null),
+        "thread/unarchive must serialize `name: null` when unset"
     );
 
     let rollout_path_display = rollout_path.display();

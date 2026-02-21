@@ -74,14 +74,15 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     let fork_result = fork_resp.result.clone();
     let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
 
-    // Wire contract: thread title field is `name`.
+    // Wire contract: thread title field is `name`, serialized as null when unset.
     let thread_json = fork_result
         .get("thread")
         .and_then(Value::as_object)
         .expect("thread/fork result.thread must be an object");
-    assert!(
-        thread_json.contains_key("name"),
-        "thread/fork must include `thread.name` on the wire (null when absent)"
+    assert_eq!(
+        thread_json.get("name"),
+        Some(&Value::Null),
+        "forked threads do not inherit a name; expected `name: null`"
     );
 
     let after_contents = std::fs::read_to_string(&original_path)?;
@@ -99,6 +100,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     assert_ne!(thread_path, original_path);
     assert!(thread.cwd.is_absolute());
     assert_eq!(thread.source, SessionSource::VsCode);
+    assert_eq!(thread.name, None);
 
     assert_eq!(
         thread.turns.len(),
@@ -132,9 +134,10 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         .get("thread")
         .and_then(Value::as_object)
         .expect("thread/started params.thread must be an object");
-    assert!(
-        started_thread_json.contains_key("name"),
-        "thread/started must include `thread.name` on the wire (null when absent)"
+    assert_eq!(
+        started_thread_json.get("name"),
+        Some(&Value::Null),
+        "thread/started must serialize `name: null` when unset"
     );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;

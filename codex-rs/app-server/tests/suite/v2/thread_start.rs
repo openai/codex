@@ -70,20 +70,17 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         "fresh thread rollout should not be materialized until first user message"
     );
 
-    // Wire contract: thread title field is `name`.
+    // Wire contract: thread title field is `name`, serialized as null when unset.
     let thread_json = resp_result
         .get("thread")
         .and_then(Value::as_object)
         .expect("thread/start result.thread must be an object");
-    assert!(
-        thread_json.contains_key("name"),
-        "thread/start must include `thread.name` on the wire (null when absent)"
-    );
     assert_eq!(
         thread_json.get("name"),
         Some(&Value::Null),
         "new threads should serialize `name: null`"
     );
+    assert_eq!(thread.name, None);
 
     // A corresponding thread/started notification should arrive.
     let notif: JSONRPCNotification = timeout(
@@ -96,10 +93,6 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         .get("thread")
         .and_then(Value::as_object)
         .expect("thread/started params.thread must be an object");
-    assert!(
-        started_thread_json.contains_key("name"),
-        "thread/started must include `thread.name` on the wire (null when absent)"
-    );
     assert_eq!(
         started_thread_json.get("name"),
         Some(&Value::Null),
