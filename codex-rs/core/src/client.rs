@@ -383,20 +383,25 @@ impl ModelClient {
         request_telemetry
     }
 
-    /// Returns whether this session is configured to use Responses-over-WebSocket.
+    /// Returns the active Responses-over-WebSocket version for this session.
     ///
     /// This combines provider capability and feature gating; both must be true for websocket paths
     /// to be eligible.
-    pub fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
-        self.state.provider.supports_websockets
-            && (self.state.responses_websocket_version.is_some() || model_info.prefer_websockets)
-    }
-
-    /// Returns whether websocket transport has been permanently disabled for this session.
     ///
-    /// Once set by fallback activation, subsequent turns must stay on HTTP transport.
-    fn websockets_disabled(&self) -> bool {
-        self.state.disable_websockets.load(Ordering::Relaxed)
+    /// If websockets are only enabled via model preference (no explicit feature flag), default to
+    /// v1 behavior.
+    pub fn active_ws_version(&self, model_info: &ModelInfo) -> Option<ResponsesWebsocketVersion> {
+        if !self.state.provider.supports_websockets
+            || self.state.disable_websockets.load(Ordering::Relaxed)
+        {
+            return None;
+        }
+
+        match self.state.responses_websocket_version {
+            Some(version) => Some(version),
+            None if model_info.prefer_websockets => Some(ResponsesWebsocketVersion::V1),
+            None => None,
+        }
     }
 
     /// Returns auth + provider configuration resolved from the current session auth state.
@@ -429,10 +434,12 @@ impl ModelClient {
         otel_manager: &OtelManager,
         api_provider: codex_api::Provider,
         api_auth: CoreAuthProvider,
+        ws_version: ResponsesWebsocketVersion,
         turn_state: Option<Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
-        let headers = self.build_websocket_headers(turn_state.as_ref(), turn_metadata_header);
+        let headers =
+            self.build_websocket_headers(ws_version, turn_state.as_ref(), turn_metadata_header);
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(otel_manager);
         ApiWebSocketResponsesClient::new(api_provider, api_auth)
             .connect(
@@ -450,6 +457,7 @@ impl ModelClient {
     /// replayed on reconnect within the same turn.
     fn build_websocket_headers(
         &self,
+        ws_version: ResponsesWebsocketVersion,
         turn_state: Option<&Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
     ) -> ApiHeaderMap {
@@ -462,9 +470,9 @@ impl ModelClient {
         headers.extend(build_conversation_headers(Some(
             self.state.conversation_id.to_string(),
         )));
-        let responses_websockets_beta_header = match self.state.responses_websocket_version {
-            Some(ResponsesWebsocketVersion::V2) => RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE,
-            Some(ResponsesWebsocketVersion::V1) | None => OPENAI_BETA_RESPONSES_WEBSOCKETS,
+        let responses_websockets_beta_header = match ws_version {
+            ResponsesWebsocketVersion::V2 => RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE,
+            ResponsesWebsocketVersion::V1 => OPENAI_BETA_RESPONSES_WEBSOCKETS,
         };
         headers.insert(
             OPENAI_BETA_HEADER,
@@ -637,10 +645,8 @@ impl ModelClientSession {
         &mut self,
         payload: ResponseCreateWsRequest,
         request: &ResponsesApiRequest,
+        ws_version: ResponsesWebsocketVersion,
     ) -> ResponsesWsRequest {
-        let Some(ws_version) = self.client.state.responses_websocket_version else {
-            return ResponsesWsRequest::ResponseCreate(payload);
-        };
         let Some(last_response) = self.get_last_response() else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
@@ -682,10 +688,9 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         model_info: &ModelInfo,
     ) -> std::result::Result<(), ApiError> {
-        if !self.client.responses_websocket_enabled(model_info) || self.client.websockets_disabled()
-        {
+        let Some(ws_version) = self.client.active_ws_version(model_info) else {
             return Ok(());
-        }
+        };
         if self.connection.is_some() {
             return Ok(());
         }
@@ -702,6 +707,7 @@ impl ModelClientSession {
                 otel_manager,
                 client_setup.api_provider,
                 client_setup.api_auth,
+                ws_version,
                 Some(Arc::clone(&self.turn_state)),
                 None,
             )
@@ -716,6 +722,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         api_provider: codex_api::Provider,
         api_auth: CoreAuthProvider,
+        ws_version: ResponsesWebsocketVersion,
         turn_metadata_header: Option<&str>,
         options: &ApiResponsesOptions,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
@@ -737,6 +744,7 @@ impl ModelClientSession {
                     otel_manager,
                     api_provider,
                     api_auth,
+                    ws_version,
                     Some(turn_state),
                     turn_metadata_header,
                 )
@@ -833,6 +841,7 @@ impl ModelClientSession {
         &mut self,
         prompt: &Prompt,
         model_info: &ModelInfo,
+        ws_version: ResponsesWebsocketVersion,
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
@@ -865,6 +874,7 @@ impl ModelClientSession {
                     otel_manager,
                     client_setup.api_provider,
                     client_setup.api_auth,
+                    ws_version,
                     turn_metadata_header,
                     &options,
                 )
@@ -885,7 +895,7 @@ impl ModelClientSession {
                 Err(err) => return Err(map_api_error(err)),
             }
 
-            let ws_request = self.prepare_websocket_request(ws_payload, &request);
+            let ws_request = self.prepare_websocket_request(ws_payload, &request, ws_version);
 
             let stream_result = self
                 .connection
@@ -943,14 +953,12 @@ impl ModelClientSession {
         let wire_api = self.client.state.provider.wire_api;
         match wire_api {
             WireApi::Responses => {
-                let websocket_enabled = self.client.responses_websocket_enabled(model_info)
-                    && !self.client.websockets_disabled();
-
-                if websocket_enabled {
+                if let Some(ws_version) = self.client.active_ws_version(model_info) {
                     match self
                         .stream_responses_websocket(
                             prompt,
                             model_info,
+                            ws_version,
                             otel_manager,
                             effort,
                             summary,
@@ -989,7 +997,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         model_info: &ModelInfo,
     ) -> bool {
-        let websocket_enabled = self.client.responses_websocket_enabled(model_info);
+        let websocket_enabled = self.client.active_ws_version(model_info).is_some();
         let activated = self.activate_http_fallback(websocket_enabled);
         if activated {
             warn!("falling back to HTTP");
