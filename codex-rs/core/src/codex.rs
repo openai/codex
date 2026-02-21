@@ -2614,9 +2614,13 @@ impl Session {
         true
     }
 
-    pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
+    pub(crate) async fn replace_history(
+        &self,
+        items: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+    ) {
         let mut state = self.state.lock().await;
-        state.replace_history(items);
+        state.replace_history(items, reference_context_item);
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -4032,14 +4036,17 @@ mod handlers {
 
         let mut history = sess.clone_history().await;
         // TODO(ccunningham): Fix rollback/backtracking baseline handling.
-        // Truncating history should also invalidate/recompute
-        // `reference_context_item` and `previous_model` so the next regular
-        // turn replays any dropped context diffs / model-switch instructions.
+        // We clear `reference_context_item` here, but should restore the
+        // post-rollback baseline from the surviving history/rollout instead.
+        // Truncating history should also invalidate/recompute `previous_model`
+        // so the next regular turn replays any dropped model-switch
+        // instructions.
         history.drop_last_n_user_turns(num_turns);
 
         // Replace with the raw items. We don't want to replace with a normalized
         // version of the history.
-        sess.replace_history(history.raw_items().to_vec()).await;
+        sess.replace_history(history.raw_items().to_vec(), None)
+            .await;
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
         sess.send_event_raw_flushed(Event {
@@ -8138,7 +8145,7 @@ mod tests {
             .await;
         session.clear_reference_context_item().await;
         session
-            .replace_history(vec![compacted_summary.clone()])
+            .replace_history(vec![compacted_summary.clone()], None)
             .await;
 
         session

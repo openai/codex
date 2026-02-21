@@ -144,15 +144,12 @@ async fn run_remote_compact_task_inner_impl(
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
     }
-    sess.replace_history(new_history.clone()).await;
-    if matches!(
-        initial_context_injection,
-        InitialContextInjection::DoNotInject
-    ) {
-        // Pre-turn/manual compaction replacement history strips prior context diffs, so the next
-        // regular turn must fully reinject canonical context.
-        sess.clear_reference_context_item().await;
-    }
+    let reference_context_item = match initial_context_injection {
+        InitialContextInjection::DoNotInject => None,
+        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+    };
+    sess.replace_history(new_history.clone(), reference_context_item)
+        .await;
     sess.recompute_token_usage(turn_context).await;
 
     let compacted_item = CompactedItem {
