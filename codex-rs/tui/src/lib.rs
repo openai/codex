@@ -131,6 +131,8 @@ mod voice {
 
     pub struct VoiceCapture;
 
+    pub(crate) struct RecordingMeterState;
+
     impl VoiceCapture {
         pub fn start() -> Result<Self, String> {
             Err("voice input is unavailable in this build".to_string())
@@ -158,6 +160,16 @@ mod voice {
 
         pub fn last_peak_arc(&self) -> Arc<AtomicU16> {
             Arc::new(AtomicU16::new(0))
+        }
+    }
+
+    impl RecordingMeterState {
+        pub(crate) fn new() -> Self {
+            Self
+        }
+
+        pub(crate) fn next_text(&mut self, _peak: u16) -> String {
+            "⠤⠤⠤⠤".to_string()
         }
     }
 
