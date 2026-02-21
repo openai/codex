@@ -5,6 +5,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 #[cfg(unix)]
+use crate::bash::parse_shell_lc_plain_commands;
+#[cfg(unix)]
 use crate::error::CodexErr;
 #[cfg(unix)]
 use crate::error::SandboxErr;
@@ -369,6 +371,11 @@ impl ZshExecBridge {
             argv.clone()
         };
         let normalized_exec_program = normalize_wrapper_executable_for_skill_matching(&file, &cwd);
+        let normalized_wrapped_exec_program =
+            normalize_wrapped_shell_inner_executable_for_skill_matching(
+                &command_for_approval,
+                &cwd,
+            );
 
         // Check exec policy against the resolved executable path, not the original argv[0].
         let mut command_for_execpolicy = command_for_approval.clone();
@@ -384,7 +391,15 @@ impl ZshExecBridge {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let matched_skill_permissions = registry
                 .get(std::slice::from_ref(&normalized_exec_program))
-                .cloned();
+                .cloned()
+                .or_else(|| {
+                    // Wrapper requests often execute `zsh -c/-lc <skill-script>`, so the
+                    // wrapper executable (`zsh`) won't match skill script prefixes. Fall back
+                    // to the parsed inner executable path to match skill permissions.
+                    normalized_wrapped_exec_program
+                        .as_ref()
+                        .and_then(|program| registry.get(std::slice::from_ref(program)).cloned())
+                });
             let overlay_prompt_prefixes = registry.keys().cloned().collect::<Vec<_>>();
             (overlay_prompt_prefixes, matched_skill_permissions)
         };
@@ -641,6 +656,19 @@ fn normalize_wrapper_executable_for_skill_matching(file: &str, cwd: &str) -> Str
 }
 
 #[cfg(unix)]
+fn normalize_wrapped_shell_inner_executable_for_skill_matching(
+    command: &[String],
+    cwd: &str,
+) -> Option<String> {
+    let commands = parse_shell_lc_plain_commands(command)?;
+    let first_command = commands.first()?;
+    let program = first_command.first()?;
+    Some(normalize_wrapper_executable_for_skill_matching(
+        program, cwd,
+    ))
+}
+
+#[cfg(unix)]
 fn normalize_lexically(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -723,5 +751,40 @@ mod tests {
     fn normalize_wrapper_executable_for_skill_matching_keeps_bare_command_names() {
         let normalized = normalize_wrapper_executable_for_skill_matching("bash", "/tmp");
         assert_eq!(normalized, "bash");
+    }
+
+    #[test]
+    fn normalize_wrapped_shell_inner_executable_for_skill_matching_resolves_relative_script() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let repo_root = tempdir.path().join("repo");
+        let cwd = repo_root.join("codex-rs");
+        let skill_script =
+            repo_root.join(".agents/skills/sandbox-approval-demo/scripts/skill_action.sh");
+        fs::create_dir_all(
+            skill_script
+                .parent()
+                .expect("skill script should have a parent directory"),
+        )
+        .expect("create skill scripts dir");
+        fs::create_dir_all(&cwd).expect("create cwd");
+        fs::write(&skill_script, "#!/bin/sh\n").expect("write skill script");
+
+        let command = vec![
+            "/bin/zsh".to_string(),
+            "-c".to_string(),
+            "../.agents/skills/sandbox-approval-demo/scripts/./skill_action.sh".to_string(),
+        ];
+
+        let normalized = normalize_wrapped_shell_inner_executable_for_skill_matching(
+            &command,
+            &cwd.to_string_lossy(),
+        )
+        .expect("should parse wrapped shell command");
+
+        let expected = dunce::canonicalize(&skill_script)
+            .expect("canonicalize skill script")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(normalized, expected);
     }
 }

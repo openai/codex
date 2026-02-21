@@ -975,7 +975,11 @@ fn parse_skill_selection(
 ) -> Result<Option<SkillSelection>> {
     match (skill_name, skill_path) {
         (None, None) => Ok(None),
-        (Some(name), Some(path)) => Ok(Some(SkillSelection { name, path })),
+        (Some(name), Some(path)) => {
+            let path = fs::canonicalize(&path)
+                .with_context(|| format!("canonicalize --skill-path {}", path.display()))?;
+            Ok(Some(SkillSelection { name, path }))
+        }
         (Some(_), None) => bail!("--skill-name requires --skill-path"),
         (None, Some(_)) => bail!("--skill-path requires --skill-name"),
     }
