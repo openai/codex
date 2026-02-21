@@ -92,7 +92,7 @@ const MAX_TOOL_NAME_LENGTH: usize = 64;
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Default timeout for individual tool calls.
-const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
 
 const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 1;
 const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
