@@ -1,3 +1,4 @@
+use crate::CodexAuth;
 use crate::api_bridge::map_api_error;
 use crate::codex::Session;
 use crate::default_client::default_headers;
@@ -231,9 +232,10 @@ pub(crate) async fn handle_start(
     sess: &Arc<Session>,
     sub_id: String,
     params: ConversationStartParams,
-) {
-    let config = sess.get_config().await;
-    let api_provider = config.model_provider.to_api_provider(None).unwrap();
+) -> CodexResult<()> {
+    let provider = sess.provider().await;
+    let auth = sess.services.auth_manager.auth().await;
+    let api_provider = provider.to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
 
     let requested_session_id = params
         .session_id
@@ -251,7 +253,7 @@ pub(crate) async fn handle_start(
         Ok(events_rx) => events_rx,
         Err(err) => {
             send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other).await;
-            return;
+            return Ok(());
         }
     };
 
@@ -286,6 +288,8 @@ pub(crate) async fn handle_start(
                 .await;
         }
     });
+
+    Ok(())
 }
 
 pub(crate) async fn handle_audio(

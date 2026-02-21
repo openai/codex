@@ -1963,6 +1963,11 @@ impl Session {
             .clone()
     }
 
+    pub(crate) async fn provider(&self) -> ModelProviderInfo {
+        let state = self.state.lock().await;
+        state.session_configuration.provider.clone()
+    }
+
     pub(crate) async fn reload_user_config_layer(&self) {
         let config_toml_path = {
             let state = self.state.lock().await;
@@ -3162,7 +3167,18 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::clean_background_terminals(&sess).await;
             }
             Op::RealtimeConversationStart(params) => {
-                crate::realtime_conversation::handle_start(&sess, sub.id.clone(), params).await;
+                if let Err(err) =
+                    crate::realtime_conversation::handle_start(&sess, sub.id.clone(), params).await
+                {
+                    sess.send_event_raw(Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: err.to_string(),
+                            codex_error_info: Some(CodexErrorInfo::Other),
+                        }),
+                    })
+                    .await;
+                }
             }
             Op::RealtimeConversationAudio(params) => {
                 crate::realtime_conversation::handle_audio(&sess, sub.id.clone(), params).await;
