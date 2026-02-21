@@ -4024,7 +4024,7 @@ impl ChatWidget {
     /// that must not be used to correlate follow-up actions.
     fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
         let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
-        if !is_stream_error {
+        if !from_replay && !is_stream_error {
             self.restore_retry_status_header_if_present();
         }
 
@@ -4059,7 +4059,11 @@ impl ChatWidget {
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TurnStarted(_) => self.on_task_started(),
+            EventMsg::TurnStarted(_) => {
+                if !from_replay {
+                    self.on_task_started();
+                }
+            }
             EventMsg::TurnComplete(TurnCompleteEvent {
                 last_agent_message, ..
             }) => self.on_task_complete(last_agent_message, from_replay),
@@ -4149,7 +4153,11 @@ impl ChatWidget {
                 message,
                 additional_details,
                 ..
-            }) => self.on_stream_error(message, additional_details),
+            }) => {
+                if !from_replay {
+                    self.on_stream_error(message, additional_details);
+                }
+            }
             EventMsg::UserMessage(ev) => {
                 if from_replay {
                     self.on_user_message_event(ev);
