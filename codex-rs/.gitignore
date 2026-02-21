@@ -6,3 +6,6 @@
 
 # Value of CARGO_TARGET_DIR when using .devcontainer/devcontainer.json.
 /target-arm64/
+
+# local query_project index cache
+**/.codex/repo_hybrid_index/
