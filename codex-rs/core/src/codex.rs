@@ -2762,12 +2762,6 @@ impl Session {
         state.reference_context_item()
     }
 
-    #[cfg(test)]
-    pub(crate) async fn clear_reference_context_item(&self) {
-        let mut state = self.state.lock().await;
-        state.set_reference_context_item(None);
-    }
-
     /// Persist the latest turn context snapshot and emit any required model-visible context updates.
     ///
     /// When the reference snapshot is missing, this injects full initial context. Otherwise, it
@@ -8140,7 +8134,10 @@ mod tests {
         session
             .record_context_updates_and_set_reference_context_item(&turn_context, None)
             .await;
-        session.clear_reference_context_item().await;
+        {
+            let mut state = session.state.lock().await;
+            state.set_reference_context_item(None);
+        }
         session
             .replace_history(vec![compacted_summary.clone()], None)
             .await;
@@ -8158,7 +8155,10 @@ mod tests {
     #[tokio::test]
     async fn run_user_shell_command_does_not_set_reference_context_item() {
         let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
-        session.clear_reference_context_item().await;
+        {
+            let mut state = session.state.lock().await;
+            state.set_reference_context_item(None);
+        }
 
         handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
             .await;
