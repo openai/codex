@@ -395,9 +395,12 @@ where
         if self.viewport_area.is_empty() {
             return Ok(());
         }
-        self.backend
-            .set_cursor_position(self.viewport_area.as_position())?;
+        let home = Position { x: 0, y: 0 };
+        // Use an explicit cursor-home around scrollback purge for terminals that
+        // are sensitive to inline viewport cursor placement (e.g. Terminal.app).
+        self.set_cursor_position(home)?;
         queue!(self.backend, Clear(crossterm::terminal::ClearType::Purge))?;
+        self.set_cursor_position(home)?;
         std::io::Write::flush(&mut self.backend)?;
         self.previous_buffer_mut().reset();
         Ok(())
@@ -405,7 +408,32 @@ where
 
     /// Clear the entire visible screen (not just the viewport) and force a full redraw.
     pub fn clear_visible_screen(&mut self) -> io::Result<()> {
+        let home = Position { x: 0, y: 0 };
+        // Some terminals (notably Terminal.app) behave more reliably if we pair ED2
+        // with an explicit cursor-home before/after, matching the common `clear`
+        // sequence (`CSI 2J` + `CSI H`).
+        self.set_cursor_position(home)?;
         self.backend.clear_region(ClearType::All)?;
+        self.set_cursor_position(home)?;
+        std::io::Write::flush(&mut self.backend)?;
+        self.visible_history_rows = 0;
+        self.previous_buffer_mut().reset();
+        Ok(())
+    }
+
+    /// Hard-reset scrollback + visible screen using an explicit ANSI sequence.
+    ///
+    /// This is a compatibility fallback for terminals that misbehave when purge
+    /// and full-screen clear are issued as separate backend commands.
+    pub fn clear_scrollback_and_visible_screen_ansi(&mut self) -> io::Result<()> {
+        if self.viewport_area.is_empty() {
+            return Ok(());
+        }
+
+        // Reset scroll region + style state, purge scrollback, clear screen, home cursor.
+        write!(self.backend, "\x1b[r\x1b[0m\x1b[3J\x1b[2J\x1b[H")?;
+        std::io::Write::flush(&mut self.backend)?;
+        self.last_known_cursor_pos = Position { x: 0, y: 0 };
         self.visible_history_rows = 0;
         self.previous_buffer_mut().reset();
         Ok(())

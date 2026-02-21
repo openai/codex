@@ -715,6 +715,18 @@ impl App {
         cells: Vec<Arc<dyn HistoryCell>>,
     ) {
         let width = tui.terminal.last_known_screen_size.width;
+        let lines = self.replay_history_cells_as_lines(width, cells);
+        if !lines.is_empty() {
+            tui.insert_history_lines(lines);
+        }
+    }
+
+    fn replay_history_cells_as_lines(
+        &mut self,
+        width: u16,
+        cells: Vec<Arc<dyn HistoryCell>>,
+    ) -> Vec<Line<'static>> {
+        let mut replay_lines = Vec::new();
         for cell in cells {
             let mut display = cell.display_lines(width);
             if display.is_empty() {
@@ -727,30 +739,70 @@ impl App {
                     self.has_emitted_history_lines = true;
                 }
             }
-            tui.insert_history_lines(display);
+            replay_lines.extend(display);
         }
+        replay_lines
     }
 
     fn clear_terminal_ui(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let is_alt_screen_active = tui.is_alt_screen_active();
+        let use_apple_terminal_clear_workaround = !is_alt_screen_active
+            && matches!(
+                codex_core::terminal::terminal_info().name,
+                codex_core::terminal::TerminalName::AppleTerminal
+            );
         let replay_cells = self.clear_ui_replay_cells_for_latest_initialization();
-        if tui.is_alt_screen_active() {
+        let mut apple_replay_lines: Option<Vec<Line<'static>>> = None;
+
+        if is_alt_screen_active {
             tui.terminal.clear_visible_screen()?;
+        } else if use_apple_terminal_clear_workaround {
+            // Terminal.app can leave mixed old/new glyphs behind when we purge + clear then
+            // replay transcript history via the normal inline clear path. Use a stricter ANSI
+            // reset, then pre-position the inline viewport based on replay height so the replayed
+            // preamble (session header + startup notices) fits exactly above the prompt.
+            tui.terminal.clear_scrollback_and_visible_screen_ansi()?;
+            self.has_emitted_history_lines = false;
+
+            let width = tui.terminal.last_known_screen_size.width;
+            let replay_lines = self.replay_history_cells_as_lines(width, replay_cells.clone());
+            if !replay_lines.is_empty() {
+                let mut area = tui.terminal.viewport_area;
+                if area.y > 0 {
+                    // `insert_history_lines()` already shifts the inline viewport downward by the
+                    // wrapped replay height. Starting from the top avoids double-applying that
+                    // offset, which makes the replayed preamble sit too low in Terminal.app.
+                    area.y = 0;
+                    tui.terminal.set_viewport_area(area);
+                }
+                apple_replay_lines = Some(replay_lines);
+            } else {
+                let mut area = tui.terminal.viewport_area;
+                if area.y > 0 {
+                    area.y = 0;
+                    tui.terminal.set_viewport_area(area);
+                }
+            }
         } else {
-            let old_visible_history_rows = tui.terminal.visible_history_rows();
             tui.terminal.clear_scrollback()?;
             tui.terminal.clear_visible_screen()?;
-            if old_visible_history_rows > 0 {
-                let mut area = tui.terminal.viewport_area;
-                // Purge + full clear wipes the terminal contents, but does not relocate the
-                // inline viewport. Move it back to the top of the previously visible Codex
-                // history so replay does not reappear with a blank gap above it.
-                area.y = area.y.saturating_sub(old_visible_history_rows);
+            let mut area = tui.terminal.viewport_area;
+            if area.y > 0 {
+                // Full-screen clear wipes the terminal contents but leaves the inline viewport at
+                // its prior row. Relocate to the top so replayed preamble content renders on a
+                // clean screen consistently across terminals (including Terminal.app).
+                area.y = 0;
                 tui.terminal.set_viewport_area(area);
             }
         }
         self.has_emitted_history_lines = false;
 
-        if !replay_cells.is_empty() {
+        if let Some(replay_lines) = apple_replay_lines {
+            if !replay_lines.is_empty() {
+                tui.insert_history_lines(replay_lines);
+                self.has_emitted_history_lines = true;
+            }
+        } else if !replay_cells.is_empty() {
             self.replay_history_cells_to_terminal(tui, replay_cells);
         }
         Ok(())
