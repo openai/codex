@@ -29,6 +29,8 @@ use anyhow::Context as _;
 #[cfg(unix)]
 use codex_utils_pty::process_group::kill_child_process_group;
 #[cfg(unix)]
+use dunce::canonicalize as canonicalize_path;
+#[cfg(unix)]
 use serde::Deserialize;
 #[cfg(unix)]
 use serde::Serialize;
@@ -36,6 +38,10 @@ use serde::Serialize;
 use std::io::Read;
 #[cfg(unix)]
 use std::io::Write;
+#[cfg(unix)]
+use std::path::Component;
+#[cfg(unix)]
+use std::path::Path;
 #[cfg(unix)]
 use std::time::Instant;
 #[cfg(unix)]
@@ -354,11 +360,12 @@ impl ZshExecBridge {
         } else {
             argv.clone()
         };
+        let normalized_exec_program = normalize_wrapper_executable_for_skill_matching(&file, &cwd);
 
         // Check exec policy against the resolved executable path, not the original argv[0].
         let mut command_for_execpolicy = command_for_approval.clone();
         if let Some(program) = command_for_execpolicy.first_mut() {
-            *program = file.clone();
+            *program = normalized_exec_program.clone();
         }
 
         // Collect skill-provided approval overlays and any matching skill permission profile.
@@ -367,9 +374,9 @@ impl ZshExecBridge {
                 .skill_prefix_permissions
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let matched_skill_permissions = command_for_execpolicy
-                .first()
-                .and_then(|program| registry.get(std::slice::from_ref(program)).cloned());
+            let matched_skill_permissions = registry
+                .get(std::slice::from_ref(&normalized_exec_program))
+                .cloned();
             let overlay_prompt_prefixes = registry.keys().cloned().collect::<Vec<_>>();
             (overlay_prompt_prefixes, matched_skill_permissions)
         };
@@ -603,6 +610,40 @@ fn parse_wrapper_request_line(request_line: &str) -> Result<WrapperIpcRequest, T
 }
 
 #[cfg(unix)]
+fn normalize_wrapper_executable_for_skill_matching(file: &str, cwd: &str) -> String {
+    let file_path = Path::new(file);
+    if !file_path.is_absolute() && !file.contains('/') {
+        return file.to_string();
+    }
+
+    let absolute = if file_path.is_absolute() {
+        file_path.to_path_buf()
+    } else {
+        Path::new(cwd).join(file_path)
+    };
+    let normalized = normalize_lexically(&absolute);
+    let canonicalized = canonicalize_path(&normalized).unwrap_or(normalized);
+    canonicalized.to_string_lossy().to_string()
+}
+
+#[cfg(unix)]
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
+
+#[cfg(unix)]
 async fn write_json_line<W: tokio::io::AsyncWrite + Unpin, T: Serialize>(
     writer: &mut W,
     message: &T,
@@ -624,6 +665,8 @@ async fn write_json_line<W: tokio::io::AsyncWrite + Unpin, T: Serialize>(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+    use std::fs;
 
     #[test]
     fn parse_wrapper_request_line_rejects_malformed_json() {
@@ -632,5 +675,39 @@ mod tests {
             panic!("expected ToolError::Rejected");
         };
         assert!(message.starts_with("parse wrapper request payload:"));
+    }
+
+    #[test]
+    fn normalize_wrapper_executable_for_skill_matching_resolves_relative_paths_against_cwd() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let repo_root = tempdir.path().join("repo");
+        let cwd = repo_root.join("codex-rs");
+        let skill_script =
+            repo_root.join(".agents/skills/sandbox-approval-demo/scripts/skill_action.sh");
+        fs::create_dir_all(
+            skill_script
+                .parent()
+                .expect("skill script should have a parent directory"),
+        )
+        .expect("create skill scripts dir");
+        fs::create_dir_all(&cwd).expect("create cwd");
+        fs::write(&skill_script, "#!/bin/sh\n").expect("write skill script");
+
+        let normalized = normalize_wrapper_executable_for_skill_matching(
+            "../.agents/skills/sandbox-approval-demo/scripts/./skill_action.sh",
+            &cwd.to_string_lossy(),
+        );
+
+        let expected = dunce::canonicalize(&skill_script)
+            .expect("canonicalize skill script")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(normalized, expected);
+    }
+
+    #[test]
+    fn normalize_wrapper_executable_for_skill_matching_keeps_bare_command_names() {
+        let normalized = normalize_wrapper_executable_for_skill_matching("bash", "/tmp");
+        assert_eq!(normalized, "bash");
     }
 }
