@@ -166,6 +166,7 @@ impl ThreadHistoryBuilder {
             RolloutItem::Compacted(payload) => self.handle_compacted(payload),
             RolloutItem::TurnContext(_)
             | RolloutItem::SessionMeta(_)
+            | RolloutItem::ForkReference(_)
             | RolloutItem::ResponseItem(_) => {}
         }
     }

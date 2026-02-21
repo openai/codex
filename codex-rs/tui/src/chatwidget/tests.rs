@@ -11,6 +11,9 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
+use crate::history_cell::SubagentPanelAgent;
+use crate::history_cell::SubagentPanelState;
+use crate::history_cell::SubagentStatusCell;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
@@ -25,6 +28,48 @@ use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::RequirementSource;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
+use codex_core::protocol::AgentMessageDeltaEvent;
+use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::AgentReasoningDeltaEvent;
+use codex_core::protocol::AgentReasoningEvent;
+use codex_core::protocol::AgentStatus;
+use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::CreditsSnapshot;
+use codex_core::protocol::Event;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecApprovalRequestEvent;
+use codex_core::protocol::ExecCommandBeginEvent;
+use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandSource;
+use codex_core::protocol::ExecCommandStatus as CoreExecCommandStatus;
+use codex_core::protocol::ExecPolicyAmendment;
+use codex_core::protocol::ExitedReviewModeEvent;
+use codex_core::protocol::FileChange;
+use codex_core::protocol::ItemCompletedEvent;
+use codex_core::protocol::McpStartupCompleteEvent;
+use codex_core::protocol::McpStartupStatus;
+use codex_core::protocol::McpStartupUpdateEvent;
+use codex_core::protocol::Op;
+use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::PatchApplyStatus as CorePatchApplyStatus;
+use codex_core::protocol::RateLimitWindow;
+use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::ReviewTarget;
+use codex_core::protocol::SessionSource;
+use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::TerminalInteractionEvent;
+use codex_core::protocol::ThreadRolledBackEvent;
+use codex_core::protocol::TokenCountEvent;
+use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
+use codex_core::protocol::TurnCompleteEvent;
+use codex_core::protocol::TurnStartedEvent;
+use codex_core::protocol::UndoCompletedEvent;
+use codex_core::protocol::UndoStartedEvent;
+use codex_core::protocol::ViewImageToolCallEvent;
+use codex_core::protocol::WarningEvent;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
 use codex_otel::OtelManager;
@@ -103,6 +148,9 @@ use serial_test::serial;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::time::Instant;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -1768,6 +1816,38 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+#[tokio::test]
+async fn subagent_panel_is_not_flushed_into_transcript_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let state = Arc::new(StdMutex::new(SubagentPanelState {
+        started_at: Instant::now(),
+        total_agents: 1,
+        running_count: 0,
+        running_agents: vec![SubagentPanelAgent {
+            ordinal: 1,
+            name: "user-request-derisk-implement".to_string(),
+            status: AgentStatus::PendingInit,
+            is_watchdog: true,
+            preview: "watchdog idle".to_string(),
+            latest_update_at: Instant::now(),
+        }],
+    }));
+    chat.on_subagent_panel_updated(Arc::new(SubagentStatusCell::new(state, true)));
+
+    chat.add_to_history(history_cell::new_error_event("follow-up cell".to_string()));
+
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(
+        inserted.len(),
+        1,
+        "subagent panel should remain transient and not be inserted into transcript history"
+    );
+    let rendered = lines_to_single_string(&inserted[0]);
+    assert!(rendered.contains("follow-up cell"));
+    assert!(!rendered.contains("Subagents"));
 }
 
 fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {

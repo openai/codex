@@ -1,3 +1,30 @@
+use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::AgentReasoningEvent;
+use codex_core::protocol::AgentStatus;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::CollabAgentSpawnBeginEvent;
+use codex_core::protocol::CollabAgentSpawnEndEvent;
+use codex_core::protocol::CollabAgentSpawnMode;
+use codex_core::protocol::CollabWaitingEndEvent;
+use codex_core::protocol::ErrorEvent;
+use codex_core::protocol::Event;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecCommandBeginEvent;
+use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandSource;
+use codex_core::protocol::ExecCommandStatus as CoreExecCommandStatus;
+use codex_core::protocol::FileChange;
+use codex_core::protocol::McpInvocation;
+use codex_core::protocol::McpToolCallBeginEvent;
+use codex_core::protocol::McpToolCallEndEvent;
+use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::PatchApplyStatus as CorePatchApplyStatus;
+use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::WarningEvent;
+use codex_core::protocol::WebSearchBeginEvent;
+use codex_core::protocol::WebSearchEndEvent;
 use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use codex_exec::exec_events::AgentMessageItem;
 use codex_exec::exec_events::CollabAgentState;
@@ -575,6 +602,7 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             new_agent_nickname: None,
             new_agent_role: None,
             prompt: prompt.clone(),
+            spawn_mode: CollabAgentSpawnMode::Spawn,
             status: AgentStatus::Running,
         }),
     );
