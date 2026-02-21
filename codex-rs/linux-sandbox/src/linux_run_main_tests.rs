@@ -1,6 +1,7 @@
+#[cfg(test)]
 use super::*;
+#[cfg(test)]
 use codex_protocol::protocol::SandboxPolicy;
-use pretty_assertions::assert_eq;
 
 #[test]
 fn detects_proc_mount_invalid_argument_failure() {
