@@ -6249,10 +6249,9 @@ impl ChatWidget {
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
         {
-            if mask.mode == Some(ModeKind::Plan) && self.config.plan_mode_reasoning_effort.is_none()
-            {
-                // Preserve the Plan preset's default reasoning unless a Plan-only override is set.
-            } else {
+            if mask.mode != Some(ModeKind::Plan) {
+                // Generic "global default" updates should not mutate the active Plan mask.
+                // Plan reasoning is controlled by the Plan preset and Plan-only override updates.
                 mask.reasoning_effort = Some(effort);
             }
         }
