@@ -18,9 +18,11 @@ use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+#[cfg(test)]
 use crate::history_cell::SessionInfoCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+#[cfg(test)]
 use crate::history_cell::UserHistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
@@ -32,6 +34,7 @@ use crate::resume_picker::SessionSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
+use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
@@ -80,6 +83,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+#[cfg(test)]
 use std::any::TypeId;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -683,6 +687,7 @@ impl App {
             .add_info_message(format!("Opened {url} in your browser."), None);
     }
 
+    #[cfg(test)]
     fn clear_ui_replay_cells_for_latest_initialization(&self) -> Vec<Arc<dyn HistoryCell>> {
         if self.transcript_cells.is_empty() {
             return Vec::new();
@@ -701,47 +706,13 @@ impl App {
         self.transcript_cells[latest_init_idx..end_idx].to_vec()
     }
 
+    #[cfg(test)]
     fn clear_ui_latest_initialization_idx(&self) -> usize {
         let session_info_type = TypeId::of::<SessionInfoCell>();
         self.transcript_cells
             .iter()
             .rposition(|cell| cell.as_any().type_id() == session_info_type)
             .unwrap_or(0)
-    }
-
-    fn replay_history_cells_to_terminal(
-        &mut self,
-        tui: &mut tui::Tui,
-        cells: Vec<Arc<dyn HistoryCell>>,
-    ) {
-        let width = tui.terminal.last_known_screen_size.width;
-        let lines = self.replay_history_cells_as_lines(width, cells);
-        if !lines.is_empty() {
-            tui.insert_history_lines(lines);
-        }
-    }
-
-    fn replay_history_cells_as_lines(
-        &mut self,
-        width: u16,
-        cells: Vec<Arc<dyn HistoryCell>>,
-    ) -> Vec<Line<'static>> {
-        let mut replay_lines = Vec::new();
-        for cell in cells {
-            let mut display = cell.display_lines(width);
-            if display.is_empty() {
-                continue;
-            }
-            if !cell.is_stream_continuation() {
-                if self.has_emitted_history_lines {
-                    display.insert(0, Line::from(""));
-                } else {
-                    self.has_emitted_history_lines = true;
-                }
-            }
-            replay_lines.extend(display);
-        }
-        replay_lines
     }
 
     fn clear_terminal_ui(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -751,59 +722,39 @@ impl App {
                 codex_core::terminal::terminal_info().name,
                 codex_core::terminal::TerminalName::AppleTerminal
             );
-        let replay_cells = self.clear_ui_replay_cells_for_latest_initialization();
-        let mut apple_replay_lines: Option<Vec<Line<'static>>> = None;
 
         if is_alt_screen_active {
             tui.terminal.clear_visible_screen()?;
         } else if use_apple_terminal_clear_workaround {
-            // Terminal.app can leave mixed old/new glyphs behind when we purge + clear then
-            // replay transcript history via the normal inline clear path. Use a stricter ANSI
-            // reset, then pre-position the inline viewport based on replay height so the replayed
-            // preamble (session header + startup notices) fits exactly above the prompt.
+            // Terminal.app can leave mixed old/new glyphs behind when we purge + clear.
+            // Use a stricter ANSI reset, then redraw only a fresh session header box instead of
+            // replaying the initialization transcript preamble.
             tui.terminal.clear_scrollback_and_visible_screen_ansi()?;
-            self.has_emitted_history_lines = false;
-
-            let width = tui.terminal.last_known_screen_size.width;
-            let replay_lines = self.replay_history_cells_as_lines(width, replay_cells.clone());
-            if !replay_lines.is_empty() {
-                let mut area = tui.terminal.viewport_area;
-                if area.y > 0 {
-                    // `insert_history_lines()` already shifts the inline viewport downward by the
-                    // wrapped replay height. Starting from the top avoids double-applying that
-                    // offset, which makes the replayed preamble sit too low in Terminal.app.
-                    area.y = 0;
-                    tui.terminal.set_viewport_area(area);
-                }
-                apple_replay_lines = Some(replay_lines);
-            } else {
-                let mut area = tui.terminal.viewport_area;
-                if area.y > 0 {
-                    area.y = 0;
-                    tui.terminal.set_viewport_area(area);
-                }
-            }
         } else {
             tui.terminal.clear_scrollback()?;
             tui.terminal.clear_visible_screen()?;
-            let mut area = tui.terminal.viewport_area;
-            if area.y > 0 {
-                // Full-screen clear wipes the terminal contents but leaves the inline viewport at
-                // its prior row. Relocate to the top so replayed preamble content renders on a
-                // clean screen consistently across terminals (including Terminal.app).
-                area.y = 0;
-                tui.terminal.set_viewport_area(area);
-            }
+        }
+
+        let mut area = tui.terminal.viewport_area;
+        if area.y > 0 {
+            // After a full clear, anchor the inline viewport at the top and redraw a fresh header
+            // box. `insert_history_lines()` will shift the viewport down by the rendered height.
+            area.y = 0;
+            tui.terminal.set_viewport_area(area);
         }
         self.has_emitted_history_lines = false;
 
-        if let Some(replay_lines) = apple_replay_lines {
-            if !replay_lines.is_empty() {
-                tui.insert_history_lines(replay_lines);
-                self.has_emitted_history_lines = true;
-            }
-        } else if !replay_cells.is_empty() {
-            self.replay_history_cells_to_terminal(tui, replay_cells);
+        let width = tui.terminal.last_known_screen_size.width;
+        let header_lines = history_cell::SessionHeaderHistoryCell::new(
+            self.chat_widget.current_model().to_string(),
+            self.chat_widget.current_reasoning_effort(),
+            self.config.cwd.clone(),
+            CODEX_CLI_VERSION,
+        )
+        .display_lines(width);
+        if !header_lines.is_empty() {
+            tui.insert_history_lines(header_lines);
+            self.has_emitted_history_lines = true;
         }
         Ok(())
     }
