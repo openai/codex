@@ -124,7 +124,7 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
     })
     .await;
 
-    let client = RealtimeWebsocketClient::new(test_provider(format!("ws://{addr}")));
+    let client = RealtimeWebsocketClient::new(test_provider(format!("http://{addr}")));
     let connection = client
         .connect(
             RealtimeSessionConfig {
@@ -214,7 +214,7 @@ async fn realtime_ws_e2e_send_while_next_event_waits() {
     })
     .await;
 
-    let client = RealtimeWebsocketClient::new(test_provider(format!("ws://{addr}")));
+    let client = RealtimeWebsocketClient::new(test_provider(format!("http://{addr}")));
     let connection = client
         .connect(
             RealtimeSessionConfig {
@@ -275,7 +275,7 @@ async fn realtime_ws_e2e_disconnected_emitted_once() {
     })
     .await;
 
-    let client = RealtimeWebsocketClient::new(test_provider(format!("ws://{addr}")));
+    let client = RealtimeWebsocketClient::new(test_provider(format!("http://{addr}")));
     let connection = client
         .connect(
             RealtimeSessionConfig {
@@ -334,7 +334,7 @@ async fn realtime_ws_e2e_ignores_unknown_text_events() {
     })
     .await;
 
-    let client = RealtimeWebsocketClient::new(test_provider(format!("ws://{addr}")));
+    let client = RealtimeWebsocketClient::new(test_provider(format!("http://{addr}")));
     let connection = client
         .connect(
             RealtimeSessionConfig {
