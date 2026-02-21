@@ -6678,8 +6678,10 @@ mod tests {
             .await;
 
         assert_eq!(
-            session.reference_context_item().await,
-            Some(previous_context_item)
+            serde_json::to_value(session.reference_context_item().await)
+                .expect("serialize seeded reference context item"),
+            serde_json::to_value(Some(previous_context_item))
+                .expect("serialize expected reference context item")
         );
     }
 
@@ -6729,7 +6731,7 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(session.reference_context_item().await, None);
+        assert!(session.reference_context_item().await.is_none());
     }
 
     #[tokio::test]
