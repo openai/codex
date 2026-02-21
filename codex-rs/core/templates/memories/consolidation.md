@@ -261,7 +261,13 @@ What to write:
   `memory_summary.md`.
 - `MEMORY.md` should support related-but-not-identical tasks: slightly more general than a
   rollout summary, but still operational and concrete.
-- Use `raw_memories.md` as the routing layer; deep-dive into `rollout_summaries/*.md` when:
+- Use `raw_memories.md` as the routing layer and task inventory. In INIT mode, do a broad
+  coverage pass across nearly the whole file (chunked reads or equivalent) before choosing
+  deep dives.
+- Before writing `MEMORY.md`, build a scratch mapping of `rollout_summary_file -> target
+  task group/task` from the full raw inventory so you can have a better overview. 
+  Note that each rollout summary file can belong to multiple tasks.
+- Then deep-dive into `rollout_summaries/*.md` when:
   - the task is high-value and needs richer detail,
   - multiple rollouts overlap and need conflict/staleness resolution,
   - raw memory wording is too terse/ambiguous to consolidate confidently,
@@ -413,6 +419,10 @@ WORKFLOW
 
 2) INIT phase behavior:
    - Read `raw_memories.md` first, then rollout summaries carefully.
+   - In INIT mode, do a chunked coverage pass over `raw_memories.md` from top to near end
+     (or an equivalent full-file scan/indexing pass). Do not stop after only the first chunk.
+   - Use `wc -l` (or equivalent) to gauge file size, then scan in chunks so thread/task
+     metadata and high-signal entries across the whole file can influence clustering.
    - Build Phase 2 artifacts from scratch:
      - produce/refresh `MEMORY.md`
      - create initial `skills/*` (optional but highly recommended)
@@ -424,17 +434,28 @@ WORKFLOW
 3) INCREMENTAL UPDATE behavior:
    - Treat `raw_memories.md` as the primary source of NEW signal.
    - Read existing memory files first for continuity.
+   - Build an index of rollout references already present in existing `MEMORY.md` before
+     scanning raw memories so you can route net-new evidence into the right blocks.
+   - Compute net-new candidates from the raw-memory inventory (threads / rollout summaries /
+     updated evidence not already represented in `MEMORY.md`).
    - Integrate new signal into existing artifacts by:
      - scanning new raw memories in recency order and identifying which existing blocks they should update
      - updating existing knowledge with better/newer evidence
      - updating stale or contradicting guidance
      - expanding terse old blocks when new summaries/raw memories make the task family clearer
      - doing light clustering and merging if needed
+     - preserving stable block taxonomy/order unless there is real new evidence that warrants restructuring
      - updating existing skills or adding new skills only when there is clear new reusable procedure
      - update `memory_summary.md` last to reflect the final state of the memory folder
+   - Minimize churn in incremental mode: unchanged blocks should stay mostly unchanged in
+     wording/order unless you are fixing an actual problem (staleness, ambiguity, schema drift).
 
 4) Evidence deep-dive rule (both modes):
    - `raw_memories.md` is the routing layer, not always the final authority for detail.
+   - Start by inventorying the real files on disk (`rg --files rollout_summaries` or
+     equivalent) and only open/cite rollout summaries from that set.
+   - If raw memory mentions a rollout summary file that is missing on disk, do not invent or
+     guess the file path in `MEMORY.md`; treat it as missing evidence and low confidence.
    - When a task family is important, ambiguous, or duplicated across multiple rollouts,
      open the relevant `rollout_summaries/*.md` files and extract richer procedural detail,
      validation signals, and user feedback before finalizing `MEMORY.md`.
@@ -450,6 +471,8 @@ WORKFLOW
 
 7) Final pass:
    - remove duplication in memory_summary, skills/, and MEMORY.md
+   - remove stale or low-signal blocks that are less likely to be useful in the future
+   - run a global rollout-reference audit on final `MEMORY.md` and fix duplicates before finishing
    - ensure any referenced skills/summaries actually exist
    - ensure MEMORY blocks and "What's in Memory" use a consistent task-oriented taxonomy
    - ensure recent important task families are easy to find (description + keywords + topic wording)
