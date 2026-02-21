@@ -11,11 +11,11 @@
 use std::path::PathBuf;
 
 use codex_chatgpt::connectors::AppInfo;
-use codex_core::protocol::Event;
-use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -23,11 +23,11 @@ use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
 
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -73,7 +73,7 @@ pub(crate) enum AppEvent {
 
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
-    CodexOp(codex_core::protocol::Op),
+    CodexOp(codex_protocol::protocol::Op),
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
@@ -162,6 +162,12 @@ pub(crate) enum AppEvent {
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
+    },
+
+    /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
+    OpenPlanReasoningScopePrompt {
+        model: String,
+        effort: Option<ReasoningEffort>,
     },
 
     /// Open the full model picker (non-auto models).
@@ -258,6 +264,9 @@ pub(crate) enum AppEvent {
     /// Update whether the rate limit switch prompt has been acknowledged for the session.
     UpdateRateLimitSwitchPromptHidden(bool),
 
+    /// Update the Plan-mode-specific reasoning effort in memory.
+    UpdatePlanModeReasoningEffort(Option<ReasoningEffort>),
+
     /// Persist the acknowledgement flag for the full access warning prompt.
     PersistFullAccessWarningAcknowledged,
 
@@ -267,6 +276,9 @@ pub(crate) enum AppEvent {
 
     /// Persist the acknowledgement flag for the rate limit switch prompt.
     PersistRateLimitSwitchPromptHidden,
+
+    /// Persist the Plan-mode-specific reasoning effort.
+    PersistPlanModeReasoningEffort(Option<ReasoningEffort>),
 
     /// Persist the acknowledgement flag for the model migration prompt.
     PersistModelMigrationPromptAcknowledged {

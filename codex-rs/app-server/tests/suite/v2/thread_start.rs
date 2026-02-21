@@ -13,6 +13,7 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
+use serde_json::Value;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -45,6 +46,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
     )
     .await??;
+    let resp_result = resp.result.clone();
     let ThreadStartResponse {
         thread,
         model_provider,
@@ -68,12 +70,34 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         "fresh thread rollout should not be materialized until first user message"
     );
 
+    // Wire contract: thread title field is `name`, serialized as null when unset.
+    let thread_json = resp_result
+        .get("thread")
+        .and_then(Value::as_object)
+        .expect("thread/start result.thread must be an object");
+    assert_eq!(
+        thread_json.get("name"),
+        Some(&Value::Null),
+        "new threads should serialize `name: null`"
+    );
+    assert_eq!(thread.name, None);
+
     // A corresponding thread/started notification should arrive.
     let notif: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("thread/started"),
     )
     .await??;
+    let started_params = notif.params.clone().expect("params must be present");
+    let started_thread_json = started_params
+        .get("thread")
+        .and_then(Value::as_object)
+        .expect("thread/started params.thread must be an object");
+    assert_eq!(
+        started_thread_json.get("name"),
+        Some(&Value::Null),
+        "thread/started should serialize `name: null` for new threads"
+    );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
     assert_eq!(started.thread, thread);

@@ -1,6 +1,6 @@
 //! Exercises `ChatWidget` event handling and rendering invariants.
 //!
-//! These tests treat the widget as the adapter between `codex_core::protocol::EventMsg` inputs and
+//! These tests treat the widget as the adapter between `codex_protocol::protocol::EventMsg` inputs and
 //! the TUI output. Many assertions are snapshot-based so that layout regressions and status/header
 //! changes show up as stable, reviewable diffs.
 
@@ -25,47 +25,6 @@ use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::RequirementSource;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_core::protocol::AgentMessageDeltaEvent;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningDeltaEvent;
-use codex_core::protocol::AgentReasoningEvent;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::BackgroundEventEvent;
-use codex_core::protocol::CreditsSnapshot;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::ExecCommandStatus as CoreExecCommandStatus;
-use codex_core::protocol::ExecPolicyAmendment;
-use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::ItemCompletedEvent;
-use codex_core::protocol::McpStartupCompleteEvent;
-use codex_core::protocol::McpStartupStatus;
-use codex_core::protocol::McpStartupUpdateEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::PatchApplyEndEvent;
-use codex_core::protocol::PatchApplyStatus as CorePatchApplyStatus;
-use codex_core::protocol::RateLimitWindow;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::SessionSource;
-use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TerminalInteractionEvent;
-use codex_core::protocol::ThreadRolledBackEvent;
-use codex_core::protocol::TokenCountEvent;
-use codex_core::protocol::TokenUsage;
-use codex_core::protocol::TokenUsageInfo;
-use codex_core::protocol::TurnCompleteEvent;
-use codex_core::protocol::TurnStartedEvent;
-use codex_core::protocol::UndoCompletedEvent;
-use codex_core::protocol::UndoStartedEvent;
-use codex_core::protocol::ViewImageToolCallEvent;
-use codex_core::protocol::WarningEvent;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
 use codex_otel::OtelManager;
@@ -87,8 +46,49 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::AgentMessageDeltaEvent;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::AgentReasoningDeltaEvent;
+use codex_protocol::protocol::AgentReasoningEvent;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecCommandBeginEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
+use codex_protocol::protocol::ExecPolicyAmendment;
+use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::McpStartupCompleteEvent;
+use codex_protocol::protocol::McpStartupStatus;
+use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PatchApplyBeginEvent;
+use codex_protocol::protocol::PatchApplyEndEvent;
+use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
+use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::StreamErrorEvent;
+use codex_protocol::protocol::TerminalInteractionEvent;
+use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::UndoCompletedEvent;
+use codex_protocol::protocol::UndoStartedEvent;
+use codex_protocol::protocol::ViewImageToolCallEvent;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -149,7 +149,7 @@ async fn resumed_initial_messages_render_history() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -218,7 +218,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -277,7 +277,7 @@ async fn replayed_user_message_preserves_remote_image_urls() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -333,7 +333,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -384,7 +384,7 @@ async fn replayed_user_message_with_only_local_images_does_not_render_history_ce
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -494,7 +494,7 @@ async fn submission_preserves_text_elements_and_local_images() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -576,7 +576,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -669,7 +669,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -731,7 +731,7 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -769,7 +769,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -807,7 +807,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -846,7 +846,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
@@ -1119,7 +1119,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     // must be renumbered to match the combined local image list.
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -1184,7 +1184,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
 
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -2178,6 +2178,243 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
 }
 
 #[tokio::test]
+async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    assert_matches!(
+        event,
+        AppEvent::OpenPlanReasoningScopePrompt {
+            model,
+            effort: Some(_)
+        } if model == "gpt-5.1-codex-max"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    let current_preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.set_reasoning_effort(Some(current_preset.default_reasoning_effort));
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateModel(model) if model == "gpt-5.1-codex-max"
+        )),
+        "expected model update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
+        "expected reasoning update event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_global_opens_scope_prompt()
+ {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    // Reproduce: Plan effective reasoning remains the preset (medium), but the
+    // global default differs (high). Pressing Enter on the current Plan choice
+    // should open the scope prompt rather than silently rewriting the global default.
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    assert_matches!(
+        event,
+        AppEvent::OpenPlanReasoningScopePrompt {
+            model,
+            effort: Some(ReasoningEffortConfig::Medium)
+        } if model == "gpt-5.1-codex-max"
+    );
+}
+
+#[tokio::test]
+async fn plan_mode_reasoning_override_is_marked_current_in_reasoning_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    set_chatgpt_auth(&mut chat);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
+
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("Low (current)"));
+    assert!(
+        !popup.contains("High (current)"),
+        "expected Plan override to drive current reasoning label, got: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    let preset = get_available_model(&chat, "gpt-5");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateModel(model) if model == "gpt-5"
+        )),
+        "expected model update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
+        "expected reasoning update event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected plan override to be updated; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistPlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected updated plan override to be persisted; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelection { model, effort: Some(ReasoningEffortConfig::High) }
+                if model == "gpt-5.1-codex-max"
+        )),
+        "expected global model reasoning selection persistence; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_mentions_selected_reasoning() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::Medium),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("Choose where to apply medium reasoning."));
+    assert!(popup.contains("Always use medium reasoning in Plan mode."));
+    assert!(popup.contains("Apply to Plan mode override"));
+    assert!(popup.contains("Apply to global default and Plan mode override"));
+    assert!(popup.contains("user-chosen Plan override (low)"));
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_mentions_built_in_plan_default_when_no_override() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::Medium),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("built-in Plan default (medium)"));
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasoning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected plan-only reasoning update; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::UpdateReasoningEffort(_))),
+        "did not expect all-modes reasoning update; events: {events:?}"
+    );
+}
+
+#[tokio::test]
 async fn submit_user_message_with_mode_errors_when_mode_changes_during_running_turn() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -2615,7 +2852,8 @@ fn begin_exec_with_source(
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
-    let parsed_cmd: Vec<ParsedCommand> = codex_core::parse_command::parse_command(&command);
+    let parsed_cmd: Vec<ParsedCommand> =
+        codex_shell_command::parse_command::parse_command(&command);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let interaction_input = None;
     let event = ExecCommandBeginEvent {
@@ -3257,7 +3495,7 @@ async fn exec_end_without_begin_uses_event_command() {
         "-lc".to_string(),
         "echo orphaned".to_string(),
     ];
-    let parsed_cmd = codex_core::parse_command::parse_command(&command);
+    let parsed_cmd = codex_shell_command::parse_command::parse_command(&command);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     chat.handle_codex_event(Event {
         id: "call-orphan".to_string(),
@@ -3800,7 +4038,7 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
         thread_name: None,
@@ -3958,7 +4196,29 @@ async fn set_reasoning_effort_updates_active_collaboration_mask() {
 
     chat.set_reasoning_effort(None);
 
-    assert_eq!(chat.current_reasoning_effort(), None);
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Medium)
+    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn set_reasoning_effort_does_not_override_active_plan_override() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::High));
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
 }
 
@@ -4380,7 +4640,7 @@ async fn interrupt_exec_marks_failed_snapshot() {
     // cause the active exec cell to be finalized as failed and flushed.
     chat.handle_codex_event(Event {
         id: "call-int".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -4416,7 +4676,7 @@ async fn interrupted_turn_error_message_snapshot() {
     // Abort the turn (like pressing Esc) and drain inserted history.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -6071,7 +6331,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
     // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -6110,7 +6370,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -6139,7 +6399,7 @@ async fn interrupt_clears_unified_exec_processes() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -6160,7 +6420,7 @@ async fn review_ended_keeps_unified_exec_processes() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::ReviewEnded,
         }),
@@ -6205,7 +6465,7 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -6313,7 +6573,7 @@ async fn ui_snapshots_small_heights_task_running() {
 // task (status indicator active) while an approval request is shown.
 #[tokio::test]
 async fn status_widget_and_approval_modal_snapshot() {
-    use codex_core::protocol::ExecApprovalRequestEvent;
+    use codex_protocol::protocol::ExecApprovalRequestEvent;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     // Begin a running task so the status indicator would be active.
@@ -6696,7 +6956,7 @@ async fn apply_patch_approval_sends_op_with_call_id() {
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::CodexOp(Op::PatchApproval { id, decision }) = app_ev {
             assert_eq!(id, "call-999");
-            assert_matches!(decision, codex_core::protocol::ReviewDecision::Approved);
+            assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
             found = true;
             break;
         }
@@ -6744,7 +7004,7 @@ async fn apply_patch_full_flow_integration_like() {
     match forwarded {
         Op::PatchApproval { id, decision } => {
             assert_eq!(id, "call-1");
-            assert_matches!(decision, codex_core::protocol::ReviewDecision::Approved);
+            assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
         }
         other => panic!("unexpected op forwarded: {other:?}"),
     }
@@ -7085,7 +7345,7 @@ async fn status_line_branch_refreshes_after_interrupt() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),

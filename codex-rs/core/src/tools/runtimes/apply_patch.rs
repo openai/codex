@@ -4,7 +4,6 @@
 //! decision to avoid re-prompting, builds the self-invocation command for
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
-use crate::CODEX_APPLY_PATCH_ARG1;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
@@ -20,6 +19,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
@@ -57,7 +57,10 @@ impl ApplyPatchRuntime {
         let program = exe.to_string_lossy().to_string();
         Ok(CommandSpec {
             program,
-            args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.action.patch.clone()],
+            args: vec![
+                CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
+                req.action.patch.clone(),
+            ],
             cwd: req.action.cwd.clone(),
             expiration: req.timeout_ms.into(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.

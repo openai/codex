@@ -1,6 +1,6 @@
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;

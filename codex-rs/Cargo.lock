@@ -1309,6 +1309,7 @@ dependencies = [
  "codex-login",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-shell-command",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -1397,8 +1398,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
- "codex-core",
  "codex-linux-sandbox",
+ "codex-utils-home-dir",
  "dotenvy",
  "tempfile",
  "tokio",
@@ -1470,6 +1471,7 @@ dependencies = [
  "codex-arg0",
  "codex-chatgpt",
  "codex-cloud-tasks",
+ "codex-config",
  "codex-core",
  "codex-exec",
  "codex-execpolicy",
@@ -1600,10 +1602,13 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "sha2",
  "thiserror 2.0.18",
  "tokio",
  "toml 0.9.11+spec-1.1.0",
+ "toml_edit 0.24.0+spec-1.1.0",
+ "tracing",
 ]
 
 [[package]]
@@ -1639,6 +1644,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-secrets",
  "codex-shell-command",
+ "codex-skills",
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
@@ -1658,7 +1664,6 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "image",
- "include_dir",
  "indexmap 2.13.0",
  "indoc",
  "insta",
@@ -1681,7 +1686,6 @@ dependencies = [
  "seccompiler",
  "serde",
  "serde_json",
- "serde_path_to_error",
  "serde_yaml",
  "serial_test",
  "sha1",
@@ -1731,6 +1735,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "codex-apply-patch",
  "codex-arg0",
  "codex-cloud-requirements",
  "codex-core",
@@ -1770,6 +1775,8 @@ dependencies = [
  "clap",
  "codex-core",
  "codex-execpolicy",
+ "codex-protocol",
+ "codex-shell-command",
  "codex-utils-cargo-bin",
  "exec_server_test_support",
  "libc",
@@ -1907,15 +1914,18 @@ dependencies = [
  "cc",
  "clap",
  "codex-core",
+ "codex-protocol",
  "codex-utils-absolute-path",
  "landlock",
  "libc",
  "pkg-config",
  "pretty_assertions",
  "seccompiler",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -1963,6 +1973,7 @@ dependencies = [
  "codex-arg0",
  "codex-core",
  "codex-protocol",
+ "codex-shell-command",
  "codex-utils-cli",
  "codex-utils-json-to-toml",
  "core_test_support",
@@ -2181,6 +2192,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-skills"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-absolute-path",
+ "include_dir",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "codex-state"
 version = "0.0.0"
 dependencies = [
@@ -2237,6 +2257,7 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
+ "codex-shell-command",
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-approval-presets",
@@ -2317,7 +2338,7 @@ dependencies = [
 name = "codex-utils-approval-presets"
 version = "0.0.0"
 dependencies = [
- "codex-core",
+ "codex-protocol",
 ]
 
 [[package]]
@@ -2343,7 +2364,6 @@ name = "codex-utils-cli"
 version = "0.0.0"
 dependencies = [
  "clap",
- "codex-core",
  "codex-protocol",
  "pretty_assertions",
  "serde",
@@ -2436,6 +2456,7 @@ name = "codex-utils-sandbox-summary"
 version = "0.0.0"
 dependencies = [
  "codex-core",
+ "codex-protocol",
  "codex-utils-absolute-path",
  "pretty_assertions",
 ]
@@ -3537,6 +3558,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-core",
+ "codex-protocol",
  "codex-utils-cargo-bin",
  "rmcp",
  "serde_json",

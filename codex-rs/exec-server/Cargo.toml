@@ -25,6 +25,8 @@ async-trait = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-core = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-protocol = { workspace = true }
+codex-shell-command = { workspace = true }
 libc = { workspace = true }
 path-absolutize = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
@@ -57,6 +59,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }
+codex-protocol = { workspace = true }
 exec_server_test_support = { workspace = true }
 maplit = { workspace = true }
 pretty_assertions = { workspace = true }

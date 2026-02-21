@@ -11,6 +11,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::thread_status::ThreadWatchManager;
+use crate::thread_status::resolve_thread_status;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
@@ -174,7 +175,6 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
-use codex_core::InitialHistory;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
@@ -202,17 +202,13 @@ use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::features::Stage;
 use codex_core::find_archived_thread_path_by_id_str;
+use codex_core::find_thread_name_by_id;
+use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
 use codex_core::parse_cursor;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDelivery as CoreReviewDelivery;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget as CoreReviewTarget;
-use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
@@ -237,13 +233,20 @@ use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::McpServerRefreshConfig;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RemoteSkillHazelnutScope;
 use codex_protocol::protocol::RemoteSkillProductSurface;
+use codex_protocol::protocol::ReviewDelivery as CoreReviewDelivery;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
@@ -2051,10 +2054,12 @@ impl CodexMessageProcessor {
                     .upsert_thread(thread.clone())
                     .await;
 
-                thread.status = self
-                    .thread_watch_manager
-                    .loaded_status_for_thread(&thread.id)
-                    .await;
+                thread.status = resolve_thread_status(
+                    self.thread_watch_manager
+                        .loaded_status_for_thread(&thread.id)
+                        .await,
+                    false,
+                );
 
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
@@ -2370,10 +2375,13 @@ impl CodexMessageProcessor {
 
         match result {
             Ok(mut thread) => {
-                thread.status = self
-                    .thread_watch_manager
-                    .loaded_status_for_thread(&thread.id)
-                    .await;
+                thread.status = resolve_thread_status(
+                    self.thread_watch_manager
+                        .loaded_status_for_thread(&thread.id)
+                        .await,
+                    false,
+                );
+                self.attach_thread_name(thread_id, &mut thread).await;
                 let thread_id = thread.id.clone();
                 let response = ThreadUnarchiveResponse { thread };
                 self.outgoing.send_response(request_id, response).await;
@@ -2544,18 +2552,36 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let mut threads = Vec::with_capacity(summaries.len());
+        let mut thread_ids = HashSet::with_capacity(summaries.len());
+        let mut status_ids = Vec::with_capacity(summaries.len());
 
-        let data = summaries
-            .into_iter()
-            .map(summary_to_thread)
-            .collect::<Vec<_>>();
+        for summary in summaries {
+            let conversation_id = summary.conversation_id;
+            thread_ids.insert(conversation_id);
+
+            let thread = summary_to_thread(summary);
+            status_ids.push(thread.id.clone());
+            threads.push((conversation_id, thread));
+        }
+
+        let names = match find_thread_names_by_ids(&self.config.codex_home, &thread_ids).await {
+            Ok(names) => names,
+            Err(err) => {
+                warn!("Failed to read thread names: {err}");
+                HashMap::new()
+            }
+        };
+
         let statuses = self
             .thread_watch_manager
-            .loaded_statuses_for_threads(data.iter().map(|thread| thread.id.clone()).collect())
+            .loaded_statuses_for_threads(status_ids)
             .await;
-        let data = data
+
+        let data = threads
             .into_iter()
-            .map(|mut thread| {
+            .map(|(conversation_id, mut thread)| {
+                thread.name = names.get(&conversation_id).cloned();
                 if let Some(status) = statuses.get(&thread.id) {
                     thread.status = status.clone();
                 }
@@ -2717,6 +2743,7 @@ impl CodexMessageProcessor {
             }
             build_thread_from_snapshot(thread_uuid, &config_snapshot, loaded_rollout_path)
         };
+        self.attach_thread_name(thread_uuid, &mut thread).await;
 
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
             match read_rollout_items_from_rollout(rollout_path).await {
@@ -2747,10 +2774,12 @@ impl CodexMessageProcessor {
             }
         }
 
-        thread.status = self
-            .thread_watch_manager
-            .loaded_status_for_thread(&thread.id)
-            .await;
+        thread.status = resolve_thread_status(
+            self.thread_watch_manager
+                .loaded_status_for_thread(&thread.id)
+                .await,
+            false,
+        );
         let response = ThreadReadResponse { thread };
         self.outgoing.send_response(request_id, response).await;
     }
@@ -2927,10 +2956,12 @@ impl CodexMessageProcessor {
                     .upsert_thread(thread.clone())
                     .await;
 
-                thread.status = self
-                    .thread_watch_manager
-                    .loaded_status_for_thread(&thread.id)
-                    .await;
+                thread.status = resolve_thread_status(
+                    self.thread_watch_manager
+                        .loaded_status_for_thread(&thread.id)
+                        .await,
+                    false,
+                );
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -3206,6 +3237,7 @@ impl CodexMessageProcessor {
         match read_rollout_items_from_rollout(rollout_path).await {
             Ok(items) => {
                 thread.turns = build_turns_from_rollout_items(&items);
+                self.attach_thread_name(thread_id, &mut thread).await;
                 Some(thread)
             }
             Err(err) => {
@@ -3218,6 +3250,17 @@ impl CodexMessageProcessor {
                 )
                 .await;
                 None
+            }
+        }
+    }
+
+    async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
+        match find_thread_name_by_id(&self.config.codex_home, &thread_id).await {
+            Ok(name) => {
+                thread.name = name;
+            }
+            Err(err) => {
+                warn!("Failed to read thread name for {thread_id}: {err}");
             }
         }
     }
@@ -3419,6 +3462,7 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        // forked thread names do not inherit the source thread name
         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
             Ok(items) => {
                 thread.turns = build_turns_from_rollout_items(&items);
@@ -3440,10 +3484,12 @@ impl CodexMessageProcessor {
             .upsert_thread(thread.clone())
             .await;
 
-        thread.status = self
-            .thread_watch_manager
-            .loaded_status_for_thread(&thread.id)
-            .await;
+        thread.status = resolve_thread_status(
+            self.thread_watch_manager
+                .loaded_status_for_thread(&thread.id)
+                .await,
+            false,
+        );
 
         let response = ThreadForkResponse {
             thread: thread.clone(),
@@ -5581,10 +5627,12 @@ impl CodexMessageProcessor {
                     self.thread_watch_manager
                         .upsert_thread(thread.clone())
                         .await;
-                    thread.status = self
-                        .thread_watch_manager
-                        .loaded_status_for_thread(&thread.id)
-                        .await;
+                    thread.status = resolve_thread_status(
+                        self.thread_watch_manager
+                            .loaded_status_for_thread(&thread.id)
+                            .await,
+                        false,
+                    );
                     let notif = ThreadStartedNotification { thread };
                     self.outgoing
                         .send_server_notification(ServerNotification::ThreadStarted(notif))
@@ -5823,6 +5871,7 @@ impl CodexMessageProcessor {
         let thread_watch_manager = self.thread_watch_manager.clone();
         let fallback_model_provider = self.config.model_provider_id.clone();
         let single_client_mode = self.single_client_mode;
+        let codex_home = self.config.codex_home.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -5903,6 +5952,7 @@ impl CodexMessageProcessor {
                             thread_watch_manager.clone(),
                             api_version,
                             fallback_model_provider.clone(),
+                            codex_home.as_path(),
                         )
                         .await;
                     }
@@ -5916,6 +5966,7 @@ impl CodexMessageProcessor {
                             ) => {
                                 handle_pending_thread_resume_request(
                                     conversation_id,
+                                    codex_home.as_path(),
                                     &thread_state,
                                     &thread_watch_manager,
                                     &outgoing_for_task,
@@ -6235,6 +6286,7 @@ impl CodexMessageProcessor {
 
 async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
+    codex_home: &Path,
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
     outgoing: &Arc<OutgoingMessageSender>,
@@ -6244,6 +6296,9 @@ async fn handle_pending_thread_resume_request(
         let state = thread_state.lock().await;
         state.active_turn_snapshot()
     };
+    let mut has_in_progress_turn = active_turn
+        .as_ref()
+        .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
 
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
@@ -6270,9 +6325,25 @@ async fn handle_pending_thread_resume_request(
             return;
         }
     };
-    thread.status = thread_watch_manager
-        .loaded_status_for_thread(&thread.id)
-        .await;
+
+    has_in_progress_turn = has_in_progress_turn
+        || thread
+            .turns
+            .iter()
+            .any(|turn| matches!(turn.status, TurnStatus::InProgress));
+
+    let status = resolve_thread_status(
+        thread_watch_manager
+            .loaded_status_for_thread(&thread.id)
+            .await,
+        has_in_progress_turn,
+    );
+    thread.status = status;
+
+    match find_thread_name_by_id(codex_home, &conversation_id).await {
+        Ok(thread_name) => thread.name = thread_name,
+        Err(err) => warn!("Failed to read thread name for {conversation_id}: {err}"),
+    }
 
     let ThreadConfigSnapshot {
         model,
@@ -6994,6 +7065,7 @@ fn build_thread_from_snapshot(
         agent_role: config_snapshot.session_source.get_agent_role(),
         source: config_snapshot.session_source.clone().into(),
         git_info: None,
+        name: None,
         turns: Vec::new(),
     }
 }
@@ -7034,6 +7106,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         agent_role: source.get_agent_role(),
         source: source.into(),
         git_info,
+        name: None,
         turns: Vec::new(),
     }
 }

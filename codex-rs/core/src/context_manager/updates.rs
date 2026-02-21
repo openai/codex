@@ -97,11 +97,10 @@ pub(crate) fn personality_message_for(
 }
 
 pub(crate) fn build_model_instructions_update_item(
-    previous: Option<&TurnContextItem>,
-    resumed_model: Option<&str>,
+    previous_user_turn_model: Option<&str>,
     next: &TurnContext,
 ) -> Option<ResponseItem> {
-    let previous_model = resumed_model.or_else(|| previous.map(|prev| prev.model.as_str()))?;
+    let previous_model = previous_user_turn_model?;
     if previous_model == next.model_info.slug {
         return None;
     }
@@ -116,7 +115,7 @@ pub(crate) fn build_model_instructions_update_item(
 
 pub(crate) fn build_settings_update_items(
     previous: Option<&TurnContextItem>,
-    resumed_model: Option<&str>,
+    previous_user_turn_model: Option<&str>,
     next: &TurnContext,
     shell: &Shell,
     exec_policy: &Policy,
@@ -124,6 +123,13 @@ pub(crate) fn build_settings_update_items(
 ) -> Vec<ResponseItem> {
     let mut update_items = Vec::new();
 
+    // Keep model-switch instructions first so model-specific guidance is read before
+    // any other context diffs on this turn.
+    if let Some(model_instructions_item) =
+        build_model_instructions_update_item(previous_user_turn_model, next)
+    {
+        update_items.push(model_instructions_item);
+    }
     if let Some(env_item) = build_environment_update_item(previous, next, shell) {
         update_items.push(env_item);
     }
@@ -132,11 +138,6 @@ pub(crate) fn build_settings_update_items(
     }
     if let Some(collaboration_mode_item) = build_collaboration_mode_update_item(previous, next) {
         update_items.push(collaboration_mode_item);
-    }
-    if let Some(model_instructions_item) =
-        build_model_instructions_update_item(previous, resumed_model, next)
-    {
-        update_items.push(model_instructions_item);
     }
     if let Some(personality_item) =
         build_personality_update_item(previous, next, personality_feature_enabled)

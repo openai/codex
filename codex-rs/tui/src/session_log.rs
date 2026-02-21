@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 
 use codex_core::config::Config;
-use codex_core::protocol::Op;
+use codex_protocol::protocol::Op;
 use serde::Serialize;
 use serde_json::json;
 

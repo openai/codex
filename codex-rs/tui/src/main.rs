@@ -24,7 +24,10 @@ fn main() -> anyhow::Result<()> {
         let exit_info = run_main(inner, codex_linux_sandbox_exe).await?;
         let token_usage = exit_info.token_usage;
         if !token_usage.is_zero() {
-            println!("{}", codex_core::protocol::FinalOutput::from(token_usage),);
+            println!(
+                "{}",
+                codex_protocol::protocol::FinalOutput::from(token_usage),
+            );
         }
         Ok(())
     })

@@ -39,10 +39,6 @@ use crate::wrapping::word_wrap_lines;
 use base64::Engine;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::McpAuthStatus;
-use codex_core::protocol::McpInvocation;
-use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
@@ -54,6 +50,10 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::McpAuthStatus;
+use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::user_input::TextElement;
@@ -589,8 +589,13 @@ impl HistoryCell for UnifiedExecInteractionCell {
             return Vec::new();
         }
         let wrap_width = width as usize;
+        let waited_only = self.stdin.is_empty();
 
-        let mut header_spans = vec!["↳ ".dim(), "Interacted with background terminal".bold()];
+        let mut header_spans = if waited_only {
+            vec!["• Waited for background terminal".bold()]
+        } else {
+            vec!["↳ ".dim(), "Interacted with background terminal".bold()]
+        };
         if let Some(command) = &self.command_display
             && !command.is_empty()
         {
@@ -603,14 +608,15 @@ impl HistoryCell for UnifiedExecInteractionCell {
         let header_wrapped = word_wrap_line(&header, RtOptions::new(wrap_width));
         push_owned_lines(&header_wrapped, &mut out);
 
-        let input_lines: Vec<Line<'static>> = if self.stdin.is_empty() {
-            vec![vec!["(waited)".dim()].into()]
-        } else {
-            self.stdin
-                .lines()
-                .map(|line| Line::from(line.to_string()))
-                .collect()
-        };
+        if waited_only {
+            return out;
+        }
+
+        let input_lines: Vec<Line<'static>> = self
+            .stdin
+            .lines()
+            .map(|line| Line::from(line.to_string()))
+            .collect();
 
         let input_wrapped = word_wrap_lines(
             input_lines,
@@ -785,9 +791,9 @@ fn exec_snippet(command: &[String]) -> String {
 
 pub fn new_approval_decision_cell(
     command: Vec<String>,
-    decision: codex_core::protocol::ReviewDecision,
+    decision: codex_protocol::protocol::ReviewDecision,
 ) -> Box<dyn HistoryCell> {
-    use codex_core::protocol::ReviewDecision::*;
+    use codex_protocol::protocol::ReviewDecision::*;
 
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
         Approved => {
@@ -2377,19 +2383,19 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
-    use codex_core::protocol::McpAuthStatus;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::models::WebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::McpAuthStatus;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::HashMap;
 
-    use codex_core::protocol::ExecCommandSource;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::mcp::Tool;
+    use codex_protocol::protocol::ExecCommandSource;
     use rmcp::model::Content;
 
     const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
@@ -2465,10 +2471,7 @@ mod tests {
     fn unified_exec_interaction_cell_renders_wait() {
         let cell = new_unified_exec_interaction(None, String::new());
         let lines = render_transcript(&cell);
-        assert_eq!(
-            lines,
-            vec!["↳ Interacted with background terminal", "  └ (waited)"],
-        );
+        assert_eq!(lines, vec!["• Waited for background terminal"]);
     }
 
     #[test]

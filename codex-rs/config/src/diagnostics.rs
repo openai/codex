@@ -1,10 +1,12 @@
 //! Helpers for mapping config parse/validation failures to file locations and
 //! rendering them in a user-friendly way.
 
-use crate::config::CONFIG_TOML_FILE;
-use crate::config::ConfigToml;
+use crate::ConfigLayerEntry;
+use crate::ConfigLayerStack;
+use crate::ConfigLayerStackOrdering;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use serde::de::DeserializeOwned;
 use serde_path_to_error::Path as SerdePath;
 use serde_path_to_error::Segment as SerdeSegment;
 use std::fmt;
@@ -16,10 +18,6 @@ use toml_edit::Document;
 use toml_edit::Item;
 use toml_edit::Table;
 use toml_edit::Value;
-
-use super::ConfigLayerEntry;
-use super::ConfigLayerStack;
-use super::ConfigLayerStackOrdering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextPosition {
@@ -88,7 +86,7 @@ impl std::error::Error for ConfigLoadError {
     }
 }
 
-pub(crate) fn io_error_from_config_error(
+pub fn io_error_from_config_error(
     kind: io::ErrorKind,
     error: ConfigError,
     source: Option<toml::de::Error>,
@@ -96,7 +94,7 @@ pub(crate) fn io_error_from_config_error(
     io::Error::new(kind, ConfigLoadError::new(error, source))
 }
 
-pub(crate) fn config_error_from_toml(
+pub fn config_error_from_toml(
     path: impl AsRef<Path>,
     contents: &str,
     err: toml::de::Error,
@@ -108,7 +106,7 @@ pub(crate) fn config_error_from_toml(
     ConfigError::new(path.as_ref().to_path_buf(), range, err.message())
 }
 
-pub(crate) fn config_error_from_config_toml(
+pub fn config_error_from_typed_toml<T: DeserializeOwned>(
     path: impl AsRef<Path>,
     contents: &str,
 ) -> Option<ConfigError> {
@@ -117,7 +115,7 @@ pub(crate) fn config_error_from_config_toml(
         Err(err) => return Some(config_error_from_toml(path, contents, err)),
     };
 
-    let result: Result<ConfigToml, _> = serde_path_to_error::deserialize(deserializer);
+    let result: Result<T, _> = serde_path_to_error::deserialize(deserializer);
     match result {
         Ok(_) => None,
         Err(err) => {
@@ -136,28 +134,36 @@ pub(crate) fn config_error_from_config_toml(
     }
 }
 
-pub(crate) async fn first_layer_config_error(layers: &ConfigLayerStack) -> Option<ConfigError> {
+pub async fn first_layer_config_error<T: DeserializeOwned>(
+    layers: &ConfigLayerStack,
+    config_toml_file: &str,
+) -> Option<ConfigError> {
     // When the merged config fails schema validation, we surface the first concrete
     // per-file error to point users at a specific file and range rather than an
     // opaque merged-layer failure.
-    first_layer_config_error_for_entries(
+    first_layer_config_error_for_entries::<T, _>(
         layers.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false),
+        config_toml_file,
     )
     .await
 }
 
-pub(crate) async fn first_layer_config_error_from_entries(
+pub async fn first_layer_config_error_from_entries<T: DeserializeOwned>(
     layers: &[ConfigLayerEntry],
+    config_toml_file: &str,
 ) -> Option<ConfigError> {
-    first_layer_config_error_for_entries(layers.iter()).await
+    first_layer_config_error_for_entries::<T, _>(layers.iter(), config_toml_file).await
 }
 
-async fn first_layer_config_error_for_entries<'a, I>(layers: I) -> Option<ConfigError>
+async fn first_layer_config_error_for_entries<'a, T: DeserializeOwned, I>(
+    layers: I,
+    config_toml_file: &str,
+) -> Option<ConfigError>
 where
     I: IntoIterator<Item = &'a ConfigLayerEntry>,
 {
     for layer in layers {
-        let Some(path) = config_path_for_layer(layer) else {
+        let Some(path) = config_path_for_layer(layer, config_toml_file) else {
             continue;
         };
         let contents = match tokio::fs::read_to_string(&path).await {
@@ -174,7 +180,7 @@ where
             continue;
         };
         let _guard = AbsolutePathBufGuard::new(parent);
-        if let Some(error) = config_error_from_config_toml(&path, &contents) {
+        if let Some(error) = config_error_from_typed_toml::<T>(&path, &contents) {
             return Some(error);
         }
     }
@@ -182,12 +188,12 @@ where
     None
 }
 
-fn config_path_for_layer(layer: &ConfigLayerEntry) -> Option<PathBuf> {
+fn config_path_for_layer(layer: &ConfigLayerEntry, config_toml_file: &str) -> Option<PathBuf> {
     match &layer.name {
         ConfigLayerSource::System { file } => Some(file.to_path_buf()),
         ConfigLayerSource::User { file } => Some(file.to_path_buf()),
         ConfigLayerSource::Project { dot_codex_folder } => {
-            Some(dot_codex_folder.as_path().join(CONFIG_TOML_FILE))
+            Some(dot_codex_folder.as_path().join(config_toml_file))
         }
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => Some(file.to_path_buf()),
         ConfigLayerSource::Mdm { .. }

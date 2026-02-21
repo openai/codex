@@ -61,54 +61,6 @@ use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
-use codex_core::protocol::AgentMessageDeltaEvent;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningDeltaEvent;
-use codex_core::protocol::AgentReasoningEvent;
-use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
-use codex_core::protocol::AgentReasoningRawContentEvent;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::BackgroundEventEvent;
-use codex_core::protocol::CodexErrorInfo;
-use codex_core::protocol::CreditsSnapshot;
-use codex_core::protocol::DeprecationNoticeEvent;
-use codex_core::protocol::ErrorEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::ExecCommandOutputDeltaEvent;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::ListCustomPromptsResponseEvent;
-use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::McpListToolsResponseEvent;
-use codex_core::protocol::McpStartupCompleteEvent;
-use codex_core::protocol::McpStartupStatus;
-use codex_core::protocol::McpStartupUpdateEvent;
-use codex_core::protocol::McpToolCallBeginEvent;
-use codex_core::protocol::McpToolCallEndEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::RateLimitSnapshot;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TerminalInteractionEvent;
-use codex_core::protocol::TokenUsage;
-use codex_core::protocol::TokenUsageInfo;
-use codex_core::protocol::TurnAbortReason;
-use codex_core::protocol::TurnCompleteEvent;
-use codex_core::protocol::TurnDiffEvent;
-use codex_core::protocol::UndoCompletedEvent;
-use codex_core::protocol::UndoStartedEvent;
-use codex_core::protocol::UserMessageEvent;
-use codex_core::protocol::ViewImageToolCallEvent;
-use codex_core::protocol::WarningEvent;
-use codex_core::protocol::WebSearchBeginEvent;
-use codex_core::protocol::WebSearchEndEvent;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
 use codex_core::terminal::terminal_info;
@@ -130,6 +82,54 @@ use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::protocol::AgentMessageDeltaEvent;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::AgentReasoningDeltaEvent;
+use codex_protocol::protocol::AgentReasoningEvent;
+use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
+use codex_protocol::protocol::AgentReasoningRawContentEvent;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::BackgroundEventEvent;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::DeprecationNoticeEvent;
+use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecCommandBeginEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::ListCustomPromptsResponseEvent;
+use codex_protocol::protocol::ListSkillsResponseEvent;
+use codex_protocol::protocol::McpListToolsResponseEvent;
+use codex_protocol::protocol::McpStartupCompleteEvent;
+use codex_protocol::protocol::McpStartupStatus;
+use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_protocol::protocol::McpToolCallBeginEvent;
+use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PatchApplyBeginEvent;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
+use codex_protocol::protocol::StreamErrorEvent;
+use codex_protocol::protocol::TerminalInteractionEvent;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::protocol::UndoCompletedEvent;
+use codex_protocol::protocol::UndoStartedEvent;
+use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::protocol::ViewImageToolCallEvent;
+use codex_protocol::protocol::WarningEvent;
+use codex_protocol::protocol::WebSearchBeginEvent;
+use codex_protocol::protocol::WebSearchEndEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -158,6 +158,9 @@ const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
+const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
+const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
+const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 
 /// Choose the keybinding used to edit the most-recently queued message.
@@ -265,13 +268,13 @@ use chrono::Local;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_approval_presets::ApprovalPreset;
 use codex_utils_approval_presets::builtin_approval_presets;
 use strum::IntoEnumIterator;
@@ -647,7 +650,7 @@ pub(crate) struct ChatWidget {
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
     // Runtime network proxy bind addresses from SessionConfigured.
-    session_network_proxy: Option<codex_core::protocol::SessionNetworkProxyRuntime>,
+    session_network_proxy: Option<codex_protocol::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     status_line_invalid_items_warned: Arc<AtomicBool>,
     // Cached git branch name for the status line (None if unknown).
@@ -1057,7 +1060,7 @@ impl ChatWidget {
     }
 
     // --- Small event handlers ---
-    fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
+    fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
@@ -1156,7 +1159,7 @@ impl ChatWidget {
         });
     }
 
-    fn on_thread_name_updated(&mut self, event: codex_core::protocol::ThreadNameUpdatedEvent) {
+    fn on_thread_name_updated(&mut self, event: codex_protocol::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
             self.thread_name = event.thread_name;
             self.request_redraw();
@@ -1452,7 +1455,6 @@ impl ChatWidget {
             }
             None => (Vec::new(), Some("Default mode unavailable".to_string())),
         };
-
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
@@ -1980,7 +1982,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_patch_apply_end(&mut self, event: codex_core::protocol::PatchApplyEndEvent) {
+    fn on_patch_apply_end(&mut self, event: codex_protocol::protocol::PatchApplyEndEvent) {
         let ev2 = event.clone();
         self.defer_or_handle(
             |q| q.push_patch_end(event),
@@ -2142,9 +2144,9 @@ impl ChatWidget {
 
     fn on_get_history_entry_response(
         &mut self,
-        event: codex_core::protocol::GetHistoryEntryResponseEvent,
+        event: codex_protocol::protocol::GetHistoryEntryResponseEvent,
     ) {
-        let codex_core::protocol::GetHistoryEntryResponseEvent {
+        let codex_protocol::protocol::GetHistoryEntryResponseEvent {
             offset,
             log_id,
             entry,
@@ -2410,7 +2412,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_patch_apply_end_now(
         &mut self,
-        event: codex_core::protocol::PatchApplyEndEvent,
+        event: codex_protocol::protocol::PatchApplyEndEvent,
     ) {
         // If the patch was successful, just let the "Edited" block stand.
         // Otherwise, add a failure block.
@@ -2921,7 +2923,7 @@ impl ChatWidget {
     pub(crate) fn new_from_existing(
         common: ChatWidgetInit,
         conversation: std::sync::Arc<codex_core::CodexThread>,
-        session_configured: codex_core::protocol::SessionConfiguredEvent,
+        session_configured: codex_protocol::protocol::SessionConfiguredEvent,
     ) -> Self {
         let ChatWidgetInit {
             config,
@@ -3503,11 +3505,11 @@ impl ChatWidget {
                 }
             }
             SlashCommand::TestApproval => {
-                use codex_core::protocol::EventMsg;
+                use codex_protocol::protocol::EventMsg;
                 use std::collections::HashMap;
 
-                use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-                use codex_core::protocol::FileChange;
+                use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+                use codex_protocol::protocol::FileChange;
 
                 self.app_event_tx.send(AppEvent::CodexEvent(Event {
                     id: "1".to_string(),
@@ -4186,6 +4188,9 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::RealtimeConversationStarted(_)
+            | EventMsg::RealtimeConversationRealtime(_)
+            | EventMsg::RealtimeConversationClosed(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
             EventMsg::ItemCompleted(event) => {
                 let item = event.item;
@@ -5028,16 +5033,20 @@ impl ChatWidget {
         }
 
         auto_presets.sort_by_key(|preset| Self::auto_model_order(&preset.model));
-
         let mut items: Vec<SelectionItem> = auto_presets
             .into_iter()
             .map(|preset| {
                 let description =
                     (!preset.description.is_empty()).then_some(preset.description.clone());
                 let model = preset.model.clone();
+                let should_prompt_plan_mode_scope = self.should_prompt_plan_mode_reasoning_scope(
+                    model.as_str(),
+                    Some(preset.default_reasoning_effort),
+                );
                 let actions = Self::model_selection_actions(
                     model.clone(),
                     Some(preset.default_reasoning_effort),
+                    should_prompt_plan_mode_scope,
                 );
                 SelectionItem {
                     name: model.clone(),
@@ -5192,40 +5201,135 @@ impl ChatWidget {
     fn model_selection_actions(
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
+        should_prompt_plan_mode_scope: bool,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
-            let effort_label = effort_for_action
-                .map(|effort| effort.to_string())
-                .unwrap_or_else(|| "default".to_string());
-            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                cwd: None,
-                approval_policy: None,
-                sandbox_policy: None,
-                windows_sandbox_level: None,
-                model: Some(model_for_action.clone()),
-                effort: Some(effort_for_action),
-                summary: None,
-                collaboration_mode: None,
-                personality: None,
-            }));
+            if should_prompt_plan_mode_scope {
+                tx.send(AppEvent::OpenPlanReasoningScopePrompt {
+                    model: model_for_action.clone(),
+                    effort: effort_for_action,
+                });
+                return;
+            }
+
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
             });
-            tracing::info!(
-                "Selected model: {}, Selected effort: {}",
-                model_for_action,
-                effort_label
-            );
         })]
+    }
+
+    fn should_prompt_plan_mode_reasoning_scope(
+        &self,
+        selected_model: &str,
+        selected_effort: Option<ReasoningEffortConfig>,
+    ) -> bool {
+        if !self.collaboration_modes_enabled()
+            || self.active_mode_kind() != ModeKind::Plan
+            || selected_model != self.current_model()
+        {
+            return false;
+        }
+
+        // Prompt whenever the selection is not a true no-op for both:
+        // 1) the active Plan-mode effective reasoning, and
+        // 2) the stored global defaults that would be updated by the fallback path.
+        selected_effort != self.effective_reasoning_effort()
+            || selected_model != self.current_collaboration_mode.model()
+            || selected_effort != self.current_collaboration_mode.reasoning_effort()
+    }
+
+    pub(crate) fn open_plan_reasoning_scope_prompt(
+        &mut self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
+        let reasoning_phrase = match effort {
+            Some(ReasoningEffortConfig::None) => "no reasoning".to_string(),
+            Some(selected_effort) => {
+                format!(
+                    "{} reasoning",
+                    Self::reasoning_effort_label(selected_effort).to_lowercase()
+                )
+            }
+            None => "the selected reasoning".to_string(),
+        };
+        let plan_only_description = format!("Always use {reasoning_phrase} in Plan mode.");
+        let plan_reasoning_source = if let Some(plan_override) =
+            self.config.plan_mode_reasoning_effort
+        {
+            format!(
+                "user-chosen Plan override ({})",
+                Self::reasoning_effort_label(plan_override).to_lowercase()
+            )
+        } else if let Some(plan_mask) = collaboration_modes::plan_mask(self.models_manager.as_ref())
+        {
+            match plan_mask.reasoning_effort.flatten() {
+                Some(plan_effort) => format!(
+                    "built-in Plan default ({})",
+                    Self::reasoning_effort_label(plan_effort).to_lowercase()
+                ),
+                None => "built-in Plan default (no reasoning)".to_string(),
+            }
+        } else {
+            "built-in Plan default".to_string()
+        };
+        let all_modes_description = format!(
+            "Set the global default reasoning level and the Plan mode override. This replaces the current {plan_reasoning_source}."
+        );
+        let subtitle = format!("Choose where to apply {reasoning_phrase}.");
+
+        let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
+            let model = model.clone();
+            move |tx| {
+                tx.send(AppEvent::UpdateModel(model.clone()));
+                tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+                tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
+            }
+        })];
+        let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::UpdateModel(model.clone()));
+            tx.send(AppEvent::UpdateReasoningEffort(effort));
+            tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+            tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
+            tx.send(AppEvent::PersistModelSelection {
+                model: model.clone(),
+                effort,
+            });
+        })];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(PLAN_MODE_REASONING_SCOPE_TITLE.to_string()),
+            subtitle: Some(subtitle),
+            footer_hint: Some(standard_popup_hint_line()),
+            items: vec![
+                SelectionItem {
+                    name: PLAN_MODE_REASONING_SCOPE_PLAN_ONLY.to_string(),
+                    description: Some(plan_only_description),
+                    actions: plan_only_actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: PLAN_MODE_REASONING_SCOPE_ALL_MODES.to_string(),
+                    description: Some(all_modes_description),
+                    actions: all_modes_actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
+        let in_plan_mode =
+            self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan;
 
         let warn_effort = if supported
             .iter()
@@ -5269,10 +5373,16 @@ impl ChatWidget {
         }
 
         if choices.len() == 1 {
-            if let Some(effort) = choices.first().and_then(|c| c.stored) {
-                self.apply_model_and_effort(preset.model, Some(effort));
+            let selected_effort = choices.first().and_then(|c| c.stored);
+            let selected_model = preset.model;
+            if self.should_prompt_plan_mode_reasoning_scope(&selected_model, selected_effort) {
+                self.app_event_tx
+                    .send(AppEvent::OpenPlanReasoningScopePrompt {
+                        model: selected_model,
+                        effort: selected_effort,
+                    });
             } else {
-                self.apply_model_and_effort(preset.model, None);
+                self.apply_model_and_effort(selected_model, selected_effort);
             }
             return;
         }
@@ -5288,7 +5398,13 @@ impl ChatWidget {
         let model_slug = preset.model.to_string();
         let is_current_model = self.current_model() == preset.model.as_str();
         let highlight_choice = if is_current_model {
-            self.effective_reasoning_effort()
+            if in_plan_mode {
+                self.config
+                    .plan_mode_reasoning_effort
+                    .or(self.effective_reasoning_effort())
+            } else {
+                self.effective_reasoning_effort()
+            }
         } else {
             default_choice
         };
@@ -5331,7 +5447,24 @@ impl ChatWidget {
             };
 
             let model_for_action = model_slug.clone();
-            let actions = Self::model_selection_actions(model_for_action, choice.stored);
+            let choice_effort = choice.stored;
+            let should_prompt_plan_mode_scope =
+                self.should_prompt_plan_mode_reasoning_scope(model_slug.as_str(), choice_effort);
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                if should_prompt_plan_mode_scope {
+                    tx.send(AppEvent::OpenPlanReasoningScopePrompt {
+                        model: model_for_action.clone(),
+                        effort: choice_effort,
+                    });
+                } else {
+                    tx.send(AppEvent::UpdateModel(model_for_action.clone()));
+                    tx.send(AppEvent::UpdateReasoningEffort(choice_effort));
+                    tx.send(AppEvent::PersistModelSelection {
+                        model: model_for_action.clone(),
+                        effort: choice_effort,
+                    });
+                }
+            })];
 
             items.push(SelectionItem {
                 name: effort_label,
@@ -5369,33 +5502,20 @@ impl ChatWidget {
         }
     }
 
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
-        self.app_event_tx
-            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                cwd: None,
-                approval_policy: None,
-                sandbox_policy: None,
-                windows_sandbox_level: None,
-                model: Some(model.clone()),
-                effort: Some(effort),
-                summary: None,
-                collaboration_mode: None,
-                personality: None,
-            }));
-        self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
+    fn apply_model_and_effort_without_persist(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
+        self.app_event_tx.send(AppEvent::UpdateModel(model));
         self.app_event_tx
             .send(AppEvent::UpdateReasoningEffort(effort));
-        self.app_event_tx.send(AppEvent::PersistModelSelection {
-            model: model.clone(),
-            effort,
-        });
-        tracing::info!(
-            "Selected model: {}, Selected effort: {}",
-            model,
-            effort
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "default".to_string())
-        );
+    }
+
+    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+        self.apply_model_and_effort_without_persist(model.clone(), effort);
+        self.app_event_tx
+            .send(AppEvent::PersistModelSelection { model, effort });
     }
 
     /// Open the permissions popup (alias for /permissions).
@@ -6160,6 +6280,22 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
+    pub(crate) fn set_plan_mode_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        self.config.plan_mode_reasoning_effort = effort;
+        if self.collaboration_modes_enabled()
+            && let Some(mask) = self.active_collaboration_mask.as_mut()
+            && mask.mode == Some(ModeKind::Plan)
+        {
+            if let Some(effort) = effort {
+                mask.reasoning_effort = Some(Some(effort));
+            } else if let Some(plan_mask) =
+                collaboration_modes::plan_mask(self.models_manager.as_ref())
+            {
+                mask.reasoning_effort = plan_mask.reasoning_effort;
+            }
+        }
+    }
+
     /// Set the reasoning effort in the stored collaboration mode.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.current_collaboration_mode =
@@ -6167,7 +6303,10 @@ impl ChatWidget {
                 .with_updates(None, Some(effort), None);
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
+            && mask.mode != Some(ModeKind::Plan)
         {
+            // Generic "global default" updates should not mutate the active Plan mask.
+            // Plan reasoning is controlled by the Plan preset and Plan-only override updates.
             mask.reasoning_effort = Some(effort);
         }
     }
@@ -6391,13 +6530,18 @@ impl ChatWidget {
     ///
     /// When collaboration modes are enabled and a preset is selected,
     /// the current mode is attached to submissions as `Op::UserTurn { collaboration_mode: Some(...) }`.
-    pub(crate) fn set_collaboration_mask(&mut self, mask: CollaborationModeMask) {
+    pub(crate) fn set_collaboration_mask(&mut self, mut mask: CollaborationModeMask) {
         if !self.collaboration_modes_enabled() {
             return;
         }
         let previous_mode = self.active_mode_kind();
         let previous_model = self.current_model().to_string();
         let previous_effort = self.effective_reasoning_effort();
+        if mask.mode == Some(ModeKind::Plan)
+            && let Some(effort) = self.config.plan_mode_reasoning_effort
+        {
+            mask.reasoning_effort = Some(Some(effort));
+        }
         self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();
         self.refresh_model_display();
@@ -6814,8 +6958,13 @@ impl ChatWidget {
     pub(crate) fn submit_user_message_with_mode(
         &mut self,
         text: String,
-        collaboration_mode: CollaborationModeMask,
+        mut collaboration_mode: CollaborationModeMask,
     ) {
+        if collaboration_mode.mode == Some(ModeKind::Plan)
+            && let Some(effort) = self.config.plan_mode_reasoning_effort
+        {
+            collaboration_mode.reasoning_effort = Some(Some(effort));
+        }
         if self.agent_turn_running
             && self.active_collaboration_mask.as_ref() != Some(&collaboration_mode)
         {
