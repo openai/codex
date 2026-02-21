@@ -22,6 +22,7 @@ pub use rmcp::model::ElicitationAction;
 pub use rmcp_client::Elicitation;
 pub use rmcp_client::ElicitationResponse;
 pub use rmcp_client::ListToolsWithConnectorIdResult;
+pub use rmcp_client::OnToolListChanged;
 pub use rmcp_client::RmcpClient;
 pub use rmcp_client::SendElicitation;
 pub use rmcp_client::ToolWithConnectorId;

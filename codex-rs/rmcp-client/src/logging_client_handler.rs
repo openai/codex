@@ -17,19 +17,26 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::rmcp_client::OnToolListChanged;
 use crate::rmcp_client::SendElicitation;
 
 #[derive(Clone)]
 pub(crate) struct LoggingClientHandler {
     client_info: ClientInfo,
     send_elicitation: Arc<SendElicitation>,
+    on_tool_list_changed: Arc<OnToolListChanged>,
 }
 
 impl LoggingClientHandler {
-    pub(crate) fn new(client_info: ClientInfo, send_elicitation: SendElicitation) -> Self {
+    pub(crate) fn new(
+        client_info: ClientInfo,
+        send_elicitation: SendElicitation,
+        on_tool_list_changed: OnToolListChanged,
+    ) -> Self {
         Self {
             client_info,
             send_elicitation: Arc::new(send_elicitation),
+            on_tool_list_changed: Arc::new(on_tool_list_changed),
         }
     }
 }
@@ -81,6 +88,7 @@ impl ClientHandler for LoggingClientHandler {
 
     async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
         info!("MCP server tool list changed");
+        (self.on_tool_list_changed)().await;
     }
 
     async fn on_prompt_list_changed(&self, _context: NotificationContext<RoleClient>) {
