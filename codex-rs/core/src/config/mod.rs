@@ -380,7 +380,8 @@ pub struct Config {
     ///
     /// When unset, Plan mode uses the built-in Plan preset default (currently
     /// `medium`). When explicitly set (including `none`), this overrides the
-    /// Plan preset.
+    /// Plan preset. The `none` value means "no reasoning" (not "inherit the
+    /// global default").
     pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
 
     /// If not "none", the value to use for `reasoning.summary` when making a
