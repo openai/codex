@@ -67,6 +67,7 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::terminal::TerminalName;
 use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -1640,6 +1641,7 @@ async fn make_chatwidget_manual(
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
+        queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
@@ -2781,6 +2783,9 @@ async fn empty_enter_during_task_does_not_queue() {
 #[tokio::test]
 async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_message_edit_binding = crate::key_hint::alt(KeyCode::Up);
+    chat.bottom_pane
+        .set_queued_message_edit_binding(crate::key_hint::alt(KeyCode::Up));
 
     // Simulate a running task so messages would normally be queued.
     chat.bottom_pane.set_task_running(true);
@@ -2805,6 +2810,77 @@ async fn alt_up_edits_most_recent_queued_message() {
     assert_eq!(
         chat.queued_user_messages.front().unwrap().text,
         "first queued"
+    );
+}
+
+async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
+    terminal_name: TerminalName,
+) {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_name);
+    chat.bottom_pane
+        .set_queued_message_edit_binding(chat.queued_message_edit_binding);
+
+    // Simulate a running task so messages would normally be queued.
+    chat.bottom_pane.set_task_running(true);
+
+    // Seed two queued messages.
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    // Press Shift+Left to edit the most recent (last) queued message.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+
+    // Composer should now contain the last queued message.
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "second queued".to_string()
+    );
+    // And the queue should now contain only the remaining (older) item.
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "first queued"
+    );
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_apple_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::AppleTerminal)
+        .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_warp_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::WarpTerminal)
+        .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_vscode_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::VsCode).await;
+}
+
+#[test]
+fn queued_message_edit_binding_mapping_covers_special_terminals() {
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::AppleTerminal),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::WarpTerminal),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::VsCode),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::Iterm2),
+        crate::key_hint::alt(KeyCode::Up)
     );
 }
 
