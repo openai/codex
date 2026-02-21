@@ -2314,10 +2314,22 @@ impl ChatWidget {
         elapsed
     }
 
+    /// Finalizes an exec call while preserving the active exec cell grouping contract.
+    ///
+    /// Exec begin/end events usually pair through `running_commands`, but unified exec can emit an
+    /// end event for a call that was never materialized as the current active `ExecCell` (for
+    /// example, when another exploring group is still active). In that case we render the end as a
+    /// standalone history entry instead of replacing or flushing the unrelated active exploring
+    /// cell. If this method treated every unknown end as "complete the active cell", the UI could
+    /// merge unrelated commands and hide still-running exploring work.
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         enum ExecEndTarget {
+            // Normal case: the active exec cell already tracks this call id.
             ActiveTracked,
+            // We have an active exec group, but it does not contain this call id. Render the end
+            // as a standalone finalized history cell so the active group remains intact.
             OrphanHistoryWhileActiveExec,
+            // No active exec cell can safely own this end; build a new cell from the end payload.
             NewCell,
         }
 
@@ -2348,6 +2360,8 @@ impl ChatWidget {
             None => ExecEndTarget::NewCell,
         };
 
+        // Unified exec interaction rows intentionally hide command output text in the exec cell and
+        // instead render the interaction-specific content elsewhere in the UI.
         let output = if is_unified_exec_interaction {
             CommandOutput {
                 exit_code: ev.exit_code,

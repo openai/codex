@@ -1,3 +1,10 @@
+//! Data model for grouped exec-call history cells in the TUI transcript.
+//!
+//! An `ExecCell` can represent either a single command or an "exploring" group of related read/
+//! list/search commands. The chat widget relies on stable `call_id` matching to route progress and
+//! end events into the right cell, and it treats "call id not found" as a real signal (for
+//! example, an orphan end that should render as a separate history entry).
+
 use std::time::Duration;
 use std::time::Instant;
 
@@ -67,6 +74,11 @@ impl ExecCell {
         }
     }
 
+    /// Marks the most recently matching call as finished and returns whether a call was found.
+    ///
+    /// Callers should treat `false` as a routing mismatch rather than silently ignoring it. The
+    /// chat widget uses that signal to avoid attaching an orphan `exec_end` event to an unrelated
+    /// active exploring cell, which would incorrectly collapse two transcript entries together.
     pub(crate) fn complete_call(
         &mut self,
         call_id: &str,
