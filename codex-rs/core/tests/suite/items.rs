@@ -1,16 +1,16 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Ok;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ItemCompletedEvent;
-use codex_core::protocol::ItemStartedEvent;
-use codex_core::protocol::Op;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::Op;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -373,8 +373,8 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
             }],
             final_output_json_schema: None,
             cwd: std::env::current_dir()?,
-            approval_policy: codex_core::protocol::AskForApproval::Never,
-            sandbox_policy: codex_core::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: codex_protocol::protocol::AskForApproval::Never,
+            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -448,8 +448,8 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             cwd: std::env::current_dir()?,
-            approval_policy: codex_core::protocol::AskForApproval::Never,
-            sandbox_policy: codex_core::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: codex_protocol::protocol::AskForApproval::Never,
+            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -544,8 +544,8 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
             }],
             final_output_json_schema: None,
             cwd: std::env::current_dir()?,
-            approval_policy: codex_core::protocol::AskForApproval::Never,
-            sandbox_policy: codex_core::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy: codex_protocol::protocol::AskForApproval::Never,
+            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,

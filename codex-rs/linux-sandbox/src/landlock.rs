@@ -8,7 +8,7 @@ use std::path::Path;
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
 use codex_core::error::SandboxErr;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use landlock::ABI;
@@ -204,7 +204,7 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
 #[cfg(test)]
 mod tests {
     use super::should_install_network_seccomp;
-    use codex_core::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
 
     #[test]

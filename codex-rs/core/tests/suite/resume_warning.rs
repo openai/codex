@@ -2,17 +2,17 @@
 
 use codex_core::CodexAuth;
 use codex_core::NewThread;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::InitialHistory;
-use codex_core::protocol::ResumedHistory;
-use codex_core::protocol::RolloutItem;
-use codex_core::protocol::TurnCompleteEvent;
-use codex_core::protocol::TurnContextItem;
-use codex_core::protocol::TurnStartedEvent;
-use codex_core::protocol::UserMessageEvent;
-use codex_core::protocol::WarningEvent;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnContextItem;
+use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::protocol::WarningEvent;
 use core::time::Duration;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;

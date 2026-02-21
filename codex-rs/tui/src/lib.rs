@@ -30,13 +30,13 @@ use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
-use codex_core::protocol::AskForApproval;
 use codex_core::read_session_meta_line;
 use codex_core::terminal::Multiplexer;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_state::log_db;
@@ -468,7 +468,7 @@ async fn run_ratatui_app(
                 UpdatePromptOutcome::RunUpdate(action) => {
                     crate::tui::restore()?;
                     return Ok(AppExitInfo {
-                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        token_usage: codex_protocol::protocol::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: Some(action),
@@ -511,7 +511,7 @@ async fn run_ratatui_app(
             session_log::log_session_end();
             let _ = tui.terminal.clear();
             return Ok(AppExitInfo {
-                token_usage: codex_core::protocol::TokenUsage::default(),
+                token_usage: codex_protocol::protocol::TokenUsage::default(),
                 thread_id: None,
                 thread_name: None,
                 update_action: None,
@@ -551,7 +551,7 @@ async fn run_ratatui_app(
         session_log::log_session_end();
         let _ = tui.terminal.clear();
         Ok(AppExitInfo {
-            token_usage: codex_core::protocol::TokenUsage::default(),
+            token_usage: codex_protocol::protocol::TokenUsage::default(),
             thread_id: None,
             thread_name: None,
             update_action: None,
@@ -600,7 +600,7 @@ async fn run_ratatui_app(
                     restore();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
-                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        token_usage: codex_protocol::protocol::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: None,
@@ -651,7 +651,7 @@ async fn run_ratatui_app(
                 restore();
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
-                    token_usage: codex_core::protocol::TokenUsage::default(),
+                    token_usage: codex_protocol::protocol::TokenUsage::default(),
                     thread_id: None,
                     thread_name: None,
                     update_action: None,
@@ -681,7 +681,7 @@ async fn run_ratatui_app(
                     restore();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
-                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        token_usage: codex_protocol::protocol::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: None,
@@ -965,7 +965,7 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
-    use codex_core::protocol::AskForApproval;
+    use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SessionMeta;

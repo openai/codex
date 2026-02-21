@@ -2,7 +2,7 @@
 #![allow(clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
