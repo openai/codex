@@ -19,6 +19,7 @@ use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::ConfigToml;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
@@ -63,6 +64,7 @@ mod app_event_sender;
 mod ascii_animation;
 mod bottom_pane;
 mod chatwidget;
+mod claude_migration_prompt;
 mod cli;
 mod clipboard_paste;
 mod collaboration_modes;
@@ -419,6 +421,21 @@ pub async fn run_main(
         .with(otel_tracing_layer)
         .try_init();
 
+    match codex_core::claude_migration::detect_claude_home_migration(
+        &codex_home,
+        &config_toml,
+        config.model_provider_id.as_str(),
+        codex_core::claude_migration::CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD,
+    )
+    .await
+    {
+        Ok(Some(_available)) => {}
+        Ok(None) => {}
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to detect Claude home migration in TUI startup");
+        }
+    }
+
     run_ratatui_app(
         cli,
         config,
@@ -545,6 +562,86 @@ async fn run_ratatui_app(
     } else {
         initial_config
     };
+
+    if cli.prompt.as_ref().map(String::is_empty).unwrap_or(true) {
+        let effective_toml = config.config_layer_stack.effective_config();
+        let config_toml: Option<ConfigToml> = match effective_toml.try_into() {
+            Ok(config_toml) => Some(config_toml),
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "failed to deserialize effective config for Claude home migration prompt"
+                );
+                None
+            }
+        };
+
+        if let Some(config_toml) = config_toml {
+            match codex_core::claude_migration::detect_claude_home_migration(
+                &config.codex_home,
+                &config_toml,
+                config.model_provider_id.as_str(),
+                codex_core::claude_migration::CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD,
+            )
+            .await
+            {
+                Ok(Some(available)) => {
+                    let outcome = claude_migration_prompt::run_claude_home_migration_prompt(
+                        &mut tui,
+                        claude_migration_prompt::ClaudeHomeMigrationPromptData {
+                            prior_codex_thread_count: available.prior_codex_thread_count,
+                            imported_config_keys: available.proposed.imported_config_keys.clone(),
+                            copied_skills: available.proposed.imported_skills.clone(),
+                            copy_agents_md: available.proposed.imported_user_agents_md,
+                        },
+                    )
+                    .await?;
+                    match outcome {
+                        claude_migration_prompt::ClaudeHomeMigrationPromptOutcome::ImportNow => {
+                            match codex_core::claude_migration::apply_claude_home_migration(
+                                &config.codex_home,
+                                &config_toml,
+                            )
+                            .await
+                            {
+                                Ok(_summary) => {}
+                                Err(err) => {
+                                    tracing::warn!(
+                                        error = %err,
+                                        "failed to apply Claude home migration from TUI prompt"
+                                    );
+                                }
+                            }
+                        }
+                        claude_migration_prompt::ClaudeHomeMigrationPromptOutcome::SkipOnce => {}
+                        claude_migration_prompt::ClaudeHomeMigrationPromptOutcome::Never => {
+                            if let Err(err) =
+                                codex_core::claude_migration::set_claude_home_migration_state(
+                                    &config.codex_home,
+                                    codex_core::claude_migration::ClaudeMigrationMarkerState::Never,
+                                )
+                                .await
+                            {
+                                tracing::warn!(
+                                    error = %err,
+                                    "failed to persist Claude home migration state=never from TUI prompt"
+                                );
+                            }
+                        }
+                    }
+                    let _ = tui.terminal.clear();
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        "failed to detect Claude home migration for TUI prompt"
+                    );
+                }
+            }
+        }
+    }
+
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
         restore();

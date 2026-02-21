@@ -21,11 +21,13 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use time::OffsetDateTime;
+use toml_edit::Array as TomlArray;
+use toml_edit::InlineTable;
+use toml_edit::Item as TomlItem;
 use toml_edit::value;
 
-// Keep the original on-disk marker filename for backward compatibility.
-pub const CLAUDE_MIGRATION_STATE_RELATIVE_PATH: &str = "state/claude_import_v1.json";
-pub const CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD: usize = 3;
+pub const CLAUDE_MIGRATION_STATE_RELATIVE_PATH: &str = "state/claude_migration_state.json";
+pub const CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD: usize = 3000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -88,16 +90,28 @@ pub struct ClaudeRepoMigrationSummary {
     pub imported_mcp_servers: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ClaudeMigrationStateFile {
-    #[serde(rename = "claude_import_v1")]
-    claude_migration_v1: ClaudeMigrationStateV1,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ClaudeMigrationStateV1 {
+    schema_version: u32,
     state: ClaudeMigrationMarkerState,
     updated_at_unix: i64,
+    last_result: Option<ClaudeMigrationLastResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ClaudeMigrationResultScope {
+    Home,
+    Repo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClaudeMigrationLastResult {
+    scope: ClaudeMigrationResultScope,
+    imported_config_keys: Vec<String>,
+    copied_skills: Vec<String>,
+    copied_agents_md: bool,
+    imported_mcp_servers: Vec<String>,
 }
 
 pub async fn maybe_migrate_claude_home(
@@ -150,6 +164,7 @@ pub async fn set_claude_home_migration_state(
     persist_import_state(
         &codex_home.join(CLAUDE_MIGRATION_STATE_RELATIVE_PATH),
         state,
+        None,
     )
     .await
 }
@@ -180,10 +195,12 @@ pub async fn detect_claude_repo_migration(
     };
     let has_any = detected.claude_md || detected.mcp_json;
     let would_change = preview.copied_agents_md || !preview.imported_mcp_servers.is_empty();
-    if !has_any || !would_change {
+    if !has_any {
         return Ok(None);
     }
-
+    if !would_change {
+        return Ok(None);
+    }
     Ok(Some(ClaudeMigrationRepoAvailable {
         marker_state,
         repo_root: project_root,
@@ -200,6 +217,13 @@ pub async fn apply_claude_repo_migration(cwd: &Path) -> io::Result<ClaudeRepoMig
             .join(".codex")
             .join(CLAUDE_MIGRATION_STATE_RELATIVE_PATH),
         ClaudeMigrationMarkerState::Imported,
+        Some(ClaudeMigrationLastResult {
+            scope: ClaudeMigrationResultScope::Repo,
+            imported_config_keys: Vec::new(),
+            copied_skills: Vec::new(),
+            copied_agents_md: summary.copied_agents_md,
+            imported_mcp_servers: summary.imported_mcp_servers.clone(),
+        }),
     )
     .await?;
     Ok(summary)
@@ -215,6 +239,7 @@ pub async fn set_claude_repo_migration_state(
             .join(".codex")
             .join(CLAUDE_MIGRATION_STATE_RELATIVE_PATH),
         state,
+        None,
     )
     .await
 }
@@ -285,7 +310,6 @@ async fn detect_claude_home_migration_with_paths(
     if !would_change {
         return Ok(None);
     }
-
     Ok(Some(ClaudeMigrationHomeAvailable {
         marker_state,
         prior_codex_thread_count,
@@ -336,6 +360,13 @@ async fn apply_claude_home_migration_with_paths(
     persist_import_state(
         &codex_home.join(CLAUDE_MIGRATION_STATE_RELATIVE_PATH),
         ClaudeMigrationMarkerState::Imported,
+        Some(ClaudeMigrationLastResult {
+            scope: ClaudeMigrationResultScope::Home,
+            imported_config_keys: summary.imported_config_keys.clone(),
+            copied_skills: summary.imported_skills.clone(),
+            copied_agents_md: summary.imported_user_agents_md,
+            imported_mcp_servers: Vec::new(),
+        }),
     )
     .await?;
     Ok(summary)
@@ -433,12 +464,16 @@ fn collect_settings_edits(
         && let Some(writable_roots) = extract_workspace_writable_roots(settings_json)
         && !writable_roots.is_empty()
     {
+        let mut writable_roots_array = TomlArray::new();
+        for root in writable_roots {
+            writable_roots_array.push(root);
+        }
         edits.push(ConfigEdit::SetPath {
             segments: vec![
                 "sandbox_workspace_write".to_string(),
                 "writable_roots".to_string(),
             ],
-            value: value(writable_roots),
+            value: TomlItem::Value(writable_roots_array.into()),
         });
         imported_keys.push("sandbox_workspace_write.writable_roots".to_string());
     }
@@ -447,9 +482,13 @@ fn collect_settings_edits(
         && let Some(set_values) = extract_shell_environment_set(settings_json)
         && !set_values.is_empty()
     {
+        let mut set_table = InlineTable::new();
+        for (key, value_str) in set_values {
+            set_table.insert(key, value_str.into());
+        }
         edits.push(ConfigEdit::SetPath {
             segments: vec!["shell_environment_policy".to_string(), "set".to_string()],
-            value: value(set_values),
+            value: TomlItem::Value(set_table.into()),
         });
         imported_keys.push("shell_environment_policy.set".to_string());
     }
@@ -687,57 +726,22 @@ async fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
 }
 
 async fn read_import_state(state_path: &Path) -> io::Result<Option<ClaudeMigrationMarkerState>> {
-    if !tokio::fs::try_exists(state_path).await? {
-        return Ok(None);
-    }
-    let contents = tokio::fs::read_to_string(state_path).await?;
-    let value: JsonValue = serde_json::from_str(&contents)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-
-    let state_str = value
-        .get("claude_migration_v1")
-        .or_else(|| value.get("claude_import_v1"))
-        .and_then(|v| v.get("state"))
-        .and_then(JsonValue::as_str);
-    if let Some(state_str) = state_str {
-        let state = match state_str {
-            "pending" => ClaudeMigrationMarkerState::Pending,
-            "imported" => ClaudeMigrationMarkerState::Imported,
-            "never" => ClaudeMigrationMarkerState::Never,
-            other => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("unknown Claude import marker state: {other}"),
-                ));
-            }
-        };
-        return Ok(Some(state));
-    }
-
-    // Backward compatibility with the first local draft format.
-    let completed = value
-        .get("claude_migration_v1")
-        .or_else(|| value.get("claude_import_v1"))
-        .and_then(|v| v.get("completed"))
-        .and_then(JsonValue::as_bool);
-    Ok(completed.map(|is_completed| {
-        if is_completed {
-            ClaudeMigrationMarkerState::Imported
-        } else {
-            ClaudeMigrationMarkerState::Pending
-        }
-    }))
+    Ok(read_migration_state_file(state_path)
+        .await?
+        .map(|file| file.state))
 }
 
 async fn persist_import_state(
     state_path: &Path,
     state: ClaudeMigrationMarkerState,
+    last_result: Option<ClaudeMigrationLastResult>,
 ) -> io::Result<()> {
+    let existing = read_migration_state_file(state_path).await?;
     let state = ClaudeMigrationStateFile {
-        claude_migration_v1: ClaudeMigrationStateV1 {
-            state,
-            updated_at_unix: OffsetDateTime::now_utc().unix_timestamp(),
-        },
+        schema_version: 1,
+        state,
+        updated_at_unix: OffsetDateTime::now_utc().unix_timestamp(),
+        last_result: last_result.or_else(|| existing.and_then(|file| file.last_result)),
     };
 
     let serialized = serde_json::to_string_pretty(&state)
@@ -746,6 +750,18 @@ async fn persist_import_state(
         tokio::fs::create_dir_all(parent).await?;
     }
     write_atomically(&state_path, &format!("{serialized}\n"))
+}
+
+async fn read_migration_state_file(
+    state_path: &Path,
+) -> io::Result<Option<ClaudeMigrationStateFile>> {
+    if !tokio::fs::try_exists(state_path).await? {
+        return Ok(None);
+    }
+    let contents = tokio::fs::read_to_string(state_path).await?;
+    let state: ClaudeMigrationStateFile = serde_json::from_str(&contents)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    Ok(Some(state))
 }
 
 async fn preview_home_migration(

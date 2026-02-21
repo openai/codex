@@ -2074,6 +2074,7 @@ impl CodexMessageProcessor {
 
                 self.outgoing.send_response(request_id, response).await;
 
+                let thread_cwd = thread.cwd.clone();
                 let notif = ThreadStartedNotification { thread };
                 self.outgoing
                     .send_server_notification(ServerNotification::ThreadStarted(notif))
@@ -2081,7 +2082,7 @@ impl CodexMessageProcessor {
 
                 {
                     match codex_core::claude_migration::detect_claude_repo_migration(
-                        thread.cwd.as_path(),
+                        thread_cwd.as_path(),
                     )
                     .await
                     {
