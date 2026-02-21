@@ -8,4 +8,4 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-codex-core = { workspace = true }
+codex-protocol = { workspace = true }

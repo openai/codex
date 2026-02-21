@@ -84,7 +84,6 @@ mod seatbelt_permissions;
 mod thread_manager;
 pub mod web_search;
 pub mod windows_sandbox_read_grants;
-pub use codex_protocol::protocol::InitialHistory;
 pub use thread_manager::NewThread;
 pub use thread_manager::ThreadManager;
 #[deprecated(note = "use ThreadManager")]
@@ -138,11 +137,12 @@ mod state;
 mod tasks;
 mod user_shell_command;
 pub mod util;
-pub use codex_shell_command::bash;
-pub use codex_shell_command::is_dangerous_command;
-pub use codex_shell_command::is_safe_command;
-pub use codex_shell_command::parse_command;
-pub use codex_shell_command::powershell;
+pub(crate) use codex_protocol::protocol;
+pub(crate) use codex_shell_command::bash;
+pub(crate) use codex_shell_command::is_dangerous_command;
+pub(crate) use codex_shell_command::is_safe_command;
+pub(crate) use codex_shell_command::parse_command;
+pub(crate) use codex_shell_command::powershell;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use client::X_CODEX_TURN_METADATA_HEADER;
@@ -155,12 +155,6 @@ pub use safety::get_platform_sandbox;
 pub use tools::spec::parse_tool_input_schema;
 pub use turn_metadata::build_turn_metadata_header;
 pub use zsh_exec_bridge::maybe_run_zsh_exec_wrapper_mode;
-// Re-export the protocol types from the standalone `codex-protocol` crate so existing
-// `codex_core::protocol::...` references continue to work across the workspace.
-pub use codex_protocol::protocol;
-// Re-export protocol config enums to ensure call sites can use the same types
-// as those in the protocol crate when constructing protocol messages.
-pub use codex_protocol::config_types as protocol_config_types;
 
 pub use client::ModelClient;
 pub use client::ModelClientSession;
@@ -168,11 +162,6 @@ pub use client_common::Prompt;
 pub use client_common::REVIEW_PROMPT;
 pub use client_common::ResponseEvent;
 pub use client_common::ResponseStream;
-pub use codex_protocol::models::ContentItem;
-pub use codex_protocol::models::LocalShellAction;
-pub use codex_protocol::models::LocalShellExecAction;
-pub use codex_protocol::models::LocalShellStatus;
-pub use codex_protocol::models::ResponseItem;
 pub use compact::content_items_to_text;
 pub use event_mapping::parse_turn_item;
 pub mod compact;

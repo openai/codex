@@ -1,6 +1,6 @@
 use codex_core::MCP_SANDBOX_STATE_METHOD;
 use codex_core::SandboxState;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_cargo_bin::find_resource;
 use rmcp::ClientHandler;
 use rmcp::ErrorData as McpError;

@@ -15,8 +15,8 @@ use std::path::PathBuf;
 
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::WritableRoot;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::WritableRoot;
 
 /// Options that control how bubblewrap is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,7 +322,7 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
 
     #[test]

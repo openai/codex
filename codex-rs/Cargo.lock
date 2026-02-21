@@ -1309,6 +1309,7 @@ dependencies = [
  "codex-login",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-shell-command",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -1773,6 +1774,8 @@ dependencies = [
  "clap",
  "codex-core",
  "codex-execpolicy",
+ "codex-protocol",
+ "codex-shell-command",
  "codex-utils-cargo-bin",
  "exec_server_test_support",
  "libc",
@@ -1910,6 +1913,7 @@ dependencies = [
  "cc",
  "clap",
  "codex-core",
+ "codex-protocol",
  "codex-utils-absolute-path",
  "landlock",
  "libc",
@@ -1966,6 +1970,7 @@ dependencies = [
  "codex-arg0",
  "codex-core",
  "codex-protocol",
+ "codex-shell-command",
  "codex-utils-cli",
  "codex-utils-json-to-toml",
  "core_test_support",
@@ -2240,6 +2245,7 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
+ "codex-shell-command",
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-approval-presets",
@@ -2320,7 +2326,7 @@ dependencies = [
 name = "codex-utils-approval-presets"
 version = "0.0.0"
 dependencies = [
- "codex-core",
+ "codex-protocol",
 ]
 
 [[package]]
@@ -2346,7 +2352,6 @@ name = "codex-utils-cli"
 version = "0.0.0"
 dependencies = [
  "clap",
- "codex-core",
  "codex-protocol",
  "pretty_assertions",
  "serde",
@@ -2439,6 +2444,7 @@ name = "codex-utils-sandbox-summary"
 version = "0.0.0"
 dependencies = [
  "codex-core",
+ "codex-protocol",
  "codex-utils-absolute-path",
  "pretty_assertions",
 ]
@@ -3540,6 +3546,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-core",
+ "codex-protocol",
  "codex-utils-cargo-bin",
  "rmcp",
  "serde_json",

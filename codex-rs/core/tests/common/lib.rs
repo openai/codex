@@ -175,9 +175,12 @@ pub fn load_sse_fixture_with_id_from_str(raw: &str, id: &str) -> String {
         .collect()
 }
 
-pub async fn wait_for_event<F>(codex: &CodexThread, predicate: F) -> codex_core::protocol::EventMsg
+pub async fn wait_for_event<F>(
+    codex: &CodexThread,
+    predicate: F,
+) -> codex_protocol::protocol::EventMsg
 where
-    F: FnMut(&codex_core::protocol::EventMsg) -> bool,
+    F: FnMut(&codex_protocol::protocol::EventMsg) -> bool,
 {
     use tokio::time::Duration;
     wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
@@ -185,7 +188,7 @@ where
 
 pub async fn wait_for_event_match<T, F>(codex: &CodexThread, matcher: F) -> T
 where
-    F: Fn(&codex_core::protocol::EventMsg) -> Option<T>,
+    F: Fn(&codex_protocol::protocol::EventMsg) -> Option<T>,
 {
     let ev = wait_for_event(codex, |ev| matcher(ev).is_some()).await;
     matcher(&ev).unwrap()
@@ -195,9 +198,9 @@ pub async fn wait_for_event_with_timeout<F>(
     codex: &CodexThread,
     mut predicate: F,
     wait_time: tokio::time::Duration,
-) -> codex_core::protocol::EventMsg
+) -> codex_protocol::protocol::EventMsg
 where
-    F: FnMut(&codex_core::protocol::EventMsg) -> bool,
+    F: FnMut(&codex_protocol::protocol::EventMsg) -> bool,
 {
     use tokio::time::Duration;
     use tokio::time::timeout;
