@@ -205,10 +205,13 @@ pub(crate) async fn process_compacted_history(
 fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } if role == "developer" => false,
-        ResponseItem::Message { role, .. } if role == "user" => matches!(
-            crate::event_mapping::parse_turn_item(item),
-            Some(TurnItem::UserMessage(_))
-        ),
+        ResponseItem::Message { role, .. } if role == "user" => {
+            !crate::event_mapping::is_contextual_user_message(item)
+                && matches!(
+                    crate::event_mapping::parse_turn_item(item),
+                    Some(TurnItem::UserMessage(_))
+                )
+        }
         ResponseItem::Message { role, .. } if role == "assistant" => true,
         ResponseItem::Message { .. } => false,
         ResponseItem::Compaction { .. } => true,

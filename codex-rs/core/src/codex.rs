@@ -3113,7 +3113,7 @@ impl Session {
                 // TODO(ccunningham): When a model switch changes the effective personality
                 // instructions, inject the updated personality spec alongside <model_switch>
                 // here so resume/model-switch paths can avoid forcing full reinjection.
-                initial_context.insert(0, model_switch_item);
+                initial_context.insert(0, model_switch_item.into());
             }
             initial_context
         } else {
@@ -3123,6 +3123,7 @@ impl Session {
                 previous_user_turn_model,
                 turn_context,
             )
+            .into_items()
         };
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
