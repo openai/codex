@@ -1365,6 +1365,25 @@ fn non_image_base64_data_url_is_unchanged() {
 }
 
 #[test]
+fn mixed_case_data_url_markers_are_adjusted() {
+    let payload = "F".repeat(1_024);
+    let image_url = format!("DATA:image/png;BASE64,{payload}");
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputImage { image_url }],
+        end_turn: None,
+        phase: None,
+    };
+
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+    let expected = raw_len - payload.len() as i64 + IMAGE_BYTES_ESTIMATE;
+
+    assert_eq!(estimated, expected);
+}
+
+#[test]
 fn multiple_inline_images_apply_multiple_fixed_costs() {
     let payload_one = "D".repeat(100);
     let payload_two = "E".repeat(200);

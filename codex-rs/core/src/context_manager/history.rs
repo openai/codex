@@ -448,19 +448,26 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
 }
 
 fn base64_data_url_payload_len(url: &str) -> Option<usize> {
-    if !url.starts_with("data:") {
+    if !url
+        .get(.."data:".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+    {
         return None;
     }
-    let (metadata, payload) = url.split_once(";base64,")?;
-    let mime_type = metadata
-        .strip_prefix("data:")?
-        .split(';')
-        .next()
-        .unwrap_or_default();
+    let comma_index = url.find(',')?;
+    let metadata = &url[..comma_index];
+    let payload = &url[comma_index + 1..];
+    let metadata_without_scheme = &metadata["data:".len()..];
+    let mut metadata_parts = metadata_without_scheme.split(';');
+    let mime_type = metadata_parts.next().unwrap_or_default();
+    let has_base64_marker = metadata_parts.any(|part| part.eq_ignore_ascii_case("base64"));
     if !mime_type
         .get(.."image/".len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/"))
     {
+        return None;
+    }
+    if !has_base64_marker {
         return None;
     }
     Some(payload.len())
