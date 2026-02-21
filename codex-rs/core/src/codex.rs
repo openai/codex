@@ -30,6 +30,11 @@ use crate::features::maybe_push_unstable_features_warning;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::realtime_conversation::RealtimeConversationManager;
+use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
+use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
+use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
+use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
@@ -288,7 +293,7 @@ pub struct CodexSpawnOk {
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
-pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 64;
+pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
 
@@ -529,11 +534,13 @@ pub(crate) struct Session {
     /// session.
     features: Features,
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
+    pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
 }
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -615,6 +622,7 @@ impl TurnContext {
             features: &features,
             web_search_mode: self.tools_config.web_search_mode,
         })
+        .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_agent_roles(config.agent_roles.clone());
 
         Self {
@@ -947,6 +955,7 @@ impl Session {
             features: &per_turn_config.features,
             web_search_mode: Some(per_turn_config.web_search_mode.value()),
         })
+        .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_agent_roles(per_turn_config.agent_roles.clone());
 
         let cwd = session_configuration.cwd.clone();
@@ -1361,6 +1370,7 @@ impl Session {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
+            conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             services,
             js_repl,
@@ -1965,12 +1975,17 @@ impl Session {
         state.take_startup_regular_task()
     }
 
-    async fn get_config(&self) -> std::sync::Arc<Config> {
+    pub(crate) async fn get_config(&self) -> std::sync::Arc<Config> {
         let state = self.state.lock().await;
         state
             .session_configuration
             .original_config_do_not_use
             .clone()
+    }
+
+    pub(crate) async fn provider(&self) -> ModelProviderInfo {
+        let state = self.state.lock().await;
+        state.session_configuration.provider.clone()
     }
 
     pub(crate) async fn reload_user_config_layer(&self) {
@@ -3299,6 +3314,29 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::CleanBackgroundTerminals => {
                 handlers::clean_background_terminals(&sess).await;
             }
+            Op::RealtimeConversationStart(params) => {
+                if let Err(err) =
+                    handle_realtime_conversation_start(&sess, sub.id.clone(), params).await
+                {
+                    sess.send_event_raw(Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: err.to_string(),
+                            codex_error_info: Some(CodexErrorInfo::Other),
+                        }),
+                    })
+                    .await;
+                }
+            }
+            Op::RealtimeConversationAudio(params) => {
+                handle_realtime_conversation_audio(&sess, sub.id.clone(), params).await;
+            }
+            Op::RealtimeConversationText(params) => {
+                handle_realtime_conversation_text(&sess, sub.id.clone(), params).await;
+            }
+            Op::RealtimeConversationClose => {
+                handle_realtime_conversation_close(&sess, sub.id.clone()).await;
+            }
             Op::OverrideTurnContext {
                 cwd,
                 approval_policy,
@@ -4144,6 +4182,7 @@ mod handlers {
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        let _ = sess.conversation.shutdown().await;
         sess.services
             .unified_exec_manager
             .terminate_all_processes()
@@ -4253,6 +4292,7 @@ async fn spawn_review_thread(
         features: &review_features,
         web_search_mode: Some(review_web_search_mode),
     })
+    .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_agent_roles(config.agent_roles.clone());
 
     let review_prompt = resolved.prompt.clone();
@@ -4962,6 +5002,7 @@ fn connector_inserted_in_messages(
 fn filter_codex_apps_mcp_tools(
     mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
     connectors: &[connectors::AppInfo],
+    config: &Config,
 ) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
     let allowed: HashSet<&str> = connectors
         .iter()
@@ -4977,7 +5018,7 @@ fn filter_codex_apps_mcp_tools(
             let Some(connector_id) = codex_apps_connector_id(tool) else {
                 return false;
             };
-            allowed.contains(connector_id)
+            allowed.contains(connector_id) && connectors::codex_app_tool_is_enabled(config, tool)
         })
         .map(|(name, tool)| (name.clone(), tool.clone()))
         .collect()
@@ -5151,9 +5192,9 @@ async fn built_tools(
         None
     };
 
-    let app_tools = connectors
-        .as_ref()
-        .map(|connectors| filter_codex_apps_mcp_tools(&mcp_tools, connectors));
+    let app_tools = connectors.as_ref().map(|connectors| {
+        filter_codex_apps_mcp_tools(&mcp_tools, connectors, &turn_context.config)
+    });
 
     if let Some(connectors) = connectors.as_ref() {
         let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
@@ -5178,7 +5219,8 @@ async fn built_tools(
             explicitly_enabled.as_ref(),
         ));
 
-        mcp_tools = selected_mcp_tools;
+        mcp_tools =
+            connectors::filter_codex_apps_tools_by_policy(selected_mcp_tools, &turn_context.config);
     }
 
     Ok(Arc::new(ToolRouter::from_config(
@@ -6164,7 +6206,7 @@ mod tests {
         let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
         std::fs::write(
             &config_toml_path,
-            "[apps.calendar]\nenabled = false\ndisabled_reason = \"user\"\n",
+            "[apps.calendar]\nenabled = false\ndestructive_enabled = false\n",
         )
         .expect("write user config");
 
@@ -6186,10 +6228,7 @@ mod tests {
             .expect("calendar app config exists");
 
         assert!(!app.enabled);
-        assert_eq!(
-            app.disabled_reason,
-            Some(crate::config::types::AppDisabledReason::User)
-        );
+        assert_eq!(app.destructive_enabled, Some(false));
     }
 
     #[test]
@@ -7631,6 +7670,7 @@ mod tests {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
+            conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             services,
             js_repl,
@@ -7787,6 +7827,7 @@ mod tests {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
+            conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             services,
             js_repl,

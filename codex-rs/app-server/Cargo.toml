@@ -48,6 +48,7 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
+tokio-util = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }

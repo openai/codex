@@ -63,8 +63,20 @@ impl ShellHandler {
 }
 
 impl ShellCommandHandler {
-    fn base_command(shell: &Shell, command: &str, login: Option<bool>) -> Vec<String> {
-        let use_login_shell = login.unwrap_or(true);
+    fn resolve_use_login_shell(
+        login: Option<bool>,
+        allow_login_shell: bool,
+    ) -> Result<bool, FunctionCallError> {
+        if !allow_login_shell && login == Some(true) {
+            return Err(FunctionCallError::RespondToModel(
+                "login shell is disabled by config; omit `login` or set it to false.".to_string(),
+            ));
+        }
+
+        Ok(login.unwrap_or(allow_login_shell))
+    }
+
+    fn base_command(shell: &Shell, command: &str, use_login_shell: bool) -> Vec<String> {
         shell.derive_exec_args(command, use_login_shell)
     }
 
@@ -73,11 +85,13 @@ impl ShellCommandHandler {
         session: &crate::codex::Session,
         turn_context: &TurnContext,
         thread_id: ThreadId,
-    ) -> ExecParams {
+        allow_login_shell: bool,
+    ) -> Result<ExecParams, FunctionCallError> {
         let shell = session.user_shell();
-        let command = Self::base_command(shell.as_ref(), &params.command, params.login);
+        let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
+        let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
 
-        ExecParams {
+        Ok(ExecParams {
             command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
@@ -87,7 +101,7 @@ impl ShellCommandHandler {
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
             arg0: None,
-        }
+        })
     }
 }
 
@@ -183,8 +197,15 @@ impl ToolHandler for ShellCommandHandler {
 
         serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .map(|params| {
+                let use_login_shell = match Self::resolve_use_login_shell(
+                    params.login,
+                    invocation.turn.tools_config.allow_login_shell,
+                ) {
+                    Ok(use_login_shell) => use_login_shell,
+                    Err(_) => return true,
+                };
                 let shell = invocation.session.user_shell();
-                let command = Self::base_command(shell.as_ref(), &params.command, params.login);
+                let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
                 !is_known_safe_command(&command)
             })
             .unwrap_or(true)
@@ -213,7 +234,8 @@ impl ToolHandler for ShellCommandHandler {
             session.as_ref(),
             turn.as_ref(),
             session.conversation_id,
-        );
+            turn.tools_config.allow_login_shell,
+        )?;
         ShellHandler::run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,
@@ -439,7 +461,9 @@ mod tests {
             &session,
             &turn_context,
             session.conversation_id,
-        );
+            true,
+        )
+        .expect("login shells should be allowed");
 
         // ExecParams cannot derive Eq due to the CancellationToken field, so we manually compare the fields.
         assert_eq!(exec_params.command, expected_command);
@@ -464,18 +488,57 @@ mod tests {
             shell_snapshot,
         };
 
-        let login_command =
-            ShellCommandHandler::base_command(&shell, "echo login shell", Some(true));
+        let login_command = ShellCommandHandler::base_command(&shell, "echo login shell", true);
         assert_eq!(
             login_command,
             shell.derive_exec_args("echo login shell", true)
         );
 
         let non_login_command =
-            ShellCommandHandler::base_command(&shell, "echo non login shell", Some(false));
+            ShellCommandHandler::base_command(&shell, "echo non login shell", false);
         assert_eq!(
             non_login_command,
             shell.derive_exec_args("echo non login shell", false)
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
+        let (session, turn_context) = make_session_and_context().await;
+        let params = ShellCommandToolCallParams {
+            command: "echo hello".to_string(),
+            workdir: None,
+            login: None,
+            timeout_ms: None,
+            sandbox_permissions: None,
+            prefix_rule: None,
+            justification: None,
+        };
+
+        let exec_params = ShellCommandHandler::to_exec_params(
+            &params,
+            &session,
+            &turn_context,
+            session.conversation_id,
+            false,
+        )
+        .expect("non-login shells should still be allowed");
+
+        assert_eq!(
+            exec_params.command,
+            session.user_shell().derive_exec_args("echo hello", false)
+        );
+    }
+
+    #[test]
+    fn shell_command_handler_rejects_login_when_disallowed() {
+        let err = ShellCommandHandler::resolve_use_login_shell(Some(true), false)
+            .expect_err("explicit login should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("login shell is disabled by config"),
+            "unexpected error: {err}"
         );
     }
 }

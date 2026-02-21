@@ -1327,6 +1327,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
@@ -1636,6 +1637,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-secrets",
  "codex-shell-command",
  "codex-state",
  "codex-utils-absolute-path",
@@ -1643,7 +1645,6 @@ dependencies = [
  "codex-utils-home-dir",
  "codex-utils-pty",
  "codex-utils-readiness",
- "codex-utils-sanitizer",
  "codex-utils-string",
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
@@ -2150,6 +2151,7 @@ dependencies = [
  "keyring",
  "pretty_assertions",
  "rand 0.9.2",
+ "regex",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -2436,13 +2438,6 @@ dependencies = [
  "codex-core",
  "codex-utils-absolute-path",
  "pretty_assertions",
-]
-
-[[package]]
-name = "codex-utils-sanitizer"
-version = "0.0.0"
-dependencies = [
- "regex",
 ]
 
 [[package]]

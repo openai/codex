@@ -67,6 +67,7 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::terminal::TerminalName;
 use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -1640,6 +1641,7 @@ async fn make_chatwidget_manual(
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
+        queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
@@ -2173,6 +2175,243 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
             panic!("expected Op::UserTurn with default collab mode, got {other:?}")
         }
     }
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    assert_matches!(
+        event,
+        AppEvent::OpenPlanReasoningScopePrompt {
+            model,
+            effort: Some(_)
+        } if model == "gpt-5.1-codex-max"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    let current_preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.set_reasoning_effort(Some(current_preset.default_reasoning_effort));
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateModel(model) if model == "gpt-5.1-codex-max"
+        )),
+        "expected model update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
+        "expected reasoning update event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_global_opens_scope_prompt()
+ {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    // Reproduce: Plan effective reasoning remains the preset (medium), but the
+    // global default differs (high). Pressing Enter on the current Plan choice
+    // should open the scope prompt rather than silently rewriting the global default.
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    assert_matches!(
+        event,
+        AppEvent::OpenPlanReasoningScopePrompt {
+            model,
+            effort: Some(ReasoningEffortConfig::Medium)
+        } if model == "gpt-5.1-codex-max"
+    );
+}
+
+#[tokio::test]
+async fn plan_mode_reasoning_override_is_marked_current_in_reasoning_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    set_chatgpt_auth(&mut chat);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
+
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("Low (current)"));
+    assert!(
+        !popup.contains("High (current)"),
+        "expected Plan override to drive current reasoning label, got: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    let preset = get_available_model(&chat, "gpt-5");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateModel(model) if model == "gpt-5"
+        )),
+        "expected model update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
+        "expected reasoning update event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected plan override to be updated; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistPlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected updated plan override to be persisted; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelection { model, effort: Some(ReasoningEffortConfig::High) }
+                if model == "gpt-5.1-codex-max"
+        )),
+        "expected global model reasoning selection persistence; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_mentions_selected_reasoning() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::Medium),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("Choose where to apply medium reasoning."));
+    assert!(popup.contains("Always use medium reasoning in Plan mode."));
+    assert!(popup.contains("Apply to Plan mode override"));
+    assert!(popup.contains("Apply to global default and Plan mode override"));
+    assert!(popup.contains("user-chosen Plan override (low)"));
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_mentions_built_in_plan_default_when_no_override() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::Medium),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("built-in Plan default (medium)"));
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasoning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected plan-only reasoning update; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::UpdateReasoningEffort(_))),
+        "did not expect all-modes reasoning update; events: {events:?}"
+    );
 }
 
 #[tokio::test]
@@ -2784,6 +3023,9 @@ async fn empty_enter_during_task_does_not_queue() {
 #[tokio::test]
 async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_message_edit_binding = crate::key_hint::alt(KeyCode::Up);
+    chat.bottom_pane
+        .set_queued_message_edit_binding(crate::key_hint::alt(KeyCode::Up));
 
     // Simulate a running task so messages would normally be queued.
     chat.bottom_pane.set_task_running(true);
@@ -2808,6 +3050,77 @@ async fn alt_up_edits_most_recent_queued_message() {
     assert_eq!(
         chat.queued_user_messages.front().unwrap().text,
         "first queued"
+    );
+}
+
+async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
+    terminal_name: TerminalName,
+) {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_name);
+    chat.bottom_pane
+        .set_queued_message_edit_binding(chat.queued_message_edit_binding);
+
+    // Simulate a running task so messages would normally be queued.
+    chat.bottom_pane.set_task_running(true);
+
+    // Seed two queued messages.
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    // Press Shift+Left to edit the most recent (last) queued message.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+
+    // Composer should now contain the last queued message.
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "second queued".to_string()
+    );
+    // And the queue should now contain only the remaining (older) item.
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "first queued"
+    );
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_apple_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::AppleTerminal)
+        .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_warp_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::WarpTerminal)
+        .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_vscode_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::VsCode).await;
+}
+
+#[test]
+fn queued_message_edit_binding_mapping_covers_special_terminals() {
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::AppleTerminal),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::WarpTerminal),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::VsCode),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::Iterm2),
+        crate::key_hint::alt(KeyCode::Up)
     );
 }
 
@@ -3588,6 +3901,66 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
 }
 
 #[tokio::test]
+async fn mode_switch_surfaces_model_change_notification_when_effective_model_changes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let default_model = chat.current_model().to_string();
+
+    let mut plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mode");
+    plan_mask.model = Some("gpt-5.1-codex-mini".to_string());
+    chat.set_collaboration_mask(plan_mask);
+
+    let plan_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan_messages.contains("Model changed to gpt-5.1-codex-mini medium for Plan mode."),
+        "expected Plan-mode model switch notice, got: {plan_messages:?}"
+    );
+
+    let default_mask = collaboration_modes::default_mask(chat.models_manager.as_ref())
+        .expect("expected default collaboration mode");
+    chat.set_collaboration_mask(default_mask);
+
+    let default_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let expected_default_message =
+        format!("Model changed to {default_model} default for Default mode.");
+    assert!(
+        default_messages.contains(&expected_default_message),
+        "expected Default-mode model switch notice, got: {default_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_same() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+
+    let plan_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan_messages.contains("Model changed to gpt-5.3-codex medium for Plan mode."),
+        "expected reasoning-change notice in Plan mode, got: {plan_messages:?}"
+    );
+}
+
+#[tokio::test]
 async fn collab_slash_command_opens_picker_and_updates_mode() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
@@ -3652,7 +4025,12 @@ async fn plan_slash_command_switches_to_plan_mode() {
 
     chat.dispatch_command(SlashCommand::Plan);
 
-    assert!(rx.try_recv().is_err(), "plan should not emit an app event");
+    while let Ok(event) = rx.try_recv() {
+        assert!(
+            matches!(event, AppEvent::InsertHistoryCell(_)),
+            "plan should not emit a non-history app event: {event:?}"
+        );
+    }
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 }
@@ -3820,7 +4198,29 @@ async fn set_reasoning_effort_updates_active_collaboration_mask() {
 
     chat.set_reasoning_effort(None);
 
-    assert_eq!(chat.current_reasoning_effort(), None);
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Medium)
+    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn set_reasoning_effort_does_not_override_active_plan_override() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::High));
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
 }
 

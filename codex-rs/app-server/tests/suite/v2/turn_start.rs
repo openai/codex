@@ -847,7 +847,9 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     // Approve and wait for task completion
     mcp.send_response(
         request_id,
-        serde_json::json!({ "decision": codex_core::protocol::ReviewDecision::Approved }),
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Accept,
+        })?,
     )
     .await?;
     timeout(
@@ -1035,7 +1037,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 
@@ -1129,7 +1131,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
     mcp.clear_message_buffer();

@@ -20,6 +20,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -872,7 +873,7 @@ async fn start_responses_server_with_sse(
     sse_raw: &str,
     expected_requests: usize,
 ) -> (MockServer, ResponseMock) {
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
     let sse = load_sse_fixture_with_id_from_str(sse_raw, &Uuid::new_v4().to_string());
     let responses = vec![sse; expected_requests];
     let request_log = mount_sse_sequence(&server, responses).await;

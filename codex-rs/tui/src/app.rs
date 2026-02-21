@@ -1764,6 +1764,10 @@ impl App {
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
+            AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
+                self.chat_widget
+                    .open_plan_reasoning_scope_prompt(model, effort);
+            }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
             }
@@ -2115,6 +2119,10 @@ impl App {
                     .await
                 {
                     Ok(()) => {
+                        let effort_label = effort
+                            .map(|selected_effort| selected_effort.to_string())
+                            .unwrap_or_else(|| "default".to_string());
+                        tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
                         let mut message = format!("Model changed to {model}");
                         if let Some(label) = Self::reasoning_label_for(&model, effort) {
                             message.push(' ');
@@ -2315,6 +2323,11 @@ impl App {
             AppEvent::UpdateRateLimitSwitchPromptHidden(hidden) => {
                 self.chat_widget.set_rate_limit_switch_prompt_hidden(hidden);
             }
+            AppEvent::UpdatePlanModeReasoningEffort(effort) => {
+                self.config.plan_mode_reasoning_effort = effort;
+                self.chat_widget.set_plan_mode_reasoning_effort(effort);
+                self.refresh_status_line();
+            }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                     .set_hide_full_access_warning(true)
@@ -2358,6 +2371,45 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to save rate limit reminder preference: {err}"
                     ));
+                }
+            }
+            AppEvent::PersistPlanModeReasoningEffort(effort) => {
+                let profile = self.active_profile.as_deref();
+                let segments = if let Some(profile) = profile {
+                    vec![
+                        "profiles".to_string(),
+                        profile.to_string(),
+                        "plan_mode_reasoning_effort".to_string(),
+                    ]
+                } else {
+                    vec!["plan_mode_reasoning_effort".to_string()]
+                };
+                let edit = if let Some(effort) = effort {
+                    ConfigEdit::SetPath {
+                        segments,
+                        value: effort.to_string().into(),
+                    }
+                } else {
+                    ConfigEdit::ClearPath { segments }
+                };
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist plan mode reasoning effort"
+                    );
+                    if let Some(profile) = profile {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save Plan mode reasoning effort for profile `{profile}`: {err}"
+                        ));
+                    } else {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save Plan mode reasoning effort: {err}"
+                        ));
+                    }
                 }
             }
             AppEvent::PersistModelMigrationPromptAcknowledged {

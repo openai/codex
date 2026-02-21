@@ -75,6 +75,7 @@ use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_app_server_protocol::convert_patch_changes;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_core::find_thread_name_by_id;
 use codex_core::parse_command::shlex_join;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -99,11 +100,13 @@ use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUse
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::error;
+use tracing::warn;
 
 type JsonValue = serde_json::Value;
 
@@ -129,6 +132,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     thread_watch_manager: ThreadWatchManager,
     api_version: ApiVersion,
     fallback_model_provider: String,
+    codex_home: &Path,
 ) {
     let Event {
         id: event_turn_id,
@@ -1224,6 +1228,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 thread.status = thread_watch_manager
                                     .loaded_status_for_thread(&thread.id)
                                     .await;
+                                match find_thread_name_by_id(codex_home, &conversation_id).await {
+                                    Ok(name) => {
+                                        thread.name = name;
+                                    }
+                                    Err(err) => {
+                                        warn!(
+                                            "Failed to read thread name for {conversation_id}: {err}"
+                                        );
+                                    }
+                                }
                                 ThreadRollbackResponse { thread }
                             }
                             Err(err) => {

@@ -139,6 +139,15 @@ pub struct Permissions {
     pub sandbox_policy: Constrained<SandboxPolicy>,
     /// Effective network configuration applied to all spawned processes.
     pub network: Option<NetworkProxySpec>,
+    /// Whether the model may request a login shell for shell-based tools.
+    /// Default to `true`
+    ///
+    /// If `true`, the model may request a login shell (`login = true`), and
+    /// omitting `login` defaults to using a login shell.
+    /// If `false`, the model can never use a login shell: `login = true`
+    /// requests are rejected, and omitting `login` defaults to a non-login
+    /// shell.
+    pub allow_login_shell: bool,
     /// Policy used to build process environments for shell/unified exec.
     pub shell_environment_policy: ShellEnvironmentPolicy,
     /// Effective Windows sandbox mode derived from `[windows].sandbox` or
@@ -367,6 +376,13 @@ pub struct Config {
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    /// Optional Plan-mode-specific reasoning effort override used by the TUI.
+    ///
+    /// When unset, Plan mode uses the built-in Plan preset default (currently
+    /// `medium`). When explicitly set (including `none`), this overrides the
+    /// Plan preset. The `none` value means "no reasoning" (not "inherit the
+    /// global default").
+    pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
 
     /// If not "none", the value to use for `reasoning.summary` when making a
     /// request using the Responses API.
@@ -385,6 +401,14 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
+    /// connection) without changing normal provider HTTP requests.
+    pub experimental_realtime_ws_base_url: Option<String>,
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport backend prompt (the `Op::RealtimeConversation`
+    /// `/ws` session.create backend_prompt) without changing normal prompts.
+    pub experimental_realtime_ws_backend_prompt: Option<String>,
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -952,6 +976,16 @@ pub struct ConfigToml {
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
+    /// Whether the model may request a login shell for shell-based tools.
+    /// Default to `true`
+    ///
+    /// If `true`, the model may request a login shell (`login = true`), and
+    /// omitting `login` defaults to using a login shell.
+    /// If `false`, the model can never use a login shell: `login = true`
+    /// requests are rejected, and omitting `login` defaults to a non-login
+    /// shell.
+    pub allow_login_shell: Option<bool>,
+
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
 
@@ -1083,6 +1117,7 @@ pub struct ConfigToml {
     pub show_raw_agent_reasoning: Option<bool>,
 
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
@@ -1090,8 +1125,8 @@ pub struct ConfigToml {
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
-    /// Optional path to a JSON file containing a complete model catalog.
-    /// When set, this replaces the bundled catalog for this process.
+    /// Optional path to a JSON model catalog (applied on startup only).
+    /// Per-thread `config` overrides are accepted but do not reapply this (no-ops).
     pub model_catalog_json: Option<AbsolutePathBuf>,
 
     /// Optionally specify a personality for the model
@@ -1100,6 +1135,14 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
+    /// connection) without changing normal provider HTTP requests.
+    pub experimental_realtime_ws_base_url: Option<String>,
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport backend prompt (the `Op::RealtimeConversation`
+    /// `/ws` session.create backend_prompt) without changing normal prompts.
+    pub experimental_realtime_ws_backend_prompt: Option<String>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -1710,6 +1753,7 @@ impl Config {
             .clone();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
+        let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
 
         let history = cfg.history.unwrap_or_default();
 
@@ -1950,6 +1994,7 @@ impl Config {
                 approval_policy: constrained_approval_policy.value,
                 sandbox_policy: constrained_sandbox_policy.value,
                 network,
+                allow_login_shell,
                 shell_environment_policy,
                 windows_sandbox_mode,
                 macos_seatbelt_profile_extensions: None,
@@ -2011,6 +2056,9 @@ impl Config {
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort),
+            plan_mode_reasoning_effort: config_profile
+                .plan_mode_reasoning_effort
+                .or(cfg.plan_mode_reasoning_effort),
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
@@ -2022,6 +2070,8 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
+            experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
@@ -4519,6 +4569,7 @@ model_verbosity = "high"
                     approval_policy: Constrained::allow_any(AskForApproval::Never),
                     sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                     network: None,
+                    allow_login_shell: true,
                     shell_environment_policy: ShellEnvironmentPolicy::default(),
                     windows_sandbox_mode: None,
                     macos_seatbelt_profile_extensions: None,
@@ -4555,12 +4606,15 @@ model_verbosity = "high"
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
+                plan_mode_reasoning_effort: None,
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: None,
                 model_catalog: None,
                 model_verbosity: None,
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+                experimental_realtime_ws_base_url: None,
+                experimental_realtime_ws_backend_prompt: None,
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
@@ -4637,6 +4691,7 @@ model_verbosity = "high"
                 approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
@@ -4673,12 +4728,15 @@ model_verbosity = "high"
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
+            plan_mode_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_realtime_ws_base_url: None,
+            experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4753,6 +4811,7 @@ model_verbosity = "high"
                 approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
@@ -4789,12 +4848,15 @@ model_verbosity = "high"
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
+            plan_mode_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_realtime_ws_base_url: None,
+            experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4855,6 +4917,7 @@ model_verbosity = "high"
                 approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
@@ -4891,12 +4954,15 @@ model_verbosity = "high"
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
+            plan_mode_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: Some(Verbosity::High),
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_realtime_ws_base_url: None,
+            experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -5430,6 +5496,27 @@ mcp_oauth_callback_port = 5678
     }
 
     #[test]
+    fn config_loads_allow_login_shell_from_toml() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+model = "gpt-5.1"
+allow_login_shell = false
+"#,
+        )
+        .expect("TOML deserialization should succeed for allow_login_shell");
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(!config.permissions.allow_login_shell);
+        Ok(())
+    }
+
+    #[test]
     fn config_loads_mcp_oauth_callback_url_from_toml() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let toml = r#"
@@ -5659,6 +5746,61 @@ trust_level = "untrusted"
         assert_eq!(
             config.permissions.approval_policy.value(),
             AskForApproval::OnRequest
+        );
+        Ok(())
+    }
+    #[test]
+    fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::Result<()> {
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
+"#,
+        )
+        .expect("TOML deserialization should succeed");
+
+        assert_eq!(
+            cfg.experimental_realtime_ws_base_url.as_deref(),
+            Some("http://127.0.0.1:8011")
+        );
+
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.experimental_realtime_ws_base_url.as_deref(),
+            Some("http://127.0.0.1:8011")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn experimental_realtime_ws_backend_prompt_loads_from_config_toml() -> std::io::Result<()> {
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+experimental_realtime_ws_backend_prompt = "prompt from config"
+"#,
+        )
+        .expect("TOML deserialization should succeed");
+
+        assert_eq!(
+            cfg.experimental_realtime_ws_backend_prompt.as_deref(),
+            Some("prompt from config")
+        );
+
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.experimental_realtime_ws_backend_prompt.as_deref(),
+            Some("prompt from config")
         );
         Ok(())
     }

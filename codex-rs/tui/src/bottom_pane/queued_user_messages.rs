@@ -11,15 +11,31 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 
 /// Widget that displays a list of user messages queued while a turn is in progress.
+///
+/// The widget shows a key hint at the bottom (e.g. "⌥ + ↑ edit") telling the
+/// user how to pop the most recent queued message back into the composer.
+/// Because some terminals intercept certain modifier-key combinations, the
+/// displayed binding is configurable via [`set_edit_binding`](Self::set_edit_binding).
 pub(crate) struct QueuedUserMessages {
     pub messages: Vec<String>,
+    /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
+    /// be overridden for terminals where that chord is unavailable.
+    edit_binding: key_hint::KeyBinding,
 }
 
 impl QueuedUserMessages {
     pub(crate) fn new() -> Self {
         Self {
             messages: Vec::new(),
+            edit_binding: key_hint::alt(KeyCode::Up),
         }
+    }
+
+    /// Replace the keybinding shown in the hint line at the bottom of the
+    /// queued-messages list.  The caller is responsible for also wiring the
+    /// corresponding key event handler.
+    pub(crate) fn set_edit_binding(&mut self, binding: key_hint::KeyBinding) {
+        self.edit_binding = binding;
     }
 
     fn as_renderable(&self, width: u16) -> Box<dyn Renderable> {
@@ -48,7 +64,7 @@ impl QueuedUserMessages {
         lines.push(
             Line::from(vec![
                 "    ".into(),
-                key_hint::alt(KeyCode::Up).into(),
+                self.edit_binding.into(),
                 " edit".into(),
             ])
             .dim(),

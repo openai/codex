@@ -11,6 +11,7 @@ pub use codex_app_server_protocol::AppBranding;
 pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
 use codex_protocol::protocol::SandboxPolicy;
+use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use tracing::warn;
 
@@ -18,6 +19,7 @@ use crate::AuthManager;
 use crate::CodexAuth;
 use crate::SandboxState;
 use crate::config::Config;
+use crate::config::types::AppToolApproval;
 use crate::config::types::AppsConfigToml;
 use crate::default_client::is_first_party_chat_originator;
 use crate::default_client::originator;
@@ -31,6 +33,21 @@ use crate::token_data::TokenData;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AppToolPolicy {
+    pub enabled: bool,
+    pub approval: AppToolApproval,
+}
+
+impl Default for AppToolPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            approval: AppToolApproval::Auto,
+        }
+    }
+}
 
 #[derive(Clone, PartialEq, Eq)]
 struct AccessibleConnectorsCacheKey {
@@ -337,13 +354,56 @@ pub fn merge_connectors(
 }
 
 pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
-    let apps = read_apps_config(config).map(|apps_config| apps_config.apps);
-    for connector in &mut connectors {
-        if let Some(app) = apps.as_ref().and_then(|apps| apps.get(&connector.id)) {
-            connector.is_enabled = app.enabled;
+    let apps_config = read_apps_config(config);
+    if let Some(apps_config) = apps_config.as_ref() {
+        for connector in &mut connectors {
+            connector.is_enabled = app_is_enabled(apps_config, Some(connector.id.as_str()));
         }
     }
     connectors
+}
+
+pub(crate) fn app_tool_policy(
+    config: &Config,
+    connector_id: Option<&str>,
+    tool_name: &str,
+    tool_title: Option<&str>,
+    annotations: Option<&ToolAnnotations>,
+) -> AppToolPolicy {
+    let apps_config = read_apps_config(config);
+    app_tool_policy_from_apps_config(
+        apps_config.as_ref(),
+        connector_id,
+        tool_name,
+        tool_title,
+        annotations,
+    )
+}
+
+pub(crate) fn codex_app_tool_is_enabled(
+    config: &Config,
+    tool_info: &crate::mcp_connection_manager::ToolInfo,
+) -> bool {
+    if tool_info.server_name != CODEX_APPS_MCP_SERVER_NAME {
+        return true;
+    }
+
+    app_tool_policy(
+        config,
+        tool_info.connector_id.as_deref(),
+        &tool_info.tool_name,
+        tool_info.tool.title.as_deref(),
+        tool_info.tool.annotations.as_ref(),
+    )
+    .enabled
+}
+
+pub(crate) fn filter_codex_apps_tools_by_policy(
+    mut mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    config: &Config,
+) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
+    mcp_tools.retain(|_, tool_info| codex_app_tool_is_enabled(config, tool_info));
+    mcp_tools
 }
 
 const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
@@ -392,6 +452,85 @@ fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
     let effective_config = config.config_layer_stack.effective_config();
     let apps_config = effective_config.as_table()?.get("apps")?.clone();
     AppsConfigToml::deserialize(apps_config).ok()
+}
+
+fn app_is_enabled(apps_config: &AppsConfigToml, connector_id: Option<&str>) -> bool {
+    let default_enabled = apps_config
+        .default
+        .as_ref()
+        .map(|defaults| defaults.enabled)
+        .unwrap_or(true);
+
+    connector_id
+        .and_then(|connector_id| apps_config.apps.get(connector_id))
+        .map(|app| app.enabled)
+        .unwrap_or(default_enabled)
+}
+
+fn app_tool_policy_from_apps_config(
+    apps_config: Option<&AppsConfigToml>,
+    connector_id: Option<&str>,
+    tool_name: &str,
+    tool_title: Option<&str>,
+    annotations: Option<&ToolAnnotations>,
+) -> AppToolPolicy {
+    let Some(apps_config) = apps_config else {
+        return AppToolPolicy::default();
+    };
+
+    let app = connector_id.and_then(|connector_id| apps_config.apps.get(connector_id));
+    let tools = app.and_then(|app| app.tools.as_ref());
+    let tool_config = tools.and_then(|tools| {
+        tools
+            .tools
+            .get(tool_name)
+            .or_else(|| tool_title.and_then(|title| tools.tools.get(title)))
+    });
+    let approval = tool_config
+        .and_then(|tool| tool.approval_mode)
+        .or_else(|| app.and_then(|app| app.default_tools_approval_mode))
+        .unwrap_or(AppToolApproval::Auto);
+
+    if !app_is_enabled(apps_config, connector_id) {
+        return AppToolPolicy {
+            enabled: false,
+            approval,
+        };
+    }
+
+    if let Some(enabled) = tool_config.and_then(|tool| tool.enabled) {
+        return AppToolPolicy { enabled, approval };
+    }
+
+    if let Some(enabled) = app.and_then(|app| app.default_tools_enabled) {
+        return AppToolPolicy { enabled, approval };
+    }
+
+    let app_defaults = apps_config.default.as_ref();
+    let destructive_enabled = app
+        .and_then(|app| app.destructive_enabled)
+        .unwrap_or_else(|| {
+            app_defaults
+                .map(|defaults| defaults.destructive_enabled)
+                .unwrap_or(true)
+        });
+    let open_world_enabled = app
+        .and_then(|app| app.open_world_enabled)
+        .unwrap_or_else(|| {
+            app_defaults
+                .map(|defaults| defaults.open_world_enabled)
+                .unwrap_or(true)
+        });
+    let destructive_hint = annotations
+        .and_then(|annotations| annotations.destructive_hint)
+        .unwrap_or(false);
+    let open_world_hint = annotations
+        .and_then(|annotations| annotations.open_world_hint)
+        .unwrap_or(false);
+    let enabled =
+        (destructive_enabled || !destructive_hint) && (open_world_enabled || !open_world_hint);
+
+    AppToolPolicy { enabled, approval }
 }
 
 fn collect_accessible_connectors<I>(tools: I) -> Vec<AppInfo>
@@ -472,7 +611,24 @@ fn format_connector_label(name: &str, _id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::types::AppConfig;
+    use crate::config::types::AppToolConfig;
+    use crate::config::types::AppToolsConfig;
+    use crate::config::types::AppsDefaultConfig;
     use pretty_assertions::assert_eq;
+
+    fn annotations(
+        destructive_hint: Option<bool>,
+        open_world_hint: Option<bool>,
+    ) -> ToolAnnotations {
+        ToolAnnotations {
+            destructive_hint,
+            idempotent_hint: None,
+            open_world_hint,
+            read_only_hint: None,
+            title: None,
+        }
+    }
 
     fn app(id: &str) -> AppInfo {
         AppInfo {
@@ -489,6 +645,328 @@ mod tests {
             is_accessible: false,
             is_enabled: true,
         }
+    }
+
+    #[test]
+    fn app_tool_policy_uses_global_defaults_for_destructive_hints() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: true,
+                destructive_enabled: false,
+                open_world_enabled: true,
+            }),
+            apps: HashMap::new(),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/create",
+            None,
+            Some(&annotations(Some(true), None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: false,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_is_enabled_uses_default_for_unconfigured_apps() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                destructive_enabled: true,
+                open_world_enabled: true,
+            }),
+            apps: HashMap::new(),
+        };
+
+        assert!(!app_is_enabled(&apps_config, Some("calendar")));
+        assert!(!app_is_enabled(&apps_config, None));
+    }
+
+    #[test]
+    fn app_is_enabled_prefers_per_app_override_over_default() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                destructive_enabled: true,
+                open_world_enabled: true,
+            }),
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: None,
+                    open_world_enabled: None,
+                    default_tools_approval_mode: None,
+                    default_tools_enabled: None,
+                    tools: None,
+                },
+            )]),
+        };
+
+        assert!(app_is_enabled(&apps_config, Some("calendar")));
+        assert!(!app_is_enabled(&apps_config, Some("drive")));
+    }
+
+    #[test]
+    fn app_tool_policy_honors_default_app_enabled_false() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                destructive_enabled: true,
+                open_world_enabled: true,
+            }),
+            apps: HashMap::new(),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/list",
+            None,
+            Some(&annotations(None, None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: false,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_allows_per_app_enable_when_default_is_disabled() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                destructive_enabled: true,
+                open_world_enabled: true,
+            }),
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: None,
+                    open_world_enabled: None,
+                    default_tools_approval_mode: None,
+                    default_tools_enabled: None,
+                    tools: None,
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/list",
+            None,
+            Some(&annotations(None, None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_per_tool_enabled_true_overrides_app_level_disable_flags() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: Some(false),
+                    open_world_enabled: Some(false),
+                    default_tools_approval_mode: None,
+                    default_tools_enabled: None,
+                    tools: Some(AppToolsConfig {
+                        tools: HashMap::from([(
+                            "events/create".to_string(),
+                            AppToolConfig {
+                                enabled: Some(true),
+                                approval_mode: None,
+                            },
+                        )]),
+                    }),
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/create",
+            None,
+            Some(&annotations(Some(true), Some(true))),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_default_tools_enabled_true_overrides_app_level_tool_hints() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: Some(false),
+                    open_world_enabled: Some(false),
+                    default_tools_approval_mode: None,
+                    default_tools_enabled: Some(true),
+                    tools: None,
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/create",
+            None,
+            Some(&annotations(Some(true), Some(true))),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_default_tools_enabled_false_overrides_app_level_tool_hints() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: Some(true),
+                    open_world_enabled: Some(true),
+                    default_tools_approval_mode: Some(AppToolApproval::Approve),
+                    default_tools_enabled: Some(false),
+                    tools: None,
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/list",
+            None,
+            Some(&annotations(None, None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: false,
+                approval: AppToolApproval::Approve,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_uses_default_tools_approval_mode() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: None,
+                    open_world_enabled: None,
+                    default_tools_approval_mode: Some(AppToolApproval::Prompt),
+                    default_tools_enabled: None,
+                    tools: Some(AppToolsConfig {
+                        tools: HashMap::new(),
+                    }),
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/list",
+            None,
+            Some(&annotations(None, None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Prompt,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: Some(false),
+                    open_world_enabled: Some(false),
+                    default_tools_approval_mode: Some(AppToolApproval::Auto),
+                    default_tools_enabled: Some(false),
+                    tools: Some(AppToolsConfig {
+                        tools: HashMap::from([(
+                            "events/create".to_string(),
+                            AppToolConfig {
+                                enabled: Some(true),
+                                approval_mode: Some(AppToolApproval::Approve),
+                            },
+                        )]),
+                    }),
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "calendar_events/create",
+            Some("events/create"),
+            Some(&annotations(Some(true), Some(true))),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Approve,
+            }
+        );
     }
 
     #[test]
@@ -528,7 +1006,7 @@ mod tests {
         );
         assert_eq!(
             filtered,
-            vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c"),]
+            vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c")]
         );
     }
 }

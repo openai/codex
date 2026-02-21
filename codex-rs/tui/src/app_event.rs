@@ -164,6 +164,12 @@ pub(crate) enum AppEvent {
         model: ModelPreset,
     },
 
+    /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
+    OpenPlanReasoningScopePrompt {
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
     /// Open the full model picker (non-auto models).
     OpenAllModelsPopup {
         models: Vec<ModelPreset>,
@@ -258,6 +264,9 @@ pub(crate) enum AppEvent {
     /// Update whether the rate limit switch prompt has been acknowledged for the session.
     UpdateRateLimitSwitchPromptHidden(bool),
 
+    /// Update the Plan-mode-specific reasoning effort in memory.
+    UpdatePlanModeReasoningEffort(Option<ReasoningEffort>),
+
     /// Persist the acknowledgement flag for the full access warning prompt.
     PersistFullAccessWarningAcknowledged,
 
@@ -267,6 +276,9 @@ pub(crate) enum AppEvent {
 
     /// Persist the acknowledgement flag for the rate limit switch prompt.
     PersistRateLimitSwitchPromptHidden,
+
+    /// Persist the Plan-mode-specific reasoning effort.
+    PersistPlanModeReasoningEffort(Option<ReasoningEffort>),
 
     /// Persist the acknowledgement flag for the model migration prompt.
     PersistModelMigrationPromptAcknowledged {

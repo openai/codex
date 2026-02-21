@@ -20,7 +20,7 @@ use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
-use codex_protocol::models::MessagePhase as CoreMessagePhase;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -398,12 +398,41 @@ pub struct AnalyticsConfig {
     pub additional: HashMap<String, JsonValue>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum AppToolApproval {
+    Auto,
+    Prompt,
+    Approve,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
-pub enum AppDisabledReason {
-    Unknown,
-    User,
+pub struct AppsDefaultConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_enabled")]
+    pub destructive_enabled: bool,
+    #[serde(default = "default_enabled")]
+    pub open_world_enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct AppToolConfig {
+    pub enabled: Option<bool>,
+    pub approval_mode: Option<AppToolApproval>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct AppToolsConfig {
+    #[serde(default, flatten)]
+    pub tools: HashMap<String, AppToolConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -412,15 +441,20 @@ pub enum AppDisabledReason {
 pub struct AppConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    pub disabled_reason: Option<AppDisabledReason>,
+    pub destructive_enabled: Option<bool>,
+    pub open_world_enabled: Option<bool>,
+    pub default_tools_approval_mode: Option<AppToolApproval>,
+    pub default_tools_enabled: Option<bool>,
+    pub tools: Option<AppToolsConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct AppsConfig {
+    #[serde(default, rename = "_default")]
+    pub default: Option<AppsDefaultConfig>,
     #[serde(default, flatten)]
-    #[schemars(with = "HashMap<String, AppConfig>")]
     pub apps: HashMap<String, AppConfig>,
 }
 
@@ -1472,6 +1506,8 @@ pub struct FeedbackUploadParams {
     #[ts(optional = nullable)]
     pub thread_id: Option<String>,
     pub include_logs: bool,
+    #[ts(optional = nullable)]
+    pub extra_log_files: Option<Vec<PathBuf>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2241,6 +2277,8 @@ pub struct Thread {
     pub agent_role: Option<String>,
     /// Optional Git metadata captured when the thread was created.
     pub git_info: Option<GitInfo>,
+    /// Optional user-facing thread title.
+    pub name: Option<String>,
     /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
     /// (when `includeTurns` is true) responses.
     /// For all other responses and notifications returning a Thread,
@@ -2629,24 +2667,6 @@ impl From<CoreUserInput> for UserInput {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum MessagePhase {
-    Commentary,
-    FinalAnswer,
-}
-
-impl From<CoreMessagePhase> for MessagePhase {
-    fn from(value: CoreMessagePhase) -> Self {
-        match value {
-            CoreMessagePhase::Commentary => Self::Commentary,
-            CoreMessagePhase::FinalAnswer => Self::FinalAnswer,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
@@ -2835,7 +2855,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 ThreadItem::AgentMessage {
                     id: agent.id,
                     text,
-                    phase: agent.phase.map(Into::into),
+                    phase: agent.phase,
                 }
             }
             CoreTurnItem::Plan(plan) => ThreadItem::Plan {
@@ -3654,7 +3674,6 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::items::WebSearchItem;
-    use codex_protocol::models::MessagePhase as CoreMessagePhase;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
@@ -3864,7 +3883,7 @@ mod tests {
             content: vec![AgentMessageContent::Text {
                 text: "final".to_string(),
             }],
-            phase: Some(CoreMessagePhase::FinalAnswer),
+            phase: Some(MessagePhase::FinalAnswer),
         });
 
         assert_eq!(
