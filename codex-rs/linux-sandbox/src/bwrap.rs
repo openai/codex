@@ -309,7 +309,14 @@ fn apply_deny_read_overlays(
         .map(|root| root.root.as_path().to_path_buf())
         .collect();
 
+    let mut applied_paths: Vec<PathBuf> = Vec::new();
     for denied_path in deny_read_paths {
+        if applied_paths
+            .iter()
+            .any(|applied| denied_path.starts_with(applied))
+        {
+            continue;
+        }
         if !denied_path.exists() {
             continue;
         }
@@ -333,10 +340,12 @@ fn apply_deny_read_overlays(
         if is_dir {
             args.push("--tmpfs".to_string());
             args.push(path_to_string(&denied_path));
+            applied_paths.push(denied_path);
         } else {
             args.push("--ro-bind".to_string());
             args.push("/dev/null".to_string());
             args.push(path_to_string(&denied_path));
+            applied_paths.push(denied_path);
         }
     }
 }
@@ -626,5 +635,36 @@ mod tests {
             .expect("deny overlay ro-bind");
 
         assert!(deny_overlay_index > readable_mount_index);
+    }
+
+    #[test]
+    fn deny_read_parent_directory_skips_redundant_child_overlay() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let denied_dir = temp_dir.path().join("private");
+        let denied_file = denied_dir.join("secret.txt");
+        std::fs::create_dir(&denied_dir).expect("create denied dir");
+        std::fs::write(&denied_file, "secret").expect("create denied file");
+
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            deny_read_paths: vec![
+                AbsolutePathBuf::try_from(denied_dir.as_path()).expect("absolute dir"),
+                AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute file"),
+            ],
+        };
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let denied_dir_str = path_to_string(&denied_dir);
+        let denied_file_str = path_to_string(&denied_file);
+
+        assert!(
+            args.windows(2)
+                .any(|window| window == ["--tmpfs", denied_dir_str.as_str()])
+        );
+        assert!(
+            !args
+                .windows(3)
+                .any(|window| window == ["--ro-bind", "/dev/null", denied_file_str.as_str()])
+        );
     }
 }
