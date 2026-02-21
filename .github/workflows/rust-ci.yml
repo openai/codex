@@ -145,6 +145,8 @@ jobs:
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
+            # This is consistently the slowest test job; keep runtime coverage on pushes/manual runs.
+            skip_on_pr: true
             runs_on:
               group: codex-runners
               labels: codex-windows-arm64
@@ -455,7 +457,7 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
-    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    if: ${{ (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') && !(github.event_name == 'pull_request' && matrix.skip_on_pr == true) }}
     defaults:
       run:
         working-directory: codex-rs
