@@ -4446,6 +4446,7 @@ pub(crate) async fn run_turn(
     // one instance across retries within this turn.
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut has_sent_sampling_request = false;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -4493,7 +4494,16 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+        if has_sent_sampling_request {
+            // First request uses best-effort base metadata; follow-up requests wait for the
+            // async git enrichment task so headers are stable once the turn continues.
+            turn_context
+                .turn_metadata_state
+                .wait_for_git_enrichment_task()
+                .await;
+        }
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
+        has_sent_sampling_request = true;
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),

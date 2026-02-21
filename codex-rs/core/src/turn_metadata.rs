@@ -220,6 +220,20 @@ impl TurnMetadataState {
         }
     }
 
+    pub(crate) async fn wait_for_git_enrichment_task(&self) {
+        let task = {
+            let mut task_guard = self
+                .enrichment_task
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            task_guard.take()
+        };
+
+        if let Some(task) = task {
+            let _ = task.await;
+        }
+    }
+
     async fn fetch_workspace_git_metadata(&self) -> WorkspaceGitMetadata {
         let (latest_git_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
             get_head_commit_hash(&self.cwd),
@@ -345,5 +359,95 @@ mod tests {
             assert_eq!(with_bubblewrap_sandbox, Some("linux_bubblewrap"));
             assert_ne!(with_bubblewrap_sandbox, without_bubblewrap_sandbox);
         }
+    }
+
+    #[tokio::test]
+    async fn turn_metadata_state_wait_for_git_enrichment_populates_workspace_metadata() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let repo_path = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&repo_path).expect("create repo");
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("git config user.name");
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("git config user.email");
+        std::fs::write(repo_path.join("README.md"), "hello").expect("write file");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("git commit");
+        Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/openai/codex.git",
+            ])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("git remote add");
+
+        let sandbox_policy = SandboxPolicy::new_read_only_policy();
+        let state = TurnMetadataState::new(
+            "turn-a".to_string(),
+            repo_path,
+            &sandbox_policy,
+            WindowsSandboxLevel::Disabled,
+            false,
+        );
+
+        state.spawn_git_enrichment_task();
+        state.wait_for_git_enrichment_task().await;
+
+        let header = state.current_header_value().expect("header");
+        let parsed: Value = serde_json::from_str(&header).expect("valid json");
+        let workspace = parsed
+            .get("workspaces")
+            .and_then(Value::as_object)
+            .and_then(|workspaces| workspaces.values().next())
+            .cloned()
+            .expect("workspace metadata should be present after waiting");
+
+        assert_eq!(
+            workspace.get("has_changes").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            workspace
+                .get("associated_remote_urls")
+                .and_then(Value::as_object)
+                .and_then(|remotes| remotes.get("origin"))
+                .and_then(Value::as_str),
+            Some("https://github.com/openai/codex.git")
+        );
+        assert!(
+            workspace
+                .get("latest_git_commit_hash")
+                .and_then(Value::as_str)
+                .is_some()
+        );
     }
 }
