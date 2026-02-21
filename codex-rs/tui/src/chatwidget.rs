@@ -4949,6 +4949,9 @@ impl ChatWidget {
         }
         widget
             .bottom_pane
+            .set_vim_enabled(widget.config.tui_vim_mode_default);
+        widget
+            .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane
@@ -5396,6 +5399,9 @@ impl ChatWidget {
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
+            }
+            SlashCommand::Vim => {
+                self.toggle_vim_mode_and_notify();
             }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
@@ -10889,6 +10895,16 @@ impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn is_task_running_for_test(&self) -> bool {
         self.bottom_pane.is_task_running()
+    }
+
+    pub(crate) fn toggle_vim_mode_and_notify(&mut self) {
+        let enabled = self.bottom_pane.toggle_vim_enabled();
+        let message = if enabled {
+            "Vim mode enabled."
+        } else {
+            "Vim mode disabled."
+        };
+        self.add_info_message(message.to_string(), None);
     }
 
     pub(crate) fn submit_user_message_with_mode(

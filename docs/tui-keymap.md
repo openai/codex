@@ -70,10 +70,12 @@ Supported contexts:
 2. `chat`
 3. `composer`
 4. `editor`
-5. `pager`
-6. `list`
-7. `approval`
-8. `onboarding`
+5. `vim_normal`
+6. `vim_operator`
+7. `pager`
+8. `list`
+9. `approval`
+10. `onboarding`
 
 Action inventory by context is documented in `docs/config.md` and the template
 at `https://github.com/openai/codex/blob/main/docs/default-keymap.toml`.
@@ -124,7 +126,8 @@ Current conflict passes in `RuntimeKeymap::validate_conflicts` enforce:
 2. App/composer shadowing prevention, because app handlers execute before
    forwarding to composer handlers.
 3. Composer-local uniqueness for submit/queue/shortcut-toggle.
-4. Context-local uniqueness in editor, pager, list, approval, and onboarding.
+4. Context-local uniqueness in editor, vim_normal, vim_operator, pager, list,
+   approval, and onboarding.
 
 Intentionally allowed:
 

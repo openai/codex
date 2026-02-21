@@ -37,6 +37,8 @@ pub use crate::tui_keymap::TuiKeymapPreset;
 pub use crate::tui_keymap::TuiListKeymap;
 pub use crate::tui_keymap::TuiOnboardingKeymap;
 pub use crate::tui_keymap::TuiPagerKeymap;
+pub use crate::tui_keymap::TuiVimNormalKeymap;
+pub use crate::tui_keymap::TuiVimOperatorKeymap;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 16;
@@ -547,6 +549,11 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
+
+    /// Start the composer in Vim mode (`Normal`) by default.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub vim_mode_default: bool,
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///

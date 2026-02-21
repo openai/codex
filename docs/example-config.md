@@ -5,6 +5,9 @@ For a full sample configuration, see [this documentation](https://developers.ope
 ## Keymap snippet
 
 ```toml
+[tui]
+vim_mode_default = false
+
 [tui.keymap]
 preset = "latest" # currently points to v1 defaults
 

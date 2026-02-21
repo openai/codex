@@ -6061,6 +6061,11 @@ Keymap template: https://github.com/openai/codex/blob/main/docs/default-keymap.t
             return;
         }
 
+        if self.keymap.app.toggle_vim_mode.is_pressed(key_event) {
+            self.chat_widget.toggle_vim_mode_and_notify();
+            return;
+        }
+
         if self.keymap.chat.edit_previous_message.is_pressed(key_event) {
             // Esc primes/advances backtracking only in normal (not working) mode
             // with the composer focused and empty. In any other state, forward

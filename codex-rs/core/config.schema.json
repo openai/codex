@@ -1884,7 +1884,8 @@
               "open_transcript": null,
               "queue": null,
               "submit": null,
-              "toggle_shortcuts": null
+              "toggle_shortcuts": null,
+              "toggle_vim_mode": null
             },
             "list": {
               "accept": null,
@@ -1918,7 +1919,45 @@
               "scroll_down": null,
               "scroll_up": null
             },
-            "preset": "latest"
+            "preset": "latest",
+            "vim_normal": {
+              "append_after_cursor": null,
+              "append_line_end": null,
+              "cancel_operator": null,
+              "delete_char": null,
+              "delete_to_line_end": null,
+              "enter_insert": null,
+              "insert_line_start": null,
+              "move_down": null,
+              "move_left": null,
+              "move_line_end": null,
+              "move_line_start": null,
+              "move_right": null,
+              "move_up": null,
+              "move_word_backward": null,
+              "move_word_end": null,
+              "move_word_forward": null,
+              "open_line_above": null,
+              "open_line_below": null,
+              "paste_after": null,
+              "start_delete_operator": null,
+              "start_yank_operator": null,
+              "yank_line": null
+            },
+            "vim_operator": {
+              "cancel": null,
+              "delete_line": null,
+              "motion_down": null,
+              "motion_left": null,
+              "motion_line_end": null,
+              "motion_line_start": null,
+              "motion_right": null,
+              "motion_up": null,
+              "motion_word_backward": null,
+              "motion_word_end": null,
+              "motion_word_forward": null,
+              "yank_line": null
+            }
           },
           "description": "Keybinding overrides for the TUI.\n\nThis supports rebinding selected actions globally and by context. Context bindings take precedence over `global` bindings."
         },
@@ -1983,6 +2022,11 @@
           "default": null,
           "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",
           "type": "string"
+        },
+        "vim_mode_default": {
+          "default": false,
+          "description": "Start the composer in Vim mode (`Normal`) by default. Defaults to `false`.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2290,6 +2334,14 @@
             }
           ],
           "description": "Toggle the composer shortcut overlay."
+        },
+        "toggle_vim_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle Vim mode for the composer input."
         }
       },
       "type": "object"
@@ -2374,7 +2426,8 @@
             "open_transcript": null,
             "queue": null,
             "submit": null,
-            "toggle_shortcuts": null
+            "toggle_shortcuts": null,
+            "toggle_vim_mode": null
           }
         },
         "list": {
@@ -2437,6 +2490,58 @@
             }
           ],
           "default": "latest"
+        },
+        "vim_normal": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiVimNormalKeymap"
+            }
+          ],
+          "default": {
+            "append_after_cursor": null,
+            "append_line_end": null,
+            "cancel_operator": null,
+            "delete_char": null,
+            "delete_to_line_end": null,
+            "enter_insert": null,
+            "insert_line_start": null,
+            "move_down": null,
+            "move_left": null,
+            "move_line_end": null,
+            "move_line_start": null,
+            "move_right": null,
+            "move_up": null,
+            "move_word_backward": null,
+            "move_word_end": null,
+            "move_word_forward": null,
+            "open_line_above": null,
+            "open_line_below": null,
+            "paste_after": null,
+            "start_delete_operator": null,
+            "start_yank_operator": null,
+            "yank_line": null
+          }
+        },
+        "vim_operator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiVimOperatorKeymap"
+            }
+          ],
+          "default": {
+            "cancel": null,
+            "delete_line": null,
+            "motion_down": null,
+            "motion_left": null,
+            "motion_line_end": null,
+            "motion_line_start": null,
+            "motion_right": null,
+            "motion_up": null,
+            "motion_word_backward": null,
+            "motion_word_end": null,
+            "motion_word_forward": null,
+            "yank_line": null
+          }
         }
       },
       "type": "object"
@@ -2685,6 +2790,122 @@
             }
           ],
           "description": "Scroll up by one row."
+        }
+      },
+      "type": "object"
+    },
+    "TuiVimNormalKeymap": {
+      "additionalProperties": false,
+      "description": "Vim normal-mode keybindings for modal editing inside text areas.",
+      "properties": {
+        "append_after_cursor": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "append_line_end": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "cancel_operator": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "delete_char": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "delete_to_line_end": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "enter_insert": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "insert_line_start": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "move_down": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "move_left": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "move_line_end": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "move_line_start": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "move_right": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "move_up": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "move_word_backward": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "move_word_end": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "move_word_forward": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "open_line_above": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "open_line_below": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "paste_after": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "start_delete_operator": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "start_yank_operator": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "yank_line": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        }
+      },
+      "type": "object"
+    },
+    "TuiVimOperatorKeymap": {
+      "additionalProperties": false,
+      "description": "Vim operator-pending keybindings for modal editing inside text areas.",
+      "properties": {
+        "cancel": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "delete_line": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "motion_down": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "motion_left": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "motion_line_end": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "motion_line_start": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "motion_right": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "motion_up": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "motion_word_backward": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "motion_word_end": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "motion_word_forward": {
+          "$ref": "#/definitions/KeybindingsSpec"
+        },
+        "yank_line": {
+          "$ref": "#/definitions/KeybindingsSpec"
         }
       },
       "type": "object"
