@@ -323,6 +323,9 @@ impl Visit for MessageVisitor {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
+
     use super::*;
 
     fn stale_log(message: &str) -> LogEntry {
