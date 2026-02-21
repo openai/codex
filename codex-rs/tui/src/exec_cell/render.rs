@@ -541,10 +541,18 @@ impl ExecCell {
         let line_rows: Vec<usize> = lines
             .iter()
             .map(|line| {
-                Paragraph::new(Text::from(vec![line.clone()]))
-                    .wrap(Wrap { trim: false })
-                    .line_count(width)
-                    .max(1)
+                let is_whitespace_only = line
+                    .spans
+                    .iter()
+                    .all(|span| span.content.chars().all(char::is_whitespace));
+                if is_whitespace_only {
+                    line.width().div_ceil(usize::from(width)).max(1)
+                } else {
+                    Paragraph::new(Text::from(vec![line.clone()]))
+                        .wrap(Wrap { trim: false })
+                        .line_count(width)
+                        .max(1)
+                }
             })
             .collect();
         let total_rows: usize = line_rows.iter().sum();
@@ -682,6 +690,7 @@ const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
 mod tests {
     use super::*;
     use codex_protocol::protocol::ExecCommandSource;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn user_shell_output_is_limited_by_screen_lines() {
@@ -803,6 +812,17 @@ mod tests {
             rendered.iter().any(|line| line.contains("… +6 lines")),
             "expected omitted hint to count hidden lines (not wrapped rows), got: {rendered:?}"
         );
+    }
+
+    #[test]
+    fn truncate_lines_middle_does_not_truncate_blank_prefixed_output_lines() {
+        let mut lines = vec![Line::from("  └ start")];
+        lines.extend(std::iter::repeat_n(Line::from("    "), 26));
+        lines.push(Line::from("    end"));
+
+        let truncated = ExecCell::truncate_lines_middle(&lines, 28, 80, None, None);
+
+        assert_eq!(truncated, lines);
     }
 
     #[test]
