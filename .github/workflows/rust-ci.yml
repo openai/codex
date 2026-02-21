@@ -451,7 +451,7 @@ jobs:
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
   tests:
-    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}
+    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }} (shard ${{ matrix.shard_index }}/${{ matrix.shard_count }})
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
@@ -468,29 +468,44 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # To increase sharding (for example 2 -> 4), update both shard_count and
+        # the shard_index list.
+        shard_count: [2]
+        shard_index: [1, 2]
+        target_key:
+          - linux-x64-gnu
+          - macos-aarch64
+          - linux-arm64-gnu
+          - windows-x64
+          - windows-arm64
         include:
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            profile: dev
-          - runner: ubuntu-24.04
+          - target_key: linux-x64-gnu
+            runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
             runs_on:
               group: codex-runners
               labels: codex-linux-x64
-          - runner: ubuntu-24.04-arm
+          - target_key: macos-aarch64
+            runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            profile: dev
+          - target_key: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             profile: dev
             runs_on:
               group: codex-runners
               labels: codex-linux-arm64
-          - runner: windows-x64
+          - target_key: windows-x64
+            runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
             runs_on:
               group: codex-runners
               labels: codex-windows-x64
-          - runner: windows-arm64
+          - target_key: windows-arm64
+            runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
             runs_on:
@@ -579,22 +594,20 @@ jobs:
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: nextest
-          version: 0.9.103
+          version: 0.9.111
 
       - name: Enable unprivileged user namespaces (Linux)
         if: runner.os == 'Linux'
-        run: |
-          # Required for bubblewrap to work on Linux CI runners.
-          sudo sysctl -w kernel.unprivileged_userns_clone=1
-          # Ubuntu 24.04+ can additionally gate unprivileged user namespaces
-          # behind AppArmor.
-          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/enable-unprivileged-userns.sh"
 
       - name: tests
         id: test
-        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmd=(cargo nextest run --all-features --no-fail-fast --target "${{ matrix.target }}" --cargo-profile ci-test --timings)
+          cmd+=(--partition "hash:${{ matrix.shard_index }}/${{ matrix.shard_count }}")
+          "${cmd[@]}"
         env:
           RUST_BACKTRACE: 1
           NEXTEST_STATUS_LEVEL: leak
@@ -603,7 +616,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: cargo-timings-rust-ci-nextest-${{ matrix.target }}-${{ matrix.profile }}
+          name: cargo-timings-rust-ci-nextest-${{ matrix.target }}-${{ matrix.profile }}-shard-${{ matrix.shard_index }}-of-${{ matrix.shard_count }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
