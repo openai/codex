@@ -213,6 +213,17 @@
         "itemId": {
           "type": "string"
         },
+        "networkApprovalContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkApprovalContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional context for managed-network approval prompts."
+        },
         "proposedExecpolicyAmendment": {
           "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
           "items": {
@@ -418,6 +429,30 @@
         "turnId"
       ],
       "type": "object"
+    },
+    "NetworkApprovalContext": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/NetworkApprovalProtocol"
+        }
+      },
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "NetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https",
+        "socks5Tcp",
+        "socks5Udp"
+      ],
+      "type": "string"
     },
     "ParsedCommand": {
       "oneOf": [

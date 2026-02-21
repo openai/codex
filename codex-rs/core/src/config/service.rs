@@ -701,7 +701,7 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use codex_app_server_protocol::AppConfig;
-    use codex_app_server_protocol::AppDisabledReason;
+    use codex_app_server_protocol::AppToolApproval;
     use codex_app_server_protocol::AppsConfig;
     use codex_app_server_protocol::AskForApproval;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -827,13 +827,13 @@ personality = true
         service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
-                key_path: "apps.app1.disabled_reason".to_string(),
-                value: serde_json::json!("user"),
+                key_path: "apps.app1.default_tools_approval_mode".to_string(),
+                value: serde_json::json!("prompt"),
                 merge_strategy: MergeStrategy::Replace,
                 expected_version: None,
             })
             .await
-            .expect("write apps.app1.disabled_reason succeeds");
+            .expect("write apps.app1.default_tools_approval_mode succeeds");
 
         let read = service
             .read(ConfigReadParams {
@@ -846,11 +846,16 @@ personality = true
         assert_eq!(
             read.config.apps,
             Some(AppsConfig {
+                default: None,
                 apps: std::collections::HashMap::from([(
                     "app1".to_string(),
                     AppConfig {
                         enabled: false,
-                        disabled_reason: Some(AppDisabledReason::User),
+                        destructive_enabled: None,
+                        open_world_enabled: None,
+                        default_tools_approval_mode: Some(AppToolApproval::Prompt),
+                        default_tools_enabled: None,
+                        tools: None,
                     },
                 )]),
             })

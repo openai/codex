@@ -1,5 +1,6 @@
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
+use crate::config::ValidatedUnixSocketPath;
 use crate::policy::Host;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
@@ -75,8 +76,6 @@ pub struct BlockedRequest {
     pub mode: Option<NetworkMode>,
     pub protocol: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub attempt_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub decision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -92,7 +91,6 @@ pub struct BlockedRequestArgs {
     pub method: Option<String>,
     pub mode: Option<NetworkMode>,
     pub protocol: String,
-    pub attempt_id: Option<String>,
     pub decision: Option<String>,
     pub source: Option<String>,
     pub port: Option<u16>,
@@ -107,7 +105,6 @@ impl BlockedRequest {
             method,
             mode,
             protocol,
-            attempt_id,
             decision,
             source,
             port,
@@ -119,7 +116,6 @@ impl BlockedRequest {
             method,
             mode,
             protocol,
-            attempt_id,
             decision,
             source,
             port,
@@ -365,7 +361,6 @@ impl NetworkProxyState {
         let source = entry.source.clone();
         let protocol = entry.protocol.clone();
         let port = entry.port;
-        let attempt_id = entry.attempt_id.clone();
         guard.blocked.push_back(entry);
         guard.blocked_total = guard.blocked_total.saturating_add(1);
         let total = guard.blocked_total;
@@ -373,7 +368,7 @@ impl NetworkProxyState {
             guard.blocked.pop_front();
         }
         debug!(
-            "recorded blocked request telemetry (total={}, host={}, reason={}, decision={:?}, source={:?}, protocol={}, port={:?}, attempt_id={:?}, buffered={})",
+            "recorded blocked request telemetry (total={}, host={}, reason={}, decision={:?}, source={:?}, protocol={}, port={:?}, buffered={})",
             total,
             host,
             reason,
@@ -381,7 +376,6 @@ impl NetworkProxyState {
             source,
             protocol,
             port,
-            attempt_id,
             guard.blocked.len()
         );
         debug!("{violation_line}");
@@ -425,6 +419,10 @@ impl NetworkProxyState {
         }
 
         let guard = self.state.read().await;
+        if guard.config.network.dangerously_allow_all_unix_sockets {
+            return Ok(true);
+        }
+
         // Normalize the path while keeping the absolute-path requirement explicit.
         let requested_abs = match AbsolutePathBuf::from_absolute_path(requested_path) {
             Ok(path) => path,
@@ -432,7 +430,16 @@ impl NetworkProxyState {
         };
         let requested_canonical = std::fs::canonicalize(requested_abs.as_path()).ok();
         for allowed in &guard.config.network.allow_unix_sockets {
-            if allowed == path {
+            let allowed_path = match ValidatedUnixSocketPath::parse(allowed) {
+                Ok(ValidatedUnixSocketPath::Native(path)) => path,
+                Ok(ValidatedUnixSocketPath::UnixStyleAbsolute(_)) => continue,
+                Err(err) => {
+                    warn!("ignoring invalid network.allow_unix_sockets entry at runtime: {err:#}");
+                    continue;
+                }
+            };
+
+            if allowed_path.as_path() == requested_abs.as_path() {
                 return Ok(true);
             }
 
@@ -441,7 +448,7 @@ impl NetworkProxyState {
             let Some(requested_canonical) = &requested_canonical else {
                 continue;
             };
-            if let Ok(allowed_canonical) = std::fs::canonicalize(allowed)
+            if let Ok(allowed_canonical) = std::fs::canonicalize(allowed_path.as_path())
                 && &allowed_canonical == requested_canonical
             {
                 return Ok(true);
@@ -700,7 +707,6 @@ mod tests {
                 method: Some("GET".to_string()),
                 mode: None,
                 protocol: "http".to_string(),
-                attempt_id: None,
                 decision: Some("ask".to_string()),
                 source: Some("decider".to_string()),
                 port: Some(80),
@@ -741,7 +747,6 @@ mod tests {
                     method: Some("GET".to_string()),
                     mode: None,
                     protocol: "http".to_string(),
-                    attempt_id: None,
                     decision: Some("ask".to_string()),
                     source: Some("decider".to_string()),
                     port: Some(80),
@@ -764,7 +769,6 @@ mod tests {
             method: Some("GET".to_string()),
             mode: Some(NetworkMode::Full),
             protocol: "http".to_string(),
-            attempt_id: Some("attempt-1".to_string()),
             decision: Some("ask".to_string()),
             source: Some("decider".to_string()),
             port: Some(80),
@@ -773,7 +777,7 @@ mod tests {
 
         assert_eq!(
             blocked_request_violation_log_line(&entry),
-            r#"CODEX_NETWORK_POLICY_VIOLATION {"host":"google.com","reason":"not_allowed","client":"127.0.0.1","method":"GET","mode":"full","protocol":"http","attempt_id":"attempt-1","decision":"ask","source":"decider","port":80,"timestamp":1735689600}"#
+            r#"CODEX_NETWORK_POLICY_VIOLATION {"host":"google.com","reason":"not_allowed","client":"127.0.0.1","method":"GET","mode":"full","protocol":"http","decision":"ask","source":"decider","port":80,"timestamp":1735689600}"#
         );
     }
 
@@ -1086,6 +1090,77 @@ mod tests {
     }
 
     #[test]
+    fn validate_policy_against_constraints_disallows_allow_all_unix_sockets_without_managed_opt_in()
+    {
+        let constraints = NetworkProxyConstraints {
+            dangerously_allow_all_unix_sockets: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                dangerously_allow_all_unix_sockets: true,
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_disallows_allow_all_unix_sockets_when_allowlist_is_managed()
+     {
+        let constraints = NetworkProxyConstraints {
+            allow_unix_sockets: Some(vec!["/tmp/allowed.sock".to_string()]),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                dangerously_allow_all_unix_sockets: true,
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_allows_allow_all_unix_sockets_with_managed_opt_in() {
+        let constraints = NetworkProxyConstraints {
+            dangerously_allow_all_unix_sockets: Some(true),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                dangerously_allow_all_unix_sockets: true,
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_ok());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_allows_allow_all_unix_sockets_when_unmanaged() {
+        let constraints = NetworkProxyConstraints::default();
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                dangerously_allow_all_unix_sockets: true,
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_ok());
+    }
+
+    #[test]
     fn compile_globset_is_case_insensitive() {
         let patterns = vec!["ExAmPle.CoM".to_string()];
         let set = compile_globset(&patterns).unwrap();
@@ -1182,6 +1257,19 @@ mod tests {
         assert!(state.is_unix_socket_allowed(&link_s).await.unwrap());
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn unix_socket_allow_all_flag_bypasses_allowlist() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["example.com".to_string()],
+            dangerously_allow_all_unix_sockets: true,
+            ..NetworkProxySettings::default()
+        });
+
+        assert!(state.is_unix_socket_allowed("/tmp/any.sock").await.unwrap());
+        assert!(!state.is_unix_socket_allowed("relative.sock").await.unwrap());
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn unix_socket_allowlist_is_rejected_on_non_macos() {
@@ -1189,6 +1277,7 @@ mod tests {
         let state = network_proxy_state_for_policy(NetworkProxySettings {
             allowed_domains: vec!["example.com".to_string()],
             allow_unix_sockets: vec![socket_path.clone()],
+            dangerously_allow_all_unix_sockets: true,
             ..NetworkProxySettings::default()
         });
 

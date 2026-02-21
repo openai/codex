@@ -48,7 +48,7 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
-codex-utils-sanitizer = { workspace = true }
+codex-secrets = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 dirs = { workspace = true }

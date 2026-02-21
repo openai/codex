@@ -67,6 +67,7 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::terminal::TerminalName;
 use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -1640,6 +1641,7 @@ async fn make_chatwidget_manual(
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
+        queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
@@ -2781,6 +2783,9 @@ async fn empty_enter_during_task_does_not_queue() {
 #[tokio::test]
 async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_message_edit_binding = crate::key_hint::alt(KeyCode::Up);
+    chat.bottom_pane
+        .set_queued_message_edit_binding(crate::key_hint::alt(KeyCode::Up));
 
     // Simulate a running task so messages would normally be queued.
     chat.bottom_pane.set_task_running(true);
@@ -2805,6 +2810,77 @@ async fn alt_up_edits_most_recent_queued_message() {
     assert_eq!(
         chat.queued_user_messages.front().unwrap().text,
         "first queued"
+    );
+}
+
+async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
+    terminal_name: TerminalName,
+) {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_name);
+    chat.bottom_pane
+        .set_queued_message_edit_binding(chat.queued_message_edit_binding);
+
+    // Simulate a running task so messages would normally be queued.
+    chat.bottom_pane.set_task_running(true);
+
+    // Seed two queued messages.
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    // Press Shift+Left to edit the most recent (last) queued message.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+
+    // Composer should now contain the last queued message.
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "second queued".to_string()
+    );
+    // And the queue should now contain only the remaining (older) item.
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "first queued"
+    );
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_apple_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::AppleTerminal)
+        .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_warp_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::WarpTerminal)
+        .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_vscode_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::VsCode).await;
+}
+
+#[test]
+fn queued_message_edit_binding_mapping_covers_special_terminals() {
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::AppleTerminal),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::WarpTerminal),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::VsCode),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::Iterm2),
+        crate::key_hint::alt(KeyCode::Up)
     );
 }
 
@@ -3585,6 +3661,66 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
 }
 
 #[tokio::test]
+async fn mode_switch_surfaces_model_change_notification_when_effective_model_changes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let default_model = chat.current_model().to_string();
+
+    let mut plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mode");
+    plan_mask.model = Some("gpt-5.1-codex-mini".to_string());
+    chat.set_collaboration_mask(plan_mask);
+
+    let plan_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan_messages.contains("Model changed to gpt-5.1-codex-mini medium for Plan mode."),
+        "expected Plan-mode model switch notice, got: {plan_messages:?}"
+    );
+
+    let default_mask = collaboration_modes::default_mask(chat.models_manager.as_ref())
+        .expect("expected default collaboration mode");
+    chat.set_collaboration_mask(default_mask);
+
+    let default_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let expected_default_message =
+        format!("Model changed to {default_model} default for Default mode.");
+    assert!(
+        default_messages.contains(&expected_default_message),
+        "expected Default-mode model switch notice, got: {default_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_same() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+
+    let plan_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan_messages.contains("Model changed to gpt-5.3-codex medium for Plan mode."),
+        "expected reasoning-change notice in Plan mode, got: {plan_messages:?}"
+    );
+}
+
+#[tokio::test]
 async fn collab_slash_command_opens_picker_and_updates_mode() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
@@ -3649,7 +3785,12 @@ async fn plan_slash_command_switches_to_plan_mode() {
 
     chat.dispatch_command(SlashCommand::Plan);
 
-    assert!(rx.try_recv().is_err(), "plan should not emit an app event");
+    while let Ok(event) = rx.try_recv() {
+        assert!(
+            matches!(event, AppEvent::InsertHistoryCell(_)),
+            "plan should not emit a non-history app event: {event:?}"
+        );
+    }
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 }

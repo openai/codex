@@ -47,6 +47,9 @@ allow_local_binding = true
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
 allow_unix_sockets = ["/tmp/example.sock"]
+# DANGEROUS (macOS-only): bypasses unix socket allowlisting and permits any
+# absolute socket path from `x-unix-socket`.
+dangerously_allow_all_unix_sockets = false
 ```
 
 ### 2) Run the proxy
@@ -116,8 +119,9 @@ let handle = proxy.run().await?;
 handle.shutdown().await?;
 ```
 
-When unix socket proxying is enabled, HTTP/admin bind overrides are still clamped to loopback
-to avoid turning the proxy into a remote bridge to local daemons.
+When unix socket proxying is enabled (`allow_unix_sockets` or
+`dangerously_allow_all_unix_sockets`), HTTP/admin bind overrides are still clamped to loopback to
+avoid turning the proxy into a remote bridge to local daemons.
 
 ### Policy hook (exec-policy mapping)
 
@@ -176,6 +180,8 @@ what it can reasonably guarantee.
     `dangerously_allow_non_loopback_proxy`
 - when unix socket proxying is enabled, both listeners are forced to loopback to avoid turning the
     proxy into a remote bridge into local daemons.
+- `dangerously_allow_all_unix_sockets = true` bypasses the unix socket allowlist entirely (still
+  macOS-only and absolute-path-only). Use only in tightly controlled environments.
 - `enabled` is enforced at runtime; when false the proxy no-ops and does not bind listeners.
 Limitations:
 

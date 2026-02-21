@@ -110,6 +110,8 @@ use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::terminal::TerminalName;
+use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
@@ -157,6 +159,34 @@ const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
+
+/// Choose the keybinding used to edit the most-recently queued message.
+///
+/// Apple Terminal, Warp, and VSCode integrated terminals intercept or silently
+/// swallow Alt+Up, so users in those environments would never be able to trigger
+/// the edit action.  We fall back to Shift+Left for those terminals while
+/// keeping the more discoverable Alt+Up everywhere else.
+///
+/// The match is exhaustive so that adding a new `TerminalName` variant forces
+/// an explicit decision about which binding that terminal should use.
+fn queued_message_edit_binding_for_terminal(terminal_name: TerminalName) -> KeyBinding {
+    match terminal_name {
+        TerminalName::AppleTerminal | TerminalName::WarpTerminal | TerminalName::VsCode => {
+            key_hint::shift(KeyCode::Left)
+        }
+        TerminalName::Ghostty
+        | TerminalName::Iterm2
+        | TerminalName::WezTerm
+        | TerminalName::Kitty
+        | TerminalName::Alacritty
+        | TerminalName::Konsole
+        | TerminalName::GnomeTerminal
+        | TerminalName::Vte
+        | TerminalName::WindowsTerminal
+        | TerminalName::Dumb
+        | TerminalName::Unknown => key_hint::alt(KeyCode::Up),
+    }
+}
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
@@ -563,6 +593,11 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    /// Terminal-appropriate keybinding for popping the most-recently queued
+    /// message back into the composer.  Determined once at construction time via
+    /// [`queued_message_edit_binding_for_terminal`] and propagated to
+    /// `BottomPane` so the hint text matches the actual shortcut.
+    queued_message_edit_binding: KeyBinding,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
@@ -2609,6 +2644,8 @@ impl ChatWidget {
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
         let current_cwd = Some(config.cwd.clone());
+        let queued_message_edit_binding =
+            queued_message_edit_binding_for_terminal(terminal_info().name);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -2666,6 +2703,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2709,6 +2747,9 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.sync_personality_command_enabled();
+        widget
+            .bottom_pane
+            .set_queued_message_edit_binding(widget.queued_message_edit_binding);
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -2776,6 +2817,8 @@ impl ChatWidget {
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
         let current_cwd = Some(config.cwd.clone());
 
+        let queued_message_edit_binding =
+            queued_message_edit_binding_for_terminal(terminal_info().name);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -2837,6 +2880,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
+            queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2876,6 +2920,9 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.sync_personality_command_enabled();
+        widget
+            .bottom_pane
+            .set_queued_message_edit_binding(widget.queued_message_edit_binding);
 
         widget
     }
@@ -2932,6 +2979,8 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
+        let queued_message_edit_binding =
+            queued_message_edit_binding_for_terminal(terminal_info().name);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -2989,6 +3038,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            queued_message_edit_binding,
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -3032,6 +3082,9 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.sync_personality_command_enabled();
+        widget
+            .bottom_pane
+            .set_queued_message_edit_binding(widget.queued_message_edit_binding);
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -3104,6 +3157,18 @@ impl ChatWidget {
             _ => {}
         }
 
+        if key_event.kind == KeyEventKind::Press
+            && self.queued_message_edit_binding.is_press(key_event)
+            && !self.queued_user_messages.is_empty()
+        {
+            if let Some(user_message) = self.queued_user_messages.pop_back() {
+                self.restore_user_message_to_composer(user_message);
+                self.refresh_queued_user_messages();
+                self.request_redraw();
+            }
+            return;
+        }
+
         match key_event {
             KeyEvent {
                 code: KeyCode::BackTab,
@@ -3114,19 +3179,6 @@ impl ChatWidget {
                 && self.bottom_pane.no_modal_or_popup_active() =>
             {
                 self.cycle_collaboration_mode();
-            }
-            KeyEvent {
-                code: KeyCode::Up,
-                modifiers: KeyModifiers::ALT,
-                kind: KeyEventKind::Press,
-                ..
-            } if !self.queued_user_messages.is_empty() => {
-                // Prefer the most recently queued item.
-                if let Some(user_message) = self.queued_user_messages.pop_back() {
-                    self.restore_user_message_to_composer(user_message);
-                    self.refresh_queued_user_messages();
-                    self.request_redraw();
-                }
             }
             _ => match self.bottom_pane.handle_key_event(key_event) {
                 InputResult::Submitted {
@@ -6359,9 +6411,36 @@ impl ChatWidget {
         if !self.collaboration_modes_enabled() {
             return;
         }
+        let previous_mode = self.active_mode_kind();
+        let previous_model = self.current_model().to_string();
+        let previous_effort = self.effective_reasoning_effort();
         self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();
         self.refresh_model_display();
+        let next_mode = self.active_mode_kind();
+        let next_model = self.current_model();
+        let next_effort = self.effective_reasoning_effort();
+        if previous_mode != next_mode
+            && (previous_model != next_model || previous_effort != next_effort)
+        {
+            let mut message = format!("Model changed to {next_model}");
+            if !next_model.starts_with("codex-auto-") {
+                let reasoning_label = match next_effort {
+                    Some(ReasoningEffortConfig::Minimal) => "minimal",
+                    Some(ReasoningEffortConfig::Low) => "low",
+                    Some(ReasoningEffortConfig::Medium) => "medium",
+                    Some(ReasoningEffortConfig::High) => "high",
+                    Some(ReasoningEffortConfig::XHigh) => "xhigh",
+                    None | Some(ReasoningEffortConfig::None) => "default",
+                };
+                message.push(' ');
+                message.push_str(reasoning_label);
+            }
+            message.push_str(" for ");
+            message.push_str(next_mode.display_name());
+            message.push_str(" mode.");
+            self.add_info_message(message, None);
+        }
         self.request_redraw();
     }
 
