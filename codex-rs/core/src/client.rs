@@ -107,6 +107,27 @@ pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponsesWebsocketVersion {
+    V1,
+    V2,
+}
+
+pub fn ws_version_from_features(
+    responses_websockets_enabled: bool,
+    responses_websockets_v2_enabled: bool,
+) -> Option<ResponsesWebsocketVersion> {
+    match (
+        responses_websockets_enabled,
+        responses_websockets_v2_enabled,
+    ) {
+        (_, true) => Some(ResponsesWebsocketVersion::V2),
+        (true, false) => Some(ResponsesWebsocketVersion::V1),
+        (false, false) => None,
+    }
+}
+
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
@@ -118,8 +139,7 @@ struct ModelClientState {
     provider: ModelProviderInfo,
     session_source: SessionSource,
     model_verbosity: Option<VerbosityConfig>,
-    enable_responses_websockets: bool,
-    enable_responses_websockets_v2: bool,
+    responses_websocket_version: Option<ResponsesWebsocketVersion>,
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
@@ -209,14 +229,11 @@ impl ModelClient {
         provider: ModelProviderInfo,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
-        enable_responses_websockets: bool,
-        enable_responses_websockets_v2: bool,
+        responses_websocket_version: Option<ResponsesWebsocketVersion>,
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
     ) -> Self {
-        let enable_responses_websockets =
-            enable_responses_websockets || enable_responses_websockets_v2;
         Self {
             state: Arc::new(ModelClientState {
                 auth_manager,
@@ -224,8 +241,7 @@ impl ModelClient {
                 provider,
                 session_source,
                 model_verbosity,
-                enable_responses_websockets,
-                enable_responses_websockets_v2,
+                responses_websocket_version,
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
@@ -373,13 +389,7 @@ impl ModelClient {
     /// to be eligible.
     pub fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
         self.state.provider.supports_websockets
-            && (self.state.enable_responses_websockets
-                || self.state.enable_responses_websockets_v2
-                || model_info.prefer_websockets)
-    }
-
-    fn responses_websockets_v2_enabled(&self) -> bool {
-        self.state.enable_responses_websockets_v2
+            && (self.state.responses_websocket_version.is_some() || model_info.prefer_websockets)
     }
 
     /// Returns whether websocket transport has been permanently disabled for this session.
@@ -452,10 +462,9 @@ impl ModelClient {
         headers.extend(build_conversation_headers(Some(
             self.state.conversation_id.to_string(),
         )));
-        let responses_websockets_beta_header = if self.responses_websockets_v2_enabled() {
-            RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE
-        } else {
-            OPENAI_BETA_RESPONSES_WEBSOCKETS
+        let responses_websockets_beta_header = match self.state.responses_websocket_version {
+            Some(ResponsesWebsocketVersion::V2) => RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE,
+            Some(ResponsesWebsocketVersion::V1) | None => OPENAI_BETA_RESPONSES_WEBSOCKETS,
         };
         headers.insert(
             OPENAI_BETA_HEADER,
@@ -629,34 +638,40 @@ impl ModelClientSession {
         payload: ResponseCreateWsRequest,
         request: &ResponsesApiRequest,
     ) -> ResponsesWsRequest {
+        let Some(ws_version) = self.client.state.responses_websocket_version else {
+            return ResponsesWsRequest::ResponseCreate(payload);
+        };
         let Some(last_response) = self.get_last_response() else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
-        let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
-        if !responses_websockets_v2_enabled && !last_response.can_append {
-            trace!("incremental request failed, can't append");
+        let Some(append_items) = self.get_incremental_items(request, Some(&last_response)) else {
             return ResponsesWsRequest::ResponseCreate(payload);
-        }
-        let incremental_items = self.get_incremental_items(request, Some(&last_response));
-        if let Some(append_items) = incremental_items {
-            if responses_websockets_v2_enabled && !last_response.response_id.is_empty() {
-                let payload = ResponseCreateWsRequest {
+        };
+
+        match ws_version {
+            ResponsesWebsocketVersion::V2 => {
+                if last_response.response_id.is_empty() {
+                    trace!("incremental request failed, no previous response id");
+                    return ResponsesWsRequest::ResponseCreate(payload);
+                }
+
+                ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
                     previous_response_id: Some(last_response.response_id),
                     input: append_items,
                     ..payload
-                };
-                return ResponsesWsRequest::ResponseCreate(payload);
+                })
             }
-
-            if !responses_websockets_v2_enabled {
-                return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
+            ResponsesWebsocketVersion::V1 => {
+                if !last_response.can_append {
+                    trace!("incremental request failed, can't append");
+                    return ResponsesWsRequest::ResponseCreate(payload);
+                }
+                ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
                     input: append_items,
                     client_metadata: payload.client_metadata,
-                });
+                })
             }
         }
-
-        ResponsesWsRequest::ResponseCreate(payload)
     }
 
     /// Opportunistically warms a websocket for this turn-scoped client session.
@@ -1224,8 +1239,7 @@ mod tests {
             provider,
             session_source,
             None,
-            false,
-            false,
+            None,
             false,
             false,
             None,
