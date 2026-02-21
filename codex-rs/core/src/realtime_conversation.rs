@@ -1,4 +1,5 @@
 use crate::api_bridge::map_api_error;
+use crate::codex::Session;
 use crate::default_client::default_headers;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -10,7 +11,18 @@ use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeWebsocketClient;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::ConversationStartParams;
+use codex_protocol::protocol::ConversationTextParams;
+use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RealtimeConversationClosedEvent;
+use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use http::HeaderMap;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::error;
@@ -213,4 +225,118 @@ impl RealtimeConversationManager {
         }
         Ok(())
     }
+}
+
+pub(crate) async fn handle_start(
+    sess: &Arc<Session>,
+    sub_id: String,
+    params: ConversationStartParams,
+) {
+    let config = sess.get_config().await;
+    let api_provider = config.model_provider.to_api_provider(None).unwrap();
+
+    let requested_session_id = params
+        .session_id
+        .or_else(|| Some(sess.conversation_id.to_string()));
+    let events_rx = match sess
+        .conversation
+        .start(
+            api_provider,
+            None,
+            params.prompt,
+            requested_session_id.clone(),
+        )
+        .await
+    {
+        Ok(events_rx) => events_rx,
+        Err(err) => {
+            send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other).await;
+            return;
+        }
+    };
+
+    sess.send_event_raw(Event {
+        id: sub_id.clone(),
+        msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
+            session_id: requested_session_id,
+        }),
+    })
+    .await;
+
+    let sess_clone = Arc::clone(sess);
+    tokio::spawn(async move {
+        let ev = |msg| Event {
+            id: sub_id.clone(),
+            msg,
+        };
+        while let Ok(event) = events_rx.recv().await {
+            sess_clone
+                .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
+                    RealtimeConversationRealtimeEvent { payload: event },
+                )))
+                .await;
+        }
+        if let Some(()) = sess_clone.conversation.running_state().await {
+            sess_clone
+                .send_event_raw(ev(EventMsg::RealtimeConversationClosed(
+                    RealtimeConversationClosedEvent {
+                        reason: Some("transport_closed".to_string()),
+                    },
+                )))
+                .await;
+        }
+    });
+}
+
+pub(crate) async fn handle_audio(
+    sess: &Arc<Session>,
+    sub_id: String,
+    params: ConversationAudioParams,
+) {
+    if let Err(err) = sess.conversation.audio_in(params.frame).await {
+        send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
+    }
+}
+
+pub(crate) async fn handle_text(
+    sess: &Arc<Session>,
+    sub_id: String,
+    params: ConversationTextParams,
+) {
+    if let Err(err) = sess.conversation.text_in(params.text).await {
+        send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
+    }
+}
+
+pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
+    match sess.conversation.shutdown().await {
+        Ok(()) => {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::RealtimeConversationClosed(RealtimeConversationClosedEvent {
+                    reason: Some("requested".to_string()),
+                }),
+            })
+            .await;
+        }
+        Err(err) => {
+            send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other).await;
+        }
+    }
+}
+
+async fn send_conversation_error(
+    sess: &Arc<Session>,
+    sub_id: String,
+    message: String,
+    codex_error_info: CodexErrorInfo,
+) {
+    sess.send_event_raw(Event {
+        id: sub_id,
+        msg: EventMsg::Error(ErrorEvent {
+            message,
+            codex_error_info: Some(codex_error_info),
+        }),
+    })
+    .await;
 }

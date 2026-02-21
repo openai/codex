@@ -86,16 +86,6 @@ pub struct McpServerRefreshConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "cmd", rename_all = "snake_case")]
-#[ts(tag = "cmd")]
-pub enum ConversationCommand {
-    Start(ConversationStartParams),
-    Audio(ConversationAudioParams),
-    Text(ConversationTextParams),
-    Close,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ConversationStartParams {
     pub prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,11 +133,17 @@ pub enum Op {
     /// Terminate all running background terminal processes for this thread.
     CleanBackgroundTerminals,
 
-    /// Realtime conversation control and media operations.
-    RealtimeConversation {
-        #[serde(flatten)]
-        cmd: ConversationCommand,
-    },
+    /// Start a realtime conversation stream.
+    RealtimeConversationStart(ConversationStartParams),
+
+    /// Send audio input to the running realtime conversation stream.
+    RealtimeConversationAudio(ConversationAudioParams),
+
+    /// Send text input to the running realtime conversation stream.
+    RealtimeConversationText(ConversationTextParams),
+
+    /// Close the running realtime conversation stream.
+    RealtimeConversationClose,
 
     /// Legacy user input.
     ///
@@ -920,8 +916,14 @@ pub enum EventMsg {
     /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
 
-    /// Realtime conversation lifecycle and streaming events.
-    RealtimeConversation(RealtimeConversationEvent),
+    /// Realtime conversation lifecycle start event.
+    RealtimeConversationStarted(RealtimeConversationStartedEvent),
+
+    /// Realtime conversation streaming payload event.
+    RealtimeConversationRealtime(RealtimeConversationRealtimeEvent),
+
+    /// Realtime conversation lifecycle close event.
+    RealtimeConversationClosed(RealtimeConversationClosedEvent),
 
     /// Model routing changed from the requested model to a different model.
     ModelReroute(ModelRerouteEvent),
@@ -1100,15 +1102,6 @@ pub enum EventMsg {
     CollabResumeBegin(CollabResumeBeginEvent),
     /// Collab interaction: resume end.
     CollabResumeEnd(CollabResumeEndEvent),
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "event", rename_all = "snake_case")]
-#[ts(tag = "event")]
-pub enum RealtimeConversationEvent {
-    Started(RealtimeConversationStartedEvent),
-    Realtime(RealtimeConversationRealtimeEvent),
-    Closed(RealtimeConversationClosedEvent),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -2982,37 +2975,28 @@ mod tests {
     }
 
     #[test]
-    fn conversation_op_serializes_with_cmd_tag() {
-        let audio = Op::RealtimeConversation {
-            cmd: ConversationCommand::Audio(ConversationAudioParams {
-                frame: RealtimeAudioFrame {
-                    data: "AQID".to_string(),
-                    sample_rate: 24_000,
-                    num_channels: 1,
-                    samples_per_channel: Some(480),
-                },
-            }),
-        };
-        let start = Op::RealtimeConversation {
-            cmd: ConversationCommand::Start(ConversationStartParams {
-                prompt: "be helpful".to_string(),
-                session_id: Some("conv_1".to_string()),
-            }),
-        };
-        let text = Op::RealtimeConversation {
-            cmd: ConversationCommand::Text(ConversationTextParams {
-                text: "hello".to_string(),
-            }),
-        };
-        let close = Op::RealtimeConversation {
-            cmd: ConversationCommand::Close,
-        };
+    fn conversation_op_serializes_as_unnested_variants() {
+        let audio = Op::RealtimeConversationAudio(ConversationAudioParams {
+            frame: RealtimeAudioFrame {
+                data: "AQID".to_string(),
+                sample_rate: 24_000,
+                num_channels: 1,
+                samples_per_channel: Some(480),
+            },
+        });
+        let start = Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "be helpful".to_string(),
+            session_id: Some("conv_1".to_string()),
+        });
+        let text = Op::RealtimeConversationText(ConversationTextParams {
+            text: "hello".to_string(),
+        });
+        let close = Op::RealtimeConversationClose;
 
         assert_eq!(
             serde_json::to_value(&start).unwrap(),
             json!({
-                "type": "conversation",
-                "cmd": "start",
+                "type": "realtime_conversation_start",
                 "prompt": "be helpful",
                 "session_id": "conv_1"
             })
@@ -3020,8 +3004,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&audio).unwrap(),
             json!({
-                "type": "conversation",
-                "cmd": "audio",
+                "type": "realtime_conversation_audio",
                 "frame": {
                     "data": "AQID",
                     "sample_rate": 24000,
@@ -3033,6 +3016,12 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<Op>(serde_json::to_value(&text).unwrap()).unwrap(),
             text
+        );
+        assert_eq!(
+            serde_json::to_value(&close).unwrap(),
+            json!({
+                "type": "realtime_conversation_close"
+            })
         );
         assert_eq!(
             serde_json::from_value::<Op>(serde_json::to_value(&close).unwrap()).unwrap(),

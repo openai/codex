@@ -1955,7 +1955,7 @@ impl Session {
         state.take_startup_regular_task()
     }
 
-    async fn get_config(&self) -> std::sync::Arc<Config> {
+    pub(crate) async fn get_config(&self) -> std::sync::Arc<Config> {
         let state = self.state.lock().await;
         state
             .session_configuration
@@ -3161,8 +3161,17 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::CleanBackgroundTerminals => {
                 handlers::clean_background_terminals(&sess).await;
             }
-            Op::RealtimeConversation { cmd } => {
-                handlers::realtime_conversation(&sess, sub.id.clone(), cmd).await;
+            Op::RealtimeConversationStart(params) => {
+                crate::realtime_conversation::handle_start(&sess, sub.id.clone(), params).await;
+            }
+            Op::RealtimeConversationAudio(params) => {
+                crate::realtime_conversation::handle_audio(&sess, sub.id.clone(), params).await;
+            }
+            Op::RealtimeConversationText(params) => {
+                crate::realtime_conversation::handle_text(&sess, sub.id.clone(), params).await;
+            }
+            Op::RealtimeConversationClose => {
+                crate::realtime_conversation::handle_close(&sess, sub.id.clone()).await;
             }
             Op::OverrideTurnContext {
                 cwd,
@@ -3323,7 +3332,6 @@ mod handlers {
     use crate::tasks::execute_user_shell_command;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
-    use codex_protocol::protocol::ConversationCommand;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -3332,10 +3340,6 @@ mod handlers {
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
-    use codex_protocol::protocol::RealtimeConversationClosedEvent;
-    use codex_protocol::protocol::RealtimeConversationEvent;
-    use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
-    use codex_protocol::protocol::RealtimeConversationStartedEvent;
     use codex_protocol::protocol::RemoteSkillDownloadedEvent;
     use codex_protocol::protocol::RemoteSkillHazelnutScope;
     use codex_protocol::protocol::RemoteSkillProductSurface;
@@ -3369,138 +3373,6 @@ mod handlers {
 
     pub async fn clean_background_terminals(sess: &Arc<Session>) {
         sess.close_unified_exec_processes().await;
-    }
-
-    pub async fn realtime_conversation(
-        sess: &Arc<Session>,
-        sub_id: String,
-        cmd: ConversationCommand,
-    ) {
-        match cmd {
-            ConversationCommand::Start(params) => {
-                let config = sess.get_config().await;
-                let api_provider = config.model_provider.to_api_provider(None).unwrap();
-
-                let requested_session_id = params
-                    .session_id
-                    .or_else(|| Some(sess.conversation_id.to_string()));
-                let events_rx = match sess
-                    .conversation
-                    .start(
-                        api_provider,
-                        None,
-                        params.prompt,
-                        requested_session_id.clone(),
-                    )
-                    .await
-                {
-                    Ok(events_rx) => events_rx,
-                    Err(err) => {
-                        send_conversation_error(
-                            sess,
-                            sub_id,
-                            err.to_string(),
-                            CodexErrorInfo::Other,
-                        )
-                        .await;
-                        return;
-                    }
-                };
-
-                sess.send_event_raw(Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::RealtimeConversation(RealtimeConversationEvent::Started(
-                        RealtimeConversationStartedEvent {
-                            session_id: requested_session_id,
-                        },
-                    )),
-                })
-                .await;
-
-                let sess_clone = Arc::clone(sess);
-                tokio::spawn(async move {
-                    let ev = |msg| Event {
-                        id: sub_id.clone(),
-                        msg,
-                    };
-                    while let Ok(event) = events_rx.recv().await {
-                        sess_clone
-                            .send_event_raw(ev(EventMsg::RealtimeConversation(
-                                RealtimeConversationEvent::Realtime(
-                                    RealtimeConversationRealtimeEvent { payload: event },
-                                ),
-                            )))
-                            .await;
-                    }
-                    if let Some(()) = sess_clone.conversation.running_state().await {
-                        sess_clone
-                            .send_event_raw(ev(EventMsg::RealtimeConversation(
-                                RealtimeConversationEvent::Closed(
-                                    RealtimeConversationClosedEvent {
-                                        reason: Some("transport_closed".to_string()),
-                                    },
-                                ),
-                            )))
-                            .await;
-                    }
-                });
-            }
-            ConversationCommand::Audio(params) => {
-                if let Err(err) = sess.conversation.audio_in(params.frame).await {
-                    send_conversation_error(
-                        sess,
-                        sub_id,
-                        err.to_string(),
-                        CodexErrorInfo::BadRequest,
-                    )
-                    .await;
-                }
-            }
-            ConversationCommand::Text(params) => {
-                if let Err(err) = sess.conversation.text_in(params.text).await {
-                    send_conversation_error(
-                        sess,
-                        sub_id,
-                        err.to_string(),
-                        CodexErrorInfo::BadRequest,
-                    )
-                    .await;
-                }
-            }
-            ConversationCommand::Close => match sess.conversation.shutdown().await {
-                Ok(()) => {
-                    sess.send_event_raw(Event {
-                        id: sub_id,
-                        msg: EventMsg::RealtimeConversation(RealtimeConversationEvent::Closed(
-                            RealtimeConversationClosedEvent {
-                                reason: Some("requested".to_string()),
-                            },
-                        )),
-                    })
-                    .await;
-                }
-                Err(err) => {
-                    send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other)
-                        .await;
-                }
-            },
-        }
-    }
-
-    async fn send_conversation_error(
-        sess: &Arc<Session>,
-        sub_id: String,
-        message: String,
-        codex_error_info: CodexErrorInfo,
-    ) {
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
-                message,
-                codex_error_info: Some(codex_error_info),
-            }),
-        })
-        .await;
     }
 
     pub async fn override_turn_context(
