@@ -395,17 +395,22 @@ jobs:
       # runtime test matrix.
       - name: cargo clippy
         shell: bash
+        env:
+          CAPTURE_CARGO_TIMINGS: ${{ (github.event_name == 'workflow_dispatch' || (matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile == 'dev')) && 'true' || 'false' }}
         run: |
           set -euo pipefail
           args=(cargo clippy --target "${{ matrix.target }}" --all-features --profile "${{ matrix.profile }}")
           if [[ "${{ matrix.profile }}" == 'dev' && "${{ matrix.target }}" == 'x86_64-unknown-linux-gnu' ]]; then
             args+=(--tests)
           fi
-          args+=(--timings -- -D warnings)
+          if [[ "${CAPTURE_CARGO_TIMINGS}" == 'true' ]]; then
+            args+=(--timings)
+          fi
+          args+=(-- -D warnings)
           "${args[@]}"
 
       - name: Upload Cargo timings (clippy)
-        if: always()
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || (matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile == 'dev')) }}
         uses: actions/upload-artifact@v6
         with:
           name: cargo-timings-rust-ci-clippy-${{ matrix.target }}-${{ matrix.profile }}
@@ -610,13 +615,21 @@ jobs:
       - name: tests
         id: test
         if: ${{ !(github.event_name == 'pull_request' && matrix.target == 'aarch64-pc-windows-msvc') }}
-        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
+        shell: bash
         env:
+          CAPTURE_CARGO_TIMINGS: ${{ (github.event_name == 'workflow_dispatch' || matrix.target == 'x86_64-unknown-linux-gnu') && 'true' || 'false' }}
           RUST_BACKTRACE: 1
           NEXTEST_STATUS_LEVEL: leak
+        run: |
+          set -euo pipefail
+          args=(cargo nextest run --all-features --no-fail-fast --target "${{ matrix.target }}" --cargo-profile ci-test)
+          if [[ "${CAPTURE_CARGO_TIMINGS}" == 'true' ]]; then
+            args+=(--timings)
+          fi
+          "${args[@]}"
 
       - name: Upload Cargo timings (nextest)
-        if: always()
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || matrix.target == 'x86_64-unknown-linux-gnu') }}
         uses: actions/upload-artifact@v6
         with:
           name: cargo-timings-rust-ci-nextest-${{ matrix.target }}-${{ matrix.profile }}
