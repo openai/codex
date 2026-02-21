@@ -394,6 +394,11 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
+    /// connection) without changing normal provider HTTP requests.
+    pub experimental_realtime_ws_base_url: Option<String>,
+
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -1118,6 +1123,11 @@ pub struct ConfigToml {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
+
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
+    /// connection) without changing normal provider HTTP requests.
+    pub experimental_realtime_ws_base_url: Option<String>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
@@ -2043,6 +2053,7 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
@@ -4583,6 +4594,7 @@ model_verbosity = "high"
                 model_verbosity: None,
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+                experimental_realtime_ws_base_url: None,
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
@@ -4702,6 +4714,7 @@ model_verbosity = "high"
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_realtime_ws_base_url: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4819,6 +4832,7 @@ model_verbosity = "high"
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_realtime_ws_base_url: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4922,6 +4936,7 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_realtime_ws_base_url: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -5705,6 +5720,34 @@ trust_level = "untrusted"
         assert_eq!(
             config.permissions.approval_policy.value(),
             AskForApproval::OnRequest
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::Result<()> {
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
+"#,
+        )
+        .expect("TOML deserialization should succeed");
+
+        assert_eq!(
+            cfg.experimental_realtime_ws_base_url.as_deref(),
+            Some("http://127.0.0.1:8011")
+        );
+
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.experimental_realtime_ws_base_url.as_deref(),
+            Some("http://127.0.0.1:8011")
         );
         Ok(())
     }

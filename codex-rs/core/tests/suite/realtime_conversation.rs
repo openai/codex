@@ -358,3 +358,58 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.created",
+        "session": { "id": "sess_override" }
+    })]]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build_with_websocket_server(&startup_server).await?;
+    assert!(
+        startup_server
+            .wait_for_handshakes(1, Duration::from_secs(2))
+            .await
+    );
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let session_created = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionCreated { session_id },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(session_created, "sess_override");
+
+    let startup_connections = startup_server.connections();
+    assert_eq!(startup_connections.len(), 1);
+
+    let realtime_connections = realtime_server.connections();
+    assert_eq!(realtime_connections.len(), 1);
+    assert_eq!(
+        realtime_connections[0][0].body_json()["type"].as_str(),
+        Some("session.create")
+    );
+
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
+    Ok(())
+}

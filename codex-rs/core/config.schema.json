@@ -1541,6 +1541,10 @@
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },
+    "experimental_realtime_ws_base_url": {
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/ws` connection) without changing normal provider HTTP requests.",
+      "type": "string"
+    },
     "experimental_use_freeform_apply_patch": {
       "type": "boolean"
     },

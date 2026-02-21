@@ -169,7 +169,11 @@ pub(crate) async fn handle_start(
 ) -> CodexResult<()> {
     let provider = sess.provider().await;
     let auth = sess.services.auth_manager.auth().await;
-    let api_provider = provider.to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+    let mut api_provider = provider.to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+    let config = sess.get_config().await;
+    if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
+        api_provider.base_url = realtime_ws_base_url.clone();
+    }
 
     let requested_session_id = params
         .session_id
