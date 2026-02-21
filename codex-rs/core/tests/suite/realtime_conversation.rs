@@ -358,7 +358,6 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     server.shutdown().await;
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -411,5 +410,51 @@ async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Resul
 
     startup_server.shutdown().await;
     realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![],
+        vec![vec![json!({
+            "type": "session.created",
+            "session": { "id": "sess_override" }
+        })]],
+    ])
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.experimental_realtime_ws_backend_prompt = Some("prompt from config".to_string());
+    });
+    let test = builder.build_with_websocket_server(&server).await?;
+    assert!(server.wait_for_handshakes(1, Duration::from_secs(2)).await);
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "prompt from op".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let session_created = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionCreated { session_id },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(session_created, "sess_override");
+
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    assert_eq!(
+        connections[1][0].body_json()["session"]["backend_prompt"].as_str(),
+        Some("prompt from config")
+    );
+
+    server.shutdown().await;
     Ok(())
 }

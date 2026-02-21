@@ -398,7 +398,10 @@ pub struct Config {
     /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
     /// connection) without changing normal provider HTTP requests.
     pub experimental_realtime_ws_base_url: Option<String>,
-
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport backend prompt (the `Op::RealtimeConversation`
+    /// `/ws` session.create backend_prompt) without changing normal prompts.
+    pub experimental_realtime_ws_backend_prompt: Option<String>,
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -1128,7 +1131,10 @@ pub struct ConfigToml {
     /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
     /// connection) without changing normal provider HTTP requests.
     pub experimental_realtime_ws_base_url: Option<String>,
-
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport backend prompt (the `Op::RealtimeConversation`
+    /// `/ws` session.create backend_prompt) without changing normal prompts.
+    pub experimental_realtime_ws_backend_prompt: Option<String>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -2054,6 +2060,7 @@ impl Config {
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
+            experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
@@ -4595,6 +4602,7 @@ model_verbosity = "high"
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 experimental_realtime_ws_base_url: None,
+                experimental_realtime_ws_backend_prompt: None,
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
@@ -4715,6 +4723,7 @@ model_verbosity = "high"
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_realtime_ws_base_url: None,
+            experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4833,6 +4842,7 @@ model_verbosity = "high"
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_realtime_ws_base_url: None,
+            experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4937,6 +4947,7 @@ model_verbosity = "high"
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_realtime_ws_base_url: None,
+            experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -5723,7 +5734,6 @@ trust_level = "untrusted"
         );
         Ok(())
     }
-
     #[test]
     fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::Result<()> {
         let cfg: ConfigToml = toml::from_str(
@@ -5748,6 +5758,34 @@ experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
         assert_eq!(
             config.experimental_realtime_ws_base_url.as_deref(),
             Some("http://127.0.0.1:8011")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn experimental_realtime_ws_backend_prompt_loads_from_config_toml() -> std::io::Result<()> {
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+experimental_realtime_ws_backend_prompt = "prompt from config"
+"#,
+        )
+        .expect("TOML deserialization should succeed");
+
+        assert_eq!(
+            cfg.experimental_realtime_ws_backend_prompt.as_deref(),
+            Some("prompt from config")
+        );
+
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.experimental_realtime_ws_backend_prompt.as_deref(),
+            Some("prompt from config")
         );
         Ok(())
     }

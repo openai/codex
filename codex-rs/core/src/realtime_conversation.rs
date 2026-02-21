@@ -174,18 +174,17 @@ pub(crate) async fn handle_start(
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
     }
+    let prompt = config
+        .experimental_realtime_ws_backend_prompt
+        .clone()
+        .unwrap_or(params.prompt);
 
     let requested_session_id = params
         .session_id
         .or_else(|| Some(sess.conversation_id.to_string()));
     let events_rx = match sess
         .conversation
-        .start(
-            api_provider,
-            None,
-            params.prompt,
-            requested_session_id.clone(),
-        )
+        .start(api_provider, None, prompt, requested_session_id.clone())
         .await
     {
         Ok(events_rx) => events_rx,

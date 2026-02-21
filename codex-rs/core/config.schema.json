@@ -1541,6 +1541,10 @@
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },
+    "experimental_realtime_ws_backend_prompt": {
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport backend prompt (the `Op::RealtimeConversation` `/ws` session.create backend_prompt) without changing normal prompts.",
+      "type": "string"
+    },
     "experimental_realtime_ws_base_url": {
       "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/ws` connection) without changing normal provider HTTP requests.",
       "type": "string"
