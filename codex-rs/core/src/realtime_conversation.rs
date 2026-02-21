@@ -269,14 +269,31 @@ pub(crate) async fn handle_start(
             id: sub_id.clone(),
             msg,
         };
+        let mut emitted_closed = false;
         while let Ok(event) = events_rx.recv().await {
+            eprintln!("realtime forwarder event: {event:?}");
+            let should_emit_closed = matches!(event, RealtimeEvent::Error(_));
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
                     RealtimeConversationRealtimeEvent { payload: event },
                 )))
                 .await;
+            if should_emit_closed {
+                sess_clone
+                    .send_event_raw(ev(EventMsg::RealtimeConversationClosed(
+                        RealtimeConversationClosedEvent {
+                            reason: Some("transport_closed".to_string()),
+                        },
+                    )))
+                    .await;
+                emitted_closed = true;
+                eprintln!("realtime forwarder emitted closed after error");
+                break;
+            }
         }
-        if let Some(()) = sess_clone.conversation.running_state().await {
+        eprintln!("realtime forwarder loop ended; emitted_closed={emitted_closed}");
+        if !emitted_closed && let Some(()) = sess_clone.conversation.running_state().await {
+            eprintln!("realtime forwarder emitting closed after channel end");
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationClosed(
                     RealtimeConversationClosedEvent {

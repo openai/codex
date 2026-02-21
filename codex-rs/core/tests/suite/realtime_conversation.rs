@@ -130,15 +130,12 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
             .expect("request type")
             .to_string(),
     ];
-    assert!(
-        request_types
-            .iter()
-            .any(|ty| ty == "response.input_audio.delta")
-    );
-    assert!(
-        request_types
-            .iter()
-            .any(|ty| ty == "conversation.item.create")
+    assert_eq!(
+        request_types,
+        [
+            "conversation.item.create".to_string(),
+            "response.input_audio.delta".to_string(),
+        ]
     );
 
     test.codex.submit(Op::RealtimeConversationClose).await?;
