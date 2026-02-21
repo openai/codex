@@ -3863,59 +3863,12 @@ impl ChatComposer {
         let tx = self.app_event_tx.clone();
         let task = move || {
             use std::time::Duration;
-            let width: usize = 4;
-            // Bar glyphs low→high; single-line sparkline that scrolls left.
-            // let symbols: Vec<char> = "·•●⬤".chars().collect();
-            let symbols: Vec<char> = "⠤⠴⠶⠷⡷⡿⣿".chars().collect();
-            let mut history: VecDeque<char> = VecDeque::with_capacity(width);
-            // Prefill to fixed width so the meter is always exactly `width` chars.
-            while history.len() < width {
-                history.push_back(symbols[0]);
-            }
-            // Adaptive gain control: track a slow EMA of RMS as the noise/reference level.
-            let mut noise_ema: f64 = 0.02; // bootstrap with small non-zero to avoid division by zero
-            let alpha_noise: f64 = 0.05; // slightly faster adaptation for responsiveness
-            // Envelope follower with separate attack/release for responsiveness
-            let mut env: f64 = 0.0;
-            let attack: f64 = 0.80; // faster rise for immediate peaks
-            let release: f64 = 0.25; // quick fall but not too jumpy
+            let mut meter = crate::voice::RecordingMeterState::new();
             loop {
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
-                // Read latest peak value from VoiceCapture
-                let latest_peak = last_peak.load(Ordering::Relaxed) as f64 / (i16::MAX as f64);
-                // Envelope follower (attack/release) for responsive yet stable meter
-                if latest_peak > env {
-                    env = attack * latest_peak + (1.0 - attack) * env;
-                } else {
-                    env = release * latest_peak + (1.0 - release) * env;
-                }
-                // Use envelope as a proxy for RMS for noise tracking
-                let rms_approx = env * 0.7;
-                noise_ema = (1.0 - alpha_noise) * noise_ema + alpha_noise * rms_approx;
-                let ref_level = noise_ema.max(0.01);
-                // Mix instantaneous peak with envelope so the bar reacts faster to changes
-                let fast_signal = 0.8 * latest_peak + 0.2 * env;
-                let target = 2.0f64; // slightly hotter meter
-                let raw = (fast_signal / (ref_level * target)).max(0.0);
-                let k = 1.6f64; // lighter compression for more punch
-                let compressed = (raw.ln_1p() / (k * 1.0).ln_1p()).min(1.0);
-                // Map to single-line glyph proportional to level (bottom→top).
-                let idx = (compressed * (symbols.len() as f64 - 1.0))
-                    .round()
-                    .clamp(0.0, symbols.len() as f64 - 1.0) as usize;
-                let level_char = symbols[idx];
-
-                if history.len() >= width {
-                    history.pop_front();
-                }
-                history.push_back(level_char);
-
-                let mut text = String::with_capacity(width);
-                for ch in &history {
-                    text.push(*ch);
-                }
+                let text = meter.next_text(last_peak.load(Ordering::Relaxed));
                 tx.send(crate::app_event::AppEvent::UpdateRecordingMeter {
                     id: id.clone(),
                     text,
