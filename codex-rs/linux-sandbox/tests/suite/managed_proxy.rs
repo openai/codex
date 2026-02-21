@@ -3,7 +3,7 @@
 
 use codex_core::config::types::ShellEnvironmentPolicy;
 use codex_core::exec_env::create_env;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::io::Read;
