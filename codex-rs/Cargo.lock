@@ -1644,6 +1644,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-secrets",
  "codex-shell-command",
+ "codex-skills",
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
@@ -1663,7 +1664,6 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "image",
- "include_dir",
  "indexmap 2.13.0",
  "indoc",
  "insta",
@@ -2187,6 +2187,15 @@ dependencies = [
  "tree-sitter-bash",
  "url",
  "which",
+]
+
+[[package]]
+name = "codex-skills"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-absolute-path",
+ "include_dir",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
