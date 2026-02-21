@@ -1348,7 +1348,7 @@ fn data_url_without_base64_marker_is_unchanged() {
 }
 
 #[test]
-fn octet_stream_base64_data_url_is_adjusted() {
+fn non_image_base64_data_url_is_unchanged() {
     let payload = "C".repeat(4_096);
     let image_url = format!("data:application/octet-stream;base64,{payload}");
     let item = ResponseItem::FunctionCallOutput {
@@ -1360,10 +1360,8 @@ fn octet_stream_base64_data_url_is_adjusted() {
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
     let estimated = estimate_response_item_model_visible_bytes(&item);
-    let expected = raw_len - payload.len() as i64 + IMAGE_BYTES_ESTIMATE;
 
-    assert_eq!(estimated, expected);
-    assert!(estimated < raw_len);
+    assert_eq!(estimated, raw_len);
 }
 
 #[test]
@@ -1371,7 +1369,7 @@ fn multiple_inline_images_apply_multiple_fixed_costs() {
     let payload_one = "D".repeat(100);
     let payload_two = "E".repeat(200);
     let image_url_one = format!("data:image/png;base64,{payload_one}");
-    let image_url_two = format!("data:application/octet-stream;base64,{payload_two}");
+    let image_url_two = format!("data:image/jpeg;base64,{payload_two}");
     let item = ResponseItem::Message {
         id: None,
         role: "user".to_string(),

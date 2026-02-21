@@ -451,7 +451,18 @@ fn base64_data_url_payload_len(url: &str) -> Option<usize> {
     if !url.starts_with("data:") {
         return None;
     }
-    let (_, payload) = url.split_once(";base64,")?;
+    let (metadata, payload) = url.split_once(";base64,")?;
+    let mime_type = metadata
+        .strip_prefix("data:")?
+        .split(';')
+        .next()
+        .unwrap_or_default();
+    if !mime_type
+        .get(.."image/".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/"))
+    {
+        return None;
+    }
     Some(payload.len())
 }
 
