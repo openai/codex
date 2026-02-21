@@ -1057,6 +1057,15 @@ impl RepoHybridIndex {
         embedding_model: String,
     ) -> anyhow::Result<SearchOutcome> {
         let glob_set = build_glob_set(file_globs)?;
+        let lexical_scores = self
+            .lexical_scores(
+                query,
+                limit.saturating_mul(LEXICAL_CANDIDATE_MULTIPLIER),
+                glob_set.as_ref(),
+            )
+            .await?;
+        let lexical_candidate_ids = lexical_scores.keys().copied().collect::<Vec<_>>();
+
         let mut vector_scores = Vec::new();
         let mut effective_alpha = 0.0;
         let mut embedding_fallback_reason = None;
@@ -1072,8 +1081,18 @@ impl RepoHybridIndex {
                     let (query_embedding, fallback_reason) =
                         query_embedding_or_fallback_reason(embeddings);
                     if let Some(query_embedding) = query_embedding {
+                        let vector_prefilter = if lexical_candidate_ids.is_empty() {
+                            None
+                        } else {
+                            Some(lexical_candidate_ids.as_slice())
+                        };
                         vector_scores = self
-                            .vector_scores(&query_embedding, limit, glob_set.as_ref())
+                            .vector_scores(
+                                &query_embedding,
+                                limit,
+                                glob_set.as_ref(),
+                                vector_prefilter,
+                            )
                             .await?;
                         effective_alpha = alpha;
                     } else {
@@ -1087,14 +1106,6 @@ impl RepoHybridIndex {
                 }
             }
         }
-
-        let lexical_scores = self
-            .lexical_scores(
-                query,
-                limit.saturating_mul(LEXICAL_CANDIDATE_MULTIPLIER),
-                glob_set.as_ref(),
-            )
-            .await?;
 
         if vector_scores.is_empty() && lexical_scores.is_empty() {
             return Ok(SearchOutcome {
@@ -1164,28 +1175,63 @@ impl RepoHybridIndex {
         query_embedding: &[f32],
         limit: usize,
         glob_set: Option<&GlobSet>,
+        candidate_ids: Option<&[i64]>,
     ) -> anyhow::Result<Vec<(i64, f32)>> {
         let candidate_limit = limit.saturating_mul(VECTOR_CANDIDATE_MULTIPLIER).max(limit);
         let buffer_limit = candidate_limit.saturating_mul(4).max(candidate_limit);
-        let mut rows =
-            sqlx::query("SELECT id, path, embedding FROM chunks ORDER BY id ASC").fetch(&self.pool);
         let mut scores = Vec::new();
-        while let Some(row) = rows.try_next().await? {
-            let id: i64 = row.try_get("id")?;
-            let path: String = row.try_get("path")?;
-            if let Some(glob_set) = glob_set
-                && !glob_set.is_match(path.as_str())
-            {
-                continue;
+
+        if let Some(candidate_ids) = candidate_ids {
+            for id_chunk in candidate_ids.chunks(SQLITE_BIND_CHUNK_SIZE) {
+                let mut builder =
+                    QueryBuilder::new("SELECT id, path, embedding FROM chunks WHERE id IN (");
+                let mut separated = builder.separated(", ");
+                for id in id_chunk {
+                    separated.push_bind(id);
+                }
+                separated.push_unseparated(") ORDER BY id ASC");
+                let rows = builder.build().fetch_all(&self.pool).await?;
+                for row in rows {
+                    let id: i64 = row.try_get("id")?;
+                    let path: String = row.try_get("path")?;
+                    if let Some(glob_set) = glob_set
+                        && !glob_set.is_match(path.as_str())
+                    {
+                        continue;
+                    }
+                    let embedding_json: String = row.try_get("embedding")?;
+                    let embedding = serde_json::from_str::<Vec<f32>>(&embedding_json)
+                        .with_context(|| {
+                            format!("failed to parse embedding JSON for chunk id {id}")
+                        })?;
+                    let score = cosine_similarity(query_embedding, &embedding);
+                    scores.push((id, score));
+                    if scores.len() > buffer_limit {
+                        scores.sort_by(sort_score_desc);
+                        scores.truncate(candidate_limit);
+                    }
+                }
             }
-            let embedding_json: String = row.try_get("embedding")?;
-            let embedding = serde_json::from_str::<Vec<f32>>(&embedding_json)
-                .with_context(|| format!("failed to parse embedding JSON for chunk id {id}"))?;
-            let score = cosine_similarity(query_embedding, &embedding);
-            scores.push((id, score));
-            if scores.len() > buffer_limit {
-                scores.sort_by(sort_score_desc);
-                scores.truncate(candidate_limit);
+        } else {
+            let mut rows = sqlx::query("SELECT id, path, embedding FROM chunks ORDER BY id ASC")
+                .fetch(&self.pool);
+            while let Some(row) = rows.try_next().await? {
+                let id: i64 = row.try_get("id")?;
+                let path: String = row.try_get("path")?;
+                if let Some(glob_set) = glob_set
+                    && !glob_set.is_match(path.as_str())
+                {
+                    continue;
+                }
+                let embedding_json: String = row.try_get("embedding")?;
+                let embedding = serde_json::from_str::<Vec<f32>>(&embedding_json)
+                    .with_context(|| format!("failed to parse embedding JSON for chunk id {id}"))?;
+                let score = cosine_similarity(query_embedding, &embedding);
+                scores.push((id, score));
+                if scores.len() > buffer_limit {
+                    scores.sort_by(sort_score_desc);
+                    scores.truncate(candidate_limit);
+                }
             }
         }
         scores.sort_by(sort_score_desc);
@@ -1907,5 +1953,48 @@ mod tests {
         assert_eq!(second.stats.updated_files, 0);
         assert_eq!(second.stats.removed_files, 0);
         assert_eq!(second.embedding_status.ready, first.embedding_status.ready);
+    }
+
+    #[tokio::test]
+    async fn vector_scores_with_candidates_avoids_full_table_scan() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path();
+        let index = RepoHybridIndex::open(repo_root).await.expect("open index");
+        let mut tx = index.pool.begin().await.expect("begin tx");
+
+        let good_insert = sqlx::query(
+            "INSERT INTO chunks(path, start_line, end_line, snippet, content, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind("good.rs")
+        .bind(1_i64)
+        .bind(1_i64)
+        .bind("good")
+        .bind("good")
+        .bind("[1.0, 0.0]")
+        .execute(&mut *tx)
+        .await
+        .expect("insert good chunk");
+        let good_id = good_insert.last_insert_rowid();
+
+        sqlx::query(
+            "INSERT INTO chunks(path, start_line, end_line, snippet, content, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind("bad.rs")
+        .bind(1_i64)
+        .bind(1_i64)
+        .bind("bad")
+        .bind("bad")
+        .bind("not-json")
+        .execute(&mut *tx)
+        .await
+        .expect("insert bad chunk");
+        tx.commit().await.expect("commit");
+
+        let scores = index
+            .vector_scores(&[1.0, 0.0], 5, None, Some(&[good_id]))
+            .await
+            .expect("vector scores should only read candidate rows");
+
+        assert_eq!(scores, vec![(good_id, 1.0)]);
     }
 }
