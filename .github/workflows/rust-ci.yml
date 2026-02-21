@@ -145,6 +145,8 @@ jobs:
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
+            # This is consistently the slowest test job; keep runtime coverage on pushes/manual runs.
+            skip_on_pr: true
             runs_on:
               group: codex-runners
               labels: codex-windows-arm64
@@ -387,11 +389,28 @@ jobs:
           cargo chef prepare --recipe-path "$RECIPE"
           cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} --release --all-features
 
+      # Cargo timings show `--tests` repeatedly rebuilding heavy test targets
+      # (especially codex-core) across the full matrix. Keep test linting on one
+      # representative dev target and let nextest continue compiling tests on the
+      # runtime test matrix.
       - name: cargo clippy
-        run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} --timings -- -D warnings
+        shell: bash
+        env:
+          CAPTURE_CARGO_TIMINGS: ${{ (github.event_name == 'workflow_dispatch' || (matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile == 'dev')) && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          args=(cargo clippy --target "${{ matrix.target }}" --all-features --profile "${{ matrix.profile }}")
+          if [[ "${{ matrix.profile }}" == 'dev' && "${{ matrix.target }}" == 'x86_64-unknown-linux-gnu' ]]; then
+            args+=(--tests)
+          fi
+          if [[ "${CAPTURE_CARGO_TIMINGS}" == 'true' ]]; then
+            args+=(--timings)
+          fi
+          args+=(-- -D warnings)
+          "${args[@]}"
 
       - name: Upload Cargo timings (clippy)
-        if: always()
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || (matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile == 'dev')) }}
         uses: actions/upload-artifact@v6
         with:
           name: cargo-timings-rust-ci-clippy-${{ matrix.target }}-${{ matrix.profile }}
@@ -455,7 +474,7 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
-    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    if: ${{ (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') && !(github.event_name == 'pull_request' && matrix.skip_on_pr == true) }}
     defaults:
       run:
         working-directory: codex-rs
@@ -594,13 +613,21 @@ jobs:
 
       - name: tests
         id: test
-        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
+        shell: bash
         env:
+          CAPTURE_CARGO_TIMINGS: ${{ (github.event_name == 'workflow_dispatch' || matrix.target == 'x86_64-unknown-linux-gnu') && 'true' || 'false' }}
           RUST_BACKTRACE: 1
           NEXTEST_STATUS_LEVEL: leak
+        run: |
+          set -euo pipefail
+          args=(cargo nextest run --all-features --no-fail-fast --target "${{ matrix.target }}" --cargo-profile ci-test)
+          if [[ "${CAPTURE_CARGO_TIMINGS}" == 'true' ]]; then
+            args+=(--timings)
+          fi
+          "${args[@]}"
 
       - name: Upload Cargo timings (nextest)
-        if: always()
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || matrix.target == 'x86_64-unknown-linux-gnu') }}
         uses: actions/upload-artifact@v6
         with:
           name: cargo-timings-rust-ci-nextest-${{ matrix.target }}-${{ matrix.profile }}
