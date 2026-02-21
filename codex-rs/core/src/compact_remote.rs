@@ -210,7 +210,17 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
             Some(TurnItem::UserMessage(_))
         ),
         ResponseItem::Message { role, .. } if role == "assistant" => true,
-        _ => true,
+        ResponseItem::Message { .. } => false,
+        ResponseItem::Compaction { .. } => true,
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Other => false,
     }
 }
 
