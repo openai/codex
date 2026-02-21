@@ -27,9 +27,33 @@ impl KeyBinding {
     }
 
     pub fn is_press(&self, event: KeyEvent) -> bool {
-        self.key == event.code
-            && self.modifiers == event.modifiers
-            && (event.kind == KeyEventKind::Press || event.kind == KeyEventKind::Repeat)
+        if event.kind != KeyEventKind::Press && event.kind != KeyEventKind::Repeat {
+            return false;
+        }
+
+        if self.key == event.code && self.modifiers == event.modifiers {
+            return true;
+        }
+
+        self.matches_shifted_ascii_letter_compat(event)
+    }
+
+    fn matches_shifted_ascii_letter_compat(&self, event: KeyEvent) -> bool {
+        let (KeyCode::Char(bound), KeyCode::Char(observed)) = (self.key, event.code) else {
+            return false;
+        };
+
+        if !bound.is_ascii_lowercase() || !self.modifiers.contains(KeyModifiers::SHIFT) {
+            return false;
+        }
+
+        if observed != bound.to_ascii_uppercase() {
+            return false;
+        }
+
+        let mut without_shift = self.modifiers;
+        without_shift.remove(KeyModifiers::SHIFT);
+        event.modifiers == self.modifiers || event.modifiers == without_shift
     }
 
     pub(crate) const fn parts(&self) -> (KeyCode, KeyModifiers) {
@@ -158,6 +182,29 @@ mod tests {
         assert!(bindings.is_pressed(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)));
         assert!(bindings.is_pressed(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)));
         assert!(!bindings.is_pressed(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn shift_letter_binding_matches_uppercase_compat_forms() {
+        let binding = shift(KeyCode::Char('a'));
+        assert!(binding.is_press(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SHIFT)));
+        assert!(binding.is_press(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn shift_letter_binding_preserves_other_modifiers_with_uppercase_compat() {
+        let binding = KeyBinding::new(
+            KeyCode::Char('i'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert!(binding.is_press(KeyEvent::new(KeyCode::Char('I'), KeyModifiers::CONTROL)));
+    }
+
+    #[test]
+    fn shift_letter_binding_does_not_match_plain_lowercase_or_other_uppercase() {
+        let binding = shift(KeyCode::Char('o'));
+        assert!(!binding.is_press(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)));
+        assert!(!binding.is_press(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE)));
     }
 
     #[test]

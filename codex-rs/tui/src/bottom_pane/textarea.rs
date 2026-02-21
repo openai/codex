@@ -1768,6 +1768,7 @@ impl TextArea {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::key_hint;
     // crossterm types are intentionally not imported here to avoid unused warnings
     use pretty_assertions::assert_eq;
     use rand::prelude::*;
@@ -1975,6 +1976,46 @@ mod tests {
 
         assert!(!t.is_vim_insert());
         assert_eq!(t.cursor(), 1);
+    }
+
+    #[test]
+    fn vim_shift_i_enters_insert_at_line_start_with_shift_only_binding() {
+        let mut t = ta_with("hello\nworld");
+        t.vim_normal_keymap.insert_line_start = vec![key_hint::shift(KeyCode::Char('i'))];
+        t.set_cursor(9);
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('I'), KeyModifiers::NONE));
+
+        assert!(t.is_vim_insert());
+        assert_eq!(t.cursor(), 6);
+    }
+
+    #[test]
+    fn vim_shift_a_enters_insert_at_line_end_with_shift_only_binding() {
+        let mut t = ta_with("hello\nworld");
+        t.vim_normal_keymap.append_line_end = vec![key_hint::shift(KeyCode::Char('a'))];
+        t.set_cursor(8);
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE));
+
+        assert!(t.is_vim_insert());
+        assert_eq!(t.cursor(), 11);
+    }
+
+    #[test]
+    fn vim_shift_o_opens_line_above_with_shift_only_binding() {
+        let mut t = ta_with("hello\nworld");
+        t.vim_normal_keymap.open_line_above = vec![key_hint::shift(KeyCode::Char('o'))];
+        t.set_cursor(8);
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('O'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello\n\nworld");
+        assert!(t.is_vim_insert());
+        assert_eq!(t.cursor(), 6);
     }
 
     #[test]
