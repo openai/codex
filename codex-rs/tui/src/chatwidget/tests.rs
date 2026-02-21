@@ -2279,7 +2279,7 @@ async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_promp
 }
 
 #[tokio::test]
-async fn plan_reasoning_scope_popup_all_modes_persists_global_and_clears_plan_override() {
+async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
     chat.open_plan_reasoning_scope_prompt(
         "gpt-5.1-codex-max".to_string(),
@@ -2291,16 +2291,18 @@ async fn plan_reasoning_scope_popup_all_modes_persists_global_and_clears_plan_ov
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, AppEvent::UpdatePlanModeReasoningEffort(None))),
-        "expected plan override to be cleared; events: {events:?}"
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected plan override to be updated; events: {events:?}"
     );
     assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, AppEvent::PersistPlanModeReasoningEffort(None))),
-        "expected cleared plan override to be persisted; events: {events:?}"
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistPlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected updated plan override to be persisted; events: {events:?}"
     );
     assert!(
         events.iter().any(|event| matches!(
@@ -2324,12 +2326,13 @@ async fn plan_reasoning_scope_popup_mentions_selected_reasoning() {
     let popup = render_bottom_popup(&chat, 100);
     assert!(popup.contains("Choose where to apply medium reasoning."));
     assert!(popup.contains("Always use medium reasoning in Plan mode."));
-    assert!(popup.contains("clear the current Plan mode"));
-    assert!(popup.contains("override (medium)"));
+    assert!(popup.contains("Apply to Plan mode override"));
+    assert!(popup.contains("Apply to global default and Plan mode override"));
+    assert!(popup.contains("user-chosen Plan override (low)"));
 }
 
 #[tokio::test]
-async fn plan_reasoning_scope_popup_omits_override_clearance_when_no_override() {
+async fn plan_reasoning_scope_popup_mentions_built_in_plan_default_when_no_override() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
     chat.open_plan_reasoning_scope_prompt(
         "gpt-5.1-codex-max".to_string(),
@@ -2337,10 +2340,7 @@ async fn plan_reasoning_scope_popup_omits_override_clearance_when_no_override() 
     );
 
     let popup = render_bottom_popup(&chat, 100);
-    assert!(
-        !popup.contains("This will clear the current Plan mode override (medium)."),
-        "unexpected override-clearance note in popup: {popup}"
-    );
+    assert!(popup.contains("built-in Plan default (medium)"));
 }
 
 #[tokio::test]

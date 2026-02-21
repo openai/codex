@@ -157,8 +157,8 @@ const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
-const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode default only";
-const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to all modes";
+const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
+const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 
 use crate::app_event::AppEvent;
@@ -5207,11 +5207,28 @@ impl ChatWidget {
             None => "the selected reasoning".to_string(),
         };
         let plan_only_description = format!("Always use {reasoning_phrase} in Plan mode.");
-        let all_modes_description = if self.config.plan_mode_reasoning_effort.is_some() {
-            "Update the all-modes default reasoning level. This will clear the current Plan mode override (medium).".to_string()
+        let plan_reasoning_source = if let Some(plan_override) =
+            self.config.plan_mode_reasoning_effort
+        {
+            format!(
+                "user-chosen Plan override ({})",
+                Self::reasoning_effort_label(plan_override).to_lowercase()
+            )
+        } else if let Some(plan_mask) = collaboration_modes::plan_mask(self.models_manager.as_ref())
+        {
+            match plan_mask.reasoning_effort.flatten() {
+                Some(plan_effort) => format!(
+                    "built-in Plan default ({})",
+                    Self::reasoning_effort_label(plan_effort).to_lowercase()
+                ),
+                None => "built-in Plan default (no reasoning)".to_string(),
+            }
         } else {
-            "Update the all-modes default reasoning level.".to_string()
+            "built-in Plan default".to_string()
         };
+        let all_modes_description = format!(
+            "Set the global default reasoning level and the Plan mode override. This replaces the current {plan_reasoning_source}."
+        );
         let subtitle = format!("Choose where to apply {reasoning_phrase}.");
 
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
@@ -5247,8 +5264,8 @@ impl ChatWidget {
             }));
             tx.send(AppEvent::UpdateModel(model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort));
-            tx.send(AppEvent::UpdatePlanModeReasoningEffort(None));
-            tx.send(AppEvent::PersistPlanModeReasoningEffort(None));
+            tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+            tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
             tx.send(AppEvent::PersistModelSelection {
                 model: model.clone(),
                 effort,
