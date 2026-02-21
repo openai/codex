@@ -31,7 +31,7 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 const OPENAI_CONNECTORS_MCP_BASE_URL: &str = "https://api.openai.com";
-const OPENAI_CONNECTORS_MCP_PATH: &str = "/v1/connectors/mcp/";
+const OPENAI_CONNECTORS_MCP_PATH: &str = "/v1/connectors/gateways/flat/mcp";
 
 // Legacy vs new MCP gateway
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
