@@ -12,8 +12,6 @@ use crate::bwrap::create_bwrap_command_args;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
 use crate::vendored_bwrap::exec_vendored_bwrap;
 use crate::vendored_bwrap::run_vendored_bwrap_main;
-use codex_core::error::CodexErr;
-use codex_core::error::SandboxErr;
 
 #[derive(Debug, Parser)]
 /// CLI surface for the Linux sandbox helper.
@@ -137,25 +135,6 @@ pub fn run_main() -> ! {
         true,
         allow_network_for_proxy,
     ) {
-        if matches!(e, CodexErr::Sandbox(SandboxErr::LandlockRestrict)) {
-            eprintln!(
-                "codex-linux-sandbox: legacy Landlock enforcement unavailable; falling back to bubblewrap"
-            );
-            let inner = build_inner_seccomp_command(
-                &sandbox_policy_cwd,
-                &sandbox_policy,
-                true,
-                allow_network_for_proxy,
-                command,
-            );
-            run_bwrap_with_proc_fallback(
-                &sandbox_policy_cwd,
-                &sandbox_policy,
-                inner,
-                !no_proc,
-                allow_network_for_proxy,
-            );
-        }
         panic!("error applying legacy Linux sandbox restrictions: {e:?}");
     }
     exec_or_panic(command);

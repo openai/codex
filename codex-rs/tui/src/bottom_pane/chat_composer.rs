@@ -3729,9 +3729,19 @@ impl ChatComposer {
                 return true;
             }
 
-            // Remove the previously inserted space element if present.
+            // Preserve the typed space when transitioning into voice capture, but
+            // avoid duplicating an existing trailing space. In either case,
+            // convert/remove the temporary named element before inserting the
+            // recording/transcribing placeholder.
             if let Some(id) = self.voice_state.space_hold_element_id.take() {
-                let _ = self.textarea.replace_element_by_id(&id, "");
+                let replacement = self
+                    .textarea
+                    .named_element_range(&id)
+                    .and_then(|range| self.textarea.text()[..range.start].chars().next_back())
+                    .is_some_and(|ch| ch == ' ')
+                    .then_some("")
+                    .unwrap_or(" ");
+                let _ = self.textarea.replace_element_by_id(&id, replacement);
             }
             // Clear pending state before starting capture
             self.voice_state.space_hold_started_at = None;
@@ -6348,7 +6358,41 @@ mod tests {
 
         composer.process_space_hold_trigger();
 
-        assert_eq!("x", composer.textarea.text());
+        assert_eq!("x ", composer.textarea.text());
+        assert!(composer.voice_state.space_hold_started_at.is_none());
+        assert!(!composer.voice_state.space_hold_repeat_seen);
+        if composer.is_recording() {
+            let _ = composer.stop_recording_and_start_transcription();
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn space_hold_timeout_with_repeat_does_not_duplicate_existing_space() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_voice_transcription_enabled(true);
+
+        composer.set_text_content("x ".to_string(), Vec::new(), Vec::new());
+        composer.move_cursor_to_end();
+        let elem_id = "space-hold".to_string();
+        composer.textarea.insert_named_element(" ", elem_id.clone());
+        composer.voice_state.space_hold_started_at = Some(Instant::now());
+        composer.voice_state.space_hold_element_id = Some(elem_id);
+        composer.voice_state.space_hold_trigger = Some(Arc::new(AtomicBool::new(true)));
+        composer.voice_state.key_release_supported = false;
+        composer.voice_state.space_hold_repeat_seen = true;
+
+        composer.process_space_hold_trigger();
+
+        assert_eq!("x ", composer.textarea.text());
         assert!(composer.voice_state.space_hold_started_at.is_none());
         assert!(!composer.voice_state.space_hold_repeat_seen);
         if composer.is_recording() {
