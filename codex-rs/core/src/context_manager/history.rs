@@ -433,8 +433,6 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
             encrypted_content: content,
         } => i64::try_from(estimate_reasoning_length(content.len())).unwrap_or(i64::MAX),
         item => {
-            // Start from the existing "serialized JSON bytes" heuristic so all
-            // non-image content and structural overhead continue to be counted.
             let raw = serde_json::to_string(item)
                 .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
                 .unwrap_or_default();
@@ -486,6 +484,10 @@ fn base64_data_url_payload_len(url: &str) -> Option<usize> {
     Some(payload.len())
 }
 
+/// Scans one response item for discount-eligible inline image data URLs and
+/// returns:
+/// - total base64 payload bytes to subtract from raw serialized size
+/// - count of qualifying images to replace with `IMAGE_BYTES_ESTIMATE`
 fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
     let mut payload_bytes = 0i64;
     let mut image_count = 0i64;
