@@ -390,7 +390,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 
     let mut lines = vec![format!(
         "{}",
-        codex_core::protocol::FinalOutput::from(token_usage)
+        codex_protocol::protocol::FinalOutput::from(token_usage)
     )];
 
     if let Some(resume_cmd) =
@@ -1037,8 +1037,8 @@ fn print_completion(cmd: CompletionCommand) {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
-    use codex_core::protocol::TokenUsage;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::TokenUsage;
     use pretty_assertions::assert_eq;
 
     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {

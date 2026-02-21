@@ -61,54 +61,6 @@ use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
-use codex_core::protocol::AgentMessageDeltaEvent;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningDeltaEvent;
-use codex_core::protocol::AgentReasoningEvent;
-use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
-use codex_core::protocol::AgentReasoningRawContentEvent;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::BackgroundEventEvent;
-use codex_core::protocol::CodexErrorInfo;
-use codex_core::protocol::CreditsSnapshot;
-use codex_core::protocol::DeprecationNoticeEvent;
-use codex_core::protocol::ErrorEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::ExecCommandOutputDeltaEvent;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::ListCustomPromptsResponseEvent;
-use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::McpListToolsResponseEvent;
-use codex_core::protocol::McpStartupCompleteEvent;
-use codex_core::protocol::McpStartupStatus;
-use codex_core::protocol::McpStartupUpdateEvent;
-use codex_core::protocol::McpToolCallBeginEvent;
-use codex_core::protocol::McpToolCallEndEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::RateLimitSnapshot;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TerminalInteractionEvent;
-use codex_core::protocol::TokenUsage;
-use codex_core::protocol::TokenUsageInfo;
-use codex_core::protocol::TurnAbortReason;
-use codex_core::protocol::TurnCompleteEvent;
-use codex_core::protocol::TurnDiffEvent;
-use codex_core::protocol::UndoCompletedEvent;
-use codex_core::protocol::UndoStartedEvent;
-use codex_core::protocol::UserMessageEvent;
-use codex_core::protocol::ViewImageToolCallEvent;
-use codex_core::protocol::WarningEvent;
-use codex_core::protocol::WebSearchBeginEvent;
-use codex_core::protocol::WebSearchEndEvent;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
 use codex_core::terminal::terminal_info;
@@ -130,6 +82,54 @@ use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::protocol::AgentMessageDeltaEvent;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::AgentReasoningDeltaEvent;
+use codex_protocol::protocol::AgentReasoningEvent;
+use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
+use codex_protocol::protocol::AgentReasoningRawContentEvent;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::BackgroundEventEvent;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::DeprecationNoticeEvent;
+use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecCommandBeginEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::ListCustomPromptsResponseEvent;
+use codex_protocol::protocol::ListSkillsResponseEvent;
+use codex_protocol::protocol::McpListToolsResponseEvent;
+use codex_protocol::protocol::McpStartupCompleteEvent;
+use codex_protocol::protocol::McpStartupStatus;
+use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_protocol::protocol::McpToolCallBeginEvent;
+use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PatchApplyBeginEvent;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
+use codex_protocol::protocol::StreamErrorEvent;
+use codex_protocol::protocol::TerminalInteractionEvent;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::protocol::UndoCompletedEvent;
+use codex_protocol::protocol::UndoStartedEvent;
+use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::protocol::ViewImageToolCallEvent;
+use codex_protocol::protocol::WarningEvent;
+use codex_protocol::protocol::WebSearchBeginEvent;
+use codex_protocol::protocol::WebSearchEndEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -268,13 +268,13 @@ use chrono::Local;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_approval_presets::ApprovalPreset;
 use codex_utils_approval_presets::builtin_approval_presets;
 use strum::IntoEnumIterator;
@@ -650,7 +650,7 @@ pub(crate) struct ChatWidget {
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
     // Runtime network proxy bind addresses from SessionConfigured.
-    session_network_proxy: Option<codex_core::protocol::SessionNetworkProxyRuntime>,
+    session_network_proxy: Option<codex_protocol::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     status_line_invalid_items_warned: Arc<AtomicBool>,
     // Cached git branch name for the status line (None if unknown).
@@ -1060,7 +1060,7 @@ impl ChatWidget {
     }
 
     // --- Small event handlers ---
-    fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
+    fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
@@ -1159,7 +1159,7 @@ impl ChatWidget {
         });
     }
 
-    fn on_thread_name_updated(&mut self, event: codex_core::protocol::ThreadNameUpdatedEvent) {
+    fn on_thread_name_updated(&mut self, event: codex_protocol::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
             self.thread_name = event.thread_name;
             self.request_redraw();
@@ -1982,7 +1982,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_patch_apply_end(&mut self, event: codex_core::protocol::PatchApplyEndEvent) {
+    fn on_patch_apply_end(&mut self, event: codex_protocol::protocol::PatchApplyEndEvent) {
         let ev2 = event.clone();
         self.defer_or_handle(
             |q| q.push_patch_end(event),
@@ -2144,9 +2144,9 @@ impl ChatWidget {
 
     fn on_get_history_entry_response(
         &mut self,
-        event: codex_core::protocol::GetHistoryEntryResponseEvent,
+        event: codex_protocol::protocol::GetHistoryEntryResponseEvent,
     ) {
-        let codex_core::protocol::GetHistoryEntryResponseEvent {
+        let codex_protocol::protocol::GetHistoryEntryResponseEvent {
             offset,
             log_id,
             entry,
@@ -2412,7 +2412,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_patch_apply_end_now(
         &mut self,
-        event: codex_core::protocol::PatchApplyEndEvent,
+        event: codex_protocol::protocol::PatchApplyEndEvent,
     ) {
         // If the patch was successful, just let the "Edited" block stand.
         // Otherwise, add a failure block.
@@ -2923,7 +2923,7 @@ impl ChatWidget {
     pub(crate) fn new_from_existing(
         common: ChatWidgetInit,
         conversation: std::sync::Arc<codex_core::CodexThread>,
-        session_configured: codex_core::protocol::SessionConfiguredEvent,
+        session_configured: codex_protocol::protocol::SessionConfiguredEvent,
     ) -> Self {
         let ChatWidgetInit {
             config,
@@ -3505,11 +3505,11 @@ impl ChatWidget {
                 }
             }
             SlashCommand::TestApproval => {
-                use codex_core::protocol::EventMsg;
+                use codex_protocol::protocol::EventMsg;
                 use std::collections::HashMap;
 
-                use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-                use codex_core::protocol::FileChange;
+                use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+                use codex_protocol::protocol::FileChange;
 
                 self.app_event_tx.send(AppEvent::CodexEvent(Event {
                     id: "1".to_string(),

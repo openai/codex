@@ -45,16 +45,6 @@ use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::FinalOutput;
-use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::SessionSource;
-use codex_core::protocol::SkillErrorInfo;
-use codex_core::protocol::TokenUsage;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
@@ -67,7 +57,17 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FinalOutput;
+use codex_protocol::protocol::ListSkillsResponseEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SkillErrorInfo;
+use codex_protocol::protocol::TokenUsage;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -1248,8 +1248,8 @@ impl App {
                 != WindowsSandboxLevel::Disabled
                 && matches!(
                     app.config.permissions.sandbox_policy.get(),
-                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
+                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
                 )
                 && !app
                     .config
@@ -2200,8 +2200,8 @@ impl App {
                 #[cfg(target_os = "windows")]
                 let policy_is_workspace_write_or_ro = matches!(
                     &policy,
-                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
+                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
                 );
                 let policy_for_chat = policy.clone();
 
@@ -2767,7 +2767,7 @@ impl App {
         (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
     }
 
-    pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
+    pub(crate) fn token_usage(&self) -> codex_protocol::protocol::TokenUsage {
         self.chat_widget.token_usage()
     }
 
@@ -2939,7 +2939,7 @@ impl App {
         cwd: PathBuf,
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: PathBuf,
-        sandbox_policy: codex_core::protocol::SandboxPolicy,
+        sandbox_policy: codex_protocol::protocol::SandboxPolicy,
         tx: AppEventSender,
     ) {
         tokio::task::spawn_blocking(move || {
@@ -3000,16 +3000,16 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
-    use codex_core::protocol::AskForApproval;
-    use codex_core::protocol::Event;
-    use codex_core::protocol::EventMsg;
-    use codex_core::protocol::SandboxPolicy;
-    use codex_core::protocol::SessionConfiguredEvent;
-    use codex_core::protocol::SessionSource;
-    use codex_core::protocol::ThreadRolledBackEvent;
-    use codex_core::protocol::UserMessageEvent;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::Event;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SessionConfiguredEvent;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::ThreadRolledBackEvent;
+    use codex_protocol::protocol::UserMessageEvent;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
     use crossterm::event::KeyModifiers;
