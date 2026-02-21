@@ -88,7 +88,7 @@ pub(crate) struct RepoHybridSearchParams {
     pub embedding_model: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RepoIndexRefreshParams {
     #[serde(default)]
@@ -161,6 +161,7 @@ pub(crate) struct RepoEmbeddingStatus {
 struct SelectedEmbeddingMode {
     mode: EmbeddingMode,
     reason: Option<&'static str>,
+    require_embeddings: bool,
 }
 
 impl SelectedEmbeddingMode {
@@ -305,9 +306,12 @@ pub(crate) async fn handle_repo_index_refresh(
     arguments: Option<JsonObject>,
     config: &Config,
 ) -> CallToolResult {
-    let params = match parse_arguments::<RepoIndexRefreshParams>(arguments) {
-        Ok(params) => params,
-        Err(result) => return result,
+    let params = match arguments {
+        Some(arguments) => match parse_arguments::<RepoIndexRefreshParams>(Some(arguments)) {
+            Ok(params) => params,
+            Err(result) => return result,
+        },
+        None => RepoIndexRefreshParams::default(),
     };
 
     let repo_root = match resolve_repo_root(params.repo_root.as_deref()) {
@@ -371,15 +375,15 @@ async fn refresh_repo_index(
         .await
         .with_context(|| format!("failed to initialize index at `{}`", repo_root.display()))?;
     let embedding_model = embedding_model_or_default(embedding_model);
-    let embedding_mode = resolve_embedding_mode(require_embeddings, &embedding_model)?;
-    let stats = index
-        .refresh(
-            &file_globs,
-            force_full,
-            embedding_model,
-            embedding_mode.mode,
-        )
-        .await?;
+    let mut embedding_mode = resolve_embedding_mode(require_embeddings, &embedding_model)?;
+    let stats = refresh_index(
+        &index,
+        &file_globs,
+        force_full,
+        embedding_model.as_str(),
+        &mut embedding_mode,
+    )
+    .await?;
 
     Ok(RepoIndexWarmOutcome {
         repo_root,
@@ -441,15 +445,16 @@ pub(crate) async fn handle_query_project(
             ));
         }
     };
+    let mut embedding_mode = embedding_mode;
 
-    let refresh_stats = match index
-        .refresh(
-            &file_globs,
-            false,
-            embedding_model.clone(),
-            embedding_mode.mode,
-        )
-        .await
+    let refresh_stats = match refresh_index(
+        &index,
+        &file_globs,
+        false,
+        embedding_model.as_str(),
+        &mut embedding_mode,
+    )
+    .await
     {
         Ok(stats) => stats,
         Err(err) => return call_tool_error(format!("index refresh failed: {err}")),
@@ -528,6 +533,7 @@ fn resolve_embedding_mode_from_api_key(
         return Ok(SelectedEmbeddingMode {
             mode: EmbeddingMode::Required,
             reason: None,
+            require_embeddings,
         });
     }
     if require_embeddings {
@@ -536,7 +542,68 @@ fn resolve_embedding_mode_from_api_key(
     Ok(SelectedEmbeddingMode {
         mode: EmbeddingMode::Skip,
         reason: Some(EMBEDDING_REASON_MISSING_API_KEY),
+        require_embeddings,
     })
+}
+
+fn should_force_full_refresh(
+    force_full: bool,
+    embedding_mode: EmbeddingMode,
+    require_embeddings: bool,
+    stored_model: Option<&str>,
+    embedding_model: &str,
+    stored_ready: bool,
+) -> bool {
+    if force_full {
+        return true;
+    }
+    if !matches!(embedding_mode, EmbeddingMode::Required) {
+        return false;
+    }
+    if stored_model != Some(embedding_model) {
+        return true;
+    }
+    require_embeddings && !stored_ready
+}
+
+async fn refresh_index(
+    index: &RepoHybridIndex,
+    file_globs: &[String],
+    force_full: bool,
+    embedding_model: &str,
+    embedding_mode: &mut SelectedEmbeddingMode,
+) -> anyhow::Result<RepoIndexRefreshStats> {
+    match index
+        .refresh(
+            file_globs,
+            force_full,
+            embedding_model.to_string(),
+            embedding_mode.mode,
+            embedding_mode.require_embeddings,
+        )
+        .await
+    {
+        Ok(stats) => Ok(stats),
+        Err(err)
+            if matches!(embedding_mode.mode, EmbeddingMode::Required)
+                && !embedding_mode.require_embeddings =>
+        {
+            tracing::warn!(error = %err, "embedding refresh failed; retrying without embeddings");
+            let stats = index
+                .refresh(
+                    file_globs,
+                    force_full,
+                    embedding_model.to_string(),
+                    EmbeddingMode::Skip,
+                    false,
+                )
+                .await?;
+            embedding_mode.mode = EmbeddingMode::Skip;
+            embedding_mode.reason = Some(EMBEDDING_REASON_QUERY_FAILED);
+            Ok(stats)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn parse_arguments<T>(arguments: Option<JsonObject>) -> Result<T, CallToolResult>
@@ -771,17 +838,20 @@ impl RepoHybridIndex {
         force_full: bool,
         embedding_model: String,
         embedding_mode: EmbeddingMode,
+        require_embeddings: bool,
     ) -> anyhow::Result<RepoIndexRefreshStats> {
         let _refresh_guard = self.refresh_lock.lock().await;
         let glob_set = build_glob_set(file_globs)?;
         let stored_model = self.load_metadata(METADATA_EMBEDDING_MODEL).await?;
         let stored_ready = self.embedding_ready().await?;
-        let mut force_full = force_full;
-        if matches!(embedding_mode, EmbeddingMode::Required)
-            && (stored_model.as_deref() != Some(embedding_model.as_str()) || !stored_ready)
-        {
-            force_full = true;
-        }
+        let force_full = should_force_full_refresh(
+            force_full,
+            embedding_mode,
+            require_embeddings,
+            stored_model.as_deref(),
+            embedding_model.as_str(),
+            stored_ready,
+        );
         if force_full {
             self.clear_all().await?;
         }
@@ -1616,6 +1686,7 @@ mod tests {
                 .expect("mode should resolve");
         assert_eq!(mode.mode, EmbeddingMode::Required);
         assert_eq!(mode.reason, None);
+        assert!(!mode.require_embeddings);
         assert_eq!(mode.status().ready, true);
     }
 
@@ -1625,7 +1696,68 @@ mod tests {
             .expect("mode should resolve to skip");
         assert_eq!(mode.mode, EmbeddingMode::Skip);
         assert_eq!(mode.reason, Some(EMBEDDING_REASON_MISSING_API_KEY));
+        assert!(!mode.require_embeddings);
         assert_eq!(mode.status().ready, false);
+    }
+
+    #[test]
+    fn resolve_embedding_mode_marks_strict_mode_when_embeddings_are_required() {
+        let mode =
+            resolve_embedding_mode_from_api_key(true, Some("test-key"), OPENAI_API_KEY_ENV_VAR)
+                .expect("mode should resolve");
+        assert_eq!(mode.mode, EmbeddingMode::Required);
+        assert_eq!(mode.reason, None);
+        assert!(mode.require_embeddings);
+        assert_eq!(mode.status().ready, true);
+    }
+
+    #[test]
+    fn repo_index_refresh_params_default_accepts_missing_arguments() {
+        let params = RepoIndexRefreshParams::default();
+        assert_eq!(params.repo_root, None);
+        assert_eq!(params.file_globs, None);
+        assert_eq!(params.embedding_model, None);
+        assert!(!params.force_full);
+        assert_eq!(params.require_embeddings, None);
+    }
+
+    #[test]
+    fn force_full_refresh_stays_disabled_for_non_strict_optional_embeddings() {
+        let should_force = should_force_full_refresh(
+            false,
+            EmbeddingMode::Required,
+            false,
+            Some(DEFAULT_EMBEDDING_MODEL),
+            DEFAULT_EMBEDDING_MODEL,
+            false,
+        );
+        assert!(!should_force);
+    }
+
+    #[test]
+    fn force_full_refresh_is_enabled_for_strict_missing_embeddings() {
+        let should_force = should_force_full_refresh(
+            false,
+            EmbeddingMode::Required,
+            true,
+            Some(DEFAULT_EMBEDDING_MODEL),
+            DEFAULT_EMBEDDING_MODEL,
+            false,
+        );
+        assert!(should_force);
+    }
+
+    #[test]
+    fn force_full_refresh_is_enabled_when_embedding_model_changes() {
+        let should_force = should_force_full_refresh(
+            false,
+            EmbeddingMode::Required,
+            false,
+            Some("text-embedding-3-small"),
+            "text-embedding-3-large",
+            false,
+        );
+        assert!(should_force);
     }
 
     #[test]
@@ -1670,7 +1802,7 @@ mod tests {
 
         let index = RepoHybridIndex::open(repo_root).await.expect("open index");
         index
-            .refresh(&[], false, "model".to_string(), EmbeddingMode::Skip)
+            .refresh(&[], false, "model".to_string(), EmbeddingMode::Skip, false)
             .await
             .expect("initial refresh");
         let stats = index
@@ -1679,6 +1811,7 @@ mod tests {
                 false,
                 "model".to_string(),
                 EmbeddingMode::Skip,
+                false,
             )
             .await
             .expect("glob refresh");
@@ -1699,11 +1832,23 @@ mod tests {
         let mode = resolve_embedding_mode_from_api_key(false, None, OPENAI_API_KEY_ENV_VAR)
             .expect("mode should resolve to skip");
         index
-            .refresh(&[], false, "model".to_string(), mode.mode)
+            .refresh(
+                &[],
+                false,
+                "model".to_string(),
+                mode.mode,
+                mode.require_embeddings,
+            )
             .await
             .expect("initial refresh");
         let second = index
-            .refresh(&[], false, "model".to_string(), mode.mode)
+            .refresh(
+                &[],
+                false,
+                "model".to_string(),
+                mode.mode,
+                mode.require_embeddings,
+            )
             .await
             .expect("second refresh");
 
@@ -1719,7 +1864,7 @@ mod tests {
 
         let index = RepoHybridIndex::open(repo_root).await.expect("open index");
         index
-            .refresh(&[], false, "model".to_string(), EmbeddingMode::Skip)
+            .refresh(&[], false, "model".to_string(), EmbeddingMode::Skip, false)
             .await
             .expect("refresh");
         let outcome = index
