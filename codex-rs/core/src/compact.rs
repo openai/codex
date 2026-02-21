@@ -317,28 +317,6 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
     message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
 }
 
-pub(crate) async fn process_compacted_history(
-    sess: &Session,
-    turn_context: &TurnContext,
-    mut compacted_history: Vec<ResponseItem>,
-    initial_context_injection: InitialContextInjection,
-) -> Vec<ResponseItem> {
-    // Mid-turn compaction is the only path that must inject initial context above the last user
-    // message in the replacement history. Pre-turn compaction instead injects context after the
-    // compaction item, but mid-turn compaction keeps the compaction item last for model training.
-    let initial_context = if matches!(
-        initial_context_injection,
-        InitialContextInjection::BeforeLastUserMessage
-    ) {
-        sess.build_initial_context(turn_context).await
-    } else {
-        Vec::new()
-    };
-
-    compacted_history.retain(should_keep_compacted_history_item);
-    insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context)
-}
-
 /// Inserts canonical initial context into compacted replacement history at the
 /// model-expected boundary.
 ///
@@ -347,7 +325,7 @@ pub(crate) async fn process_compacted_history(
 /// - If no real user messages remain, insert before the compaction summary so
 ///   the summary stays last.
 /// - If there are no user messages at all, append the context.
-fn insert_initial_context_before_last_real_user_or_summary(
+pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
     mut compacted_history: Vec<ResponseItem>,
     initial_context: Vec<ResponseItem>,
 ) -> Vec<ResponseItem> {
@@ -379,30 +357,6 @@ fn insert_initial_context_before_last_real_user_or_summary(
     }
 
     compacted_history
-}
-
-/// Returns whether an item from remote compaction output should be preserved.
-///
-/// Called while processing the model-provided compacted transcript, before we
-/// append fresh canonical context from the current session.
-///
-/// We drop:
-/// - `developer` messages because remote output can include stale/duplicated
-///   instruction content.
-/// - non-user-content `user` messages (session prefix/instruction wrappers),
-///   keeping only real user messages as parsed by `parse_turn_item`.
-///
-/// This intentionally keeps `user`-role warnings and compaction-generated
-/// summary messages because they parse as `TurnItem::UserMessage`.
-fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
-    match item {
-        ResponseItem::Message { role, .. } if role == "developer" => false,
-        ResponseItem::Message { role, .. } if role == "user" => matches!(
-            crate::event_mapping::parse_turn_item(item),
-            Some(TurnItem::UserMessage(_))
-        ),
-        _ => true,
-    }
 }
 
 pub(crate) fn build_compacted_history(
@@ -531,7 +485,7 @@ mod tests {
     ) -> (Vec<ResponseItem>, Vec<ResponseItem>) {
         let (session, turn_context) = crate::codex::make_session_and_context().await;
         let initial_context = session.build_initial_context(&turn_context).await;
-        let refreshed = process_compacted_history(
+        let refreshed = crate::compact_remote::process_compacted_history(
             &session,
             &turn_context,
             compacted_history,
