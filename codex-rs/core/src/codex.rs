@@ -2803,15 +2803,6 @@ impl Session {
         turn_context: &TurnContext,
         previous_user_turn_model: Option<&str>,
     ) {
-        let is_model_switch_developer_message = |item: &ResponseItem| match item {
-            ResponseItem::Message { role, content, .. } if role == "developer" => {
-                matches!(
-                    content.as_slice(),
-                    [ContentItem::InputText { text }] if text.starts_with("<model_switch>\n")
-                )
-            }
-            _ => false,
-        };
         let reference_context_item = self.reference_context_item().await;
         let should_inject_full_context = reference_context_item.is_none();
         let context_items = if should_inject_full_context {
@@ -2833,21 +2824,11 @@ impl Session {
             initial_context
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
-            let mut items = self.build_settings_update_items(
+            self.build_settings_update_items(
                 reference_context_item.as_ref(),
                 previous_user_turn_model,
                 turn_context,
-            );
-            if let Some(model_switch_item) =
-                crate::context_manager::updates::build_model_instructions_update_item(
-                    previous_user_turn_model,
-                    turn_context,
-                )
-            {
-                items.retain(|item| !is_model_switch_developer_message(item));
-                items.insert(0, model_switch_item);
-            }
-            items
+            )
         };
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)

@@ -123,6 +123,13 @@ pub(crate) fn build_settings_update_items(
 ) -> Vec<ResponseItem> {
     let mut update_items = Vec::new();
 
+    // Keep model-switch instructions first so model-specific guidance is read before
+    // any other context diffs on this turn.
+    if let Some(model_instructions_item) =
+        build_model_instructions_update_item(previous_user_turn_model, next)
+    {
+        update_items.push(model_instructions_item);
+    }
     if let Some(env_item) = build_environment_update_item(previous, next, shell) {
         update_items.push(env_item);
     }
@@ -131,11 +138,6 @@ pub(crate) fn build_settings_update_items(
     }
     if let Some(collaboration_mode_item) = build_collaboration_mode_update_item(previous, next) {
         update_items.push(collaboration_mode_item);
-    }
-    if let Some(model_instructions_item) =
-        build_model_instructions_update_item(previous_user_turn_model, next)
-    {
-        update_items.push(model_instructions_item);
     }
     if let Some(personality_item) =
         build_personality_update_item(previous, next, personality_feature_enabled)
