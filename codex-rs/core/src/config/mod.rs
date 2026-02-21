@@ -379,7 +379,8 @@ pub struct Config {
     /// Optional Plan-mode-specific reasoning effort override used by the TUI.
     ///
     /// When unset, Plan mode uses the built-in Plan preset default (currently
-    /// `medium`).
+    /// `medium`). When explicitly set (including `none`), this overrides the
+    /// Plan preset.
     pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
 
     /// If not "none", the value to use for `reasoning.summary` when making a
