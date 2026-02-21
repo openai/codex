@@ -1822,6 +1822,9 @@ impl Session {
             }
         }
 
+        // Legacy/minimal rollouts may only persist `TurnContextItem`/`Compacted` without turn
+        // lifecycle events. Fall back to the last `TurnContextItem` in rollout order so
+        // resume/fork can still hydrate `previous_model` and detect compaction-after-baseline.
         if !saw_turn_lifecycle_event {
             let mut saw_compaction_after_last_turn_context = false;
             for item in rollout_items.iter().rev() {
