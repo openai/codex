@@ -182,6 +182,7 @@ use crate::protocol::ModelRerouteEvent;
 use crate::protocol::ModelRerouteReason;
 use crate::protocol::NetworkApprovalContext;
 use crate::protocol::Op;
+use crate::protocol::PatchApplyStatus;
 use crate::protocol::PlanDeltaEvent;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReasoningContentDeltaEvent;
@@ -2075,6 +2076,8 @@ impl Session {
             msg,
         };
         self.send_event_raw(event).await;
+        self.maybe_mirror_event_text_to_realtime(&legacy_source)
+            .await;
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
@@ -2083,6 +2086,18 @@ impl Session {
                 msg: legacy,
             };
             self.send_event_raw(legacy_event).await;
+        }
+    }
+
+    async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {
+        let Some(text) = realtime_text_for_event(msg) else {
+            return;
+        };
+        if self.conversation.running_state().await.is_none() {
+            return;
+        }
+        if let Err(err) = self.conversation.text_in(text).await {
+            debug!("failed to mirror event text to realtime conversation: {err}");
         }
     }
 
@@ -5263,6 +5278,51 @@ fn agent_message_text(item: &codex_protocol::items::AgentMessageItem) -> String 
         .collect()
 }
 
+fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
+    match msg {
+        EventMsg::ExecCommandBegin(event) => {
+            let command = event.command.join(" ");
+            Some(format!(
+                "Exec command started: {command}\nWorking directory: {}",
+                event.cwd.display()
+            ))
+        }
+        EventMsg::PatchApplyBegin(event) => {
+            let mut files: Vec<String> = event
+                .changes
+                .keys()
+                .map(|path| path.display().to_string())
+                .collect();
+            files.sort();
+            let file_list = if files.is_empty() {
+                "none".to_string()
+            } else {
+                files.join(", ")
+            };
+            Some(format!(
+                "apply_patch started ({count} file change(s))\nFiles: {file_list}",
+                count = files.len()
+            ))
+        }
+        EventMsg::PatchApplyEnd(event) => {
+            let status = match event.status {
+                PatchApplyStatus::Completed => "completed",
+                PatchApplyStatus::Failed => "failed",
+                PatchApplyStatus::Declined => "declined",
+            };
+            let mut text = format!("apply_patch {status}");
+            if !event.stdout.is_empty() {
+                text.push_str(&format!("\nstdout:\n{}", event.stdout));
+            }
+            if !event.stderr.is_empty() {
+                text.push_str(&format!("\nstderr:\n{}", event.stderr));
+            }
+            Some(text)
+        }
+        _ => None,
+    }
+}
+
 /// Split the stream into normal assistant text vs. proposed plan content.
 /// Normal text becomes AgentMessage deltas; plan content becomes PlanDelta +
 /// TurnItem::Plan.
@@ -5848,13 +5908,22 @@ mod tests {
 
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
+    use crate::protocol::ExecCommandBeginEvent;
+    use crate::protocol::ExecCommandOutputDeltaEvent;
+    use crate::protocol::ExecCommandSource;
+    use crate::protocol::ExecOutputStream;
     use crate::protocol::InitialHistory;
+    use crate::protocol::PatchApplyBeginEvent;
+    use crate::protocol::PatchApplyEndEvent;
+    use crate::protocol::PatchApplyStatus;
     use crate::protocol::RateLimitSnapshot;
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
+    use crate::protocol::TerminalInteractionEvent;
     use crate::protocol::TokenCountEvent;
     use crate::protocol::TokenUsage;
     use crate::protocol::TokenUsageInfo;
+    use crate::protocol::TurnDiffEvent;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
@@ -5932,6 +6001,87 @@ mod tests {
             is_accessible: true,
             is_enabled: true,
         }
+    }
+
+    #[test]
+    fn realtime_text_for_event_includes_exec_command_begin() {
+        let event = EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-1".to_string(),
+            process_id: None,
+            turn_id: "turn-1".to_string(),
+            command: vec!["echo".to_string(), "hi".to_string()],
+            cwd: PathBuf::from("/tmp"),
+            parsed_cmd: Vec::new(),
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+        });
+
+        let text = realtime_text_for_event(&event).expect("expected mirrored text");
+        assert!(text.contains("Exec command started: echo hi"));
+        assert!(text.contains("Working directory: /tmp"));
+    }
+
+    #[test]
+    fn realtime_text_for_event_includes_patch_apply_begin_and_end() {
+        let mut changes = HashMap::new();
+        changes.insert(
+            PathBuf::from("b.txt"),
+            FileChange::Add {
+                content: "b".to_string(),
+            },
+        );
+        changes.insert(
+            PathBuf::from("a.txt"),
+            FileChange::Delete {
+                content: "a".to_string(),
+            },
+        );
+
+        let begin = EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            call_id: "patch-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            auto_approved: true,
+            changes: changes.clone(),
+        });
+        let begin_text = realtime_text_for_event(&begin).expect("expected patch begin text");
+        assert!(begin_text.contains("apply_patch started (2 file change(s))"));
+        assert!(begin_text.contains("Files: a.txt, b.txt"));
+
+        let end = EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+            call_id: "patch-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            stdout: "Updated files".to_string(),
+            stderr: "warning".to_string(),
+            success: true,
+            changes,
+            status: PatchApplyStatus::Completed,
+        });
+        let end_text = realtime_text_for_event(&end).expect("expected patch end text");
+        assert!(end_text.contains("apply_patch completed"));
+        assert!(end_text.contains("stdout:\nUpdated files"));
+        assert!(end_text.contains("stderr:\nwarning"));
+    }
+
+    #[test]
+    fn realtime_text_for_event_skips_turn_diff_and_shell_deltas() {
+        let turn_diff = EventMsg::TurnDiff(TurnDiffEvent {
+            unified_diff: "--- a\n+++ b\n".to_string(),
+        });
+        assert_eq!(realtime_text_for_event(&turn_diff), None);
+
+        let output_delta = EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+            call_id: "call-1".to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: b"hello".to_vec(),
+        });
+        assert_eq!(realtime_text_for_event(&output_delta), None);
+
+        let terminal_interaction = EventMsg::TerminalInteraction(TerminalInteractionEvent {
+            call_id: "call-1".to_string(),
+            process_id: "proc-1".to_string(),
+            stdin: "ls\n".to_string(),
+        });
+        assert_eq!(realtime_text_for_event(&terminal_interaction), None);
     }
 
     fn make_mcp_tool(
