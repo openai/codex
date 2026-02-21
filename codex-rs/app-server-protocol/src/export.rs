@@ -32,93 +32,10 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::LazyLock;
 use ts_rs::TS;
 
 const HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
-static VARIANT_TITLE_COLLISION_OVERRIDES: LazyLock<HashMap<&'static str, &'static str>> =
-    LazyLock::new(|| {
-        HashMap::from([
-            (
-                "base=McpStartupStatus|generated=StateMcpStartupStatus|literal:state=ready|only_property=state|required_only=state",
-                "StateMcpStartupStatus2",
-            ),
-            (
-                "base=McpStartupStatus|generated=StateMcpStartupStatus|literal:state=cancelled|only_property=state|required_only=state",
-                "StateMcpStartupStatus3",
-            ),
-        ])
-    });
-static NUMBERED_DEFINITION_COLLISION_OVERRIDES: LazyLock<HashMap<&'static str, &'static str>> =
-    LazyLock::new(|| {
-        HashMap::from([
-            (
-                "schema=ClientRequest|container=definitions|generated=AskForApproval2|base=AskForApproval",
-                "AskForApproval2",
-            ),
-            (
-                "schema=ClientRequest|container=definitions|generated=NetworkAccess2|base=NetworkAccess",
-                "NetworkAccess2",
-            ),
-            (
-                "schema=ClientRequest|container=definitions|generated=ReadOnlyAccess2|base=ReadOnlyAccess",
-                "ReadOnlyAccess2",
-            ),
-            (
-                "schema=ClientRequest|container=definitions|generated=SandboxMode2|base=SandboxMode",
-                "SandboxMode2",
-            ),
-            (
-                "schema=ClientRequest|container=definitions|generated=SandboxPolicy2|base=SandboxPolicy",
-                "SandboxPolicy2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=ByteRange2|base=ByteRange",
-                "ByteRange2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=CodexErrorInfo2|base=CodexErrorInfo",
-                "CodexErrorInfo2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=CreditsSnapshot2|base=CreditsSnapshot",
-                "CreditsSnapshot2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=MessagePhase2|base=MessagePhase",
-                "MessagePhase2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=ModelRerouteReason2|base=ModelRerouteReason",
-                "ModelRerouteReason2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=PatchApplyStatus2|base=PatchApplyStatus",
-                "PatchApplyStatus2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=RateLimitSnapshot2|base=RateLimitSnapshot",
-                "RateLimitSnapshot2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=RateLimitWindow2|base=RateLimitWindow",
-                "RateLimitWindow2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=TextElement2|base=TextElement",
-                "TextElement2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=UserInput2|base=UserInput",
-                "UserInput2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=WebSearchAction2|base=WebSearchAction",
-                "WebSearchAction2",
-            ),
-        ])
-    });
 
 #[derive(Clone)]
 pub struct GeneratedSchema {
@@ -264,6 +181,7 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
     schemas.extend(export_server_response_schemas(out_dir)?);
     schemas.extend(export_client_notification_schemas(out_dir)?);
     schemas.extend(export_server_notification_schemas(out_dir)?);
+    schemas.retain(|schema| schema.namespace() == Some("v2"));
 
     let mut bundle = build_schema_bundle(schemas)?;
     if !experimental_api {
@@ -1031,14 +949,17 @@ where
     T: JsonSchema,
 {
     let file_stem = name.trim();
+    let (raw_namespace, logical_name) = split_namespace(file_stem);
+    let include_in_json_codegen = raw_namespace == Some("v2");
     let schema = schema_for!(T);
     let mut schema_value = serde_json::to_value(schema)?;
-    enforce_numbered_definition_collision_overrides(file_stem, &mut schema_value);
-    annotate_schema(&mut schema_value, Some(file_stem));
+    if include_in_json_codegen {
+        enforce_numbered_definition_collision_overrides(file_stem, &mut schema_value);
+        annotate_schema(&mut schema_value, Some(file_stem));
+    }
     // If the name looks like a namespaced path (e.g., "v2::Type"), mirror
     // the TypeScript layout and write to out_dir/v2/Type.json. Otherwise
     // write alongside the legacy files.
-    let (raw_namespace, logical_name) = split_namespace(file_stem);
     let out_path = if let Some(ns) = raw_namespace {
         let dir = out_dir.join(ns);
         ensure_dir(&dir)?;
@@ -1047,7 +968,7 @@ where
         out_dir.join(format!("{file_stem}.json"))
     };
 
-    if !IGNORED_DEFINITIONS.contains(&logical_name) {
+    if include_in_json_codegen && !IGNORED_DEFINITIONS.contains(&logical_name) {
         write_pretty_json(out_path, &schema_value)
             .with_context(|| format!("Failed to write JSON schema for {file_stem}"))?;
     }
@@ -1066,96 +987,27 @@ where
 
 fn enforce_numbered_definition_collision_overrides(schema_name: &str, schema: &mut Value) {
     for defs_key in ["definitions", "$defs"] {
-        let renames = {
-            let Some(defs) = schema.get(defs_key).and_then(Value::as_object) else {
-                continue;
-            };
-            collect_numbered_definition_collision_renames(schema_name, defs_key, defs)
-        };
-
-        if renames.is_empty() {
+        let Some(defs) = schema.get(defs_key).and_then(Value::as_object) else {
             continue;
-        }
-
-        #[expect(clippy::expect_used)]
-        let defs = schema
-            .get_mut(defs_key)
-            .and_then(Value::as_object_mut)
-            .expect("definition map should still be present");
-        for (old_name, new_name, collision_key) in &renames {
-            if old_name == new_name {
-                continue;
-            }
-            assert!(
-                !defs.contains_key(new_name),
-                "Numbered definition collision override produced duplicate definition {new_name} for {collision_key}",
-            );
-            let schema_value = defs.remove(old_name).unwrap_or_else(|| {
-                panic!("Missing generated numbered definition {old_name} for {collision_key}")
-            });
-            defs.insert(new_name.clone(), schema_value);
-        }
-
-        for (old_name, new_name, _) in renames {
-            if old_name != new_name {
-                rewrite_named_local_ref(schema, defs_key, &old_name, &new_name);
-            }
-        }
+        };
+        detect_numbered_definition_collisions(schema_name, defs_key, defs);
     }
 }
 
-fn collect_numbered_definition_collision_renames(
+fn detect_numbered_definition_collisions(
     schema_name: &str,
     defs_key: &str,
     defs: &Map<String, Value>,
-) -> Vec<(String, String, String)> {
-    let mut renames = Vec::new();
-
+) {
     for generated_name in defs.keys() {
         let base_name = generated_name.trim_end_matches(|c: char| c.is_ascii_digit());
         if base_name == generated_name || !defs.contains_key(base_name) {
             continue;
         }
 
-        let collision_key = format!(
-            "schema={schema_name}|container={defs_key}|generated={generated_name}|base={base_name}"
+        panic!(
+            "Numbered definition naming collision detected: schema={schema_name}|container={defs_key}|generated={generated_name}|base={base_name}"
         );
-        let replacement = NUMBERED_DEFINITION_COLLISION_OVERRIDES
-            .get(collision_key.as_str())
-            .map(|value| (*value).to_string())
-            .unwrap_or_else(|| {
-                panic!("Missing numbered definition collision override for {collision_key}")
-            });
-        renames.push((generated_name.clone(), replacement, collision_key));
-    }
-
-    renames
-}
-
-fn rewrite_named_local_ref(value: &mut Value, defs_key: &str, old_name: &str, new_name: &str) {
-    let direct = format!("#/{defs_key}/{old_name}");
-    let prefixed = format!("{direct}/");
-    let replacement = format!("#/{defs_key}/{new_name}");
-    let replacement_prefixed = format!("{replacement}/");
-    match value {
-        Value::Object(obj) => {
-            if let Some(Value::String(reference)) = obj.get_mut("$ref") {
-                if reference == &direct {
-                    *reference = replacement;
-                } else if let Some(rest) = reference.strip_prefix(&prefixed) {
-                    *reference = format!("{replacement_prefixed}{rest}");
-                }
-            }
-            for child in obj.values_mut() {
-                rewrite_named_local_ref(child, defs_key, old_name, new_name);
-            }
-        }
-        Value::Array(items) => {
-            for child in items {
-                rewrite_named_local_ref(child, defs_key, old_name, new_name);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -1376,20 +1228,11 @@ fn annotate_variant_list(variants: &mut [Value], base: Option<&str>) {
             && let Some(base_name) = base
             && let Some(name) = variant_definition_name(base_name, variant)
         {
-            let mut candidate = name.clone();
+            let candidate = name.clone();
             if seen.contains(&candidate) {
                 let collision_key = variant_title_collision_key(base_name, &name, variant);
-                candidate = VARIANT_TITLE_COLLISION_OVERRIDES
-                    .get(collision_key.as_str())
-                    .map(|value| (*value).to_string())
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Missing variant title collision override for {collision_key} (generated name: {name})"
-                        )
-                    });
-                assert!(
-                    !seen.contains(&candidate),
-                    "Variant title collision override produced duplicate title {candidate} for {collision_key}",
+                panic!(
+                    "Variant title naming collision detected: {collision_key} (generated name: {name})"
                 );
             }
             if let Some(obj) = variant.as_object_mut() {
