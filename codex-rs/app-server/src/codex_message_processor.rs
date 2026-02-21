@@ -2080,14 +2080,15 @@ impl CodexMessageProcessor {
                     .send_server_notification(ServerNotification::ThreadStarted(notif))
                     .await;
 
-                {
+                let outgoing = self.outgoing.clone();
+                tokio::spawn(async move {
                     match codex_core::claude_migration::detect_claude_repo_migration(
                         thread_cwd.as_path(),
                     )
                     .await
                     {
                         Ok(Some(available)) => {
-                            self.outgoing
+                            outgoing
                                 .send_server_notification(ServerNotification::ClaudeMigrationAvailable(
                                     ClaudeMigrationAvailableNotification {
                                         scope: ClaudeMigrationScope::Repo,
@@ -2121,7 +2122,7 @@ impl CodexMessageProcessor {
                             tracing::warn!(error = %err, "failed to detect Claude repo import availability");
                         }
                     }
-                }
+                });
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
