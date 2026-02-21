@@ -222,6 +222,20 @@
           "type": "string"
         },
         {
+          "additionalProperties": false,
+          "description": "Fine-grained rejection controls for approval prompts.\n\nWhen a field is `true`, prompts of that category are automatically rejected instead of shown to the user.",
+          "properties": {
+            "reject": {
+              "$ref": "#/definitions/RejectConfig"
+            }
+          },
+          "required": [
+            "reject"
+          ],
+          "title": "RejectAskForApproval",
+          "type": "object"
+        },
+        {
           "description": "Never ask the user to approve commands. Failures are immediately returned to the model, and never escalated to the user for approval.",
           "enum": [
             "never"
@@ -2015,6 +2029,75 @@
         }
       ]
     },
+    "CollabAgentRef": {
+      "properties": {
+        "agent_nickname": {
+          "description": "Optional nickname assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_role": {
+          "description": "Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadId"
+            }
+          ],
+          "description": "Thread ID of the receiver/new agent."
+        }
+      },
+      "required": [
+        "thread_id"
+      ],
+      "type": "object"
+    },
+    "CollabAgentStatusEntry": {
+      "properties": {
+        "agent_nickname": {
+          "description": "Optional nickname assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_role": {
+          "description": "Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentStatus"
+            }
+          ],
+          "description": "Last known status of the agent."
+        },
+        "thread_id": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadId"
+            }
+          ],
+          "description": "Thread ID of the receiver/new agent."
+        }
+      },
+      "required": [
+        "status",
+        "thread_id"
+      ],
+      "type": "object"
+    },
     "CommandExecutionApprovalDecision": {
       "oneOf": [
         {
@@ -2108,6 +2191,17 @@
         },
         "itemId": {
           "type": "string"
+        },
+        "networkApprovalContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkApprovalContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional context for managed-network approval prompts."
         },
         "proposedExecpolicyAmendment": {
           "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
@@ -2515,6 +2609,73 @@
             "type"
           ],
           "title": "WarningEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Realtime conversation lifecycle start event.",
+          "properties": {
+            "session_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "realtime_conversation_started"
+              ],
+              "title": "RealtimeConversationStartedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RealtimeConversationStartedEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Realtime conversation streaming payload event.",
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/RealtimeEvent"
+            },
+            "type": {
+              "enum": [
+                "realtime_conversation_realtime"
+              ],
+              "title": "RealtimeConversationRealtimeEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "payload",
+            "type"
+          ],
+          "title": "RealtimeConversationRealtimeEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Realtime conversation lifecycle close event.",
+          "properties": {
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "realtime_conversation_closed"
+              ],
+              "title": "RealtimeConversationClosedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RealtimeConversationClosedEventMsg",
           "type": "object"
         },
         {
@@ -4578,6 +4739,20 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "new_agent_nickname": {
+              "description": "Optional nickname assigned to the new agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "new_agent_role": {
+              "description": "Optional role assigned to the new agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "new_thread_id": {
               "anyOf": [
                 {
@@ -4683,6 +4858,20 @@
               "description": "Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.",
               "type": "string"
             },
+            "receiver_agent_nickname": {
+              "description": "Optional nickname assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_agent_role": {
+              "description": "Optional role assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "receiver_thread_id": {
               "allOf": [
                 {
@@ -4733,6 +4922,13 @@
               "description": "ID of the waiting call.",
               "type": "string"
             },
+            "receiver_agents": {
+              "description": "Optional nicknames/roles for receivers.",
+              "items": {
+                "$ref": "#/definitions/CollabAgentRef"
+              },
+              "type": "array"
+            },
             "receiver_thread_ids": {
               "description": "Thread ID of the receivers.",
               "items": {
@@ -4768,6 +4964,13 @@
         {
           "description": "Collab interaction: waiting end.",
           "properties": {
+            "agent_statuses": {
+              "description": "Optional receiver metadata paired with final statuses.",
+              "items": {
+                "$ref": "#/definitions/CollabAgentStatusEntry"
+              },
+              "type": "array"
+            },
             "call_id": {
               "description": "ID of the waiting call.",
               "type": "string"
@@ -4851,6 +5054,20 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "receiver_agent_nickname": {
+              "description": "Optional nickname assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_agent_role": {
+              "description": "Optional role assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "receiver_thread_id": {
               "allOf": [
                 {
@@ -4900,6 +5117,20 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "receiver_agent_nickname": {
+              "description": "Optional nickname assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_agent_role": {
+              "description": "Optional role assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "receiver_thread_id": {
               "allOf": [
                 {
@@ -4939,6 +5170,20 @@
             "call_id": {
               "description": "Identifier for the collab tool call.",
               "type": "string"
+            },
+            "receiver_agent_nickname": {
+              "description": "Optional nickname assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_agent_role": {
+              "description": "Optional role assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "receiver_thread_id": {
               "allOf": [
@@ -6849,6 +7094,120 @@
         }
       ]
     },
+    "RealtimeAudioFrame": {
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "num_channels": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "sample_rate": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "samples_per_channel": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data",
+        "num_channels",
+        "sample_rate"
+      ],
+      "type": "object"
+    },
+    "RealtimeEvent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SessionCreated": {
+              "properties": {
+                "session_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "session_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "SessionCreated"
+          ],
+          "title": "SessionCreatedRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SessionUpdated": {
+              "properties": {
+                "backend_prompt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "SessionUpdated"
+          ],
+          "title": "SessionUpdatedRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "AudioOut": {
+              "$ref": "#/definitions/RealtimeAudioFrame"
+            }
+          },
+          "required": [
+            "AudioOut"
+          ],
+          "title": "AudioOutRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ConversationItemAdded": true
+          },
+          "required": [
+            "ConversationItemAdded"
+          ],
+          "title": "ConversationItemAddedRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Error"
+          ],
+          "title": "ErrorRealtimeEvent",
+          "type": "object"
+        }
+      ]
+    },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
       "enum": [
@@ -6948,6 +7307,28 @@
           "type": "string"
         }
       ]
+    },
+    "RejectConfig": {
+      "properties": {
+        "mcp_elicitations": {
+          "description": "Reject MCP elicitation prompts.",
+          "type": "boolean"
+        },
+        "rules": {
+          "description": "Reject prompts triggered by execpolicy `prompt` rules.",
+          "type": "boolean"
+        },
+        "sandbox_approval": {
+          "description": "Reject approval prompts related to sandbox escalation.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mcp_elicitations",
+        "rules",
+        "sandbox_approval"
+      ],
+      "type": "object"
     },
     "RemoteSkillSummary": {
       "properties": {
@@ -9395,6 +9776,20 @@
           "properties": {
             "thread_spawn": {
               "properties": {
+                "agent_nickname": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "agent_role": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "depth": {
                   "format": "int32",
                   "type": "integer"
@@ -10451,29 +10846,50 @@
       },
       "AppConfig": {
         "properties": {
-          "disabled_reason": {
+          "default_tools_approval_mode": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/AppDisabledReason"
+                "$ref": "#/definitions/v2/AppToolApproval"
               },
               {
                 "type": "null"
               }
             ]
           },
+          "default_tools_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "destructive_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "enabled": {
             "default": true,
             "type": "boolean"
+          },
+          "open_world_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tools": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppToolsConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"
-      },
-      "AppDisabledReason": {
-        "enum": [
-          "unknown",
-          "user"
-        ],
-        "type": "string"
       },
       "AppInfo": {
         "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
@@ -10700,7 +11116,69 @@
         ],
         "type": "object"
       },
+      "AppToolApproval": {
+        "enum": [
+          "auto",
+          "prompt",
+          "approve"
+        ],
+        "type": "string"
+      },
+      "AppToolConfig": {
+        "properties": {
+          "approval_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppToolApproval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "AppToolsConfig": {
+        "type": "object"
+      },
       "AppsConfig": {
+        "properties": {
+          "_default": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppsDefaultConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "AppsDefaultConfig": {
+        "properties": {
+          "destructive_enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          },
+          "open_world_enabled": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "AppsListParams": {
@@ -10763,13 +11241,46 @@
         "type": "object"
       },
       "AskForApproval": {
-        "enum": [
-          "untrusted",
-          "on-failure",
-          "on-request",
-          "never"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "enum": [
+              "untrusted",
+              "on-failure",
+              "on-request",
+              "never"
+            ],
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reject": {
+                "properties": {
+                  "mcp_elicitations": {
+                    "type": "boolean"
+                  },
+                  "rules": {
+                    "type": "boolean"
+                  },
+                  "sandbox_approval": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "mcp_elicitations",
+                  "rules",
+                  "sandbox_approval"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "reject"
+            ],
+            "title": "RejectAskForApproval",
+            "type": "object"
+          }
+        ]
       },
       "AuthMode": {
         "description": "Authentication mode for OpenAI-backed providers.",
@@ -12219,6 +12730,15 @@
           "classification": {
             "type": "string"
           },
+          "extraLogFiles": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "includeLogs": {
             "type": "boolean"
           },
@@ -13216,6 +13736,12 @@
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "dangerouslyAllowAllUnixSockets": {
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -15023,6 +15549,20 @@
             "properties": {
               "thread_spawn": {
                 "properties": {
+                  "agent_nickname": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "agent_role": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "depth": {
                     "format": "int32",
                     "type": "integer"
@@ -15149,6 +15689,20 @@
       },
       "Thread": {
         "properties": {
+          "agentNickname": {
+            "description": "Optional random unique nickname assigned to an AgentControl-spawned sub-agent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agentRole": {
+            "description": "Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cliVersion": {
             "description": "Version of the CLI that created the thread.",
             "type": "string"
@@ -15179,6 +15733,13 @@
           "modelProvider": {
             "description": "Model provider used for this thread (for example, 'openai').",
             "type": "string"
+          },
+          "name": {
+            "description": "Optional user-facing thread title.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "path": {
             "description": "[UNSTABLE] Path to the thread on disk.",

@@ -20,7 +20,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
-use codex_utils_sanitizer::redact_secrets;
+use codex_secrets::redact_secrets;
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::Value;
@@ -142,7 +142,7 @@ impl RequestContext {
             model_info,
             turn_metadata_header,
             otel_manager: turn_context.otel_manager.clone(),
-            reasoning_effort: turn_context.reasoning_effort,
+            reasoning_effort: Some(phase_one::REASONING_EFFORT),
             reasoning_summary: turn_context.reasoning_summary,
         }
     }

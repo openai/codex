@@ -26,7 +26,9 @@
 //! back. This avoids duplicate handshakes but means a failed prewarm can consume one retry
 //! budget slot before any turn payload is sent.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -122,6 +124,7 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     disable_websockets: AtomicBool,
+    cached_websocket_connection: StdMutex<Option<ApiWebSocketConnection>>,
 }
 
 /// Resolved API client setup for a single request attempt.
@@ -227,6 +230,7 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 disable_websockets: AtomicBool::new(false),
+                cached_websocket_connection: StdMutex::new(None),
             }),
         }
     }
@@ -238,11 +242,27 @@ impl ModelClient {
     pub fn new_session(&self) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),
-            connection: None,
+            connection: self.take_cached_websocket_connection(),
             websocket_last_request: None,
             websocket_last_response_rx: None,
             turn_state: Arc::new(OnceLock::new()),
         }
+    }
+
+    fn take_cached_websocket_connection(&self) -> Option<ApiWebSocketConnection> {
+        self.state
+            .cached_websocket_connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    fn store_cached_websocket_connection(&self, connection: ApiWebSocketConnection) {
+        *self
+            .state
+            .cached_websocket_connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(connection);
     }
 
     /// Compacts the current conversation history using the Compact endpoint.
@@ -451,6 +471,14 @@ impl ModelClient {
     }
 }
 
+impl Drop for ModelClientSession {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            self.client.store_cached_websocket_connection(connection);
+        }
+    }
+}
+
 impl ModelClientSession {
     fn activate_http_fallback(&self, websocket_enabled: bool) -> bool {
         websocket_enabled
@@ -623,6 +651,7 @@ impl ModelClientSession {
             if !responses_websockets_v2_enabled {
                 return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
                     input: append_items,
+                    client_metadata: payload.client_metadata,
                 });
             }
         }
@@ -811,7 +840,10 @@ impl ModelClientSession {
                 effort,
                 summary,
             )?;
-            let ws_payload = ResponseCreateWsRequest::from(&request);
+            let ws_payload = ResponseCreateWsRequest {
+                client_metadata: build_ws_client_metadata(turn_metadata_header),
+                ..ResponseCreateWsRequest::from(&request)
+            };
 
             match self
                 .websocket_connection(
@@ -966,6 +998,14 @@ impl ModelClientSession {
 /// metadata with the same sanitization path used when constructing headers.
 fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<HeaderValue> {
     turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
+}
+
+fn build_ws_client_metadata(turn_metadata_header: Option<&str>) -> Option<HashMap<String, String>> {
+    let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header)?;
+    let turn_metadata = turn_metadata_header.to_str().ok()?.to_string();
+    let mut client_metadata = HashMap::new();
+    client_metadata.insert(X_CODEX_TURN_METADATA_HEADER.to_string(), turn_metadata);
+    Some(client_metadata)
 }
 
 /// Builds the extra headers attached to Responses API requests.

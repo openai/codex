@@ -122,7 +122,7 @@ impl ApprovalOverlay {
                     || "Would you like to run the following command?".to_string(),
                     |network_approval_context| {
                         format!(
-                            "Do you want to approve access to \"{}\"?",
+                            "Do you want to approve network access to \"{}\"?",
                             network_approval_context.host
                         )
                     },
@@ -364,12 +364,14 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     header.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
                     header.push(Line::from(""));
                 }
-                let full_cmd = strip_bash_lc_and_escape(&command);
-                let mut full_cmd_lines = highlight_bash_to_lines(&full_cmd);
-                if let Some(first) = full_cmd_lines.first_mut() {
-                    first.spans.insert(0, Span::from("$ "));
+                if network_approval_context.is_none() {
+                    let full_cmd = strip_bash_lc_and_escape(&command);
+                    let mut full_cmd_lines = highlight_bash_to_lines(&full_cmd);
+                    if let Some(first) = full_cmd_lines.first_mut() {
+                        first.spans.insert(0, Span::from("$ "));
+                    }
+                    header.extend(full_cmd_lines);
                 }
-                header.extend(full_cmd_lines);
                 Self {
                     variant: ApprovalVariant::Exec {
                         id,
@@ -738,10 +740,14 @@ mod tests {
             .collect();
 
         assert!(
-            rendered
-                .iter()
-                .any(|line| line.contains("Do you want to approve access to \"example.com\"?")),
+            rendered.iter().any(|line| {
+                line.contains("Do you want to approve network access to \"example.com\"?")
+            }),
             "expected network title to include host, got {rendered:?}"
+        );
+        assert!(
+            !rendered.iter().any(|line| line.contains("$ curl")),
+            "network prompt should not show command line, got {rendered:?}"
         );
         assert!(
             !rendered.iter().any(|line| line.contains("don't ask again")),

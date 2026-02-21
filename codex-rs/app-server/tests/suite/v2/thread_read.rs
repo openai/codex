@@ -8,8 +8,14 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadListParams;
+use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSetNameParams;
+use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
@@ -21,6 +27,7 @@ use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -188,6 +195,155 @@ async fn thread_read_loaded_thread_returns_precomputed_path_before_materializati
     assert!(read.preview.is_empty());
     assert_eq!(read.turns.len(), 0);
     assert_eq!(read.status, ThreadStatus::Idle);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let preview = "Saved user message";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        preview,
+        vec![],
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    // `thread/name/set` operates on loaded threads (via ThreadManager). A rollout existing on disk
+    // is not enough; we must `thread/resume` first to load it into the running server.
+    let pre_resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let pre_resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(pre_resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: pre_resumed,
+        ..
+    } = to_response::<ThreadResumeResponse>(pre_resume_resp)?;
+    assert_eq!(pre_resumed.id, conversation_id);
+
+    // Set a user-facing thread title.
+    let new_name = "My renamed thread";
+    let set_id = mcp
+        .send_thread_set_name_request(ThreadSetNameParams {
+            thread_id: conversation_id.clone(),
+            name: new_name.to_string(),
+        })
+        .await?;
+    let set_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
+    )
+    .await??;
+    let _: ThreadSetNameResponse = to_response::<ThreadSetNameResponse>(set_resp)?;
+
+    // Read should now surface `thread.name`, and the wire payload must include `name`.
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: conversation_id.clone(),
+            include_turns: false,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let read_result = read_resp.result.clone();
+    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    assert_eq!(thread.id, conversation_id);
+    assert_eq!(thread.name.as_deref(), Some(new_name));
+    let thread_json = read_result
+        .get("thread")
+        .and_then(Value::as_object)
+        .expect("thread/read result.thread must be an object");
+    assert_eq!(
+        thread_json.get("name").and_then(Value::as_str),
+        Some(new_name),
+        "thread/read must serialize `thread.name` on the wire"
+    );
+
+    // List should also surface the name.
+    let list_id = mcp
+        .send_thread_list_request(ThreadListParams {
+            cursor: None,
+            limit: Some(50),
+            sort_key: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+        })
+        .await?;
+    let list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let list_result = list_resp.result.clone();
+    let ThreadListResponse { data, .. } = to_response::<ThreadListResponse>(list_resp)?;
+    let listed = data
+        .iter()
+        .find(|t| t.id == conversation_id)
+        .expect("thread/list should include the created thread");
+    assert_eq!(listed.name.as_deref(), Some(new_name));
+    let listed_json = list_result
+        .get("data")
+        .and_then(Value::as_array)
+        .expect("thread/list result.data must be an array")
+        .iter()
+        .find(|t| t.get("id").and_then(Value::as_str) == Some(&conversation_id))
+        .and_then(Value::as_object)
+        .expect("thread/list should include the created thread as an object");
+    assert_eq!(
+        listed_json.get("name").and_then(Value::as_str),
+        Some(new_name),
+        "thread/list must serialize `thread.name` on the wire"
+    );
+
+    // Resume should also surface the name.
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let resume_result = resume_resp.result.clone();
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(resumed.id, conversation_id);
+    assert_eq!(resumed.name.as_deref(), Some(new_name));
+    let resumed_json = resume_result
+        .get("thread")
+        .and_then(Value::as_object)
+        .expect("thread/resume result.thread must be an object");
+    assert_eq!(
+        resumed_json.get("name").and_then(Value::as_str),
+        Some(new_name),
+        "thread/resume must serialize `thread.name` on the wire"
+    );
 
     Ok(())
 }

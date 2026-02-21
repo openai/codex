@@ -8,6 +8,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use reqwest::ClientBuilder;
+use reqwest::Url;
 use rmcp::transport::auth::OAuthState;
 use tiny_http::Response;
 use tiny_http::Server;
@@ -38,6 +39,7 @@ impl Drop for CallbackServerGuard {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_oauth_login(
     server_name: &str,
     server_url: &str,
@@ -46,6 +48,7 @@ pub async fn perform_oauth_login(
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
     callback_port: Option<u16>,
+    callback_url: Option<&str>,
 ) -> Result<()> {
     let headers = OauthHeaders {
         http_headers,
@@ -59,6 +62,7 @@ pub async fn perform_oauth_login(
         scopes,
         true,
         callback_port,
+        callback_url,
         None,
     )
     .await?
@@ -76,6 +80,7 @@ pub async fn perform_oauth_login_return_url(
     scopes: &[String],
     timeout_secs: Option<i64>,
     callback_port: Option<u16>,
+    callback_url: Option<&str>,
 ) -> Result<OauthLoginHandle> {
     let headers = OauthHeaders {
         http_headers,
@@ -89,6 +94,7 @@ pub async fn perform_oauth_login_return_url(
         scopes,
         false,
         callback_port,
+        callback_url,
         timeout_secs,
     )
     .await?;
@@ -99,11 +105,15 @@ pub async fn perform_oauth_login_return_url(
     Ok(OauthLoginHandle::new(authorization_url, completion))
 }
 
-fn spawn_callback_server(server: Arc<Server>, tx: oneshot::Sender<(String, String)>) {
+fn spawn_callback_server(
+    server: Arc<Server>,
+    tx: oneshot::Sender<(String, String)>,
+    expected_callback_path: String,
+) {
     tokio::task::spawn_blocking(move || {
         while let Ok(request) = server.recv() {
             let path = request.url().to_string();
-            match parse_oauth_callback(&path) {
+            match parse_oauth_callback(&path, &expected_callback_path) {
                 CallbackOutcome::Success(OauthCallbackResult { code, state }) => {
                     let response = Response::from_string(
                         "Authentication complete. You may close this window.",
@@ -146,11 +156,11 @@ enum CallbackOutcome {
     Invalid,
 }
 
-fn parse_oauth_callback(path: &str) -> CallbackOutcome {
+fn parse_oauth_callback(path: &str, expected_callback_path: &str) -> CallbackOutcome {
     let Some((route, query)) = path.split_once('?') else {
         return CallbackOutcome::Invalid;
     };
-    if route != "/callback" {
+    if route != expected_callback_path {
         return CallbackOutcome::Invalid;
     }
 
@@ -238,6 +248,53 @@ fn resolve_callback_port(callback_port: Option<u16>) -> Result<Option<u16>> {
     Ok(None)
 }
 
+fn local_redirect_uri(server: &Server) -> Result<String> {
+    match server.server_addr() {
+        tiny_http::ListenAddr::IP(std::net::SocketAddr::V4(addr)) => {
+            let ip = addr.ip();
+            let port = addr.port();
+            Ok(format!("http://{ip}:{port}/callback"))
+        }
+        tiny_http::ListenAddr::IP(std::net::SocketAddr::V6(addr)) => {
+            let ip = addr.ip();
+            let port = addr.port();
+            Ok(format!("http://[{ip}]:{port}/callback"))
+        }
+        #[cfg(not(target_os = "windows"))]
+        _ => Err(anyhow!("unable to determine callback address")),
+    }
+}
+
+fn resolve_redirect_uri(server: &Server, callback_url: Option<&str>) -> Result<String> {
+    let Some(callback_url) = callback_url else {
+        return local_redirect_uri(server);
+    };
+    Url::parse(callback_url)
+        .with_context(|| format!("invalid MCP OAuth callback URL `{callback_url}`"))?;
+    Ok(callback_url.to_string())
+}
+
+fn callback_path_from_redirect_uri(redirect_uri: &str) -> Result<String> {
+    let parsed = Url::parse(redirect_uri)
+        .with_context(|| format!("invalid redirect URI `{redirect_uri}`"))?;
+    Ok(parsed.path().to_string())
+}
+
+fn callback_bind_host(callback_url: Option<&str>) -> &'static str {
+    let Some(callback_url) = callback_url else {
+        return "127.0.0.1";
+    };
+
+    let Ok(parsed) = Url::parse(callback_url) else {
+        return "127.0.0.1";
+    };
+
+    match parsed.host_str() {
+        Some("localhost" | "127.0.0.1" | "::1") | None => "127.0.0.1",
+        Some(_) => "0.0.0.0",
+    }
+}
+
 impl OauthLoginFlow {
     #[allow(clippy::too_many_arguments)]
     async fn new(
@@ -248,14 +305,16 @@ impl OauthLoginFlow {
         scopes: &[String],
         launch_browser: bool,
         callback_port: Option<u16>,
+        callback_url: Option<&str>,
         timeout_secs: Option<i64>,
     ) -> Result<Self> {
         const DEFAULT_OAUTH_TIMEOUT_SECS: i64 = 300;
 
+        let bind_host = callback_bind_host(callback_url);
         let callback_port = resolve_callback_port(callback_port)?;
         let bind_addr = match callback_port {
-            Some(port) => format!("127.0.0.1:{port}"),
-            None => "127.0.0.1:0".to_string(),
+            Some(port) => format!("{bind_host}:{port}"),
+            None => format!("{bind_host}:0"),
         };
 
         let server = Arc::new(Server::http(&bind_addr).map_err(|err| anyhow!(err))?);
@@ -263,23 +322,11 @@ impl OauthLoginFlow {
             server: Arc::clone(&server),
         };
 
-        let redirect_uri = match server.server_addr() {
-            tiny_http::ListenAddr::IP(std::net::SocketAddr::V4(addr)) => {
-                let ip = addr.ip();
-                let port = addr.port();
-                format!("http://{ip}:{port}/callback")
-            }
-            tiny_http::ListenAddr::IP(std::net::SocketAddr::V6(addr)) => {
-                let ip = addr.ip();
-                let port = addr.port();
-                format!("http://[{ip}]:{port}/callback")
-            }
-            #[cfg(not(target_os = "windows"))]
-            _ => return Err(anyhow!("unable to determine callback address")),
-        };
+        let redirect_uri = resolve_redirect_uri(&server, callback_url)?;
+        let callback_path = callback_path_from_redirect_uri(&redirect_uri)?;
 
         let (tx, rx) = oneshot::channel();
-        spawn_callback_server(server, tx);
+        spawn_callback_server(server, tx, callback_path);
 
         let OauthHeaders {
             http_headers,
@@ -381,5 +428,37 @@ impl OauthLoginFlow {
         });
 
         rx
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CallbackOutcome;
+    use super::callback_path_from_redirect_uri;
+    use super::parse_oauth_callback;
+
+    #[test]
+    fn parse_oauth_callback_accepts_default_path() {
+        let parsed = parse_oauth_callback("/callback?code=abc&state=xyz", "/callback");
+        assert!(matches!(parsed, CallbackOutcome::Success(_)));
+    }
+
+    #[test]
+    fn parse_oauth_callback_accepts_custom_path() {
+        let parsed = parse_oauth_callback("/oauth/callback?code=abc&state=xyz", "/oauth/callback");
+        assert!(matches!(parsed, CallbackOutcome::Success(_)));
+    }
+
+    #[test]
+    fn parse_oauth_callback_rejects_wrong_path() {
+        let parsed = parse_oauth_callback("/callback?code=abc&state=xyz", "/oauth/callback");
+        assert!(matches!(parsed, CallbackOutcome::Invalid));
+    }
+
+    #[test]
+    fn callback_path_comes_from_redirect_uri() {
+        let path = callback_path_from_redirect_uri("https://example.com/oauth/callback")
+            .expect("redirect URI should parse");
+        assert_eq!(path, "/oauth/callback");
     }
 }
