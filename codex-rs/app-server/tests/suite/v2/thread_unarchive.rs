@@ -18,6 +18,7 @@ use codex_app_server_protocol::UserInput;
 use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_path_by_id_str;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
 use std::path::Path;
@@ -120,6 +121,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
         mcp.read_stream_until_response_message(RequestId::Integer(unarchive_id)),
     )
     .await??;
+    let unarchive_result = unarchive_resp.result.clone();
     let ThreadUnarchiveResponse {
         thread: unarchived_thread,
     } = to_response::<ThreadUnarchiveResponse>(unarchive_resp)?;
@@ -139,6 +141,16 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
         "expected updated_at to be bumped on unarchive"
     );
     assert_eq!(unarchived_thread.status, ThreadStatus::NotLoaded);
+
+    // Wire contract: thread title field is `name`.
+    let thread_json = unarchive_result
+        .get("thread")
+        .and_then(Value::as_object)
+        .expect("thread/unarchive result.thread must be an object");
+    assert!(
+        thread_json.contains_key("name"),
+        "thread/unarchive must include `thread.name` on the wire (null when absent)"
+    );
 
     let rollout_path_display = rollout_path.display();
     assert!(

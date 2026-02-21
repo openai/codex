@@ -16,6 +16,7 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -107,9 +108,20 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
         mcp.read_stream_until_response_message(RequestId::Integer(rollback_id)),
     )
     .await??;
+    let rollback_result = rollback_resp.result.clone();
     let ThreadRollbackResponse {
         thread: rolled_back_thread,
     } = to_response::<ThreadRollbackResponse>(rollback_resp)?;
+
+    // Wire contract: thread title field is `name`.
+    let thread_json = rollback_result
+        .get("thread")
+        .and_then(Value::as_object)
+        .expect("thread/rollback result.thread must be an object");
+    assert!(
+        thread_json.contains_key("name"),
+        "thread/rollback must include `thread.name` on the wire (null when absent)"
+    );
 
     assert_eq!(rolled_back_thread.turns.len(), 1);
     assert_eq!(rolled_back_thread.status, ThreadStatus::Idle);

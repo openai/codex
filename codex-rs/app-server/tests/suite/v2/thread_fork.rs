@@ -18,6 +18,7 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -70,7 +71,18 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
     )
     .await??;
+    let fork_result = fork_resp.result.clone();
     let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+
+    // Wire contract: thread title field is `name`.
+    let thread_json = fork_result
+        .get("thread")
+        .and_then(Value::as_object)
+        .expect("thread/fork result.thread must be an object");
+    assert!(
+        thread_json.contains_key("name"),
+        "thread/fork must include `thread.name` on the wire (null when absent)"
+    );
 
     let after_contents = std::fs::read_to_string(&original_path)?;
     assert_eq!(
@@ -115,6 +127,15 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         mcp.read_stream_until_notification_message("thread/started"),
     )
     .await??;
+    let started_params = notif.params.clone().expect("params must be present");
+    let started_thread_json = started_params
+        .get("thread")
+        .and_then(Value::as_object)
+        .expect("thread/started params.thread must be an object");
+    assert!(
+        started_thread_json.contains_key("name"),
+        "thread/started must include `thread.name` on the wire (null when absent)"
+    );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
     assert_eq!(started.thread, thread);
