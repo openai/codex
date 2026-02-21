@@ -92,6 +92,7 @@ use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -114,13 +115,14 @@ pub enum ResponsesWebsocketVersion {
     V2,
 }
 
-pub fn ws_version_from_features(
-    responses_websockets_enabled: bool,
-    responses_websockets_v2_enabled: bool,
-) -> Option<ResponsesWebsocketVersion> {
+pub fn ws_version_from_features(config: &Config) -> Option<ResponsesWebsocketVersion> {
     match (
-        responses_websockets_enabled,
-        responses_websockets_v2_enabled,
+        config
+            .features
+            .enabled(crate::features::Feature::ResponsesWebsockets),
+        config
+            .features
+            .enabled(crate::features::Feature::ResponsesWebsocketsV2),
     ) {
         (_, true) => Some(ResponsesWebsocketVersion::V2),
         (true, false) => Some(ResponsesWebsocketVersion::V1),

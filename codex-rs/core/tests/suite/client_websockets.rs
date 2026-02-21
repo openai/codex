@@ -1309,7 +1309,7 @@ async fn websocket_harness_with_options(
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
-        ws_version_from_features(websocket_enabled, websocket_v2_enabled),
+        ws_version_from_features(&config),
         false,
         runtime_metrics_enabled,
         None,
