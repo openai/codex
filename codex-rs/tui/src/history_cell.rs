@@ -25,6 +25,7 @@ use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
+use crate::shimmer::shimmer_spans;
 use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
@@ -1298,6 +1299,10 @@ impl McpToolCallCell {
         }
     }
 
+    fn is_query_project(&self) -> bool {
+        self.invocation.tool == "query_project"
+    }
+
     pub(crate) fn call_id(&self) -> &str {
         &self.call_id
     }
@@ -1358,20 +1363,50 @@ impl McpToolCallCell {
     }
 }
 
+/// Scanning animation frames for `query_project` — cycles through search icons.
+const QUERY_PROJECT_SCAN_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
+
+/// Interval in milliseconds per scan frame.
+const QUERY_PROJECT_FRAME_MS: u128 = 150;
+
 impl HistoryCell for McpToolCallCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         let status = self.success();
+
+        let is_qp = self.is_query_project();
+
         let bullet = match status {
             Some(true) => "•".green().bold(),
             Some(false) => "•".red().bold(),
+            None if is_qp && self.animations_enabled => {
+                let idx = (self.start_time.elapsed().as_millis() / QUERY_PROJECT_FRAME_MS) as usize
+                    % QUERY_PROJECT_SCAN_FRAMES.len();
+                Span::from(QUERY_PROJECT_SCAN_FRAMES[idx].to_string()).cyan()
+            }
             None => spinner(Some(self.start_time), self.animations_enabled),
         };
-        let header_text = if status.is_some() {
-            "Called"
-        } else {
-            "Calling"
+
+        let header_text = match (status.is_some(), is_qp) {
+            (true, true) => "Searched",
+            (true, false) => "Called",
+            (false, true) => "Searching",
+            (false, false) => "Calling",
         };
+
+        // For an in-progress query_project, append a shimmer "scanning…" line.
+        let search_progress_line: Option<Line<'static>> =
+            if is_qp && status.is_none() && self.animations_enabled {
+                let text = "scanning project index…";
+                let spans = shimmer_spans(text);
+                if spans.is_empty() {
+                    Some(Line::from(text.to_string().dim()))
+                } else {
+                    Some(Line::from(spans))
+                }
+            } else {
+                None
+            };
 
         let invocation_line = line_to_static(&format_mcp_invocation(self.invocation.clone()));
         let mut compact_spans = vec![bullet.clone(), " ".into(), header_text.bold(), " ".into()];
@@ -1399,6 +1434,11 @@ impl HistoryCell for McpToolCallCell {
         let mut detail_lines: Vec<Line<'static>> = Vec::new();
         // Reserve four columns for the tree prefix ("  └ "/"    ") and ensure the wrapper still has at least one cell to work with.
         let detail_wrap_width = (width as usize).saturating_sub(4).max(1);
+
+        // Show animated shimmer line while query_project is scanning.
+        if let Some(progress_line) = search_progress_line {
+            detail_lines.push(progress_line);
+        }
 
         if let Some(result) = &self.result {
             match result {
@@ -3031,6 +3071,77 @@ mod tests {
         );
 
         let rendered = render_lines(&cell.display_lines(120)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn active_query_project_snapshot() {
+        let invocation = McpInvocation {
+            server: "codex_apps".into(),
+            tool: "query_project".into(),
+            arguments: Some(json!({
+                "query": "authentication middleware",
+                "limit": 5,
+            })),
+        };
+
+        // Animations disabled so the snapshot is deterministic (no shimmer / frame jitter).
+        let cell = new_active_mcp_tool_call("call-qp-1".into(), invocation, false);
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn active_query_project_with_animations_shows_scanning_progress_text() {
+        let invocation = McpInvocation {
+            server: "codex_apps".into(),
+            tool: "query_project".into(),
+            arguments: Some(json!({
+                "query": "authentication middleware",
+                "limit": 5,
+            })),
+        };
+
+        let cell = new_active_mcp_tool_call("call-qp-animated".into(), invocation, true);
+        let rendered = render_lines(&cell.display_lines(80));
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("scanning project index…")),
+            "expected scanning progress line in rendered output: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn completed_query_project_success_snapshot() {
+        let invocation = McpInvocation {
+            server: "codex_apps".into(),
+            tool: "query_project".into(),
+            arguments: Some(json!({
+                "query": "authentication middleware",
+                "limit": 5,
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![text_block(
+                r#"{"results":[{"path":"src/auth.rs","score":0.92}]}"#,
+            )],
+            is_error: None,
+            structured_content: None,
+            meta: None,
+        };
+
+        let mut cell = new_active_mcp_tool_call("call-qp-2".into(), invocation, false);
+        assert!(
+            cell.complete(Duration::from_millis(830), Ok(result))
+                .is_none()
+        );
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
 
         insta::assert_snapshot!(rendered);
     }

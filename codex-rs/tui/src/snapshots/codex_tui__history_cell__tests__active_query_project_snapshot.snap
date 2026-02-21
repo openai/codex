@@ -1,0 +1,6 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+• Searching
+  └ codex_apps.query_project({"query":"authentication middleware","limit":5})

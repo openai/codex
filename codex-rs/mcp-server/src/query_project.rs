@@ -59,6 +59,7 @@ const SQLITE_BIND_CHUNK_SIZE: usize = 900;
 const SQLITE_BUSY_TIMEOUT_SECS: u64 = 5;
 const EMBEDDING_REQUEST_TIMEOUT_SECS: u64 = 30;
 const EMBEDDING_CONNECT_TIMEOUT_SECS: u64 = 10;
+const QUERY_LOG_PREVIEW_CHARS: usize = 96;
 const METADATA_EMBEDDING_MODEL: &str = "embedding_model";
 const METADATA_EMBEDDING_READY: &str = "embedding_ready";
 const EMBEDDING_REASON_MISSING_API_KEY: &str = "missing_api_key";
@@ -396,28 +397,68 @@ pub(crate) async fn handle_query_project(
     arguments: Option<JsonObject>,
     config: &Config,
 ) -> CallToolResult {
+    let call_start = std::time::Instant::now();
     let params = match parse_arguments::<RepoHybridSearchParams>(arguments) {
         Ok(params) => params,
-        Err(result) => return result,
+        Err(result) => {
+            tracing::warn!(
+                stage = "parse_arguments",
+                elapsed_ms = call_start.elapsed().as_millis() as u64,
+                "query_project failed"
+            );
+            return result;
+        }
     };
 
     let query = params.query.trim();
+    let query_preview = query_log_preview(query);
+    let query_char_count = query.chars().count();
+    tracing::info!(
+        query_preview,
+        query_char_count,
+        limit = params.limit,
+        alpha = params.alpha,
+        "query_project called"
+    );
+    tracing::debug!(query, "query_project full query");
     if query.is_empty() {
-        return call_tool_error("query must not be empty");
+        return query_project_failure(
+            &call_start,
+            "validate_query",
+            Some(query_preview.as_str()),
+            "query must not be empty",
+        );
     }
 
     if params.limit == 0 {
-        return call_tool_error("limit must be greater than zero");
+        return query_project_failure(
+            &call_start,
+            "validate_limit",
+            Some(query_preview.as_str()),
+            "limit must be greater than zero",
+        );
     }
 
     if !(0.0..=1.0).contains(&params.alpha) {
-        return call_tool_error("alpha must be between 0.0 and 1.0");
+        return query_project_failure(
+            &call_start,
+            "validate_alpha",
+            Some(query_preview.as_str()),
+            "alpha must be between 0.0 and 1.0",
+        );
     }
 
     let limit = params.limit.min(MAX_LIMIT);
     let repo_root = match resolve_repo_root(params.repo_root.as_deref()) {
         Ok(repo_root) => repo_root,
-        Err(err) => return call_tool_error(format!("invalid repo_root: {err}")),
+        Err(err) => {
+            return query_project_failure(
+                &call_start,
+                "resolve_repo_root",
+                Some(query_preview.as_str()),
+                format!("invalid repo_root: {err}"),
+            );
+        }
     };
 
     let file_globs = params
@@ -433,16 +474,28 @@ pub(crate) async fn handle_query_project(
         &embedding_model,
     ) {
         Ok(embedding_mode) => embedding_mode,
-        Err(err) => return call_tool_error(format!("failed to resolve embedding mode: {err}")),
+        Err(err) => {
+            return query_project_failure(
+                &call_start,
+                "resolve_embedding_mode",
+                Some(query_preview.as_str()),
+                format!("failed to resolve embedding mode: {err}"),
+            );
+        }
     };
 
     let index = match RepoHybridIndex::open(&repo_root).await {
         Ok(index) => index,
         Err(err) => {
-            return call_tool_error(format!(
-                "failed to initialize index at `{}`: {err}",
-                repo_root.display()
-            ));
+            return query_project_failure(
+                &call_start,
+                "open_index",
+                Some(query_preview.as_str()),
+                format!(
+                    "failed to initialize index at `{}`: {err}",
+                    repo_root.display()
+                ),
+            );
         }
     };
     let mut embedding_mode = embedding_mode;
@@ -457,7 +510,14 @@ pub(crate) async fn handle_query_project(
     .await
     {
         Ok(stats) => stats,
-        Err(err) => return call_tool_error(format!("index refresh failed: {err}")),
+        Err(err) => {
+            return query_project_failure(
+                &call_start,
+                "refresh_index",
+                Some(query_preview.as_str()),
+                format!("index refresh failed: {err}"),
+            );
+        }
     };
 
     let search_outcome = match index
@@ -471,7 +531,14 @@ pub(crate) async fn handle_query_project(
         .await
     {
         Ok(results) => results,
-        Err(err) => return call_tool_error(format!("hybrid search failed: {err}")),
+        Err(err) => {
+            return query_project_failure(
+                &call_start,
+                "search",
+                Some(query_preview.as_str()),
+                format!("hybrid search failed: {err}"),
+            );
+        }
     };
     let embedding_status = if let Some(reason) = search_outcome.embedding_fallback_reason {
         RepoEmbeddingStatus {
@@ -482,6 +549,16 @@ pub(crate) async fn handle_query_project(
     } else {
         embedding_mode.status()
     };
+
+    let result_count = search_outcome.results.len();
+    let elapsed = call_start.elapsed();
+    tracing::info!(
+        query_preview,
+        query_char_count,
+        result_count,
+        elapsed_ms = elapsed.as_millis() as u64,
+        "query_project completed"
+    );
 
     let payload = json!({
         "repo_root": repo_root.display().to_string(),
@@ -498,6 +575,34 @@ pub(crate) async fn handle_query_project(
 
 fn default_limit() -> usize {
     DEFAULT_LIMIT
+}
+
+fn query_log_preview(query: &str) -> String {
+    let trimmed = query.trim();
+    let mut preview = trimmed
+        .chars()
+        .take(QUERY_LOG_PREVIEW_CHARS)
+        .collect::<String>();
+    if trimmed.chars().count() > QUERY_LOG_PREVIEW_CHARS {
+        preview.push('…');
+    }
+    preview
+}
+
+fn query_project_failure(
+    call_start: &std::time::Instant,
+    stage: &str,
+    query_preview: Option<&str>,
+    message: impl Into<String>,
+) -> CallToolResult {
+    let message = message.into();
+    let elapsed_ms = call_start.elapsed().as_millis() as u64;
+    if let Some(query_preview) = query_preview {
+        tracing::warn!(stage, query_preview, elapsed_ms, "query_project failed");
+    } else {
+        tracing::warn!(stage, elapsed_ms, "query_project failed");
+    }
+    call_tool_error(message)
 }
 
 fn default_alpha() -> f32 {
@@ -1725,6 +1830,14 @@ mod tests {
         let (embedding, reason) = query_embedding_or_fallback_reason(Vec::new());
         assert_eq!(embedding, None);
         assert_eq!(reason, Some(EMBEDDING_REASON_QUERY_FAILED));
+    }
+
+    #[test]
+    fn query_log_preview_truncates_and_adds_ellipsis() {
+        let long_query = "x".repeat(QUERY_LOG_PREVIEW_CHARS + 4);
+        let preview = query_log_preview(&long_query);
+        assert_eq!(preview.chars().count(), QUERY_LOG_PREVIEW_CHARS + 1);
+        assert!(preview.ends_with('…'));
     }
 
     #[test]
