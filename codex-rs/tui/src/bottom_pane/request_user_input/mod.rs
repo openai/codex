@@ -776,6 +776,34 @@ impl RequestUserInputOverlay {
         )));
     }
 
+    fn supports_partial_interrupt_submission(&self) -> bool {
+        !self.request.questions.is_empty()
+            && self
+                .request
+                .questions
+                .iter()
+                .all(Self::is_tool_style_partial_interrupt_question)
+    }
+
+    fn is_tool_style_partial_interrupt_question(question: &RequestUserInputQuestion) -> bool {
+        // Tool `request_user_input` currently emits option questions with `is_other = true`.
+        // Non-tool prompts rely on a true `Op::Interrupt` to abort the turn.
+        question.is_other
+            && question
+                .options
+                .as_ref()
+                .is_some_and(|options| !options.is_empty())
+    }
+
+    fn interrupt_current_request(&mut self) {
+        if self.supports_partial_interrupt_submission() {
+            self.submit_committed_answers_for_interrupt();
+        } else {
+            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+        }
+        self.done = true;
+    }
+
     /// Build the response payload and dispatch it to the app.
     fn submit_answers(&mut self) {
         self.confirm_unanswered = None;
@@ -1047,8 +1075,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 self.clear_notes_and_focus_options();
                 return;
             }
-            self.submit_committed_answers_for_interrupt();
-            self.done = true;
+            self.interrupt_current_request();
             return;
         }
 
@@ -1261,8 +1288,7 @@ impl BottomPaneView for RequestUserInputOverlay {
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if self.confirm_unanswered_active() {
             self.close_unanswered_confirmation();
-            self.submit_committed_answers_for_interrupt();
-            self.done = true;
+            self.interrupt_current_request();
             return CancellationEvent::Handled;
         }
         if self.focus_is_notes() && !self.composer.current_text_with_pending().is_empty() {
@@ -1270,8 +1296,7 @@ impl BottomPaneView for RequestUserInputOverlay {
             return CancellationEvent::Handled;
         }
 
-        self.submit_committed_answers_for_interrupt();
-        self.done = true;
+        self.interrupt_current_request();
         CancellationEvent::Handled
     }
 
@@ -1356,6 +1381,15 @@ mod tests {
         );
 
         response
+    }
+
+    fn expect_interrupt_op(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) {
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
+        assert!(matches!(event, AppEvent::CodexOp(Op::Interrupt)));
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvents after interrupt"
+        );
     }
 
     fn question_with_options(id: &str, header: &str) -> RequestUserInputQuestion {
@@ -1577,8 +1611,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
         assert!(overlay.done, "expected overlay to be done");
-        let response = expect_partial_interrupt_submission(&mut rx, "turn-1");
-        assert!(response.answers.is_empty(), "expected no committed answers");
+        expect_interrupt_op(&mut rx);
     }
 
     #[test]
@@ -1959,18 +1992,17 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
         assert_eq!(overlay.done, true);
-        let response = expect_partial_interrupt_submission(&mut rx, "turn-1");
-        assert!(
-            response.answers.is_empty(),
-            "expected no committed answers for empty freeform question"
-        );
+        expect_interrupt_op(&mut rx);
     }
 
     #[test]
-    fn esc_in_options_mode_interrupts() {
+    fn esc_in_tool_options_mode_interrupts_with_partial_submission() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
-            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            request_event(
+                "turn-1",
+                vec![question_with_options_and_other("q1", "Pick one")],
+            ),
             tx,
             true,
             false,
@@ -2048,8 +2080,8 @@ mod tests {
             request_event(
                 "turn-1",
                 vec![
-                    question_with_options("q1", "First"),
-                    question_without_options("q2", "Second"),
+                    question_with_options_and_other("q1", "First"),
+                    question_with_options_and_other("q2", "Second"),
                 ],
             ),
             tx,
@@ -2074,12 +2106,12 @@ mod tests {
         assert_eq!(answer.answers, vec!["Option 1".to_string()]);
         assert!(
             !response.answers.contains_key("q2"),
-            "uncommitted freeform question should not be submitted"
+            "uncommitted question should not be submitted"
         );
     }
 
     #[test]
-    fn esc_does_not_submit_uncommitted_freeform_text() {
+    fn esc_on_non_tool_freeform_request_emits_interrupt() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_without_options("q1", "Notes")]),
@@ -2092,11 +2124,8 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('x')));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
-        let response = expect_partial_interrupt_submission(&mut rx, "turn-1");
-        assert!(
-            response.answers.is_empty(),
-            "uncommitted freeform text should not be submitted"
-        );
+        assert!(overlay.done, "expected overlay to be done");
+        expect_interrupt_op(&mut rx);
     }
 
     #[test]
