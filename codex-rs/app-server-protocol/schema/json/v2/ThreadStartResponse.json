@@ -589,6 +589,13 @@
                 "type": "fullAccess"
               }
             },
+            "denyReadPaths": {
+              "default": [],
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
             "type": {
               "enum": [
                 "readOnly"
@@ -629,6 +636,13 @@
         },
         {
           "properties": {
+            "denyReadPaths": {
+              "default": [],
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
             "excludeSlashTmp": {
               "default": false,
               "type": "boolean"

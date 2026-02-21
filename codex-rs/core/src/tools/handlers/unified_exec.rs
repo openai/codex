@@ -10,6 +10,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::reject_explicit_escalation_if_deny_read_present;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
@@ -162,6 +163,10 @@ impl ToolHandler for UnifiedExecHandler {
                         "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
                     )));
                 }
+                reject_explicit_escalation_if_deny_read_present(
+                    sandbox_permissions,
+                    &context.turn.sandbox_policy,
+                )?;
 
                 let workdir = workdir.filter(|value| !value.is_empty());
 

@@ -2133,6 +2133,13 @@
                 "type": "fullAccess"
               }
             },
+            "denyReadPaths": {
+              "default": [],
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
             "type": {
               "enum": [
                 "readOnly"
@@ -2173,6 +2180,13 @@
         },
         {
           "properties": {
+            "denyReadPaths": {
+              "default": [],
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
             "excludeSlashTmp": {
               "default": false,
               "type": "boolean"
@@ -2249,6 +2263,13 @@
               ],
               "description": "Read access granted while running under this policy."
             },
+            "deny_read_paths": {
+              "description": "Paths that must not be readable, even when broad read access is otherwise allowed.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
             "type": {
               "enum": [
                 "read-only"
@@ -2292,6 +2313,13 @@
         {
           "description": "Same as `ReadOnly` but additionally grants write access to the current working directory (\"workspace\").",
           "properties": {
+            "deny_read_paths": {
+              "description": "Paths that must not be readable, even when broad read access is otherwise allowed.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
             "exclude_slash_tmp": {
               "default": false,
               "description": "When set to `true`, will NOT include the `/tmp` among the default writable roots on UNIX. Defaults to `false`.",

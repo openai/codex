@@ -428,6 +428,7 @@ allowed_sandbox_modes = ["read-only"]
             .can_set(&SandboxPolicy::WorkspaceWrite {
                 writable_roots: Vec::new(),
                 read_only_access: Default::default(),
+                deny_read_paths: vec![],
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -584,6 +585,7 @@ allowed_approval_policies = ["on-request"]
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             })
         }),
     )
@@ -632,6 +634,7 @@ allowed_approval_policies = ["on-request"]
             rules: None,
             enforce_residency: None,
             network: None,
+            permissions: None,
         },
     );
     load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
@@ -654,6 +657,51 @@ allowed_approval_policies = ["on-request"]
     Ok(())
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn load_requirements_toml_resolves_filesystem_deny_read_against_requirements_parent()
+-> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_dir = tmp.path().join("managed");
+    tokio::fs::create_dir_all(&requirements_dir).await?;
+    let requirements_file = requirements_dir.join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+[permissions.filesystem]
+deny_read = ["./sensitive", "../shared/secret.txt"]
+"#,
+    )
+    .await?;
+
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+
+    let permissions = config_requirements_toml
+        .permissions
+        .expect("permissions requirements should load");
+    let filesystem = permissions
+        .value
+        .filesystem
+        .expect("filesystem requirements should load");
+    let deny_read = filesystem.deny_read.expect("deny_read paths should load");
+
+    assert_eq!(
+        deny_read,
+        vec![
+            AbsolutePathBuf::try_from(requirements_dir.join("sensitive"))?,
+            AbsolutePathBuf::try_from(tmp.path().join("shared").join("secret.txt"))?,
+        ]
+    );
+    assert_eq!(
+        permissions.source,
+        RequirementSource::SystemRequirementsToml {
+            file: AbsolutePathBuf::try_from(requirements_file)?,
+        }
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> {
     let tmp = tempdir()?;
@@ -669,6 +717,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         rules: None,
         enforce_residency: None,
         network: None,
+        permissions: None,
     };
     let expected = requirements.clone();
     let cloud_requirements = CloudRequirementsLoader::new(async move { Some(requirements) });

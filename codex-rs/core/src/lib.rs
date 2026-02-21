@@ -35,6 +35,7 @@ pub mod exec_env;
 mod exec_policy;
 pub mod features;
 mod file_watcher;
+mod filesystem_deny_read;
 mod flags;
 pub mod git_info;
 pub mod instructions;

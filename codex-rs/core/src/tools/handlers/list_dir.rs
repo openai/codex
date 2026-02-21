@@ -10,7 +10,10 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use tokio::fs;
 
+use crate::filesystem_deny_read::ensure_read_allowed;
+use crate::filesystem_deny_read::is_read_denied;
 use crate::function_tool::FunctionCallError;
+use crate::protocol::SandboxPolicy;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -53,7 +56,7 @@ impl ToolHandler for ListDirHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation { payload, turn, .. } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -97,8 +100,11 @@ impl ToolHandler for ListDirHandler {
                 "dir_path must be an absolute path".to_string(),
             ));
         }
+        ensure_read_allowed(&path, &turn.sandbox_policy)?;
 
-        let entries = list_dir_slice(&path, offset, limit, depth).await?;
+        let entries =
+            list_dir_slice_with_policy(&path, offset, limit, depth, Some(&turn.sandbox_policy))
+                .await?;
         let mut output = Vec::with_capacity(entries.len() + 1);
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
@@ -109,14 +115,25 @@ impl ToolHandler for ListDirHandler {
     }
 }
 
+#[cfg(test)]
 async fn list_dir_slice(
     path: &Path,
     offset: usize,
     limit: usize,
     depth: usize,
 ) -> Result<Vec<String>, FunctionCallError> {
+    list_dir_slice_with_policy(path, offset, limit, depth, None).await
+}
+
+async fn list_dir_slice_with_policy(
+    path: &Path,
+    offset: usize,
+    limit: usize,
+    depth: usize,
+    sandbox_policy: Option<&SandboxPolicy>,
+) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
-    collect_entries(path, Path::new(""), depth, &mut entries).await?;
+    collect_entries(path, Path::new(""), depth, sandbox_policy, &mut entries).await?;
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -152,6 +169,7 @@ async fn collect_entries(
     dir_path: &Path,
     relative_prefix: &Path,
     depth: usize,
+    sandbox_policy: Option<&SandboxPolicy>,
     entries: &mut Vec<DirEntry>,
 ) -> Result<(), FunctionCallError> {
     let mut queue = VecDeque::new();
@@ -167,6 +185,13 @@ async fn collect_entries(
         while let Some(entry) = read_dir.next_entry().await.map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
         })? {
+            let entry_path = entry.path();
+            if let Some(policy) = sandbox_policy
+                && is_read_denied(&entry_path, policy)
+            {
+                continue;
+            }
+
             let file_type = entry.file_type().await.map_err(|err| {
                 FunctionCallError::RespondToModel(format!("failed to inspect entry: {err}"))
             })?;
@@ -183,7 +208,7 @@ async fn collect_entries(
             let sort_key = format_entry_name(&relative_path);
             let kind = DirEntryKind::from(&file_type);
             dir_entries.push((
-                entry.path(),
+                entry_path,
                 relative_path,
                 kind,
                 DirEntry {
@@ -271,6 +296,9 @@ impl From<&FileType> for DirEntryKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::ReadOnlyAccess;
+    use crate::protocol::SandboxPolicy;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -510,5 +538,46 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn hides_denied_entries_and_prunes_denied_subtrees() {
+        let temp = tempdir().expect("create tempdir");
+        let dir_path = temp.path();
+        let visible_dir = dir_path.join("visible");
+        let denied_dir = dir_path.join("private");
+        tokio::fs::create_dir(&visible_dir)
+            .await
+            .expect("create visible dir");
+        tokio::fs::create_dir(&denied_dir)
+            .await
+            .expect("create denied dir");
+        tokio::fs::write(visible_dir.join("ok.txt"), b"ok")
+            .await
+            .expect("write visible file");
+        tokio::fs::write(denied_dir.join("secret.txt"), b"secret")
+            .await
+            .expect("write denied file");
+        tokio::fs::write(dir_path.join("top_secret.txt"), b"secret")
+            .await
+            .expect("write denied top-level file");
+
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            deny_read_paths: vec![
+                AbsolutePathBuf::try_from(denied_dir.as_path()).expect("absolute denied dir"),
+                AbsolutePathBuf::try_from(dir_path.join("top_secret.txt"))
+                    .expect("absolute denied file"),
+            ],
+        };
+
+        let entries = list_dir_slice_with_policy(dir_path, 1, 20, 3, Some(&policy))
+            .await
+            .expect("list directory");
+
+        assert_eq!(
+            entries,
+            vec!["visible/".to_string(), "  ok.txt".to_string(),]
+        );
     }
 }

@@ -62,6 +62,12 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     }
 
     if apply_landlock_fs && !sandbox_policy.has_full_disk_write_access() {
+        if sandbox_policy.has_denied_read_paths() {
+            return Err(CodexErr::UnsupportedOperation(
+                "Filesystem deny_read paths are not supported by the legacy Linux Landlock filesystem backend."
+                    .to_string(),
+            ));
+        }
         if !sandbox_policy.has_full_disk_read_access() {
             return Err(CodexErr::UnsupportedOperation(
                 "Restricted read-only access is not supported by the legacy Linux Landlock filesystem backend."

@@ -253,10 +253,13 @@ impl ExecPolicyManager {
                 }
             }
             Decision::Allow => ExecApprovalRequirement::Skip {
-                // Bypass sandbox if execpolicy allows the command
-                bypass_sandbox: evaluation.matched_rules.iter().any(|rule_match| {
-                    is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
-                }),
+                // Bypass sandbox for trusted execpolicy allow rules unless the current
+                // sandbox policy carries filesystem deny_read restrictions that must
+                // still be enforced for shell/unified_exec commands.
+                bypass_sandbox: !sandbox_policy.has_denied_read_paths()
+                    && evaluation.matched_rules.iter().any(|rule_match| {
+                        is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+                    }),
                 proposed_execpolicy_amendment: if auto_amendment_allowed {
                     try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
                 } else {
@@ -1723,6 +1726,40 @@ prefix_rule(
             requirement,
             ExecApprovalRequirement::Skip {
                 bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn allow_rule_does_not_bypass_sandbox_when_deny_read_paths_exist() {
+        let policy_src = r#"prefix_rule(pattern=["cat"], decision="allow")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let policy = Arc::new(parser.build());
+        let command = vec!["cat".to_string(), "~/.gitconfig".to_string()];
+
+        let mut sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+        let deny_path = AbsolutePathBuf::try_from("/tmp/secret-config").expect("absolute path");
+        sandbox_policy.append_deny_read_paths(&[deny_path]);
+
+        let manager = ExecPolicyManager::new(policy);
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: &sandbox_policy,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
                 proposed_execpolicy_amendment: None,
             }
         );
