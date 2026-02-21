@@ -1715,6 +1715,9 @@ impl Session {
     ///
     /// Returns `(None, false)` when no completed turn with a persisted
     /// `TurnContextItem` is present in the lifecycle-aware rollout view.
+    // TODO(ccunningham): Simplify this lookup by sharing rollout traversal/rollback application
+    // with `reconstruct_history_from_rollout` so resume/fork baseline hydration does not need a
+    // second bespoke rollout scan.
     fn last_rollout_regular_turn_context_lookup(
         rollout_items: &[RolloutItem],
     ) -> (Option<&TurnContextItem>, bool) {
