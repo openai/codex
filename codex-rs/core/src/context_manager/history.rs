@@ -433,6 +433,8 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
             encrypted_content: content,
         } => i64::try_from(estimate_reasoning_length(content.len())).unwrap_or(i64::MAX),
         item => {
+            // Start from the existing "serialized JSON bytes" heuristic so all
+            // non-image content and structural overhead continue to be counted.
             let raw = serde_json::to_string(item)
                 .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
                 .unwrap_or_default();
@@ -440,6 +442,9 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
             if payload_bytes == 0 || image_count == 0 {
                 raw
             } else {
+                // Replace raw base64 payload bytes with a fixed per-image cost.
+                // We intentionally preserve the data URL prefix and JSON wrapper
+                // bytes already included in `raw`.
                 raw.saturating_sub(payload_bytes)
                     .saturating_add(image_count.saturating_mul(IMAGE_BYTES_ESTIMATE))
             }
@@ -447,6 +452,11 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
     }
 }
 
+/// Returns the base64 payload byte length for inline image data URLs that are
+/// eligible for token-estimation discounting.
+///
+/// We only discount payloads for `data:image/...;base64,...` URLs (case
+/// insensitive markers) and leave everything else at raw serialized size.
 fn base64_data_url_payload_len(url: &str) -> Option<usize> {
     if !url
         .get(.."data:".len())
@@ -457,6 +467,9 @@ fn base64_data_url_payload_len(url: &str) -> Option<usize> {
     let comma_index = url.find(',')?;
     let metadata = &url[..comma_index];
     let payload = &url[comma_index + 1..];
+    // Parse the media type and parameters without decoding. This keeps the
+    // estimator cheap while ensuring we only apply the fixed-cost image
+    // heuristic to image-typed base64 data URLs.
     let metadata_without_scheme = &metadata["data:".len()..];
     let mut metadata_parts = metadata_without_scheme.split(';');
     let mime_type = metadata_parts.next().unwrap_or_default();
