@@ -1636,29 +1636,11 @@ mod tests {
     }
 
     async fn can_run_js_repl_runtime_tests() -> bool {
-        // These white-box runtime tests rely on the unit-test harness and are
-        // only required on macOS. Linux uses the codex-linux-sandbox arg0
-        // dispatch path, which is exercised in integration tests instead.
-        if !cfg!(target_os = "macos") {
-            return false;
-        }
-        if std::env::var_os("CODEX_SANDBOX").is_some() {
-            return false;
-        }
-        let Some(node_path) = resolve_node(None) else {
-            return false;
-        };
-        let required = match required_node_version() {
-            Ok(v) => v,
-            Err(_) => return false,
-        };
-        let found = match read_node_version(&node_path).await {
-            Ok(v) => v,
-            Err(_) => return false,
-        };
-        found >= required
+        // These white-box runtime tests are required on macOS. Linux relies on
+        // the codex-linux-sandbox arg0 dispatch path, which is exercised in
+        // integration tests instead.
+        cfg!(target_os = "macos")
     }
-
     fn write_js_repl_test_package(base: &Path, name: &str, value: &str) -> anyhow::Result<()> {
         let pkg_dir = base.join("node_modules").join(name);
         fs::create_dir_all(&pkg_dir)?;

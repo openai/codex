@@ -362,12 +362,6 @@ console.log(out.output?.body?.text ?? "");
         .custom_tool_call_output_content_and_success(call_id)
         .expect("custom tool output present");
     let js_repl_output = js_repl_output.expect("custom tool output text present");
-    if js_repl_output.contains("Node runtime not found")
-        || js_repl_output.contains("Node runtime too old for js_repl")
-    {
-        eprintln!("Skipping js_repl image test: {js_repl_output}");
-        return Ok(());
-    }
     assert_ne!(
         js_repl_success,
         Some(false),
