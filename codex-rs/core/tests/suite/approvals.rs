@@ -1955,7 +1955,8 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     let test = builder.build(&server).await?;
 
     let call_id = "invalid-prefix-rule";
-    let command = "touch ~/Documents/hello.txt && echo hello > ~/Documents/hello.txt";
+    let command =
+        "touch /tmp/codex-fallback-rule-test.txt && echo hello > /tmp/codex-fallback-rule-test.txt";
     let event = shell_event_with_prefix_rule(
         call_id,
         command,
@@ -1986,9 +1987,7 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     let amendment = approval
         .proposed_execpolicy_amendment
         .expect("should have a proposed execpolicy amendment");
-    assert!(amendment.command.contains(
-        &"touch ~/Documents/hello.txt && echo hello > ~/Documents/hello.txt".to_string()
-    ));
+    assert!(amendment.command.contains(&command.to_string()));
 
     Ok(())
 }
@@ -2007,7 +2006,8 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     let test = builder.build(&server).await?;
 
     let call_id = "invalid-prefix-rule";
-    let command = "touch ~/Documents/hello.txt && echo hello > ~/Documents/hello.txt";
+    let command =
+        "touch /tmp/codex-fallback-rule-test.txt && echo hello > /tmp/codex-fallback-rule-test.txt";
     let event = shell_event_with_prefix_rule(
         call_id,
         command,
@@ -2039,9 +2039,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     let amendment = approval
         .proposed_execpolicy_amendment
         .expect("should have a proposed execpolicy amendment");
-    assert!(amendment.command.contains(
-        &"touch ~/Documents/hello.txt && echo hello > ~/Documents/hello.txt".to_string()
-    ));
+    assert!(amendment.command.contains(&command.to_string()));
 
     test.codex
         .submit(Op::ExecApproval {
@@ -2055,7 +2053,8 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     wait_for_completion(&test).await;
 
     let call_id = "invalid-prefix-rule-again";
-    let command = "touch ~/Documents/hello.txt && echo hello > ~/Documents/hello.txt";
+    let command =
+        "touch /tmp/codex-fallback-rule-test.txt && echo hello > /tmp/codex-fallback-rule-test.txt";
     let event = shell_event_with_prefix_rule(
         call_id,
         command,
