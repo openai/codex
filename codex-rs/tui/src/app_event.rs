@@ -54,6 +54,9 @@ pub(crate) enum AppEvent {
     /// Start a new session.
     NewSession,
 
+    /// Clear the terminal UI (screen + scrollback) without changing session state.
+    ClearUi,
+
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 

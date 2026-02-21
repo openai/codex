@@ -174,6 +174,9 @@ where
     if should_update_area {
         terminal.set_viewport_area(area);
     }
+    if wrapped_lines > 0 {
+        terminal.note_history_rows_inserted(wrapped_lines);
+    }
 
     Ok(())
 }

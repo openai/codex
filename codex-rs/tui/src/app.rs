@@ -30,6 +30,7 @@ use crate::resume_picker::SessionSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
+use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
@@ -678,6 +679,53 @@ impl App {
 
         self.chat_widget
             .add_info_message(format!("Opened {url} in your browser."), None);
+    }
+
+    fn clear_terminal_ui(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let is_alt_screen_active = tui.is_alt_screen_active();
+        let use_apple_terminal_clear_workaround = !is_alt_screen_active
+            && matches!(
+                codex_core::terminal::terminal_info().name,
+                codex_core::terminal::TerminalName::AppleTerminal
+            );
+
+        // Drop queued history insertions so stale transcript lines cannot be flushed after /clear.
+        tui.clear_pending_history_lines();
+
+        if is_alt_screen_active {
+            tui.terminal.clear_visible_screen()?;
+        } else if use_apple_terminal_clear_workaround {
+            // Terminal.app can leave mixed old/new glyphs behind when we purge + clear.
+            // Use a stricter ANSI reset, then redraw only a fresh session header box instead of
+            // replaying the initialization transcript preamble.
+            tui.terminal.clear_scrollback_and_visible_screen_ansi()?;
+        } else {
+            tui.terminal.clear_scrollback()?;
+            tui.terminal.clear_visible_screen()?;
+        }
+
+        let mut area = tui.terminal.viewport_area;
+        if area.y > 0 {
+            // After a full clear, anchor the inline viewport at the top and redraw a fresh header
+            // box. `insert_history_lines()` will shift the viewport down by the rendered height.
+            area.y = 0;
+            tui.terminal.set_viewport_area(area);
+        }
+        self.has_emitted_history_lines = false;
+
+        let width = tui.terminal.last_known_screen_size.width;
+        let header_lines = history_cell::SessionHeaderHistoryCell::new(
+            self.chat_widget.current_model().to_string(),
+            self.chat_widget.current_reasoning_effort(),
+            self.config.cwd.clone(),
+            CODEX_CLI_VERSION,
+        )
+        .display_lines(width);
+        if !header_lines.is_empty() {
+            tui.insert_history_lines(header_lines);
+            self.has_emitted_history_lines = true;
+        }
+        Ok(())
     }
 
     async fn shutdown_current_thread(&mut self) {
@@ -1457,6 +1505,10 @@ impl App {
                     }
                     self.chat_widget.add_plain_history_lines(lines);
                 }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::ClearUi => {
+                self.clear_terminal_ui(tui)?;
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenResumePicker => {
