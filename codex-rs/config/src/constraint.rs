@@ -148,6 +148,30 @@ impl<T: Send + Sync> Constrained<T> {
         self.value = value;
         Ok(())
     }
+
+    pub fn add_normalizer(
+        &mut self,
+        normalizer: impl Fn(T) -> T + Send + Sync + 'static,
+    ) -> ConstraintResult<()>
+    where
+        T: Clone + 'static,
+    {
+        let existing_normalizer = self.normalizer.clone();
+        let combined_normalizer: Arc<ConstraintNormalizer<T>> = Arc::new(move |value| {
+            let value = if let Some(existing) = &existing_normalizer {
+                existing(value)
+            } else {
+                value
+            };
+            normalizer(value)
+        });
+
+        let normalized = combined_normalizer(self.value.clone());
+        (self.validator)(&normalized)?;
+        self.value = normalized;
+        self.normalizer = Some(combined_normalizer);
+        Ok(())
+    }
 }
 
 impl<T> std::ops::Deref for Constrained<T> {
@@ -221,6 +245,22 @@ mod tests {
         assert_eq!(constrained.value(), 0);
         constrained.set(10)?;
         assert_eq!(constrained.value(), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn constrained_add_normalizer_composes_with_existing_normalizer() -> anyhow::Result<()> {
+        let mut constrained = Constrained::normalized(-1, |value| value.max(0))?;
+        constrained.add_normalizer(|value| value.min(5))?;
+
+        assert_eq!(constrained.value(), 0);
+
+        constrained.set(10)?;
+        assert_eq!(constrained.value(), 5);
+
+        constrained.set(-10)?;
+        assert_eq!(constrained.value(), 0);
+
         Ok(())
     }
 

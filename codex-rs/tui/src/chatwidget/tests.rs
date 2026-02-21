@@ -5114,6 +5114,7 @@ async fn preset_matching_requires_exact_workspace_write_settings() {
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![AbsolutePathBuf::try_from("C:\\extra").unwrap()],
         read_only_access: Default::default(),
+        deny_read_paths: Vec::new(),
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
