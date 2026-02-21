@@ -21,6 +21,8 @@ use crate::protocol::ReviewDecision;
 #[cfg(unix)]
 use crate::sandboxing::SandboxPermissions;
 #[cfg(unix)]
+use crate::sandboxing::policy_merge::extend_sandbox_policy;
+#[cfg(unix)]
 use crate::tools::sandboxing::ExecApprovalRequirement;
 #[cfg(unix)]
 use anyhow::Context as _;
@@ -359,14 +361,24 @@ impl ZshExecBridge {
             *program = file.clone();
         }
 
-        // Collect skill-provided approval overlays that may add promptable prefix rules.
-        let overlay_prompt_prefixes = {
+        // Collect skill-provided approval overlays and any matching skill permission profile.
+        let (overlay_prompt_prefixes, matched_skill_permissions) = {
             let registry = turn
                 .skill_prefix_permissions
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            registry.keys().cloned().collect::<Vec<_>>()
+            let matched_skill_permissions = command_for_execpolicy
+                .first()
+                .and_then(|program| registry.get(std::slice::from_ref(program)).cloned());
+            let overlay_prompt_prefixes = registry.keys().cloned().collect::<Vec<_>>();
+            (overlay_prompt_prefixes, matched_skill_permissions)
         };
+        let effective_sandbox_policy = matched_skill_permissions.as_ref().map_or_else(
+            || turn.sandbox_policy.clone(),
+            |skill_permissions| {
+                extend_sandbox_policy(&turn.sandbox_policy, skill_permissions.sandbox_policy.get())
+            },
+        );
 
         // Ask exec policy whether this command can run, is forbidden, or needs approval.
         let exec_approval_requirement = session
@@ -376,7 +388,7 @@ impl ZshExecBridge {
                 ExecApprovalRequest {
                     command: &command_for_execpolicy,
                     approval_policy: turn.approval_policy,
-                    sandbox_policy: &turn.sandbox_policy,
+                    sandbox_policy: &effective_sandbox_policy,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     prefix_rule: None,
                 },
