@@ -433,7 +433,7 @@ pub(crate) async fn handle_query_project(
         &embedding_model,
     ) {
         Ok(embedding_mode) => embedding_mode,
-        Err(err) => return call_tool_error(format!("index refresh failed: {err}")),
+        Err(err) => return call_tool_error(format!("failed to resolve embedding mode: {err}")),
     };
 
     let index = match RepoHybridIndex::open(&repo_root).await {
