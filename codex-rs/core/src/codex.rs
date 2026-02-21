@@ -1782,8 +1782,9 @@ impl Session {
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
                     saw_turn_lifecycle_event = true;
                     if active_turn_id == Some(event.turn_id.as_str()) {
+                        let active_turn_is_user_turn = active_turn_saw_user_message;
                         let active_turn_is_rolled_back =
-                            active_turn_saw_user_message && turns_to_skip_due_to_rollback > 0;
+                            active_turn_is_user_turn && turns_to_skip_due_to_rollback > 0;
                         if active_turn_is_rolled_back {
                             // `ThreadRolledBack(num_turns)` counts user turns, so only consume a
                             // skip once we've confirmed this reverse-scanned turn span contains a
@@ -1791,15 +1792,19 @@ impl Session {
                             turns_to_skip_due_to_rollback -= 1;
                         }
                         if !active_turn_is_rolled_back {
-                            if let Some(context_item) = active_turn_context {
+                            if active_turn_is_user_turn
+                                && let Some(context_item) = active_turn_context
+                            {
                                 return (
                                     Some(context_item),
                                     saw_surviving_compaction_after_candidate,
                                 );
                             }
-                            // No `TurnContextItem` in this surviving turn; keep scanning older
-                            // turns, but remember if this turn compacted so the eventual
-                            // candidate reports "compaction happened after it".
+                            // Standalone task turns do not define the baseline candidate even if
+                            // older rollouts persisted a `TurnContextItem` for them. Keep
+                            // scanning older user turns, but still remember compaction from this
+                            // surviving turn so the eventual candidate reports "compaction
+                            // happened after it".
                             if active_turn_contains_compaction {
                                 saw_surviving_compaction_after_candidate = true;
                             }
@@ -6776,6 +6781,9 @@ mod tests {
             .clone()
             .expect("turn context should have turn_id");
         let standalone_turn_id = "standalone-task-turn".to_string();
+        let mut standalone_turn_context_item = turn_context.to_turn_context_item();
+        standalone_turn_context_item.turn_id = Some(standalone_turn_id.clone());
+        standalone_turn_context_item.model = "standalone-task-model".to_string();
         let rollout_items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(
                 codex_protocol::protocol::TurnStartedEvent {
@@ -6807,6 +6815,9 @@ mod tests {
                     collaboration_mode_kind: ModeKind::Default,
                 },
             )),
+            // Older rollouts may contain a task-turn TurnContext; rollback semantics still count
+            // user turns only, and baseline hydration must ignore this standalone task context.
+            RolloutItem::TurnContext(standalone_turn_context_item),
             RolloutItem::EventMsg(EventMsg::TurnComplete(
                 codex_protocol::protocol::TurnCompleteEvent {
                     turn_id: standalone_turn_id,
