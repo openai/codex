@@ -1685,7 +1685,6 @@ dependencies = [
  "seccompiler",
  "serde",
  "serde_json",
- "serde_path_to_error",
  "serde_yaml",
  "serial_test",
  "sha1",
