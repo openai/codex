@@ -38,8 +38,8 @@ pub(crate) async fn apply_patch(
 ) -> InternalApplyPatchInvocation {
     match assess_patch_safety(
         &action,
-        turn_context.approval_policy,
-        &turn_context.sandbox_policy,
+        turn_context.approval_policy.value(),
+        turn_context.sandbox_policy.get(),
         &turn_context.cwd,
         turn_context.windows_sandbox_level,
     ) {
