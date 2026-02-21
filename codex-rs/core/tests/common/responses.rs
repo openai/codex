@@ -911,7 +911,7 @@ pub async fn mount_compact_user_history_with_summary_sequence(
                 .cloned()
                 .unwrap_or_default()
                 .into_iter()
-                // TODO(ccunningham): Update this mock to match remote compact 5.4 behavior:
+                // TODO(ccunningham): Update this mock to match future compaction model behavior:
                 // return user/developer/assistant messages since the last compaction item, then
                 // append a single newest compaction item.
                 // Match current remote compaction behavior: keep user/developer messages and
