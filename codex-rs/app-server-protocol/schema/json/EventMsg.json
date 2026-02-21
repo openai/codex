@@ -3519,7 +3519,7 @@
           "required": [
             "state"
           ],
-          "title": "StateMcpStartupStatus",
+          "title": "StartingMcpStartupStatus",
           "type": "object"
         },
         {
@@ -3534,7 +3534,7 @@
           "required": [
             "state"
           ],
-          "title": "StateMcpStartupStatus2",
+          "title": "ReadyMcpStartupStatus",
           "type": "object"
         },
         {
@@ -3567,7 +3567,7 @@
           "required": [
             "state"
           ],
-          "title": "StateMcpStartupStatus3",
+          "title": "CancelledMcpStartupStatus",
           "type": "object"
         }
       ]
