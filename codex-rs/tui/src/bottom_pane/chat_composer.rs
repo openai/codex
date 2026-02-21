@@ -4610,6 +4610,80 @@ mod tests {
     }
 
     #[test]
+    fn vim_mode_stays_enabled_after_submission() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            true,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+        composer.set_vim_enabled(true);
+
+        assert!(composer.textarea.is_vim_enabled());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Normal".magenta())
+        );
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        composer.set_text_content("h".to_string(), Vec::new(), Vec::new());
+        let (result, _) = composer.handle_submission(false);
+
+        assert!(composer.textarea.is_vim_enabled());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
+        assert!(composer.is_empty());
+        match result {
+            InputResult::Submitted { text, .. } => assert_eq!(text, "h"),
+            _ => panic!("expected Submitted"),
+        }
+    }
+
+    #[test]
+    fn esc_switches_vim_insert_to_normal() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            true,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_vim_enabled(true);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        composer.set_text_content("hey".to_string(), Vec::new(), Vec::new());
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
+        assert_eq!(composer.textarea.cursor(), "hey".len());
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Normal".magenta())
+        );
+        assert_eq!(composer.textarea.cursor(), "he".len());
+    }
+
+    #[test]
     fn clear_for_ctrl_c_preserves_image_draft_state() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -6037,6 +6111,40 @@ mod tests {
 
             insta::assert_snapshot!(name, terminal.backend());
         }
+    }
+
+    #[test]
+    fn vim_escape_cursor_position_snapshot() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            true,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_vim_enabled(true);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        composer.set_text_content("hey you, how are you?".to_string(), Vec::new(), Vec::new());
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        let area = Rect::new(0, 0, 100, 10);
+        let mut terminal =
+            Terminal::new(TestBackend::new(area.width, area.height)).expect("create test terminal");
+        terminal
+            .draw(|frame| composer.render(frame.area(), frame.buffer_mut()))
+            .expect("draw composer");
+        let cursor = composer.cursor_pos(area).expect("cursor should be visible");
+        let snapshot = format!("cursor={cursor:?}\n{:?}", terminal.backend());
+        insta::assert_snapshot!("vim_escape_cursor_position", snapshot);
     }
 
     #[test]

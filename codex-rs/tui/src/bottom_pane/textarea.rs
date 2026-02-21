@@ -569,6 +569,9 @@ impl TextArea {
 
     fn handle_vim_insert(&mut self, event: KeyEvent) {
         if matches!(event.code, KeyCode::Esc) {
+            if self.cursor_pos > 0 {
+                self.cursor_pos = self.prev_atomic_boundary(self.cursor_pos);
+            }
             self.vim_mode = VimMode::Normal;
             self.vim_operator = None;
             self.preferred_col = None;
@@ -1919,6 +1922,72 @@ mod tests {
 
         assert_eq!(t.text(), "ab");
         assert_eq!(t.cursor(), elem_start);
+    }
+
+    #[test]
+    fn vim_insert_and_escape() {
+        let mut t = TextArea::new();
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "h");
+        assert!(!t.is_vim_insert());
+        assert_eq!(t.cursor(), 0);
+    }
+
+    #[test]
+    fn vim_escape_from_insert_at_start_does_not_underflow() {
+        let mut t = TextArea::new();
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(!t.is_vim_insert());
+        assert_eq!(t.cursor(), 0);
+    }
+
+    #[test]
+    fn vim_escape_moves_by_grapheme_boundary() {
+        let mut t = ta_with("👍👍");
+        t.set_cursor(t.text().len());
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(!t.is_vim_insert());
+        assert_eq!(t.cursor(), "👍".len());
+    }
+
+    #[test]
+    fn vim_escape_respects_atomic_element_boundary() {
+        let mut t = TextArea::new();
+        t.insert_str("a");
+        t.insert_element("<element>");
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(!t.is_vim_insert());
+        assert_eq!(t.cursor(), 1);
+    }
+
+    #[test]
+    fn vim_delete_word() {
+        let mut t = ta_with("hello world");
+        t.set_cursor(0);
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "world");
+        assert_eq!(t.kill_buffer, "hello ");
     }
 
     #[test]
