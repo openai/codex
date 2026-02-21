@@ -806,7 +806,6 @@ fn extract_frontmatter(contents: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::CONFIG_TOML_FILE;
     use crate::config::ConfigBuilder;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
@@ -817,6 +816,7 @@ mod tests {
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
     use crate::config_loader::ConfigRequirementsToml;
+    use codex_config::CONFIG_TOML_FILE;
     use codex_protocol::config_types::TrustLevel;
     use codex_protocol::protocol::SkillScope;
     use codex_utils_absolute_path::AbsolutePathBuf;

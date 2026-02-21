@@ -1,11 +1,14 @@
 mod cloud_requirements;
 mod config_requirements;
 mod constraint;
+mod diagnostics;
 mod fingerprint;
 mod merge;
 mod overrides;
 mod requirements_exec_policy;
 mod state;
+
+pub const CONFIG_TOML_FILE: &str = "config.toml";
 
 pub use cloud_requirements::CloudRequirementsLoader;
 pub use config_requirements::ConfigRequirements;
@@ -24,6 +27,17 @@ pub use config_requirements::WebSearchModeRequirement;
 pub use constraint::Constrained;
 pub use constraint::ConstraintError;
 pub use constraint::ConstraintResult;
+pub use diagnostics::ConfigError;
+pub use diagnostics::ConfigLoadError;
+pub use diagnostics::TextPosition;
+pub use diagnostics::TextRange;
+pub use diagnostics::config_error_from_toml;
+pub use diagnostics::config_error_from_typed_toml;
+pub use diagnostics::first_layer_config_error;
+pub use diagnostics::first_layer_config_error_from_entries;
+pub use diagnostics::format_config_error;
+pub use diagnostics::format_config_error_with_source;
+pub use diagnostics::io_error_from_config_error;
 pub use fingerprint::version_for_toml;
 pub use merge::merge_toml_values;
 pub use overrides::build_cli_overrides_layer;
