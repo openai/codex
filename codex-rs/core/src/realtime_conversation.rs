@@ -365,6 +365,22 @@ fn spawn_realtime_input_task(
     })
 }
 
+async fn send_conversation_error(
+    sess: &Arc<Session>,
+    sub_id: String,
+    message: String,
+    codex_error_info: CodexErrorInfo,
+) {
+    sess.send_event_raw(Event {
+        id: sub_id,
+        msg: EventMsg::Error(ErrorEvent {
+            message,
+            codex_error_info: Some(codex_error_info),
+        }),
+    })
+    .await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::realtime_text_from_conversation_item;
@@ -424,20 +440,4 @@ mod tests {
         });
         assert_eq!(realtime_text_from_conversation_item(&no_text), None);
     }
-}
-
-async fn send_conversation_error(
-    sess: &Arc<Session>,
-    sub_id: String,
-    message: String,
-    codex_error_info: CodexErrorInfo,
-) {
-    sess.send_event_raw(Event {
-        id: sub_id,
-        msg: EventMsg::Error(ErrorEvent {
-            message,
-            codex_error_info: Some(codex_error_info),
-        }),
-    })
-    .await;
 }
