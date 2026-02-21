@@ -14,6 +14,8 @@ use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_altgr;
 use crate::keymap::EditorKeymap;
 use crate::keymap::RuntimeKeymap;
+use crate::keymap::VimNormalKeymap;
+use crate::keymap::VimOperatorKeymap;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement as UserTextElement;
 use crossterm::event::KeyCode;
@@ -99,6 +101,8 @@ pub(crate) struct TextArea {
     vim_mode: VimMode,
     vim_operator: Option<VimOperator>,
     editor_keymap: EditorKeymap,
+    vim_normal_keymap: VimNormalKeymap,
+    vim_operator_keymap: VimOperatorKeymap,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +144,7 @@ enum VimMotion {
 
 impl TextArea {
     pub fn new() -> Self {
+        let defaults = RuntimeKeymap::defaults();
         Self {
             text: String::new(),
             cursor_pos: 0,
@@ -151,12 +156,16 @@ impl TextArea {
             vim_enabled: false,
             vim_mode: VimMode::Insert,
             vim_operator: None,
-            editor_keymap: RuntimeKeymap::defaults().editor,
+            editor_keymap: defaults.editor,
+            vim_normal_keymap: defaults.vim_normal,
+            vim_operator_keymap: defaults.vim_operator,
         }
     }
 
-    pub fn set_keymap_bindings(&mut self, keymap: &EditorKeymap) {
-        self.editor_keymap = keymap.clone();
+    pub fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
+        self.editor_keymap = keymap.editor.clone();
+        self.vim_normal_keymap = keymap.vim_normal.clone();
+        self.vim_operator_keymap = keymap.vim_operator.clone();
     }
 
     /// Replace the visible textarea text and clear any existing text elements.
@@ -576,235 +585,167 @@ impl TextArea {
             return;
         }
 
-        match event {
-            KeyEvent {
-                code: KeyCode::Char('i'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.vim_mode = VimMode::Insert;
-            }
-            KeyEvent {
-                code: KeyCode::Char('a'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                let next = self.next_atomic_boundary(self.cursor_pos);
-                self.set_cursor(next);
-                self.vim_mode = VimMode::Insert;
-            }
-            KeyEvent {
-                code: KeyCode::Char('A'),
-                modifiers,
-                ..
-            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
-                self.set_cursor(self.end_of_current_line());
-                self.vim_mode = VimMode::Insert;
-            }
-            KeyEvent {
-                code: KeyCode::Char('I'),
-                modifiers,
-                ..
-            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
-                self.set_cursor(self.beginning_of_current_line());
-                self.vim_mode = VimMode::Insert;
-            }
-            KeyEvent {
-                code: KeyCode::Char('o'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                let eol = self.end_of_current_line();
-                let insert_at = if eol < self.text.len() { eol + 1 } else { eol };
-                self.insert_str_at(insert_at, "\n");
-                self.set_cursor(insert_at + 1);
-                self.vim_mode = VimMode::Insert;
-            }
-            KeyEvent {
-                code: KeyCode::Char('O'),
-                modifiers,
-                ..
-            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
-                let bol = self.beginning_of_current_line();
-                self.insert_str_at(bol, "\n");
-                self.set_cursor(bol);
-                self.vim_mode = VimMode::Insert;
-            }
-            KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.move_cursor_left(),
-            KeyEvent {
-                code: KeyCode::Char('l'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.move_cursor_right(),
-            KeyEvent {
-                code: KeyCode::Char('j'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.move_cursor_down(),
-            KeyEvent {
-                code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.move_cursor_up(),
-            KeyEvent {
-                code: KeyCode::Char('w'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.set_cursor(self.beginning_of_next_word()),
-            KeyEvent {
-                code: KeyCode::Char('b'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.set_cursor(self.beginning_of_previous_word()),
-            KeyEvent {
-                code: KeyCode::Char('e'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.set_cursor(self.end_of_next_word()),
-            KeyEvent {
-                code: KeyCode::Char('0'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.set_cursor(self.beginning_of_current_line()),
-            KeyEvent {
-                code: KeyCode::Char('$'),
-                modifiers,
-                ..
-            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
-                self.set_cursor(self.end_of_current_line());
-            }
-            KeyEvent {
-                code: KeyCode::Char('x'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.delete_forward_kill(1);
-            }
-            KeyEvent {
-                code: KeyCode::Char('D'),
-                modifiers,
-                ..
-            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
-                self.kill_to_end_of_line();
-            }
-            KeyEvent {
-                code: KeyCode::Char('Y'),
-                modifiers,
-                ..
-            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
-                self.yank_current_line();
-            }
-            KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.paste_after_cursor(),
-            KeyEvent {
-                code: KeyCode::Char('d'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.vim_operator = Some(VimOperator::Delete);
-            }
-            KeyEvent {
-                code: KeyCode::Char('y'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.vim_operator = Some(VimOperator::Yank);
-            }
-            KeyEvent {
-                code: KeyCode::Esc, ..
-            } => {
-                self.vim_operator = None;
-            }
-            _ => {}
+        if self.vim_normal_keymap.enter_insert.is_pressed(event) {
+            self.vim_mode = VimMode::Insert;
+            return;
+        }
+        if self.vim_normal_keymap.append_after_cursor.is_pressed(event) {
+            let next = self.next_atomic_boundary(self.cursor_pos);
+            self.set_cursor(next);
+            self.vim_mode = VimMode::Insert;
+            return;
+        }
+        if self.vim_normal_keymap.append_line_end.is_pressed(event) {
+            self.set_cursor(self.end_of_current_line());
+            self.vim_mode = VimMode::Insert;
+            return;
+        }
+        if self.vim_normal_keymap.insert_line_start.is_pressed(event) {
+            self.set_cursor(self.beginning_of_current_line());
+            self.vim_mode = VimMode::Insert;
+            return;
+        }
+        if self.vim_normal_keymap.open_line_below.is_pressed(event) {
+            let eol = self.end_of_current_line();
+            let insert_at = if eol < self.text.len() { eol + 1 } else { eol };
+            self.insert_str_at(insert_at, "\n");
+            self.set_cursor(insert_at + 1);
+            self.vim_mode = VimMode::Insert;
+            return;
+        }
+        if self.vim_normal_keymap.open_line_above.is_pressed(event) {
+            let bol = self.beginning_of_current_line();
+            self.insert_str_at(bol, "\n");
+            self.set_cursor(bol);
+            self.vim_mode = VimMode::Insert;
+            return;
+        }
+        if self.vim_normal_keymap.move_left.is_pressed(event) {
+            self.move_cursor_left();
+            return;
+        }
+        if self.vim_normal_keymap.move_right.is_pressed(event) {
+            self.move_cursor_right();
+            return;
+        }
+        if self.vim_normal_keymap.move_down.is_pressed(event) {
+            self.move_cursor_down();
+            return;
+        }
+        if self.vim_normal_keymap.move_up.is_pressed(event) {
+            self.move_cursor_up();
+            return;
+        }
+        if self.vim_normal_keymap.move_word_forward.is_pressed(event) {
+            self.set_cursor(self.beginning_of_next_word());
+            return;
+        }
+        if self.vim_normal_keymap.move_word_backward.is_pressed(event) {
+            self.set_cursor(self.beginning_of_previous_word());
+            return;
+        }
+        if self.vim_normal_keymap.move_word_end.is_pressed(event) {
+            self.set_cursor(self.end_of_next_word());
+            return;
+        }
+        if self.vim_normal_keymap.move_line_start.is_pressed(event) {
+            self.set_cursor(self.beginning_of_current_line());
+            return;
+        }
+        if self.vim_normal_keymap.move_line_end.is_pressed(event) {
+            self.set_cursor(self.end_of_current_line());
+            return;
+        }
+        if self.vim_normal_keymap.delete_char.is_pressed(event) {
+            self.delete_forward_kill(1);
+            return;
+        }
+        if self.vim_normal_keymap.delete_to_line_end.is_pressed(event) {
+            self.kill_to_end_of_line();
+            return;
+        }
+        if self.vim_normal_keymap.yank_line.is_pressed(event) {
+            self.yank_current_line();
+            return;
+        }
+        if self.vim_normal_keymap.paste_after.is_pressed(event) {
+            self.paste_after_cursor();
+            return;
+        }
+        if self
+            .vim_normal_keymap
+            .start_delete_operator
+            .is_pressed(event)
+        {
+            self.vim_operator = Some(VimOperator::Delete);
+            return;
+        }
+        if self.vim_normal_keymap.start_yank_operator.is_pressed(event) {
+            self.vim_operator = Some(VimOperator::Yank);
+            return;
+        }
+        if self.vim_normal_keymap.cancel_operator.is_pressed(event) {
+            self.vim_operator = None;
         }
     }
 
     fn handle_vim_operator(&mut self, op: VimOperator, event: KeyEvent) -> bool {
-        match event {
-            KeyEvent {
-                code: KeyCode::Char('d'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } if op == VimOperator::Delete => {
-                self.delete_current_line();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('y'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } if op == VimOperator::Yank => {
-                self.yank_current_line();
-                true
-            }
-            _ => {
-                if let Some(motion) = self.vim_motion_for_event(event) {
-                    self.apply_vim_operator(op, motion);
-                    return true;
-                }
-                false
-            }
+        if op == VimOperator::Delete && self.vim_operator_keymap.delete_line.is_pressed(event) {
+            self.delete_current_line();
+            return true;
         }
+        if op == VimOperator::Yank && self.vim_operator_keymap.yank_line.is_pressed(event) {
+            self.yank_current_line();
+            return true;
+        }
+        if self.vim_operator_keymap.cancel.is_pressed(event) {
+            return true;
+        }
+
+        if let Some(motion) = self.vim_motion_for_event(event) {
+            self.apply_vim_operator(op, motion);
+            return true;
+        }
+        false
     }
 
     fn vim_motion_for_event(&self, event: KeyEvent) -> Option<VimMotion> {
-        match event {
-            KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => Some(VimMotion::Left),
-            KeyEvent {
-                code: KeyCode::Char('l'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => Some(VimMotion::Right),
-            KeyEvent {
-                code: KeyCode::Char('j'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => Some(VimMotion::Down),
-            KeyEvent {
-                code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => Some(VimMotion::Up),
-            KeyEvent {
-                code: KeyCode::Char('w'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => Some(VimMotion::WordForward),
-            KeyEvent {
-                code: KeyCode::Char('b'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => Some(VimMotion::WordBackward),
-            KeyEvent {
-                code: KeyCode::Char('e'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => Some(VimMotion::WordEnd),
-            KeyEvent {
-                code: KeyCode::Char('0'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => Some(VimMotion::LineStart),
-            KeyEvent {
-                code: KeyCode::Char('$'),
-                modifiers,
-                ..
-            } if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => {
-                Some(VimMotion::LineEnd)
-            }
-            _ => None,
+        if self.vim_operator_keymap.motion_left.is_pressed(event) {
+            return Some(VimMotion::Left);
         }
+        if self.vim_operator_keymap.motion_right.is_pressed(event) {
+            return Some(VimMotion::Right);
+        }
+        if self.vim_operator_keymap.motion_down.is_pressed(event) {
+            return Some(VimMotion::Down);
+        }
+        if self.vim_operator_keymap.motion_up.is_pressed(event) {
+            return Some(VimMotion::Up);
+        }
+        if self
+            .vim_operator_keymap
+            .motion_word_forward
+            .is_pressed(event)
+        {
+            return Some(VimMotion::WordForward);
+        }
+        if self
+            .vim_operator_keymap
+            .motion_word_backward
+            .is_pressed(event)
+        {
+            return Some(VimMotion::WordBackward);
+        }
+        if self.vim_operator_keymap.motion_word_end.is_pressed(event) {
+            return Some(VimMotion::WordEnd);
+        }
+        if self.vim_operator_keymap.motion_line_start.is_pressed(event) {
+            return Some(VimMotion::LineStart);
+        }
+        if self.vim_operator_keymap.motion_line_end.is_pressed(event) {
+            return Some(VimMotion::LineEnd);
+        }
+        None
     }
 
     fn apply_vim_operator(&mut self, op: VimOperator, motion: VimMotion) {

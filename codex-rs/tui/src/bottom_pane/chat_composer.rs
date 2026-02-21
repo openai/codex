@@ -635,7 +635,7 @@ impl ChatComposer {
         self.queue_keys = keymap.composer.queue.clone();
         self.toggle_shortcuts_keys = keymap.composer.toggle_shortcuts.clone();
         self.editor_keymap = keymap.editor.clone();
-        self.textarea.set_keymap_bindings(&self.editor_keymap);
+        self.textarea.set_keymap_bindings(keymap);
         self.footer_external_editor_key = primary_binding(&keymap.app.open_external_editor);
         self.footer_edit_previous_key = primary_binding(&keymap.chat.edit_previous_message);
         self.footer_show_transcript_key = primary_binding(&keymap.app.open_transcript);
@@ -954,6 +954,65 @@ impl ChatComposer {
         self.relabel_attached_images_and_update_placeholders();
         self.textarea.set_cursor(self.textarea.text().len());
         self.sync_popups();
+    }
+
+    pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
+        self.textarea.set_vim_enabled(enabled);
+        self.paste_burst.clear_after_explicit_paste();
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+    }
+
+    pub(crate) fn toggle_vim_enabled(&mut self) -> bool {
+        let enabled = !self.textarea.is_vim_enabled();
+        self.set_vim_enabled(enabled);
+        enabled
+    }
+
+    pub(crate) fn is_vim_insert(&self) -> bool {
+        self.textarea.is_vim_insert()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_vim_enabled(&self) -> bool {
+        self.textarea.is_vim_enabled()
+    }
+
+    fn vim_mode_indicator_span(&self) -> Option<Span<'static>> {
+        self.textarea.vim_mode_label().map(|label| match label {
+            "Normal" => "Vim: Normal".magenta(),
+            "Insert" => "Vim: Insert".green(),
+            _ => unreachable!(),
+        })
+    }
+
+    fn mode_indicator_line(&self, show_cycle_hint: bool) -> Option<Line<'static>> {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        if let Some(vim_mode) = self.vim_mode_indicator_span() {
+            spans.push(vim_mode);
+        }
+        if let Some(collab) =
+            collaboration_mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint)
+        {
+            if !spans.is_empty() {
+                spans.push(" | ".dim());
+            }
+            spans.extend(collab.spans);
+        }
+        if spans.is_empty() {
+            None
+        } else {
+            Some(Line::from(spans))
+        }
+    }
+
+    fn right_footer_line_with_context(&self) -> Line<'static> {
+        let mut line =
+            context_window_line(self.context_window_percent, self.context_window_used_tokens);
+        if let Some(vim_mode) = self.vim_mode_indicator_span() {
+            line.spans.push(" | ".dim());
+            line.spans.push(vim_mode);
+        }
+        line
     }
 
     pub(crate) fn current_text_with_pending(&self) -> String {
@@ -1641,7 +1700,7 @@ impl ChatComposer {
         if self.disable_paste_burst {
             // When burst detection is disabled, treat IME/non-ASCII input as normal typing.
             // In particular, do not retro-capture or buffer already-inserted prefix text.
-            self.textarea.input_with_keymap(input, &self.editor_keymap);
+            self.textarea.input(input);
             let text_after = self.textarea.text();
             self.pending_pastes
                 .retain(|(placeholder, _)| text_after.contains(placeholder));
@@ -1698,7 +1757,7 @@ impl ChatComposer {
         if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
             self.handle_paste(pasted);
         }
-        self.textarea.input_with_keymap(input, &self.editor_keymap);
+        self.textarea.input(input);
 
         let text_after = self.textarea.text();
         self.pending_pastes
@@ -3114,7 +3173,7 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
 
-        self.textarea.input_with_keymap(input, &self.editor_keymap);
+        self.textarea.input(input);
         self.sync_bash_mode_from_text();
 
         if let Some(elements_before) = elements_before {

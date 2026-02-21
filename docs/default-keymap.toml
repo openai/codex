@@ -37,6 +37,9 @@ queue = "tab"
 # Toggle composer shortcut overlay.
 # Include both forms because some terminals report `?` with SHIFT and others don't.
 toggle_shortcuts = ["?", "shift-?"]
+# Toggle Vim mode for the composer input.
+# Empty list keeps this unbound by default.
+toggle_vim_mode = []
 
 [tui.keymap.chat]
 # Overrides [tui.keymap.global] for chat-only behavior.
@@ -67,6 +70,46 @@ delete_forward_word = ["alt-delete"]
 kill_line_start = ["ctrl-u"]
 kill_line_end = ["ctrl-k"]
 yank = ["ctrl-y"]
+
+[tui.keymap.vim_normal]
+# Vim normal-mode actions for modal editing.
+enter_insert = "i"
+append_after_cursor = "a"
+append_line_end = "shift-a"
+insert_line_start = "shift-i"
+open_line_below = "o"
+open_line_above = "shift-o"
+move_left = "h"
+move_right = "l"
+move_up = "k"
+move_down = "j"
+move_word_forward = "w"
+move_word_backward = "b"
+move_word_end = "e"
+move_line_start = "0"
+move_line_end = "$"
+delete_char = "x"
+delete_to_line_end = "shift-d"
+yank_line = "shift-y"
+paste_after = "p"
+start_delete_operator = "d"
+start_yank_operator = "y"
+cancel_operator = "esc"
+
+[tui.keymap.vim_operator]
+# Vim operator-pending actions for delete/yank motions.
+delete_line = "d"
+yank_line = "y"
+motion_left = "h"
+motion_right = "l"
+motion_up = "k"
+motion_down = "j"
+motion_word_forward = "w"
+motion_word_backward = "b"
+motion_word_end = "e"
+motion_line_start = "0"
+motion_line_end = "$"
+cancel = "esc"
 
 [tui.keymap.pager]
 # Transcript/static overlay navigation.

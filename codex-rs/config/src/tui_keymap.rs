@@ -108,6 +108,8 @@ pub struct TuiGlobalKeymap {
     pub queue: Option<KeybindingsSpec>,
     /// Toggle the composer shortcut overlay.
     pub toggle_shortcuts: Option<KeybindingsSpec>,
+    /// Toggle Vim mode for the composer input.
+    pub toggle_vim_mode: Option<KeybindingsSpec>,
 }
 
 /// Chat context keybindings. These override corresponding `global` actions.
@@ -168,6 +170,52 @@ pub struct TuiEditorKeymap {
     pub kill_line_end: Option<KeybindingsSpec>,
     /// Yank the kill buffer.
     pub yank: Option<KeybindingsSpec>,
+}
+
+/// Vim normal-mode keybindings for modal editing inside text areas.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiVimNormalKeymap {
+    pub enter_insert: Option<KeybindingsSpec>,
+    pub append_after_cursor: Option<KeybindingsSpec>,
+    pub append_line_end: Option<KeybindingsSpec>,
+    pub insert_line_start: Option<KeybindingsSpec>,
+    pub open_line_below: Option<KeybindingsSpec>,
+    pub open_line_above: Option<KeybindingsSpec>,
+    pub move_left: Option<KeybindingsSpec>,
+    pub move_right: Option<KeybindingsSpec>,
+    pub move_up: Option<KeybindingsSpec>,
+    pub move_down: Option<KeybindingsSpec>,
+    pub move_word_forward: Option<KeybindingsSpec>,
+    pub move_word_backward: Option<KeybindingsSpec>,
+    pub move_word_end: Option<KeybindingsSpec>,
+    pub move_line_start: Option<KeybindingsSpec>,
+    pub move_line_end: Option<KeybindingsSpec>,
+    pub delete_char: Option<KeybindingsSpec>,
+    pub delete_to_line_end: Option<KeybindingsSpec>,
+    pub yank_line: Option<KeybindingsSpec>,
+    pub paste_after: Option<KeybindingsSpec>,
+    pub start_delete_operator: Option<KeybindingsSpec>,
+    pub start_yank_operator: Option<KeybindingsSpec>,
+    pub cancel_operator: Option<KeybindingsSpec>,
+}
+
+/// Vim operator-pending keybindings for modal editing inside text areas.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiVimOperatorKeymap {
+    pub delete_line: Option<KeybindingsSpec>,
+    pub yank_line: Option<KeybindingsSpec>,
+    pub motion_left: Option<KeybindingsSpec>,
+    pub motion_right: Option<KeybindingsSpec>,
+    pub motion_up: Option<KeybindingsSpec>,
+    pub motion_down: Option<KeybindingsSpec>,
+    pub motion_word_forward: Option<KeybindingsSpec>,
+    pub motion_word_backward: Option<KeybindingsSpec>,
+    pub motion_word_end: Option<KeybindingsSpec>,
+    pub motion_line_start: Option<KeybindingsSpec>,
+    pub motion_line_end: Option<KeybindingsSpec>,
+    pub cancel: Option<KeybindingsSpec>,
 }
 
 /// Pager context keybindings for transcript and static overlays.
@@ -277,6 +325,10 @@ pub struct TuiKeymap {
     pub composer: TuiComposerKeymap,
     #[serde(default)]
     pub editor: TuiEditorKeymap,
+    #[serde(default)]
+    pub vim_normal: TuiVimNormalKeymap,
+    #[serde(default)]
+    pub vim_operator: TuiVimOperatorKeymap,
     #[serde(default)]
     pub pager: TuiPagerKeymap,
     #[serde(default)]

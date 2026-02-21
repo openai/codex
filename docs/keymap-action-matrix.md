@@ -38,6 +38,7 @@ For runtime behavior, safety invariants, and testing guidance, see
 - `submit`: submit current draft
 - `queue`: queue current draft while a task is running
 - `toggle_shortcuts`: toggle composer shortcut overlay
+- `toggle_vim_mode`: toggle Vim mode for composer input
 
 ### `chat`
 
@@ -60,6 +61,32 @@ For runtime behavior, safety invariants, and testing guidance, see
 - `delete_backward_word` / `delete_forward_word`: word deletion
 - `kill_line_start` / `kill_line_end`: kill to line boundary
 - `yank`: paste kill-buffer contents
+
+### `vim_normal`
+
+- `enter_insert`: switch to insert mode
+- `append_after_cursor`: move right and switch to insert mode
+- `append_line_end`: move to end of line and switch to insert mode
+- `insert_line_start`: move to beginning of line and switch to insert mode
+- `open_line_below` / `open_line_above`: open line and switch to insert mode
+- `move_left` / `move_right` / `move_up` / `move_down`: cursor movement
+- `move_word_forward` / `move_word_backward` / `move_word_end`: word motions
+- `move_line_start` / `move_line_end`: line boundary motions
+- `delete_char`: delete character at cursor
+- `delete_to_line_end`: delete from cursor to line end
+- `yank_line`: copy current line
+- `paste_after`: paste after cursor
+- `start_delete_operator` / `start_yank_operator`: enter operator-pending state
+- `cancel_operator`: clear pending operator
+
+### `vim_operator`
+
+- `delete_line`: apply delete operator to full line
+- `yank_line`: apply yank operator to full line
+- `motion_left` / `motion_right` / `motion_up` / `motion_down`: motion targets
+- `motion_word_forward` / `motion_word_backward` / `motion_word_end`: word targets
+- `motion_line_start` / `motion_line_end`: line targets
+- `cancel`: cancel pending operator
 
 ### `pager`
 
