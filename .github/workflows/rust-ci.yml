@@ -145,6 +145,8 @@ jobs:
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
+            # This is consistently the slowest test job; keep runtime coverage on pushes/manual runs.
+            skip_on_pr: true
             runs_on:
               group: codex-runners
               labels: codex-windows-arm64
@@ -577,6 +579,7 @@ jobs:
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
 
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+        if: ${{ !(github.event_name == 'pull_request' && matrix.target == 'aarch64-pc-windows-msvc') }}
         with:
           tool: nextest
           version: 0.9.103
@@ -594,6 +597,7 @@ jobs:
 
       - name: tests
         id: test
+        if: ${{ !(github.event_name == 'pull_request' && matrix.target == 'aarch64-pc-windows-msvc') }}
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
         env:
           RUST_BACKTRACE: 1
