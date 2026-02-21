@@ -472,12 +472,6 @@ jobs:
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             profile: dev
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             profile: dev
@@ -506,7 +500,7 @@ jobs:
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev bubblewrap
           fi
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
@@ -579,18 +573,11 @@ jobs:
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: nextest
-          version: 0.9.103
+          version: 0.9.127
 
       - name: Enable unprivileged user namespaces (Linux)
         if: runner.os == 'Linux'
-        run: |
-          # Required for bubblewrap to work on Linux CI runners.
-          sudo sysctl -w kernel.unprivileged_userns_clone=1
-          # Ubuntu 24.04+ can additionally gate unprivileged user namespaces
-          # behind AppArmor.
-          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/enable-unprivileged-userns.sh"
 
       - name: tests
         id: test
@@ -650,10 +637,258 @@ jobs:
           echo "Tests failed. See logs for details."
           exit 1
 
+  # --- Build-once + sharded tests for the primary Linux GNU target ----------
+  tests_linux_gnu_build:
+    name: Tests build archive — ubuntu-24.04 - x86_64-unknown-linux-gnu
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
+    timeout-minutes: 30
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      USE_SCCACHE: "true"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_CACHE_SIZE: 10G
+
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+          fi
+      # Some integration tests rely on DotSlash being installed.
+      # See https://github.com/openai/codex/pull/7617.
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@v2
+
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Compute lockfile hash
+        id: lockhash
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "hash=$(sha256sum Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "toolchain_hash=$(sha256sum rust-toolchain.toml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cargo home cache
+        id: cache_cargo_home_restore
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-ubuntu-24.04-x86_64-unknown-linux-gnu-dev-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
+          restore-keys: |
+            cargo-home-ubuntu-24.04-x86_64-unknown-linux-gnu-dev-
+
+      - name: Install sccache
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+        with:
+          tool: sccache
+          version: 0.7.5
+
+      - name: Configure sccache backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+            echo "Using sccache GitHub backend"
+          else
+            echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+            echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
+            echo "Using sccache local disk + actions/cache fallback"
+          fi
+
+      - name: Enable sccache wrapper
+        shell: bash
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Restore sccache cache (fallback)
+        if: ${{ env.SCCACHE_GHA_ENABLED != 'true' }}
+        id: cache_sccache_restore
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ github.workspace }}/.sccache/
+          key: sccache-ubuntu-24.04-x86_64-unknown-linux-gnu-dev-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-ubuntu-24.04-x86_64-unknown-linux-gnu-dev-${{ steps.lockhash.outputs.hash }}-
+            sccache-ubuntu-24.04-x86_64-unknown-linux-gnu-dev-
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+        with:
+          tool: nextest
+          version: 0.9.127
+
+      - name: Enable unprivileged user namespaces (Linux)
+        if: runner.os == 'Linux'
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/enable-unprivileged-userns.sh"
+
+      - name: Build and archive tests
+        shell: bash
+        run: |
+          bash "${GITHUB_WORKSPACE}/.github/scripts/nextest-archive-build.sh" \
+            "${RUNNER_TEMP}/nextest-x86_64-unknown-linux-gnu.tar.zst" \
+            x86_64-unknown-linux-gnu \
+            ci-test
+        env:
+          RUST_BACKTRACE: 1
+          NEXTEST_STATUS_LEVEL: leak
+
+      - name: Upload nextest archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: nextest-archive-rust-ci-x86_64-unknown-linux-gnu-dev
+          path: ${{ runner.temp }}/nextest-x86_64-unknown-linux-gnu.tar.zst
+          if-no-files-found: error
+
+      - name: Upload Cargo timings (nextest archive build)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cargo-timings-rust-ci-nextest-x86_64-unknown-linux-gnu-dev
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+
+      - name: Save cargo home cache
+        if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-ubuntu-24.04-x86_64-unknown-linux-gnu-dev-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
+
+      - name: Save sccache cache (fallback)
+        if: always() && !cancelled() && env.SCCACHE_GHA_ENABLED != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.sccache/
+          key: sccache-ubuntu-24.04-x86_64-unknown-linux-gnu-dev-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
+
+      - name: sccache stats
+        if: always()
+        continue-on-error: true
+        run: sccache --show-stats || true
+
+      - name: sccache summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### sccache stats — x86_64-unknown-linux-gnu (archive build)";
+            echo;
+            echo '```';
+            sccache --show-stats || true;
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tests_linux_gnu_shards:
+    name: Tests — ubuntu-24.04 - x86_64-unknown-linux-gnu (shard ${{ matrix.shard_index }}/${{ matrix.shard_count }})
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
+    timeout-minutes: 30
+    needs: [changed, tests_linux_gnu_build]
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard_index: 1
+            shard_count: 2
+          - shard_index: 2
+            shard_count: 2
+
+    steps:
+      - uses: actions/checkout@v6
+      # Some integration tests rely on DotSlash being installed.
+      # See https://github.com/openai/codex/pull/7617.
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@v2
+
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+        with:
+          tool: nextest
+          version: 0.9.127
+
+      - name: Enable unprivileged user namespaces (Linux)
+        if: runner.os == 'Linux'
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/enable-unprivileged-userns.sh"
+
+      - name: Install Linux test runtime dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap
+          fi
+
+      - name: Download nextest archive
+        uses: actions/download-artifact@v5
+        with:
+          name: nextest-archive-rust-ci-x86_64-unknown-linux-gnu-dev
+          path: ${{ runner.temp }}/nextest-archive
+
+      - name: tests
+        id: test
+        shell: bash
+        env:
+          RUST_BACKTRACE: 1
+          NEXTEST_STATUS_LEVEL: leak
+        run: |
+          bash "${GITHUB_WORKSPACE}/.github/scripts/nextest-archive-run-shard.sh" \
+            "${RUNNER_TEMP}/nextest-archive/nextest-x86_64-unknown-linux-gnu.tar.zst" \
+            "${GITHUB_WORKSPACE}/codex-rs" \
+            "hash:${{ matrix.shard_index }}/${{ matrix.shard_count }}"
+
+      - name: verify tests passed
+        if: steps.test.outcome == 'failure'
+        run: |
+          echo "Tests failed. See logs for details."
+          exit 1
+
   # --- Gatherer job that you mark as the ONLY required status -----------------
   results:
     name: CI results (required)
-    needs: [changed, general, cargo_shear, lint_build, tests]
+    needs:
+      [
+        changed,
+        general,
+        cargo_shear,
+        lint_build,
+        tests,
+        tests_linux_gnu_build,
+        tests_linux_gnu_shards,
+      ]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -664,6 +899,8 @@ jobs:
           echo "shear  : ${{ needs.cargo_shear.result }}"
           echo "lint   : ${{ needs.lint_build.result }}"
           echo "tests  : ${{ needs.tests.result }}"
+          echo "linux archive build: ${{ needs.tests_linux_gnu_build.result }}"
+          echo "linux shard tests : ${{ needs.tests_linux_gnu_shards.result }}"
 
           # If nothing relevant changed (PR touching only root README, etc.),
           # declare success regardless of other jobs.
@@ -677,6 +914,8 @@ jobs:
           [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
           [[ '${{ needs.lint_build.result }}' == 'success' ]] || { echo 'lint_build failed'; exit 1; }
           [[ '${{ needs.tests.result }}' == 'success' ]] || { echo 'tests failed'; exit 1; }
+          [[ '${{ needs.tests_linux_gnu_build.result }}' == 'success' ]] || { echo 'tests_linux_gnu_build failed'; exit 1; }
+          [[ '${{ needs.tests_linux_gnu_shards.result }}' == 'success' ]] || { echo 'tests_linux_gnu_shards failed'; exit 1; }
 
       - name: sccache summary note
         if: always()
