@@ -30,6 +30,11 @@ use crate::features::maybe_push_unstable_features_warning;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::realtime_conversation::RealtimeConversationManager;
+use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
+use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
+use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
+use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
@@ -522,7 +527,7 @@ pub(crate) struct Session {
     /// session.
     features: Features,
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
-    pub(crate) conversation: Arc<crate::realtime_conversation::RealtimeConversationManager>,
+    pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
@@ -1356,9 +1361,7 @@ impl Session {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
-            conversation: Arc::new(
-                crate::realtime_conversation::RealtimeConversationManager::new(),
-            ),
+            conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             services,
             js_repl,
@@ -3168,7 +3171,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             }
             Op::RealtimeConversationStart(params) => {
                 if let Err(err) =
-                    crate::realtime_conversation::handle_start(&sess, sub.id.clone(), params).await
+                    handle_realtime_conversation_start(&sess, sub.id.clone(), params).await
                 {
                     sess.send_event_raw(Event {
                         id: sub.id.clone(),
@@ -3181,13 +3184,13 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 }
             }
             Op::RealtimeConversationAudio(params) => {
-                crate::realtime_conversation::handle_audio(&sess, sub.id.clone(), params).await;
+                handle_realtime_conversation_audio(&sess, sub.id.clone(), params).await;
             }
             Op::RealtimeConversationText(params) => {
-                crate::realtime_conversation::handle_text(&sess, sub.id.clone(), params).await;
+                handle_realtime_conversation_text(&sess, sub.id.clone(), params).await;
             }
             Op::RealtimeConversationClose => {
-                crate::realtime_conversation::handle_close(&sess, sub.id.clone()).await;
+                handle_realtime_conversation_close(&sess, sub.id.clone()).await;
             }
             Op::OverrideTurnContext {
                 cwd,
@@ -7485,9 +7488,7 @@ mod tests {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
-            conversation: Arc::new(
-                crate::realtime_conversation::RealtimeConversationManager::new(),
-            ),
+            conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             services,
             js_repl,
@@ -7642,9 +7643,7 @@ mod tests {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
-            conversation: Arc::new(
-                crate::realtime_conversation::RealtimeConversationManager::new(),
-            ),
+            conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             services,
             js_repl,
