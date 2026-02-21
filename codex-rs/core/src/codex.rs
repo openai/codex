@@ -1713,8 +1713,11 @@ impl Session {
     /// This relies on the invariant that only regular turns persist `TurnContextItem`.
     /// `ThreadRolledBack` markers are applied so resume/fork uses the post-rollback history view.
     ///
-    /// Returns `(None, false)` when no completed turn with a persisted
-    /// `TurnContextItem` is present in the lifecycle-aware rollout view.
+    /// Returns `(None, false)` when no persisted `TurnContextItem` can be found.
+    ///
+    /// Older/minimal rollouts may only contain `RolloutItem::TurnContext` entries without turn
+    /// lifecycle events. In that case we fall back to the last `TurnContextItem` (plus whether a
+    /// later `Compacted` item appears in rollout order).
     // TODO(ccunningham): Simplify this lookup by sharing rollout traversal/rollback application
     // with `reconstruct_history_from_rollout` so resume/fork baseline hydration does not need a
     // second bespoke rollout scan.
@@ -1728,6 +1731,7 @@ impl Session {
         // scanning backward through that completed turn until its matching `TurnStarted`.
         let mut turns_to_skip_due_to_rollback = 0usize;
         let mut saw_surviving_compaction_after_candidate = false;
+        let mut saw_turn_lifecycle_event = false;
         let mut active_turn_id: Option<&str> = None;
         let mut active_turn_is_rolled_back = false;
         let mut active_turn_context: Option<&TurnContextItem> = None;
@@ -1744,6 +1748,7 @@ impl Session {
                         turns_to_skip_due_to_rollback.saturating_add(num_turns);
                 }
                 RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
+                    saw_turn_lifecycle_event = true;
                     // Enter the reverse "turn span" for this completed turn.
                     active_turn_id = Some(event.turn_id.as_str());
                     active_turn_is_rolled_back = turns_to_skip_due_to_rollback > 0;
@@ -1754,6 +1759,7 @@ impl Session {
                     active_turn_contains_compaction = false;
                 }
                 RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
+                    saw_turn_lifecycle_event = true;
                     // Same reverse-turn handling as `TurnComplete`. Some aborted turns may not
                     // have a turn id; in that case we cannot match `TurnContextItem`s to them.
                     active_turn_id = event.turn_id.as_deref();
@@ -1765,6 +1771,7 @@ impl Session {
                     active_turn_contains_compaction = false;
                 }
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
+                    saw_turn_lifecycle_event = true;
                     if active_turn_id == Some(event.turn_id.as_str()) {
                         if !active_turn_is_rolled_back {
                             if let Some(context_item) = active_turn_context {
@@ -1812,6 +1819,21 @@ impl Session {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        if !saw_turn_lifecycle_event {
+            let mut saw_compaction_after_last_turn_context = false;
+            for item in rollout_items.iter().rev() {
+                match item {
+                    RolloutItem::Compacted(_) => {
+                        saw_compaction_after_last_turn_context = true;
+                    }
+                    RolloutItem::TurnContext(ctx) => {
+                        return (Some(ctx), saw_compaction_after_last_turn_context);
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -6593,34 +6615,7 @@ mod tests {
             final_output_json_schema: None,
             truncation_policy: Some(turn_context.truncation_policy.into()),
         };
-        let turn_id = previous_context_item
-            .turn_id
-            .clone()
-            .expect("turn context should have turn_id");
-        let rollout_items = vec![
-            RolloutItem::EventMsg(EventMsg::TurnStarted(
-                codex_protocol::protocol::TurnStartedEvent {
-                    turn_id: turn_id.clone(),
-                    model_context_window: Some(128_000),
-                    collaboration_mode_kind: ModeKind::Default,
-                },
-            )),
-            RolloutItem::EventMsg(EventMsg::UserMessage(
-                codex_protocol::protocol::UserMessageEvent {
-                    message: "seed".to_string(),
-                    images: None,
-                    local_images: Vec::new(),
-                    text_elements: Vec::new(),
-                },
-            )),
-            RolloutItem::TurnContext(previous_context_item),
-            RolloutItem::EventMsg(EventMsg::TurnComplete(
-                codex_protocol::protocol::TurnCompleteEvent {
-                    turn_id,
-                    last_agent_message: None,
-                },
-            )),
-        ];
+        let rollout_items = vec![RolloutItem::TurnContext(previous_context_item)];
 
         session
             .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -6640,34 +6635,7 @@ mod tests {
     async fn record_initial_history_resumed_seeds_reference_context_item_without_compaction() {
         let (session, turn_context) = make_session_and_context().await;
         let previous_context_item = turn_context.to_turn_context_item();
-        let turn_id = previous_context_item
-            .turn_id
-            .clone()
-            .expect("turn context should have turn_id");
-        let rollout_items = vec![
-            RolloutItem::EventMsg(EventMsg::TurnStarted(
-                codex_protocol::protocol::TurnStartedEvent {
-                    turn_id: turn_id.clone(),
-                    model_context_window: Some(128_000),
-                    collaboration_mode_kind: ModeKind::Default,
-                },
-            )),
-            RolloutItem::EventMsg(EventMsg::UserMessage(
-                codex_protocol::protocol::UserMessageEvent {
-                    message: "seed".to_string(),
-                    images: None,
-                    local_images: Vec::new(),
-                    text_elements: Vec::new(),
-                },
-            )),
-            RolloutItem::TurnContext(previous_context_item.clone()),
-            RolloutItem::EventMsg(EventMsg::TurnComplete(
-                codex_protocol::protocol::TurnCompleteEvent {
-                    turn_id,
-                    last_agent_message: None,
-                },
-            )),
-        ];
+        let rollout_items = vec![RolloutItem::TurnContext(previous_context_item.clone())];
 
         session
             .record_initial_history(InitialHistory::Resumed(ResumedHistory {
@@ -6690,33 +6658,8 @@ mod tests {
     {
         let (session, turn_context) = make_session_and_context().await;
         let previous_context_item = turn_context.to_turn_context_item();
-        let turn_id = previous_context_item
-            .turn_id
-            .clone()
-            .expect("turn context should have turn_id");
         let rollout_items = vec![
-            RolloutItem::EventMsg(EventMsg::TurnStarted(
-                codex_protocol::protocol::TurnStartedEvent {
-                    turn_id: turn_id.clone(),
-                    model_context_window: Some(128_000),
-                    collaboration_mode_kind: ModeKind::Default,
-                },
-            )),
-            RolloutItem::EventMsg(EventMsg::UserMessage(
-                codex_protocol::protocol::UserMessageEvent {
-                    message: "seed".to_string(),
-                    images: None,
-                    local_images: Vec::new(),
-                    text_elements: Vec::new(),
-                },
-            )),
             RolloutItem::TurnContext(previous_context_item),
-            RolloutItem::EventMsg(EventMsg::TurnComplete(
-                codex_protocol::protocol::TurnCompleteEvent {
-                    turn_id,
-                    last_agent_message: None,
-                },
-            )),
             RolloutItem::Compacted(CompactedItem {
                 message: String::new(),
                 replacement_history: Some(Vec::new()),
@@ -6942,34 +6885,7 @@ mod tests {
             final_output_json_schema: None,
             truncation_policy: Some(turn_context.truncation_policy.into()),
         };
-        let turn_id = previous_context_item
-            .turn_id
-            .clone()
-            .expect("turn context should have turn_id");
-        let rollout_items = vec![
-            RolloutItem::EventMsg(EventMsg::TurnStarted(
-                codex_protocol::protocol::TurnStartedEvent {
-                    turn_id: turn_id.clone(),
-                    model_context_window: Some(128_000),
-                    collaboration_mode_kind: ModeKind::Default,
-                },
-            )),
-            RolloutItem::EventMsg(EventMsg::UserMessage(
-                codex_protocol::protocol::UserMessageEvent {
-                    message: "seed".to_string(),
-                    images: None,
-                    local_images: Vec::new(),
-                    text_elements: Vec::new(),
-                },
-            )),
-            RolloutItem::TurnContext(previous_context_item),
-            RolloutItem::EventMsg(EventMsg::TurnComplete(
-                codex_protocol::protocol::TurnCompleteEvent {
-                    turn_id,
-                    last_agent_message: None,
-                },
-            )),
-        ];
+        let rollout_items = vec![RolloutItem::TurnContext(previous_context_item)];
 
         session
             .record_initial_history(InitialHistory::Forked(rollout_items))
