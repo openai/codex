@@ -38,87 +38,9 @@ use ts_rs::TS;
 const HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
 static VARIANT_TITLE_COLLISION_OVERRIDES: LazyLock<HashMap<&'static str, &'static str>> =
-    LazyLock::new(|| {
-        HashMap::from([
-            (
-                "base=McpStartupStatus|generated=StateMcpStartupStatus|literal:state=ready|only_property=state|required_only=state",
-                "StateMcpStartupStatus2",
-            ),
-            (
-                "base=McpStartupStatus|generated=StateMcpStartupStatus|literal:state=cancelled|only_property=state|required_only=state",
-                "StateMcpStartupStatus3",
-            ),
-        ])
-    });
+    LazyLock::new(HashMap::new);
 static NUMBERED_DEFINITION_COLLISION_OVERRIDES: LazyLock<HashMap<&'static str, &'static str>> =
-    LazyLock::new(|| {
-        HashMap::from([
-            (
-                "schema=ClientRequest|container=definitions|generated=AskForApproval2|base=AskForApproval",
-                "AskForApproval2",
-            ),
-            (
-                "schema=ClientRequest|container=definitions|generated=NetworkAccess2|base=NetworkAccess",
-                "NetworkAccess2",
-            ),
-            (
-                "schema=ClientRequest|container=definitions|generated=ReadOnlyAccess2|base=ReadOnlyAccess",
-                "ReadOnlyAccess2",
-            ),
-            (
-                "schema=ClientRequest|container=definitions|generated=SandboxMode2|base=SandboxMode",
-                "SandboxMode2",
-            ),
-            (
-                "schema=ClientRequest|container=definitions|generated=SandboxPolicy2|base=SandboxPolicy",
-                "SandboxPolicy2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=ByteRange2|base=ByteRange",
-                "ByteRange2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=CodexErrorInfo2|base=CodexErrorInfo",
-                "CodexErrorInfo2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=CreditsSnapshot2|base=CreditsSnapshot",
-                "CreditsSnapshot2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=MessagePhase2|base=MessagePhase",
-                "MessagePhase2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=ModelRerouteReason2|base=ModelRerouteReason",
-                "ModelRerouteReason2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=PatchApplyStatus2|base=PatchApplyStatus",
-                "PatchApplyStatus2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=RateLimitSnapshot2|base=RateLimitSnapshot",
-                "RateLimitSnapshot2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=RateLimitWindow2|base=RateLimitWindow",
-                "RateLimitWindow2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=TextElement2|base=TextElement",
-                "TextElement2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=UserInput2|base=UserInput",
-                "UserInput2",
-            ),
-            (
-                "schema=ServerNotification|container=definitions|generated=WebSearchAction2|base=WebSearchAction",
-                "WebSearchAction2",
-            ),
-        ])
-    });
+    LazyLock::new(HashMap::new);
 
 #[derive(Clone)]
 pub struct GeneratedSchema {
@@ -264,6 +186,7 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
     schemas.extend(export_server_response_schemas(out_dir)?);
     schemas.extend(export_client_notification_schemas(out_dir)?);
     schemas.extend(export_server_notification_schemas(out_dir)?);
+    schemas.retain(|schema| schema.namespace() == Some("v2"));
 
     let mut bundle = build_schema_bundle(schemas)?;
     if !experimental_api {
@@ -1031,14 +954,17 @@ where
     T: JsonSchema,
 {
     let file_stem = name.trim();
+    let (raw_namespace, logical_name) = split_namespace(file_stem);
+    let include_in_json_codegen = raw_namespace == Some("v2");
     let schema = schema_for!(T);
     let mut schema_value = serde_json::to_value(schema)?;
-    enforce_numbered_definition_collision_overrides(file_stem, &mut schema_value);
-    annotate_schema(&mut schema_value, Some(file_stem));
+    if include_in_json_codegen {
+        enforce_numbered_definition_collision_overrides(file_stem, &mut schema_value);
+        annotate_schema(&mut schema_value, Some(file_stem));
+    }
     // If the name looks like a namespaced path (e.g., "v2::Type"), mirror
     // the TypeScript layout and write to out_dir/v2/Type.json. Otherwise
     // write alongside the legacy files.
-    let (raw_namespace, logical_name) = split_namespace(file_stem);
     let out_path = if let Some(ns) = raw_namespace {
         let dir = out_dir.join(ns);
         ensure_dir(&dir)?;
@@ -1047,7 +973,7 @@ where
         out_dir.join(format!("{file_stem}.json"))
     };
 
-    if !IGNORED_DEFINITIONS.contains(&logical_name) {
+    if include_in_json_codegen && !IGNORED_DEFINITIONS.contains(&logical_name) {
         write_pretty_json(out_path, &schema_value)
             .with_context(|| format!("Failed to write JSON schema for {file_stem}"))?;
     }
