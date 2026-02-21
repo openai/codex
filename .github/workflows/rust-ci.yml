@@ -451,7 +451,7 @@ jobs:
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
   tests:
-    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}
+    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.shard_name_suffix || '' }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
@@ -472,9 +472,23 @@ jobs:
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             profile: dev
+          # Partition the primary Linux GNU nextest run across two runners.
+          # This reduces wall-clock time for the representative test target.
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
+            nextest_partition: hash:1/2
+            shard_name_suffix: " (shard 1/2)"
+            timings_artifact_suffix: "-shard1of2"
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-x64
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            profile: dev
+            nextest_partition: hash:2/2
+            shard_name_suffix: " (shard 2/2)"
+            timings_artifact_suffix: "-shard2of2"
             runs_on:
               group: codex-runners
               labels: codex-linux-x64
@@ -594,7 +608,7 @@ jobs:
 
       - name: tests
         id: test
-        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
+        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test ${{ matrix.nextest_partition && format('--partition {0}', matrix.nextest_partition) || '' }} --timings
         env:
           RUST_BACKTRACE: 1
           NEXTEST_STATUS_LEVEL: leak
@@ -603,7 +617,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: cargo-timings-rust-ci-nextest-${{ matrix.target }}-${{ matrix.profile }}
+          name: cargo-timings-rust-ci-nextest-${{ matrix.target }}-${{ matrix.profile }}${{ matrix.timings_artifact_suffix || '' }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
