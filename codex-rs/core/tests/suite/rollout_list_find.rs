@@ -216,3 +216,25 @@ async fn find_archived_locates_rollout_file_by_id() {
 
     assert_eq!(found, Some(expected));
 }
+
+#[tokio::test]
+async fn find_unarchives_archived_rollout_file_by_id() {
+    let home = TempDir::new().unwrap();
+    let id = Uuid::new_v4();
+    let archived = write_minimal_rollout_with_id_in_subdir(home.path(), "archived_sessions", id);
+    let file_name = archived.file_name().unwrap().to_owned();
+    let expected_restored = home.path().join("sessions/2024/01/01").join(file_name);
+
+    let found = find_thread_path_by_id_str(home.path(), &id.to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(found, Some(expected_restored.clone()));
+    assert!(expected_restored.exists());
+    assert!(!archived.exists());
+
+    let archived_found = find_archived_thread_path_by_id_str(home.path(), &id.to_string())
+        .await
+        .unwrap();
+    assert_eq!(archived_found, None);
+}
