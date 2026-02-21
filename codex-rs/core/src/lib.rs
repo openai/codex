@@ -144,7 +144,6 @@ pub(crate) use codex_shell_command::is_safe_command;
 pub(crate) use codex_shell_command::parse_command;
 pub(crate) use codex_shell_command::powershell;
 
-pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use client::X_CODEX_TURN_METADATA_HEADER;
 pub use exec_policy::ExecPolicyError;
 pub use exec_policy::check_execpolicy_for_warnings;

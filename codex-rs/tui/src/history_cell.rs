@@ -589,8 +589,13 @@ impl HistoryCell for UnifiedExecInteractionCell {
             return Vec::new();
         }
         let wrap_width = width as usize;
+        let waited_only = self.stdin.is_empty();
 
-        let mut header_spans = vec!["↳ ".dim(), "Interacted with background terminal".bold()];
+        let mut header_spans = if waited_only {
+            vec!["• Waited for background terminal".bold()]
+        } else {
+            vec!["↳ ".dim(), "Interacted with background terminal".bold()]
+        };
         if let Some(command) = &self.command_display
             && !command.is_empty()
         {
@@ -603,14 +608,15 @@ impl HistoryCell for UnifiedExecInteractionCell {
         let header_wrapped = word_wrap_line(&header, RtOptions::new(wrap_width));
         push_owned_lines(&header_wrapped, &mut out);
 
-        let input_lines: Vec<Line<'static>> = if self.stdin.is_empty() {
-            vec![vec!["(waited)".dim()].into()]
-        } else {
-            self.stdin
-                .lines()
-                .map(|line| Line::from(line.to_string()))
-                .collect()
-        };
+        if waited_only {
+            return out;
+        }
+
+        let input_lines: Vec<Line<'static>> = self
+            .stdin
+            .lines()
+            .map(|line| Line::from(line.to_string()))
+            .collect();
 
         let input_wrapped = word_wrap_lines(
             input_lines,
@@ -2465,10 +2471,7 @@ mod tests {
     fn unified_exec_interaction_cell_renders_wait() {
         let cell = new_unified_exec_interaction(None, String::new());
         let lines = render_transcript(&cell);
-        assert_eq!(
-            lines,
-            vec!["↳ Interacted with background terminal", "  └ (waited)"],
-        );
+        assert_eq!(lines, vec!["• Waited for background terminal"]);
     }
 
     #[test]
