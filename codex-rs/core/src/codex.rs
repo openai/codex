@@ -8,7 +8,6 @@ use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
 use crate::CodexAuth;
-use crate::ResponsesWebsocketVersion;
 use crate::SandboxState;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
