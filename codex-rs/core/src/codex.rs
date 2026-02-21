@@ -1803,10 +1803,14 @@ impl Session {
                 RolloutItem::TurnContext(ctx) => {
                     // Capture the latest turn context seen in this reverse-scanned turn span. If
                     // the turn later proves to be rolled back, we discard it when we hit the
-                    // matching `TurnStarted`.
-                    if let (Some(active_id), Some(turn_id)) =
-                        (active_turn_id, ctx.turn_id.as_deref())
-                        && active_id == turn_id
+                    // matching `TurnStarted`. Older rollouts may have lifecycle events but omit
+                    // `TurnContextItem.turn_id`; accept those as belonging to the active turn
+                    // span for resume/fork hydration.
+                    if let Some(active_id) = active_turn_id
+                        && ctx
+                            .turn_id
+                            .as_deref()
+                            .is_none_or(|turn_id| turn_id == active_id)
                     {
                         // Reverse scan sees the latest `TurnContextItem` for the turn first.
                         active_turn_context.get_or_insert(ctx);
@@ -6623,6 +6627,72 @@ mod tests {
             truncation_policy: Some(turn_context.truncation_policy.into()),
         };
         let rollout_items = vec![RolloutItem::TurnContext(previous_context_item)];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(
+            session.previous_model().await,
+            Some(previous_model.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_resumed_hydrates_previous_model_from_lifecycle_turn_with_missing_turn_context_id()
+     {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_model = "previous-rollout-model";
+        let mut previous_context_item = TurnContextItem {
+            turn_id: Some(turn_context.sub_id.clone()),
+            cwd: turn_context.cwd.clone(),
+            approval_policy: turn_context.approval_policy,
+            sandbox_policy: turn_context.sandbox_policy.clone(),
+            network: None,
+            model: previous_model.to_string(),
+            personality: turn_context.personality,
+            collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+            effort: turn_context.reasoning_effort,
+            summary: turn_context.reasoning_summary,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: Some(turn_context.truncation_policy.into()),
+        };
+        let turn_id = previous_context_item
+            .turn_id
+            .clone()
+            .expect("turn context should have turn_id");
+        previous_context_item.turn_id = None;
+
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "seed".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::TurnContext(previous_context_item),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id,
+                    last_agent_message: None,
+                },
+            )),
+        ];
 
         session
             .record_initial_history(InitialHistory::Resumed(ResumedHistory {
