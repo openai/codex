@@ -440,6 +440,14 @@
         "model": {
           "type": "string"
         },
+        "model_catalog_json": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional path to a JSON model catalog (applied on startup only)."
+        },
         "model_instructions_file": {
           "allOf": [
             {
