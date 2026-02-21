@@ -97,7 +97,7 @@ fn proxy_only_mode_takes_precedence_over_full_network_policy() {
 fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
     let mode = bwrap_network_mode(&SandboxPolicy::DangerFullAccess, true);
     let argv = build_preflight_bwrap_argv(Path::new("/"), &SandboxPolicy::DangerFullAccess, mode);
-    assert_eq!(argv.contains(&"--".to_string()), true);
+    assert!(argv.iter().any(|arg| arg == "--"));
 }
 
 #[test]
@@ -111,8 +111,8 @@ fn managed_proxy_inner_command_includes_route_spec() {
         vec!["/bin/true".to_string()],
     );
 
-    assert_eq!(args.contains(&"--proxy-route-spec".to_string()), true);
-    assert_eq!(args.contains(&"{\"routes\":[]}".to_string()), true);
+    assert!(args.iter().any(|arg| arg == "--proxy-route-spec"));
+    assert!(args.iter().any(|arg| arg == "{\"routes\":[]}"));
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn non_managed_inner_command_omits_route_spec() {
         vec!["/bin/true".to_string()],
     );
 
-    assert_eq!(args.contains(&"--proxy-route-spec".to_string()), false);
+    assert!(!args.iter().any(|arg| arg == "--proxy-route-spec"));
 }
 
 #[test]

@@ -396,6 +396,6 @@ mod tests {
             .position(|window| window[0] == "--bind" && window[1] == "/dev" && window[2] == "/dev")
             .expect("expected writable /dev bind");
 
-        assert_eq!(dev_mount_index < writable_dev_bind_index, true);
+        assert!(dev_mount_index < writable_dev_bind_index);
     }
 }

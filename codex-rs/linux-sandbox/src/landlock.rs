@@ -211,22 +211,32 @@ fn install_network_seccomp_filter_on_current_thread(
             rules.insert(libc::SYS_socketpair, vec![unix_only_rule]);
         }
         NetworkSeccompMode::ProxyRouted => {
-            // In proxy-routed mode we allow TCP sockets in the isolated
-            // namespace but block AF_UNIX creation for the user command.
-            // This prevents bypassing the routed bridge via new Unix sockets.
-            let deny_unix_socket = SeccompRule::new(vec![SeccompCondition::new(
-                0,
-                SeccompCmpArgLen::Dword,
-                SeccompCmpOp::Eq,
-                libc::AF_UNIX as u64,
-            )?])?;
+            // In proxy-routed mode we allow IP sockets in the isolated
+            // namespace (used to reach the local TCP bridge) but deny all
+            // other socket families, including AF_UNIX. This prevents
+            // bypassing the routed bridge via new Unix sockets and narrows the
+            // socket surface in proxy-only mode.
+            let deny_non_ip_socket = SeccompRule::new(vec![
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_INET as u64,
+                )?,
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_INET6 as u64,
+                )?,
+            ])?;
             let deny_unix_socketpair = SeccompRule::new(vec![SeccompCondition::new(
                 0,
                 SeccompCmpArgLen::Dword,
                 SeccompCmpOp::Eq,
                 libc::AF_UNIX as u64,
             )?])?;
-            rules.insert(libc::SYS_socket, vec![deny_unix_socket]);
+            rules.insert(libc::SYS_socket, vec![deny_non_ip_socket]);
             rules.insert(libc::SYS_socketpair, vec![deny_unix_socketpair]);
         }
     }

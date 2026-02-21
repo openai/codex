@@ -2,6 +2,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fs::DirBuilder;
 use std::fs::File;
 use std::io;
 use std::io::Read;
@@ -12,6 +13,7 @@ use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::os::fd::FromRawFd;
+use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -48,14 +50,12 @@ pub(crate) struct ProxyRouteSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct ProxyRouteEntry {
     env_key: String,
-    original_value: String,
     uds_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PlannedProxyRoute {
     env_key: String,
-    original_value: String,
     endpoint: SocketAddr,
 }
 
@@ -109,7 +109,6 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
         };
         routes.push(ProxyRouteEntry {
             env_key: route.env_key,
-            original_value: route.original_value,
             uds_path: uds_path.clone(),
         });
     }
@@ -143,7 +142,13 @@ pub(crate) fn activate_proxy_routes_in_netns(serialized_spec: &str) -> io::Resul
                 route.uds_path.display()
             )));
         };
-        let Some(rewritten) = rewrite_proxy_env_value(&route.original_value, *local_port) else {
+        let original_value = std::env::var(&route.env_key).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("missing proxy env key {}", route.env_key),
+            )
+        })?;
+        let Some(rewritten) = rewrite_proxy_env_value(&original_value, *local_port) else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("could not rewrite proxy URL for env key {}", route.env_key),
@@ -179,7 +184,6 @@ fn plan_proxy_routes(env: &HashMap<String, String>) -> ProxyRoutePlan {
         };
         routes.push(PlannedProxyRoute {
             env_key: key.clone(),
-            original_value: trimmed.to_string(),
             endpoint,
         });
     }
@@ -222,11 +226,11 @@ fn parse_loopback_proxy_endpoint(proxy_url: &str) -> Option<SocketAddr> {
     } else {
         host.parse::<IpAddr>().ok()?
     };
-    if !ip.is_loopback() {
-        return None;
+    if ip.is_loopback() {
+        Some(SocketAddr::new(ip, port))
+    } else {
+        None
     }
-
-    Some(SocketAddr::new(ip, port))
 }
 
 fn is_loopback_host(host: &str) -> bool {
@@ -274,7 +278,11 @@ fn create_proxy_socket_dir() -> io::Result<PathBuf> {
     let pid = std::process::id();
     for attempt in 0..128 {
         let candidate = temp_dir.join(format!("{PROXY_SOCKET_DIR_PREFIX}{pid}-{attempt}"));
-        match std::fs::create_dir(&candidate) {
+        // The bridge UDS paths live under a shared temp root, so the per-run
+        // directory should not be traversable by other processes.
+        let mut dir_builder = DirBuilder::new();
+        dir_builder.mode(0o700);
+        match dir_builder.create(&candidate) {
             Ok(()) => return Ok(candidate),
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err),
@@ -574,12 +582,12 @@ fn ensure_loopback_interface_up() -> io::Result<()> {
 fn set_parent_death_signal() -> io::Result<()> {
     let res = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
     if res != 0 {
-        return Err(io::Error::last_os_error());
+        Err(io::Error::last_os_error())
+    } else if unsafe { libc::getppid() } == 1 {
+        Err(io::Error::other("parent process already exited"))
+    } else {
+        Ok(())
     }
-    if unsafe { libc::getppid() } == 1 {
-        return Err(io::Error::other("parent process already exited"));
-    }
-    Ok(())
 }
 
 fn proxy_bidirectional(mut tcp_stream: TcpStream, mut unix_stream: UnixStream) -> io::Result<()> {
@@ -626,6 +634,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::net::SocketAddr;
+    use std::path::PathBuf;
 
     #[test]
     fn recognizes_proxy_env_keys_case_insensitively() {
@@ -672,7 +681,12 @@ mod tests {
         assert_eq!(plan.has_proxy_config, true);
         assert_eq!(plan.routes.len(), 1);
         assert_eq!(plan.routes[0].env_key, "HTTP_PROXY");
-        assert_eq!(plan.routes[0].original_value, "http://127.0.0.1:43128");
+        assert_eq!(
+            plan.routes[0].endpoint,
+            "127.0.0.1:43128"
+                .parse::<SocketAddr>()
+                .expect("valid socket")
+        );
     }
 
     #[test]
@@ -700,6 +714,22 @@ mod tests {
         cleanup_proxy_socket_dir(socket_dir.as_path()).expect("cleanup should succeed");
 
         assert_eq!(socket_dir.exists(), false);
+    }
+
+    #[test]
+    fn proxy_route_spec_serialization_omits_proxy_urls() {
+        let spec = ProxyRouteSpec {
+            routes: vec![ProxyRouteEntry {
+                env_key: "HTTP_PROXY".to_string(),
+                uds_path: PathBuf::from("/tmp/proxy-route-0.sock"),
+            }],
+        };
+        let serialized = serde_json::to_string(&spec).expect("proxy route spec should serialize");
+
+        assert_eq!(
+            serialized,
+            r#"{"routes":[{"env_key":"HTTP_PROXY","uds_path":"/tmp/proxy-route-0.sock"}]}"#
+        );
     }
 
     #[test]

@@ -64,7 +64,7 @@ async fn should_skip_bwrap_tests() -> bool {
     strip_proxy_env(&mut env);
 
     let output = run_linux_sandbox_direct(
-        &["bash", "-lc", "true"],
+        &["bash", "-c", "true"],
         &SandboxPolicy::new_read_only_policy(),
         false,
         env,
@@ -90,7 +90,7 @@ async fn managed_proxy_skip_reason() -> Option<String> {
     env.insert("HTTP_PROXY".to_string(), "http://127.0.0.1:9".to_string());
 
     let output = run_linux_sandbox_direct(
-        &["bash", "-lc", "true"],
+        &["bash", "-c", "true"],
         &SandboxPolicy::DangerFullAccess,
         true,
         env,
@@ -170,7 +170,7 @@ async fn managed_proxy_mode_fails_closed_without_proxy_env() {
     strip_proxy_env(&mut env);
 
     let output = run_linux_sandbox_direct(
-        &["bash", "-lc", "true"],
+        &["bash", "-c", "true"],
         &SandboxPolicy::DangerFullAccess,
         true,
         env,
@@ -223,7 +223,7 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
     let routed_output = run_linux_sandbox_direct(
         &[
             "bash",
-            "-lc",
+            "-c",
             "proxy=\"${HTTP_PROXY#*://}\"; host=\"${proxy%%:*}\"; port=\"${proxy##*:}\"; exec 3<>/dev/tcp/${host}/${port}; printf 'GET http://example.com/ HTTP/1.1\\r\\nHost: example.com\\r\\n\\r\\n' >&3; IFS= read -r line <&3; printf '%s\\n' \"$line\"",
         ],
         &SandboxPolicy::DangerFullAccess,
@@ -256,7 +256,7 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
     );
 
     let direct_egress_output = run_linux_sandbox_direct(
-        &["bash", "-lc", "echo hi > /dev/tcp/192.0.2.1/80"],
+        &["bash", "-c", "echo hi > /dev/tcp/192.0.2.1/80"],
         &SandboxPolicy::DangerFullAccess,
         true,
         env,
@@ -274,7 +274,7 @@ async fn managed_proxy_mode_denies_af_unix_creation_for_user_command() {
     }
 
     let python_available = Command::new("bash")
-        .arg("-lc")
+        .arg("-c")
         .arg("command -v python3 >/dev/null")
         .status()
         .await
