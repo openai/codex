@@ -647,6 +647,8 @@ fn close_fd(fd: libc::c_int) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::PROXY_SOCKET_DIR_PREFIX;
+    use super::ProxyRouteEntry;
+    use super::ProxyRouteSpec;
     use super::cleanup_proxy_socket_dir;
     use super::cleanup_stale_proxy_socket_dirs_in;
     use super::default_proxy_port;
