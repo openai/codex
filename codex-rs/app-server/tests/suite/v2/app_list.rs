@@ -15,6 +15,7 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
+use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
 use codex_app_server_protocol::AppBranding;
@@ -491,39 +492,60 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
         })
         .await?;
 
+    let expected_directory_first = vec![
+        AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha connector".to_string()),
+            logo_url: Some("https://example.com/alpha.png".to_string()),
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+        },
+        AppInfo {
+            id: "beta".to_string(),
+            name: "beta".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+        },
+    ];
+    let expected_accessible_first = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta App".to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
+        is_accessible: true,
+        is_enabled: true,
+    }];
+
     let first_update = read_app_list_updated_notification(&mut mcp).await?;
-    assert_eq!(
-        first_update.data,
-        vec![
-            AppInfo {
-                id: "alpha".to_string(),
-                name: "Alpha".to_string(),
-                description: Some("Alpha connector".to_string()),
-                logo_url: Some("https://example.com/alpha.png".to_string()),
-                logo_url_dark: None,
-                distribution_channel: None,
-                branding: None,
-                app_metadata: None,
-                labels: None,
-                install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
-                is_accessible: false,
-                is_enabled: true,
-            },
-            AppInfo {
-                id: "beta".to_string(),
-                name: "beta".to_string(),
-                description: None,
-                logo_url: None,
-                logo_url_dark: None,
-                distribution_channel: None,
-                branding: None,
-                app_metadata: None,
-                labels: None,
-                install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
-                is_accessible: false,
-                is_enabled: true,
-            },
-        ]
+    // app/list emits an update after whichever async load finishes first. Even with
+    // a tools delay in this test, the accessible-tools path can return first if the
+    // process-global Codex Apps tools cache is warm from another test.
+    assert!(
+        first_update.data == expected_directory_first
+            || first_update.data == expected_accessible_first,
+        "unexpected first app/list update: {:#?}",
+        first_update.data
     );
 
     let expected = vec![
@@ -1194,6 +1216,7 @@ async fn start_apps_server_with_delays_and_control(
 async fn list_directory_connectors(
     State(state): State<Arc<AppsServerState>>,
     headers: HeaderMap,
+    uri: Uri,
 ) -> Result<impl axum::response::IntoResponse, StatusCode> {
     if state.directory_delay > Duration::ZERO {
         tokio::time::sleep(state.directory_delay).await;
@@ -1207,16 +1230,21 @@ async fn list_directory_connectors(
         .get("chatgpt-account-id")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value == state.expected_account_id);
+    let external_logos_ok = uri
+        .query()
+        .is_some_and(|query| query.split('&').any(|pair| pair == "external_logos=true"));
 
-    if bearer_ok && account_ok {
+    if !bearer_ok || !account_ok {
+        Err(StatusCode::UNAUTHORIZED)
+    } else if !external_logos_ok {
+        Err(StatusCode::BAD_REQUEST)
+    } else {
         let response = state
             .response
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         Ok(Json(response))
-    } else {
-        Err(StatusCode::UNAUTHORIZED)
     }
 }
 

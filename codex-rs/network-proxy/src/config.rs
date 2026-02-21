@@ -1,10 +1,12 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use std::net::IpAddr;
 use std::net::SocketAddr;
+use std::path::Path;
 use tracing::warn;
 use url::Url;
 
@@ -33,6 +35,8 @@ pub struct NetworkProxySettings {
     #[serde(default)]
     pub dangerously_allow_non_loopback_admin: bool,
     #[serde(default)]
+    pub dangerously_allow_all_unix_sockets: bool,
+    #[serde(default)]
     pub mode: NetworkMode,
     #[serde(default)]
     pub allowed_domains: Vec<String>,
@@ -55,6 +59,7 @@ impl Default for NetworkProxySettings {
             allow_upstream_proxy: true,
             dangerously_allow_non_loopback_proxy: false,
             dangerously_allow_non_loopback_admin: false,
+            dangerously_allow_all_unix_sockets: false,
             mode: NetworkMode::default(),
             allowed_domains: Vec::new(),
             denied_domains: Vec::new(),
@@ -136,7 +141,7 @@ pub(crate) fn clamp_bind_addrs(
         cfg.dangerously_allow_non_loopback_admin,
         "admin API",
     );
-    if cfg.allow_unix_sockets.is_empty() {
+    if cfg.allow_unix_sockets.is_empty() && !cfg.dangerously_allow_all_unix_sockets {
         return (http_addr, socks_addr, admin_addr);
     }
 
@@ -172,7 +177,49 @@ pub struct RuntimeConfig {
     pub admin_addr: SocketAddr,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnixStyleAbsolutePath(String);
+
+impl UnixStyleAbsolutePath {
+    fn parse(value: &str) -> Option<Self> {
+        value.starts_with('/').then(|| Self(value.to_string()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ValidatedUnixSocketPath {
+    Native(AbsolutePathBuf),
+    UnixStyleAbsolute(UnixStyleAbsolutePath),
+}
+
+impl ValidatedUnixSocketPath {
+    pub(crate) fn parse(socket_path: &str) -> Result<Self> {
+        let path = Path::new(socket_path);
+        if path.is_absolute() {
+            let path = AbsolutePathBuf::from_absolute_path(path)
+                .with_context(|| format!("failed to normalize unix socket path {socket_path:?}"))?;
+            return Ok(Self::Native(path));
+        }
+
+        if let Some(path) = UnixStyleAbsolutePath::parse(socket_path) {
+            return Ok(Self::UnixStyleAbsolute(path));
+        }
+
+        bail!("expected an absolute path, got {socket_path:?}");
+    }
+}
+
+pub(crate) fn validate_unix_socket_allowlist_paths(cfg: &NetworkProxyConfig) -> Result<()> {
+    for (index, socket_path) in cfg.network.allow_unix_sockets.iter().enumerate() {
+        ValidatedUnixSocketPath::parse(socket_path)
+            .with_context(|| format!("invalid network.allow_unix_sockets[{index}]"))?;
+    }
+    Ok(())
+}
+
 pub fn resolve_runtime(cfg: &NetworkProxyConfig) -> Result<RuntimeConfig> {
+    validate_unix_socket_allowlist_paths(cfg)?;
+
     let http_addr = resolve_addr(&cfg.network.proxy_url, 3128)
         .with_context(|| format!("invalid network.proxy_url: {}", cfg.network.proxy_url))?;
     let socks_addr = resolve_addr(&cfg.network.socks_url, 8081)
@@ -340,6 +387,7 @@ mod tests {
                 allow_upstream_proxy: true,
                 dangerously_allow_non_loopback_proxy: false,
                 dangerously_allow_non_loopback_admin: false,
+                dangerously_allow_all_unix_sockets: false,
                 mode: NetworkMode::Full,
                 allowed_domains: Vec::new(),
                 denied_domains: Vec::new(),
@@ -525,5 +573,62 @@ mod tests {
         assert_eq!(http_addr, "127.0.0.1:3128".parse::<SocketAddr>().unwrap());
         assert_eq!(socks_addr, "127.0.0.1:8081".parse::<SocketAddr>().unwrap());
         assert_eq!(admin_addr, "127.0.0.1:8080".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn clamp_bind_addrs_forces_loopback_when_all_unix_sockets_enabled() {
+        let cfg = NetworkProxySettings {
+            dangerously_allow_non_loopback_proxy: true,
+            dangerously_allow_non_loopback_admin: true,
+            dangerously_allow_all_unix_sockets: true,
+            ..Default::default()
+        };
+        let http_addr = "0.0.0.0:3128".parse::<SocketAddr>().unwrap();
+        let socks_addr = "0.0.0.0:8081".parse::<SocketAddr>().unwrap();
+        let admin_addr = "0.0.0.0:8080".parse::<SocketAddr>().unwrap();
+
+        let (http_addr, socks_addr, admin_addr) =
+            clamp_bind_addrs(http_addr, socks_addr, admin_addr, &cfg);
+
+        assert_eq!(http_addr, "127.0.0.1:3128".parse::<SocketAddr>().unwrap());
+        assert_eq!(socks_addr, "127.0.0.1:8081".parse::<SocketAddr>().unwrap());
+        assert_eq!(admin_addr, "127.0.0.1:8080".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn resolve_runtime_rejects_relative_allow_unix_sockets_entries() {
+        let cfg = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                allow_unix_sockets: vec!["relative.sock".to_string()],
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        let err = match resolve_runtime(&cfg) {
+            Ok(runtime) => panic!(
+                "relative allow_unix_sockets should fail, but resolve_runtime succeeded: {:?}",
+                runtime.http_addr
+            ),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("network.allow_unix_sockets[0]"),
+            "error should point at the invalid allow_unix_sockets entry: {err:#}"
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_accepts_unix_style_absolute_allow_unix_sockets_entries() {
+        let cfg = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                allow_unix_sockets: vec!["/private/tmp/example.sock".to_string()],
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(
+            resolve_runtime(&cfg).is_ok(),
+            "unix-style absolute allow_unix_sockets entry should be accepted"
+        );
     }
 }

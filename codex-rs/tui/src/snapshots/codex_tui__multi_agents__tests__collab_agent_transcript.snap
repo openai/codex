@@ -1,0 +1,17 @@
+---
+source: tui/src/multi_agents.rs
+expression: snapshot
+---
+• Spawned Robie [explorer]
+  └ Compute 11! and reply with just the integer result.
+
+• Sent input to Robie [explorer]
+  └ Please continue and return the answer only.
+
+• Waiting for Robie [explorer]
+
+• Finished waiting
+  └ Robie [explorer]: Completed - 39916800
+    Bob [worker]: Error - tool timeout
+
+• Closed Robie [explorer]

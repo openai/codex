@@ -25,8 +25,8 @@ again)
 - {{ base_path }}/rollout_summaries/ (per-rollout recaps + evidence snippets)
 
 Quick memory pass (when applicable):
-1) Skim the MEMORY_SUMMARY included below and extract a few task-relevant
-keywords (for example repo/module names, error strings, etc.).
+1) Skim the MEMORY_SUMMARY included below and extract task-relevant topics and
+keywords (for example repo/module names, workflows, error strings, etc.).
 2) Search {{ base_path }}/MEMORY.md for those keywords, and for any referenced
 rollout summary files and skills.
 3) If relevant rollout summary files and skills exist, open matching files

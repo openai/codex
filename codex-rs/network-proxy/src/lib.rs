@@ -3,7 +3,6 @@
 mod admin;
 mod config;
 mod http_proxy;
-mod metadata;
 mod network_policy;
 mod policy;
 mod proxy;

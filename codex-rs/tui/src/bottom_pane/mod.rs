@@ -287,6 +287,13 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update the key hint shown next to queued messages so it matches the
+    /// binding that `ChatWidget` actually listens for.
+    pub(crate) fn set_queued_message_edit_binding(&mut self, binding: KeyBinding) {
+        self.queued_user_messages.set_edit_binding(binding);
+        self.request_redraw();
+    }
+
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
     }
@@ -972,7 +979,7 @@ impl Renderable for BottomPane {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use codex_core::protocol::Op;
+    use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;

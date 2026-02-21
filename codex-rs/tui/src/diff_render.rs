@@ -19,7 +19,7 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use codex_core::git_info::get_git_repo_root;
-use codex_core::protocol::FileChange;
+use codex_protocol::protocol::FileChange;
 
 // Internal representation for diff line rendering
 enum DiffLineType {

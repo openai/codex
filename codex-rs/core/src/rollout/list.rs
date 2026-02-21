@@ -39,7 +39,7 @@ pub struct ThreadsPage {
 }
 
 /// Summary information for a thread rollout file.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 pub struct ThreadItem {
     /// Absolute path to the rollout file.
     pub path: PathBuf,
@@ -57,6 +57,10 @@ pub struct ThreadItem {
     pub git_origin_url: Option<String>,
     /// Session source from session metadata.
     pub source: Option<SessionSource>,
+    /// Random unique nickname from session metadata for AgentControl-spawned sub-agents.
+    pub agent_nickname: Option<String>,
+    /// Role (agent_role) from session metadata for AgentControl-spawned sub-agents.
+    pub agent_role: Option<String>,
     /// Model provider from session metadata.
     pub model_provider: Option<String>,
     /// CLI version from session metadata.
@@ -87,6 +91,8 @@ struct HeadTailSummary {
     git_sha: Option<String>,
     git_origin_url: Option<String>,
     source: Option<SessionSource>,
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
     model_provider: Option<String>,
     cli_version: Option<String>,
     created_at: Option<String>,
@@ -715,6 +721,8 @@ async fn build_thread_item(
             git_sha,
             git_origin_url,
             source,
+            agent_nickname,
+            agent_role,
             model_provider,
             cli_version,
             created_at,
@@ -733,6 +741,8 @@ async fn build_thread_item(
             git_sha,
             git_origin_url,
             source,
+            agent_nickname,
+            agent_role,
             model_provider,
             cli_version,
             created_at,
@@ -1017,6 +1027,8 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::SessionMeta(session_meta_line) => {
                 if !summary.saw_session_meta {
                     summary.source = Some(session_meta_line.meta.source.clone());
+                    summary.agent_nickname = session_meta_line.meta.agent_nickname.clone();
+                    summary.agent_role = session_meta_line.meta.agent_role.clone();
                     summary.model_provider = session_meta_line.meta.model_provider.clone();
                     summary.thread_id = Some(session_meta_line.meta.id);
                     summary.cwd = Some(session_meta_line.meta.cwd.clone());

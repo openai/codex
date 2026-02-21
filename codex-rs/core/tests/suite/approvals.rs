@@ -3,16 +3,16 @@
 use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_core::features::Feature;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ExecPolicyAmendment;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecPolicyAmendment;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
@@ -185,12 +185,25 @@ fn shell_event(
     timeout_ms: u64,
     sandbox_permissions: SandboxPermissions,
 ) -> Result<Value> {
+    shell_event_with_prefix_rule(call_id, command, timeout_ms, sandbox_permissions, None)
+}
+
+fn shell_event_with_prefix_rule(
+    call_id: &str,
+    command: &str,
+    timeout_ms: u64,
+    sandbox_permissions: SandboxPermissions,
+    prefix_rule: Option<Vec<String>>,
+) -> Result<Value> {
     let mut args = json!({
         "command": command,
         "timeout_ms": timeout_ms,
     });
     if sandbox_permissions.requires_escalated_permissions() {
         args["sandbox_permissions"] = json!(sandbox_permissions);
+    }
+    if let Some(prefix_rule) = prefix_rule {
+        args["prefix_rule"] = json!(prefix_rule);
     }
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "shell_command", &args_str))
@@ -1923,6 +1936,171 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
         fs::read_to_string(&allow_prefix_path)?,
         "",
         "unexpected file contents after second run"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Result<()> {
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+    });
+    let test = builder.build(&server).await?;
+
+    let call_id = "invalid-prefix-rule";
+    let command =
+        "touch /tmp/codex-fallback-rule-test.txt && echo hello > /tmp/codex-fallback-rule-test.txt";
+    let event = shell_event_with_prefix_rule(
+        call_id,
+        command,
+        1_000,
+        SandboxPermissions::RequireEscalated,
+        Some(vec!["touch".to_string()]),
+    )?;
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-invalid-prefix-1"),
+            event,
+            ev_completed("resp-invalid-prefix-1"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "invalid-prefix-rule",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, command).await;
+    let amendment = approval
+        .proposed_execpolicy_amendment
+        .expect("should have a proposed execpolicy amendment");
+    assert!(amendment.command.contains(&command.to_string()));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+    });
+    let test = builder.build(&server).await?;
+
+    let call_id = "invalid-prefix-rule";
+    let command =
+        "touch /tmp/codex-fallback-rule-test.txt && echo hello > /tmp/codex-fallback-rule-test.txt";
+    let event = shell_event_with_prefix_rule(
+        call_id,
+        command,
+        1_000,
+        SandboxPermissions::RequireEscalated,
+        Some(vec!["touch".to_string()]),
+    )?;
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-invalid-prefix-1"),
+            event,
+            ev_completed("resp-invalid-prefix-1"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "invalid-prefix-rule",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, command).await;
+    let approval_id = approval.effective_approval_id();
+    let amendment = approval
+        .proposed_execpolicy_amendment
+        .expect("should have a proposed execpolicy amendment");
+    assert!(amendment.command.contains(&command.to_string()));
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval_id,
+            turn_id: None,
+            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: amendment.clone(),
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let call_id = "invalid-prefix-rule-again";
+    let command =
+        "touch /tmp/codex-fallback-rule-test.txt && echo hello > /tmp/codex-fallback-rule-test.txt";
+    let event = shell_event_with_prefix_rule(
+        call_id,
+        command,
+        1_000,
+        SandboxPermissions::RequireEscalated,
+        Some(vec!["touch".to_string()]),
+    )?;
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-invalid-prefix-1"),
+            event,
+            ev_completed("resp-invalid-prefix-1"),
+        ]),
+    )
+    .await;
+    let second_results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-invalid-prefix-1", "done"),
+            ev_completed("resp-invalid-prefix-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "invalid-prefix-rule",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    wait_for_completion_without_approval(&test).await;
+
+    let second_output = parse_result(
+        &second_results
+            .single_request()
+            .function_call_output(call_id),
+    );
+    assert_eq!(second_output.exit_code.unwrap_or(0), 0);
+    assert!(
+        second_output.stdout.is_empty(),
+        "unexpected stdout: {}",
+        second_output.stdout
     );
 
     Ok(())

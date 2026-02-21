@@ -69,9 +69,6 @@ impl ToolOrchestrator {
             turn: tool_ctx.turn,
             call_id: tool_ctx.call_id.clone(),
             tool_name: tool_ctx.tool_name.clone(),
-            network_attempt_id: network_approval.as_ref().and_then(|network_approval| {
-                network_approval.attempt_id().map(ToString::to_string)
-            }),
         };
         let run_result = tool.run(req, attempt, &attempt_tool_ctx).await;
 

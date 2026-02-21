@@ -1,18 +1,13 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use codex_core::CodexAuth;
-use codex_core::ContentItem;
 use codex_core::ModelClient;
 use codex_core::ModelClientSession;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
-use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::features::Feature;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::MetricsClient;
@@ -21,8 +16,13 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::WebSocketConnectionConfig;
@@ -114,6 +114,34 @@ async fn responses_websocket_preconnect_reuses_connection() {
 
     assert_eq!(server.handshakes().len(), 1);
     assert_eq!(server.single_connection().len(), 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_reuses_connection_after_session_drop() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![message_item("again")]);
+
+    {
+        let mut client_session = harness.client.new_session();
+        stream_until_complete(&mut client_session, &harness, &prompt_one).await;
+    }
+
+    let mut client_session = harness.client.new_session();
+    stream_until_complete(&mut client_session, &harness, &prompt_two).await;
+
+    assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(server.single_connection().len(), 2);
 
     server.shutdown().await;
 }

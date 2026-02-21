@@ -85,34 +85,111 @@
       "additionalProperties": false,
       "description": "Config values for a single app/connector.",
       "properties": {
-        "disabled_reason": {
+        "default_tools_approval_mode": {
           "allOf": [
             {
-              "$ref": "#/definitions/AppDisabledReason"
+              "$ref": "#/definitions/AppToolApproval"
             }
           ],
-          "description": "Reason this app was disabled."
+          "description": "Approval mode for tools in this app unless a tool override exists."
+        },
+        "default_tools_enabled": {
+          "description": "Whether tools are enabled by default for this app.",
+          "type": "boolean"
+        },
+        "destructive_enabled": {
+          "description": "Whether tools with `destructive_hint = true` are allowed for this app.",
+          "type": "boolean"
         },
         "enabled": {
           "default": true,
           "description": "When `false`, Codex does not surface this app.",
           "type": "boolean"
+        },
+        "open_world_enabled": {
+          "description": "Whether tools with `open_world_hint = true` are allowed for this app.",
+          "type": "boolean"
+        },
+        "tools": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolsConfig"
+            }
+          ],
+          "description": "Per-tool settings for this app."
         }
       },
       "type": "object"
     },
-    "AppDisabledReason": {
+    "AppToolApproval": {
       "enum": [
-        "unknown",
-        "user"
+        "auto",
+        "prompt",
+        "approve"
       ],
       "type": "string"
+    },
+    "AppToolConfig": {
+      "additionalProperties": false,
+      "description": "Per-tool settings for a single app tool.",
+      "properties": {
+        "approval_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "description": "Approval mode for this tool."
+        },
+        "enabled": {
+          "description": "Whether this tool is enabled. `Some(true)` explicitly allows this tool.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AppToolsConfig": {
+      "additionalProperties": {
+        "$ref": "#/definitions/AppToolConfig"
+      },
+      "description": "Tool settings for a single app.",
+      "type": "object"
     },
     "AppsConfigToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AppConfig"
       },
       "description": "App/connector settings loaded from `config.toml`.",
+      "properties": {
+        "_default": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppsDefaultConfig"
+            }
+          ],
+          "description": "Default settings for all apps."
+        }
+      },
+      "type": "object"
+    },
+    "AppsDefaultConfig": {
+      "additionalProperties": false,
+      "description": "Default settings that apply to all apps.",
+      "properties": {
+        "destructive_enabled": {
+          "description": "Whether tools with `destructive_hint = true` are allowed by default.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": true,
+          "description": "When `false`, apps are disabled unless overridden by per-app settings.",
+          "type": "boolean"
+        },
+        "open_world_enabled": {
+          "description": "Whether tools with `open_world_hint = true` are allowed by default.",
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "AskForApproval": {
@@ -390,6 +467,9 @@
         "personality": {
           "$ref": "#/definitions/Personality"
         },
+        "plan_mode_reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
         },
@@ -655,6 +735,9 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "dangerously_allow_all_unix_sockets": {
+          "type": "boolean"
         },
         "dangerously_allow_non_loopback_admin": {
           "type": "boolean"
@@ -1389,6 +1472,10 @@
       ],
       "description": "Agent-related settings (thread limits, etc.)."
     },
+    "allow_login_shell": {
+      "description": "Whether the model may request a login shell for shell-based tools. Default to `true`\n\nIf `true`, the model may request a login shell (`login = true`), and omitting `login` defaults to using a login shell. If `false`, the model can never use a login shell: `login = true` requests are rejected, and omitting `login` defaults to a non-login shell.",
+      "type": "boolean"
+    },
     "analytics": {
       "allOf": [
         {
@@ -1456,6 +1543,14 @@
     },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
+    },
+    "experimental_realtime_ws_backend_prompt": {
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport backend prompt (the `Op::RealtimeConversation` `/ws` session.create backend_prompt) without changing normal prompts.",
+      "type": "string"
+    },
+    "experimental_realtime_ws_base_url": {
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/ws` connection) without changing normal provider HTTP requests.",
+      "type": "string"
     },
     "experimental_use_freeform_apply_patch": {
       "type": "boolean"
@@ -1723,7 +1818,7 @@
           "$ref": "#/definitions/AbsolutePathBuf"
         }
       ],
-      "description": "Optional path to a JSON file containing a complete model catalog. When set, this replaces the bundled catalog for this process."
+      "description": "Optional path to a JSON model catalog (applied on startup only). Per-thread `config` overrides are accepted but do not reapply this (no-ops)."
     },
     "model_context_window": {
       "description": "Size of the context window for the model, in tokens.",
@@ -1812,6 +1907,9 @@
         }
       ],
       "description": "Optionally specify a personality for the model"
+    },
+    "plan_mode_reasoning_effort": {
+      "$ref": "#/definitions/ReasoningEffort"
     },
     "profile": {
       "description": "Profile to use from the `profiles` map.",

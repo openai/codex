@@ -1,10 +1,10 @@
 use codex_core::NewThread;
 use codex_core::parse_turn_item;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::RolloutItem;
-use codex_core::protocol::RolloutLine;
 use codex_protocol::items::TurnItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;

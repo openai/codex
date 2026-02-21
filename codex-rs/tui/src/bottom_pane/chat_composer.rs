@@ -3252,7 +3252,7 @@ impl ChatComposer {
                     insert_text: format!("${skill_name}"),
                     search_terms,
                     path: Some(skill.path.to_string_lossy().into_owned()),
-                    category_tag: (skill.scope == codex_core::protocol::SkillScope::Repo)
+                    category_tag: (skill.scope == codex_protocol::protocol::SkillScope::Repo)
                         .then(|| "[Repo]".to_string()),
                 });
             }

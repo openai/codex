@@ -28,6 +28,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -123,6 +124,7 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     disable_websockets: AtomicBool,
+    cached_websocket_connection: StdMutex<Option<ApiWebSocketConnection>>,
 }
 
 /// Resolved API client setup for a single request attempt.
@@ -228,6 +230,7 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 disable_websockets: AtomicBool::new(false),
+                cached_websocket_connection: StdMutex::new(None),
             }),
         }
     }
@@ -239,11 +242,27 @@ impl ModelClient {
     pub fn new_session(&self) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),
-            connection: None,
+            connection: self.take_cached_websocket_connection(),
             websocket_last_request: None,
             websocket_last_response_rx: None,
             turn_state: Arc::new(OnceLock::new()),
         }
+    }
+
+    fn take_cached_websocket_connection(&self) -> Option<ApiWebSocketConnection> {
+        self.state
+            .cached_websocket_connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    fn store_cached_websocket_connection(&self, connection: ApiWebSocketConnection) {
+        *self
+            .state
+            .cached_websocket_connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(connection);
     }
 
     /// Compacts the current conversation history using the Compact endpoint.
@@ -449,6 +468,14 @@ impl ModelClient {
             );
         }
         headers
+    }
+}
+
+impl Drop for ModelClientSession {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            self.client.store_cached_websocket_connection(connection);
+        }
     }
 }
 

@@ -1,5 +1,5 @@
 use super::*;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 
 #[test]

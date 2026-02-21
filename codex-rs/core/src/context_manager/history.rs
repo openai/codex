@@ -27,12 +27,15 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
-    /// Previous turn context snapshot used for diffing context and producing
-    /// model-visible settings update items.
+    /// Reference context snapshot used for diffing and producing model-visible
+    /// settings update items.
+    ///
+    /// This is the baseline for the next regular model turn, and may already
+    /// match the current turn after context updates are persisted.
     ///
     /// When this is `None`, settings diffing treats the next turn as having no
     /// baseline and emits a full reinjection of context state.
-    previous_context_item: Option<TurnContextItem>,
+    reference_context_item: Option<TurnContextItem>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -48,7 +51,7 @@ impl ContextManager {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
-            previous_context_item: None,
+            reference_context_item: None,
         }
     }
 
@@ -60,12 +63,12 @@ impl ContextManager {
         self.token_info = info;
     }
 
-    pub(crate) fn set_previous_context_item(&mut self, item: Option<TurnContextItem>) {
-        self.previous_context_item = item;
+    pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
+        self.reference_context_item = item;
     }
 
-    pub(crate) fn previous_context_item(&self) -> Option<TurnContextItem> {
-        self.previous_context_item.clone()
+    pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
+        self.reference_context_item.clone()
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {

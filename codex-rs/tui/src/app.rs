@@ -45,16 +45,6 @@ use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::FinalOutput;
-use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::SessionSource;
-use codex_core::protocol::SkillErrorInfo;
-use codex_core::protocol::TokenUsage;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
@@ -67,7 +57,17 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FinalOutput;
+use codex_protocol::protocol::ListSkillsResponseEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SkillErrorInfo;
+use codex_protocol::protocol::TokenUsage;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -808,38 +808,57 @@ impl App {
 
     async fn open_agent_picker(&mut self) {
         let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
+        let mut agent_threads = Vec::new();
         for thread_id in thread_ids {
-            if self.server.get_thread(thread_id).await.is_err() {
-                self.thread_event_channels.remove(&thread_id);
+            match self.server.get_thread(thread_id).await {
+                Ok(thread) => {
+                    let session_source = thread.config_snapshot().await.session_source;
+                    agent_threads.push((
+                        thread_id,
+                        session_source.get_nickname(),
+                        session_source.get_agent_role(),
+                    ));
+                }
+                Err(_) => {
+                    self.thread_event_channels.remove(&thread_id);
+                }
             }
         }
 
-        if self.thread_event_channels.is_empty() {
+        if agent_threads.is_empty() {
             self.chat_widget
                 .add_info_message("No agents available yet.".to_string(), None);
             return;
         }
 
-        let mut thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
-        thread_ids.sort_by_key(ToString::to_string);
+        agent_threads.sort_by(|(left, ..), (right, ..)| left.to_string().cmp(&right.to_string()));
 
         let mut initial_selected_idx = None;
-        let items: Vec<SelectionItem> = thread_ids
+        let items: Vec<SelectionItem> = agent_threads
             .iter()
             .enumerate()
-            .map(|(idx, thread_id)| {
+            .map(|(idx, (thread_id, agent_nickname, agent_role))| {
                 if self.active_thread_id == Some(*thread_id) {
                     initial_selected_idx = Some(idx);
                 }
                 let id = *thread_id;
+                let is_primary = self.primary_thread_id == Some(*thread_id);
+                let name = format_agent_picker_item_name(
+                    *thread_id,
+                    agent_nickname.as_deref(),
+                    agent_role.as_deref(),
+                    is_primary,
+                );
+                let uuid = thread_id.to_string();
                 SelectionItem {
-                    name: thread_id.to_string(),
+                    name: name.clone(),
+                    description: Some(uuid.clone()),
                     is_current: self.active_thread_id == Some(*thread_id),
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::SelectAgentThread(id));
                     })],
                     dismiss_on_select: true,
-                    search_value: Some(thread_id.to_string()),
+                    search_value: Some(format!("{name} {uuid}")),
                     ..Default::default()
                 }
             })
@@ -1229,8 +1248,8 @@ impl App {
                 != WindowsSandboxLevel::Disabled
                 && matches!(
                     app.config.permissions.sandbox_policy.get(),
-                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
+                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
                 )
                 && !app
                     .config
@@ -1745,6 +1764,10 @@ impl App {
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
+            AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
+                self.chat_widget
+                    .open_plan_reasoning_scope_prompt(model, effort);
+            }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
             }
@@ -2096,6 +2119,10 @@ impl App {
                     .await
                 {
                     Ok(()) => {
+                        let effort_label = effort
+                            .map(|selected_effort| selected_effort.to_string())
+                            .unwrap_or_else(|| "default".to_string());
+                        tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
                         let mut message = format!("Model changed to {model}");
                         if let Some(label) = Self::reasoning_label_for(&model, effort) {
                             message.push(' ');
@@ -2173,8 +2200,8 @@ impl App {
                 #[cfg(target_os = "windows")]
                 let policy_is_workspace_write_or_ro = matches!(
                     &policy,
-                    codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
+                    codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+                        | codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
                 );
                 let policy_for_chat = policy.clone();
 
@@ -2296,6 +2323,11 @@ impl App {
             AppEvent::UpdateRateLimitSwitchPromptHidden(hidden) => {
                 self.chat_widget.set_rate_limit_switch_prompt_hidden(hidden);
             }
+            AppEvent::UpdatePlanModeReasoningEffort(effort) => {
+                self.config.plan_mode_reasoning_effort = effort;
+                self.chat_widget.set_plan_mode_reasoning_effort(effort);
+                self.refresh_status_line();
+            }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                     .set_hide_full_access_warning(true)
@@ -2339,6 +2371,45 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to save rate limit reminder preference: {err}"
                     ));
+                }
+            }
+            AppEvent::PersistPlanModeReasoningEffort(effort) => {
+                let profile = self.active_profile.as_deref();
+                let segments = if let Some(profile) = profile {
+                    vec![
+                        "profiles".to_string(),
+                        profile.to_string(),
+                        "plan_mode_reasoning_effort".to_string(),
+                    ]
+                } else {
+                    vec!["plan_mode_reasoning_effort".to_string()]
+                };
+                let edit = if let Some(effort) = effort {
+                    ConfigEdit::SetPath {
+                        segments,
+                        value: effort.to_string().into(),
+                    }
+                } else {
+                    ConfigEdit::ClearPath { segments }
+                };
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await
+                {
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist plan mode reasoning effort"
+                    );
+                    if let Some(profile) = profile {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save Plan mode reasoning effort for profile `{profile}`: {err}"
+                        ));
+                    } else {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save Plan mode reasoning effort: {err}"
+                        ));
+                    }
                 }
             }
             AppEvent::PersistModelMigrationPromptAcknowledged {
@@ -2696,7 +2767,7 @@ impl App {
         (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
     }
 
-    pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
+    pub(crate) fn token_usage(&self) -> codex_protocol::protocol::TokenUsage {
         self.chat_widget.token_usage()
     }
 
@@ -2868,7 +2939,7 @@ impl App {
         cwd: PathBuf,
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: PathBuf,
-        sandbox_policy: codex_core::protocol::SandboxPolicy,
+        sandbox_policy: codex_protocol::protocol::SandboxPolicy,
         tx: AppEventSender,
     ) {
         tokio::task::spawn_blocking(move || {
@@ -2892,6 +2963,28 @@ impl App {
     }
 }
 
+fn format_agent_picker_item_name(
+    _thread_id: ThreadId,
+    agent_nickname: Option<&str>,
+    agent_role: Option<&str>,
+    is_primary: bool,
+) -> String {
+    if is_primary {
+        return "Main [default]".to_string();
+    }
+
+    let agent_nickname = agent_nickname
+        .map(str::trim)
+        .filter(|nickname| !nickname.is_empty());
+    let agent_role = agent_role.map(str::trim).filter(|role| !role.is_empty());
+    match (agent_nickname, agent_role) {
+        (Some(agent_nickname), Some(agent_role)) => format!("{agent_nickname} [{agent_role}]"),
+        (Some(agent_nickname), None) => agent_nickname.to_string(),
+        (None, Some(agent_role)) => format!("[{agent_role}]"),
+        (None, None) => "Agent".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2907,16 +3000,16 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
-    use codex_core::protocol::AskForApproval;
-    use codex_core::protocol::Event;
-    use codex_core::protocol::EventMsg;
-    use codex_core::protocol::SandboxPolicy;
-    use codex_core::protocol::SessionConfiguredEvent;
-    use codex_core::protocol::SessionSource;
-    use codex_core::protocol::ThreadRolledBackEvent;
-    use codex_core::protocol::UserMessageEvent;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::Event;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SessionConfiguredEvent;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::ThreadRolledBackEvent;
+    use codex_protocol::protocol::UserMessageEvent;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
     use crossterm::event::KeyModifiers;
@@ -3070,6 +3163,41 @@ mod tests {
 
         assert_eq!(app.thread_event_channels.contains_key(&thread_id), false);
         Ok(())
+    }
+
+    #[test]
+    fn agent_picker_item_name_snapshot() {
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
+        let snapshot = [
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(thread_id, Some("Robie"), Some("explorer"), true),
+                thread_id
+            ),
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(thread_id, Some("Robie"), Some("explorer"), false),
+                thread_id
+            ),
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(thread_id, Some("Robie"), None, false),
+                thread_id
+            ),
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(thread_id, None, Some("explorer"), false),
+                thread_id
+            ),
+            format!(
+                "{} | {}",
+                format_agent_picker_item_name(thread_id, None, None, false),
+                thread_id
+            ),
+        ]
+        .join("\n");
+        assert_snapshot!("agent_picker_item_name", snapshot);
     }
 
     #[tokio::test]

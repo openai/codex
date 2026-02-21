@@ -27,7 +27,7 @@ pub struct LandlockCommand {
     pub sandbox_policy_cwd: PathBuf,
 
     #[arg(long = "sandbox-policy")]
-    pub sandbox_policy: codex_core::protocol::SandboxPolicy,
+    pub sandbox_policy: codex_protocol::protocol::SandboxPolicy,
 
     /// Opt-in: use the bubblewrap-based Linux sandbox pipeline.
     ///
@@ -177,7 +177,7 @@ fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_bwrap_san
 
 fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
-    sandbox_policy: &codex_core::protocol::SandboxPolicy,
+    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
     inner: Vec<String>,
     mount_proc: bool,
     allow_network_for_proxy: bool,
@@ -200,7 +200,7 @@ fn run_bwrap_with_proc_fallback(
 }
 
 fn bwrap_network_mode(
-    sandbox_policy: &codex_core::protocol::SandboxPolicy,
+    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
     allow_network_for_proxy: bool,
 ) -> BwrapNetworkMode {
     if allow_network_for_proxy {
@@ -214,7 +214,7 @@ fn bwrap_network_mode(
 
 fn build_bwrap_argv(
     inner: Vec<String>,
-    sandbox_policy: &codex_core::protocol::SandboxPolicy,
+    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
     sandbox_policy_cwd: &Path,
     options: BwrapOptions,
 ) -> Vec<String> {
@@ -237,7 +237,7 @@ fn build_bwrap_argv(
 
 fn preflight_proc_mount_support(
     sandbox_policy_cwd: &Path,
-    sandbox_policy: &codex_core::protocol::SandboxPolicy,
+    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
     network_mode: BwrapNetworkMode,
 ) -> bool {
     let preflight_argv =
@@ -248,7 +248,7 @@ fn preflight_proc_mount_support(
 
 fn build_preflight_bwrap_argv(
     sandbox_policy_cwd: &Path,
-    sandbox_policy: &codex_core::protocol::SandboxPolicy,
+    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
     network_mode: BwrapNetworkMode,
 ) -> Vec<String> {
     let preflight_command = vec![resolve_true_command()];
@@ -361,7 +361,7 @@ fn is_proc_mount_failure(stderr: &str) -> bool {
 /// Build the inner command that applies seccomp after bubblewrap.
 fn build_inner_seccomp_command(
     sandbox_policy_cwd: &Path,
-    sandbox_policy: &codex_core::protocol::SandboxPolicy,
+    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
     use_bwrap_sandbox: bool,
     allow_network_for_proxy: bool,
     proxy_route_spec: Option<String>,
@@ -422,6 +422,5 @@ fn exec_or_panic(command: Vec<String>) -> ! {
     panic!("Failed to execvp {}: {err}", command[0].as_str());
 }
 
-#[cfg(test)]
 #[path = "linux_run_main_tests.rs"]
 mod tests;

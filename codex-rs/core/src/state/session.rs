@@ -21,12 +21,9 @@ pub(crate) struct SessionState {
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
-    /// Whether the session's initial context has been seeded into history.
-    ///
-    /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
-    /// timestamp when resuming a session. Remove this once SQLite is in place.
-    pub(crate) initial_context_seeded: bool,
-    /// Previous model seen by the session, used for model-switch handling on task start.
+    /// Model used by the latest regular user turn, used for model-switch handling
+    /// on subsequent regular turns (including full-context reinjection after
+    /// resume or `/compact`).
     previous_model: Option<String>,
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<RegularTask>,
@@ -45,7 +42,6 @@ impl SessionState {
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
-            initial_context_seeded: false,
             previous_model: None,
             startup_regular_task: None,
             active_mcp_tool_selection: None,
@@ -73,20 +69,26 @@ impl SessionState {
         self.history.clone()
     }
 
-    pub(crate) fn replace_history(&mut self, items: Vec<ResponseItem>) {
+    pub(crate) fn replace_history(
+        &mut self,
+        items: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+    ) {
         self.history.replace(items);
+        self.history
+            .set_reference_context_item(reference_context_item);
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         self.history.set_token_info(info);
     }
 
-    pub(crate) fn set_previous_context_item(&mut self, item: Option<TurnContextItem>) {
-        self.history.set_previous_context_item(item);
+    pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
+        self.history.set_reference_context_item(item);
     }
 
-    pub(crate) fn previous_context_item(&self) -> Option<TurnContextItem> {
-        self.history.previous_context_item()
+    pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
+        self.history.reference_context_item()
     }
 
     // Token/rate limit helpers
