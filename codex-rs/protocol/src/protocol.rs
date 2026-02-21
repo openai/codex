@@ -144,7 +144,7 @@ pub enum Op {
     CleanBackgroundTerminals,
 
     /// Realtime conversation control and media operations.
-    Conversation {
+    RealtimeConversation {
         #[serde(flatten)]
         cmd: ConversationCommand,
     },
@@ -921,7 +921,7 @@ pub enum EventMsg {
     Warning(WarningEvent),
 
     /// Realtime conversation lifecycle and streaming events.
-    Conversation(ConversationEvent),
+    RealtimeConversation(RealtimeConversationEvent),
 
     /// Model routing changed from the requested model to a different model.
     ModelReroute(ModelRerouteEvent),
@@ -1105,24 +1105,24 @@ pub enum EventMsg {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "event", rename_all = "snake_case")]
 #[ts(tag = "event")]
-pub enum ConversationEvent {
-    Started(ConversationStartedEvent),
-    Realtime(ConversationRealtimeEvent),
-    Closed(ConversationClosedEvent),
+pub enum RealtimeConversationEvent {
+    Started(RealtimeConversationStartedEvent),
+    Realtime(RealtimeConversationRealtimeEvent),
+    Closed(RealtimeConversationClosedEvent),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct ConversationStartedEvent {
+pub struct RealtimeConversationStartedEvent {
     pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct ConversationRealtimeEvent {
+pub struct RealtimeConversationRealtimeEvent {
     pub payload: RealtimeEvent,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct ConversationClosedEvent {
+pub struct RealtimeConversationClosedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -2983,7 +2983,7 @@ mod tests {
 
     #[test]
     fn conversation_op_serializes_with_cmd_tag() {
-        let audio = Op::Conversation {
+        let audio = Op::RealtimeConversation {
             cmd: ConversationCommand::Audio(ConversationAudioParams {
                 frame: RealtimeAudioFrame {
                     data: "AQID".to_string(),
@@ -2993,18 +2993,18 @@ mod tests {
                 },
             }),
         };
-        let start = Op::Conversation {
+        let start = Op::RealtimeConversation {
             cmd: ConversationCommand::Start(ConversationStartParams {
                 prompt: "be helpful".to_string(),
                 session_id: Some("conv_1".to_string()),
             }),
         };
-        let text = Op::Conversation {
+        let text = Op::RealtimeConversation {
             cmd: ConversationCommand::Text(ConversationTextParams {
                 text: "hello".to_string(),
             }),
         };
-        let close = Op::Conversation {
+        let close = Op::RealtimeConversation {
             cmd: ConversationCommand::Close,
         };
 

@@ -3161,8 +3161,8 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::CleanBackgroundTerminals => {
                 handlers::clean_background_terminals(&sess).await;
             }
-            Op::Conversation { cmd } => {
-                handlers::conversation(&sess, sub.id.clone(), cmd).await;
+            Op::RealtimeConversation { cmd } => {
+                handlers::realtime_conversation(&sess, sub.id.clone(), cmd).await;
             }
             Op::OverrideTurnContext {
                 cwd,
@@ -3323,11 +3323,11 @@ mod handlers {
     use crate::tasks::execute_user_shell_command;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
-    use codex_protocol::protocol::ConversationClosedEvent;
+    use codex_protocol::protocol::RealtimeConversationClosedEvent;
     use codex_protocol::protocol::ConversationCommand;
-    use codex_protocol::protocol::ConversationEvent;
-    use codex_protocol::protocol::ConversationRealtimeEvent;
-    use codex_protocol::protocol::ConversationStartedEvent;
+    use codex_protocol::protocol::RealtimeConversationEvent;
+    use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+    use codex_protocol::protocol::RealtimeConversationStartedEvent;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -3371,7 +3371,7 @@ mod handlers {
         sess.close_unified_exec_processes().await;
     }
 
-    pub async fn conversation(sess: &Arc<Session>, sub_id: String, cmd: ConversationCommand) {
+    pub async fn realtime_conversation(sess: &Arc<Session>, sub_id: String, cmd: ConversationCommand) {
         match cmd {
             ConversationCommand::Start(params) => {
                 let config = sess.get_config().await;
@@ -3405,8 +3405,8 @@ mod handlers {
 
                 sess.send_event_raw(Event {
                     id: sub_id.clone(),
-                    msg: EventMsg::Conversation(ConversationEvent::Started(
-                        ConversationStartedEvent {
+                    msg: EventMsg::RealtimeConversation(RealtimeConversationEvent::Started(
+                        RealtimeConversationStartedEvent {
                             session_id: requested_session_id,
                         },
                     )),
@@ -3421,8 +3421,8 @@ mod handlers {
                     };
                     while let Ok(event) = events_rx.recv().await {
                         sess_clone
-                            .send_event_raw(ev(EventMsg::Conversation(
-                                ConversationEvent::Realtime(ConversationRealtimeEvent {
+                            .send_event_raw(ev(EventMsg::RealtimeConversation(
+                                RealtimeConversationEvent::Realtime(RealtimeConversationRealtimeEvent {
                                     payload: event,
                                 }),
                             )))
@@ -3430,8 +3430,8 @@ mod handlers {
                     }
                     if let Some(()) = sess_clone.conversation.running_state().await {
                         sess_clone
-                            .send_event_raw(ev(EventMsg::Conversation(ConversationEvent::Closed(
-                                ConversationClosedEvent {
+                            .send_event_raw(ev(EventMsg::RealtimeConversation(RealtimeConversationEvent::Closed(
+                                RealtimeConversationClosedEvent {
                                     reason: Some("transport_closed".to_string()),
                                 },
                             ))))
@@ -3465,8 +3465,8 @@ mod handlers {
                 Ok(()) => {
                     sess.send_event_raw(Event {
                         id: sub_id,
-                        msg: EventMsg::Conversation(ConversationEvent::Closed(
-                            ConversationClosedEvent {
+                        msg: EventMsg::RealtimeConversation(RealtimeConversationEvent::Closed(
+                            RealtimeConversationClosedEvent {
                                 reason: Some("requested".to_string()),
                             },
                         )),
