@@ -416,6 +416,12 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
     approx_tokens_from_byte_count_i64(model_visible_bytes)
 }
 
+/// Approximate model-visible byte cost for one image input.
+///
+/// The estimator later converts bytes to tokens using a 4-bytes/token heuristic,
+/// so 340 bytes is approximately 85 tokens.
+const IMAGE_BYTES_ESTIMATE: i64 = 340;
+
 pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {
         ResponseItem::GhostSnapshot { .. } => 0,
@@ -426,10 +432,62 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
         | ResponseItem::Compaction {
             encrypted_content: content,
         } => i64::try_from(estimate_reasoning_length(content.len())).unwrap_or(i64::MAX),
-        item => serde_json::to_string(item)
-            .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
-            .unwrap_or_default(),
+        item => {
+            let raw = serde_json::to_string(item)
+                .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
+                .unwrap_or_default();
+            let (payload_bytes, image_count) = image_data_url_estimate_adjustment(item);
+            if payload_bytes == 0 || image_count == 0 {
+                raw
+            } else {
+                raw.saturating_sub(payload_bytes)
+                    .saturating_add(image_count.saturating_mul(IMAGE_BYTES_ESTIMATE))
+            }
+        }
     }
+}
+
+fn base64_data_url_payload_len(url: &str) -> Option<usize> {
+    if !url.starts_with("data:") {
+        return None;
+    }
+    let (_, payload) = url.split_once(";base64,")?;
+    Some(payload.len())
+}
+
+fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
+    let mut payload_bytes = 0i64;
+    let mut image_count = 0i64;
+
+    let mut accumulate = |image_url: &str| {
+        if let Some(payload_len) = base64_data_url_payload_len(image_url) {
+            payload_bytes =
+                payload_bytes.saturating_add(i64::try_from(payload_len).unwrap_or(i64::MAX));
+            image_count = image_count.saturating_add(1);
+        }
+    };
+
+    match item {
+        ResponseItem::Message { content, .. } => {
+            for content_item in content {
+                if let ContentItem::InputImage { image_url } = content_item {
+                    accumulate(image_url);
+                }
+            }
+        }
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            if let FunctionCallOutputBody::ContentItems(items) = &output.body {
+                for content_item in items {
+                    if let FunctionCallOutputContentItem::InputImage { image_url } = content_item {
+                        accumulate(image_url);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    (payload_bytes, image_count)
 }
 
 fn is_model_generated_item(item: &ResponseItem) -> bool {
