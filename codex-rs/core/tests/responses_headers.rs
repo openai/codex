@@ -6,6 +6,7 @@ use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
+use codex_core::ResponsesWebsocketVersion;
 use codex_core::WireApi;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
@@ -91,8 +92,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         provider.clone(),
         session_source,
         config.model_verbosity,
-        false,
-        false,
+        None::<ResponsesWebsocketVersion>,
         false,
         false,
         None,
@@ -197,8 +197,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         provider.clone(),
         session_source,
         config.model_verbosity,
-        false,
-        false,
+        None::<ResponsesWebsocketVersion>,
         false,
         false,
         None,
@@ -302,8 +301,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         provider.clone(),
         session_source,
         config.model_verbosity,
-        false,
-        false,
+        None::<ResponsesWebsocketVersion>,
         false,
         false,
         None,

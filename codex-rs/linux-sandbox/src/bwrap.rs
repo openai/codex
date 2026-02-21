@@ -49,8 +49,8 @@ pub(crate) enum BwrapNetworkMode {
     Isolated,
     /// Intended proxy-only mode.
     ///
-    /// Bubblewrap does not currently enforce proxy-only egress, so this is
-    /// treated as isolated for fail-closed behavior.
+    /// Bubblewrap enforces this by unsharing the network namespace. The
+    /// proxy-routing bridge is established by the helper process after startup.
     ProxyOnly,
 }
 
@@ -323,6 +323,7 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use codex_protocol::protocol::SandboxPolicy;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -370,6 +371,35 @@ mod tests {
                 "/proc".to_string(),
                 "--".to_string(),
                 "/bin/true".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn mounts_dev_before_writable_dev_binds() {
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path")],
+            read_only_access: Default::default(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let args = create_filesystem_args(&sandbox_policy, Path::new("/")).expect("bwrap fs args");
+        assert_eq!(
+            args,
+            vec![
+                "--ro-bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
+                "--dev".to_string(),
+                "/dev".to_string(),
+                "--bind".to_string(),
+                "/dev".to_string(),
+                "/dev".to_string(),
+                "--bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
             ]
         );
     }

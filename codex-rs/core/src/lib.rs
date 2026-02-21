@@ -158,6 +158,8 @@ pub use zsh_exec_bridge::maybe_run_zsh_exec_wrapper_mode;
 
 pub use client::ModelClient;
 pub use client::ModelClientSession;
+pub use client::ResponsesWebsocketVersion;
+pub use client::ws_version_from_features;
 pub use client_common::Prompt;
 pub use client_common::REVIEW_PROMPT;
 pub use client_common::ResponseEvent;
