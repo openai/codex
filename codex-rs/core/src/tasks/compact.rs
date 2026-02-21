@@ -40,9 +40,6 @@ impl SessionTask for CompactTask {
                 &[("type", "local")],
             );
             crate::compact::run_compact_task(session.clone(), ctx, input).await
-        }
-
-        TaskRunOutput::default()
         };
 
         TaskRunOutput::default()
