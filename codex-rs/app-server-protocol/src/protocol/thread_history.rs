@@ -16,7 +16,7 @@ use crate::protocol::v2::TurnError;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
 use crate::protocol::v2::WebSearchAction;
-use codex_protocol::models::MessagePhase as CoreMessagePhase;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::AgentStatus;
@@ -190,17 +190,15 @@ impl ThreadHistoryBuilder {
         self.current_turn = Some(turn);
     }
 
-    fn handle_agent_message(&mut self, text: String, phase: Option<CoreMessagePhase>) {
+    fn handle_agent_message(&mut self, text: String, phase: Option<MessagePhase>) {
         if text.is_empty() {
             return;
         }
 
         let id = self.next_item_id();
-        self.ensure_turn().items.push(ThreadItem::AgentMessage {
-            id,
-            text,
-            phase: phase.map(Into::into),
-        });
+        self.ensure_turn()
+            .items
+            .push(ThreadItem::AgentMessage { id, text, phase });
     }
 
     fn handle_agent_reasoning(&mut self, payload: &AgentReasoningEvent) {
@@ -1196,7 +1194,7 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "item-1".into(),
                 text: "Final reply".into(),
-                phase: Some(crate::protocol::v2::MessagePhase::FinalAnswer),
+                phase: Some(MessagePhase::FinalAnswer),
             }
         );
     }
