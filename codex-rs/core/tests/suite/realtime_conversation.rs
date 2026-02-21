@@ -2,14 +2,14 @@ use anyhow::Result;
 use codex_core::protocol::CodexErrorInfo;
 use codex_core::protocol::ConversationAudioParams;
 use codex_core::protocol::ConversationCommand;
-use codex_core::protocol::RealtimeConversationEvent;
-use codex_core::protocol::RealtimeConversationRealtimeEvent;
 use codex_core::protocol::ConversationStartParams;
 use codex_core::protocol::ConversationTextParams;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RealtimeAudioFrame;
+use codex_core::protocol::RealtimeConversationEvent;
+use codex_core::protocol::RealtimeConversationRealtimeEvent;
 use codex_core::protocol::RealtimeEvent;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
@@ -65,7 +65,9 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         .await?;
 
     let started = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversation(RealtimeConversationEvent::Started(started)) => Some(Ok(started.clone())),
+        EventMsg::RealtimeConversation(RealtimeConversationEvent::Started(started)) => {
+            Some(Ok(started.clone()))
+        }
         EventMsg::Error(err) => Some(Err(err.clone())),
         _ => None,
     })
@@ -74,9 +76,11 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     assert!(started.session_id.is_some());
 
     let session_created = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversation(RealtimeConversationEvent::Realtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::SessionCreated { session_id },
-        })) => Some(session_id.clone()),
+        EventMsg::RealtimeConversation(RealtimeConversationEvent::Realtime(
+            RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::SessionCreated { session_id },
+            },
+        )) => Some(session_id.clone()),
         _ => None,
     })
     .await;
@@ -103,9 +107,11 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         .await?;
 
     let audio_out = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversation(RealtimeConversationEvent::Realtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::AudioOut(frame),
-        })) => Some(frame.clone()),
+        EventMsg::RealtimeConversation(RealtimeConversationEvent::Realtime(
+            RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::AudioOut(frame),
+            },
+        )) => Some(frame.clone()),
         _ => None,
     })
     .await;
@@ -155,7 +161,9 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         })
         .await?;
     let closed = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversation(RealtimeConversationEvent::Closed(closed)) => Some(closed.clone()),
+        EventMsg::RealtimeConversation(RealtimeConversationEvent::Closed(closed)) => {
+            Some(closed.clone())
+        }
         _ => None,
     })
     .await;
@@ -192,7 +200,9 @@ async fn conversation_transport_close_emits_closed_event() -> Result<()> {
         .await?;
 
     let started = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversation(RealtimeConversationEvent::Started(started)) => Some(Ok(started.clone())),
+        EventMsg::RealtimeConversation(RealtimeConversationEvent::Started(started)) => {
+            Some(Ok(started.clone()))
+        }
         EventMsg::Error(err) => Some(Err(err.clone())),
         _ => None,
     })
@@ -201,16 +211,20 @@ async fn conversation_transport_close_emits_closed_event() -> Result<()> {
     assert!(started.session_id.is_some());
 
     let session_created = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversation(RealtimeConversationEvent::Realtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::SessionCreated { session_id },
-        })) => Some(session_id.clone()),
+        EventMsg::RealtimeConversation(RealtimeConversationEvent::Realtime(
+            RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::SessionCreated { session_id },
+            },
+        )) => Some(session_id.clone()),
         _ => None,
     })
     .await;
     assert_eq!(session_created, "sess_1");
 
     let closed = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversation(RealtimeConversationEvent::Closed(closed)) => Some(closed.clone()),
+        EventMsg::RealtimeConversation(RealtimeConversationEvent::Closed(closed)) => {
+            Some(closed.clone())
+        }
         _ => None,
     })
     .await;
@@ -318,9 +332,11 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
         })
         .await?;
     wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversation(RealtimeConversationEvent::Realtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::SessionCreated { session_id },
-        })) if session_id == "sess_old" => Some(Ok(())),
+        EventMsg::RealtimeConversation(RealtimeConversationEvent::Realtime(
+            RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::SessionCreated { session_id },
+            },
+        )) if session_id == "sess_old" => Some(Ok(())),
         EventMsg::Error(err) => Some(Err(err.clone())),
         _ => None,
     })
@@ -336,9 +352,11 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
         })
         .await?;
     wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversation(RealtimeConversationEvent::Realtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::SessionCreated { session_id },
-        })) if session_id == "sess_new" => Some(Ok(())),
+        EventMsg::RealtimeConversation(RealtimeConversationEvent::Realtime(
+            RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::SessionCreated { session_id },
+            },
+        )) if session_id == "sess_new" => Some(Ok(())),
         EventMsg::Error(err) => Some(Err(err.clone())),
         _ => None,
     })
@@ -358,9 +376,11 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
         })
         .await?;
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversation(RealtimeConversationEvent::Realtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::AudioOut(frame),
-        })) if frame.data == "AQID" => Some(()),
+        EventMsg::RealtimeConversation(RealtimeConversationEvent::Realtime(
+            RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::AudioOut(frame),
+            },
+        )) if frame.data == "AQID" => Some(()),
         _ => None,
     })
     .await;

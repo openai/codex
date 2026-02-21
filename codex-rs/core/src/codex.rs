@@ -3323,11 +3323,7 @@ mod handlers {
     use crate::tasks::execute_user_shell_command;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
-    use codex_protocol::protocol::RealtimeConversationClosedEvent;
     use codex_protocol::protocol::ConversationCommand;
-    use codex_protocol::protocol::RealtimeConversationEvent;
-    use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
-    use codex_protocol::protocol::RealtimeConversationStartedEvent;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -3336,6 +3332,10 @@ mod handlers {
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::RealtimeConversationClosedEvent;
+    use codex_protocol::protocol::RealtimeConversationEvent;
+    use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+    use codex_protocol::protocol::RealtimeConversationStartedEvent;
     use codex_protocol::protocol::RemoteSkillDownloadedEvent;
     use codex_protocol::protocol::RemoteSkillHazelnutScope;
     use codex_protocol::protocol::RemoteSkillProductSurface;
@@ -3371,7 +3371,11 @@ mod handlers {
         sess.close_unified_exec_processes().await;
     }
 
-    pub async fn realtime_conversation(sess: &Arc<Session>, sub_id: String, cmd: ConversationCommand) {
+    pub async fn realtime_conversation(
+        sess: &Arc<Session>,
+        sub_id: String,
+        cmd: ConversationCommand,
+    ) {
         match cmd {
             ConversationCommand::Start(params) => {
                 let config = sess.get_config().await;
@@ -3422,19 +3426,21 @@ mod handlers {
                     while let Ok(event) = events_rx.recv().await {
                         sess_clone
                             .send_event_raw(ev(EventMsg::RealtimeConversation(
-                                RealtimeConversationEvent::Realtime(RealtimeConversationRealtimeEvent {
-                                    payload: event,
-                                }),
+                                RealtimeConversationEvent::Realtime(
+                                    RealtimeConversationRealtimeEvent { payload: event },
+                                ),
                             )))
                             .await;
                     }
                     if let Some(()) = sess_clone.conversation.running_state().await {
                         sess_clone
-                            .send_event_raw(ev(EventMsg::RealtimeConversation(RealtimeConversationEvent::Closed(
-                                RealtimeConversationClosedEvent {
-                                    reason: Some("transport_closed".to_string()),
-                                },
-                            ))))
+                            .send_event_raw(ev(EventMsg::RealtimeConversation(
+                                RealtimeConversationEvent::Closed(
+                                    RealtimeConversationClosedEvent {
+                                        reason: Some("transport_closed".to_string()),
+                                    },
+                                ),
+                            )))
                             .await;
                     }
                 });
