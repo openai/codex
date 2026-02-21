@@ -1733,7 +1733,7 @@ impl Session {
         let mut saw_surviving_compaction_after_candidate = false;
         let mut saw_turn_lifecycle_event = false;
         let mut active_turn_id: Option<&str> = None;
-        let mut active_turn_is_rolled_back = false;
+        let mut active_turn_saw_user_message = false;
         let mut active_turn_context: Option<&TurnContextItem> = None;
         let mut active_turn_contains_compaction = false;
 
@@ -1751,10 +1751,7 @@ impl Session {
                     saw_turn_lifecycle_event = true;
                     // Enter the reverse "turn span" for this completed turn.
                     active_turn_id = Some(event.turn_id.as_str());
-                    active_turn_is_rolled_back = turns_to_skip_due_to_rollback > 0;
-                    if active_turn_is_rolled_back {
-                        turns_to_skip_due_to_rollback -= 1;
-                    }
+                    active_turn_saw_user_message = false;
                     active_turn_context = None;
                     active_turn_contains_compaction = false;
                 }
@@ -1763,16 +1760,26 @@ impl Session {
                     // Same reverse-turn handling as `TurnComplete`. Some aborted turns may not
                     // have a turn id; in that case we cannot match `TurnContextItem`s to them.
                     active_turn_id = event.turn_id.as_deref();
-                    active_turn_is_rolled_back = turns_to_skip_due_to_rollback > 0;
-                    if active_turn_is_rolled_back {
-                        turns_to_skip_due_to_rollback -= 1;
-                    }
+                    active_turn_saw_user_message = false;
                     active_turn_context = None;
                     active_turn_contains_compaction = false;
+                }
+                RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
+                    if active_turn_id.is_some() {
+                        active_turn_saw_user_message = true;
+                    }
                 }
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
                     saw_turn_lifecycle_event = true;
                     if active_turn_id == Some(event.turn_id.as_str()) {
+                        let active_turn_is_rolled_back =
+                            active_turn_saw_user_message && turns_to_skip_due_to_rollback > 0;
+                        if active_turn_is_rolled_back {
+                            // `ThreadRolledBack(num_turns)` counts user turns, so only consume a
+                            // skip once we've confirmed this reverse-scanned turn span contains a
+                            // user message. Standalone task turns must not consume rollback skips.
+                            turns_to_skip_due_to_rollback -= 1;
+                        }
                         if !active_turn_is_rolled_back {
                             if let Some(context_item) = active_turn_context {
                                 return (
@@ -1788,17 +1795,17 @@ impl Session {
                             }
                         }
                         active_turn_id = None;
-                        active_turn_is_rolled_back = false;
+                        active_turn_saw_user_message = false;
                         active_turn_context = None;
                         active_turn_contains_compaction = false;
                     }
                 }
                 RolloutItem::TurnContext(ctx) => {
-                    // Ignore turn contexts unless we are inside a non-rolled-back completed turn
-                    // span whose id matches this item.
+                    // Capture the latest turn context seen in this reverse-scanned turn span. If
+                    // the turn later proves to be rolled back, we discard it when we hit the
+                    // matching `TurnStarted`.
                     if let (Some(active_id), Some(turn_id)) =
                         (active_turn_id, ctx.turn_id.as_deref())
-                        && !active_turn_is_rolled_back
                         && active_id == turn_id
                     {
                         // Reverse scan sees the latest `TurnContextItem` for the turn first.
@@ -1807,9 +1814,6 @@ impl Session {
                 }
                 RolloutItem::Compacted(_) => {
                     if active_turn_id.is_some() {
-                        if active_turn_is_rolled_back {
-                            continue;
-                        }
                         // Compaction inside the currently scanned turn is only "after" the
                         // eventual candidate if this turn has no `TurnContextItem` and we keep
                         // scanning into older turns.
@@ -6632,6 +6636,69 @@ mod tests {
             session.previous_model().await,
             Some(previous_model.to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_context_item = turn_context.to_turn_context_item();
+        let user_turn_id = previous_context_item
+            .turn_id
+            .clone()
+            .expect("turn context should have turn_id");
+        let standalone_turn_id = "standalone-task-turn".to_string();
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: user_turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "seed".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::TurnContext(previous_context_item),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: user_turn_id,
+                    last_agent_message: None,
+                },
+            )),
+            // Standalone task turn (no UserMessage) should not consume rollback skips.
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: standalone_turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: standalone_turn_id,
+                    last_agent_message: None,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+                codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+            )),
+        ];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(session.previous_model().await, None);
+        assert!(session.reference_context_item().await.is_none());
     }
 
     #[tokio::test]
