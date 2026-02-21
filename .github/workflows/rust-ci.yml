@@ -389,8 +389,20 @@ jobs:
           cargo chef prepare --recipe-path "$RECIPE"
           cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} --release --all-features
 
+      # Cargo timings show `--tests` repeatedly rebuilding heavy test targets
+      # (especially codex-core) across the full matrix. Keep test linting on one
+      # representative dev target and let nextest continue compiling tests on the
+      # runtime test matrix.
       - name: cargo clippy
-        run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} --timings -- -D warnings
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(cargo clippy --target "${{ matrix.target }}" --all-features --profile "${{ matrix.profile }}")
+          if [[ "${{ matrix.profile }}" == 'dev' && "${{ matrix.target }}" == 'x86_64-unknown-linux-gnu' ]]; then
+            args+=(--tests)
+          fi
+          args+=(--timings -- -D warnings)
+          "${args[@]}"
 
       - name: Upload Cargo timings (clippy)
         if: always()
