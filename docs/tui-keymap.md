@@ -104,6 +104,9 @@ Compatibility detail:
 Some actions intentionally ship with multiple default bindings because terminals
 can report modifier combinations differently. Examples include `?` vs `shift-?`
 and certain `ctrl` chords with optional `shift`.
+Shifted letter bindings are also matched compatibly when terminals report them
+as uppercase characters without an explicit `shift` modifier (for example
+`shift-i` matching `I`).
 
 ## Resolution and precedence
 
