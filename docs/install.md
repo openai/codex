@@ -43,7 +43,9 @@ just fix -p <crate-you-touched>
 cargo test -p codex-tui
 # If you have cargo-nextest installed, `just test` runs the test suite via nextest:
 just test
-# If you specifically want the full `--all-features` matrix, use:
+# Avoid `--all-features` for routine local runs because it increases build
+# time and `target/` disk usage by compiling additional feature combinations.
+# If you specifically want full feature coverage, use:
 cargo test --all-features
 ```
 
