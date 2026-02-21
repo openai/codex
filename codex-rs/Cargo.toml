@@ -53,7 +53,6 @@ members = [
     "utils/cli",
     "utils/elapsed",
     "utils/sandbox-summary",
-    "utils/sanitizer",
     "utils/sleep-inhibitor",
     "utils/approval-presets",
     "utils/oss",
@@ -131,7 +130,6 @@ codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
-codex-utils-sanitizer = { path = "utils/sanitizer" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
