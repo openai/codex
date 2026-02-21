@@ -420,6 +420,172 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_shell_zsh_fork_subcommand_escalated_requests_approval_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+
+    let Some(zsh_path) = find_test_zsh_path() else {
+        eprintln!("skipping zsh fork subcommand escalated test: no zsh executable found");
+        return Ok(());
+    };
+    if !supports_exec_wrapper_intercept(&zsh_path) {
+        eprintln!(
+            "skipping zsh fork subcommand escalated test: zsh does not support EXEC_WRAPPER intercepts ({})",
+            zsh_path.display()
+        );
+        return Ok(());
+    }
+    eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
+
+    let tool_call_arguments = serde_json::to_string(&serde_json::json!({
+        "command": "touch zsh_fork_escalated.txt",
+        "workdir": serde_json::Value::Null,
+        "timeout_ms": 5000,
+        "sandbox_permissions": "require_escalated",
+    }))?;
+    let response = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_function_call(
+            "call-zsh-fork-subcommand-escalated",
+            "shell_command",
+            &tool_call_arguments,
+        ),
+        responses::ev_completed("resp-1"),
+    ]);
+    let server = create_mock_responses_server_sequence(vec![response]).await;
+    create_config_toml(
+        &codex_home,
+        &server.uri(),
+        "on-request",
+        &BTreeMap::from([
+            (Feature::ShellZshFork, true),
+            (Feature::UnifiedExec, false),
+            (Feature::ShellSnapshot, false),
+        ]),
+        &zsh_path,
+    )?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run touch".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(workspace.clone()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::OnRequest),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::ReadOnly {
+                access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
+            }),
+            model: Some("mock-model".to_string()),
+            effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
+            summary: Some(codex_core::protocol_config_types::ReasoningSummary::Auto),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+
+    let mut saw_subcommand_approval = false;
+    for _ in 0..3 {
+        let server_req = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_request_message(),
+        )
+        .await??;
+        let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req
+        else {
+            panic!("expected CommandExecutionRequestApproval request");
+        };
+        assert_eq!(params.item_id, "call-zsh-fork-subcommand-escalated");
+        assert_eq!(params.thread_id, thread.id);
+        if params.approval_id.is_some() {
+            saw_subcommand_approval = true;
+        }
+        mcp.send_response(
+            request_id,
+            serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                decision: CommandExecutionApprovalDecision::Accept,
+            })?,
+        )
+        .await?;
+        if saw_subcommand_approval {
+            break;
+        }
+    }
+    assert!(
+        saw_subcommand_approval,
+        "expected zsh subcommand approval request with approval_id"
+    );
+
+    let parent_completed_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let completed_notif = mcp
+                .read_stream_until_notification_message("item/completed")
+                .await?;
+            let completed: ItemCompletedNotification = serde_json::from_value(
+                completed_notif
+                    .params
+                    .clone()
+                    .expect("item/completed params"),
+            )?;
+            if let ThreadItem::CommandExecution { id, .. } = &completed.item
+                && id == "call-zsh-fork-subcommand-escalated"
+            {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution { id, status, .. } = parent_completed_command_execution else {
+        unreachable!("loop ensures we break on parent command execution item");
+    };
+    assert_eq!(id, "call-zsh-fork-subcommand-escalated");
+    assert_eq!(status, CommandExecutionStatus::Completed);
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    assert!(workspace.join("zsh_fork_escalated.txt").is_file());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

@@ -284,7 +284,14 @@ impl ZshExecBridge {
                         ToolError::Rejected(format!("failed to accept wrapper request: {err}"))
                     })?;
                     if self
-                        .handle_wrapper_request(stream, req.justification.clone(), session, turn, call_id)
+                        .handle_wrapper_request(
+                            stream,
+                            req.justification.clone(),
+                            req.sandbox_permissions,
+                            session,
+                            turn,
+                            call_id,
+                        )
                         .await?
                     {
                         user_rejected = true;
@@ -333,6 +340,7 @@ impl ZshExecBridge {
         &self,
         mut stream: UnixStream,
         approval_reason: Option<String>,
+        sandbox_permissions: SandboxPermissions,
         session: &crate::codex::Session,
         turn: &crate::codex::TurnContext,
         call_id: &str,
@@ -386,6 +394,12 @@ impl ZshExecBridge {
                 extend_sandbox_policy(&turn.sandbox_policy, skill_permissions.sandbox_policy.get())
             },
         );
+        tracing::debug!(
+            ?effective_sandbox_policy,
+            ?matched_skill_permissions,
+            ?sandbox_permissions,
+            "zsh exec bridge resolved sandbox policy for wrapper request"
+        );
 
         // Ask exec policy whether this command can run, is forbidden, or needs approval.
         let exec_approval_requirement = session
@@ -396,7 +410,7 @@ impl ZshExecBridge {
                     command: &command_for_execpolicy,
                     approval_policy: turn.approval_policy,
                     sandbox_policy: &effective_sandbox_policy,
-                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    sandbox_permissions,
                     prefix_rule: None,
                 },
                 &overlay_prompt_prefixes,
