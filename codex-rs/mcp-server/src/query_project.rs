@@ -433,7 +433,7 @@ pub(crate) async fn handle_query_project(
         &embedding_model,
     ) {
         Ok(embedding_mode) => embedding_mode,
-        Err(err) => return call_tool_error(format!("index refresh failed: {err}")),
+        Err(err) => return call_tool_error(format!("failed to resolve embedding mode: {err}")),
     };
 
     let index = match RepoHybridIndex::open(&repo_root).await {
@@ -686,6 +686,7 @@ struct RepoHybridIndex {
     repo_root: PathBuf,
     pool: SqlitePool,
     refresh_lock: Arc<AsyncMutex<()>>,
+    embeddings_client: reqwest::Client,
 }
 
 impl RepoHybridIndex {
@@ -706,6 +707,11 @@ impl RepoHybridIndex {
             .connect_with(connect_options)
             .await
             .with_context(|| format!("failed to open SQLite DB `{}`", db_path.display()))?;
+        let embeddings_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(EMBEDDING_REQUEST_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(EMBEDDING_CONNECT_TIMEOUT_SECS))
+            .build()
+            .context("failed to initialize embeddings client")?;
         static REFRESH_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>> =
             OnceLock::new();
         let refresh_lock = {
@@ -726,6 +732,7 @@ impl RepoHybridIndex {
             repo_root: repo_root.to_path_buf(),
             pool,
             refresh_lock,
+            embeddings_client,
         };
         index.ensure_schema().await?;
         Ok(index)
@@ -856,7 +863,14 @@ impl RepoHybridIndex {
             self.clear_all().await?;
         }
 
-        let scanned_files = scan_repo(&self.repo_root, glob_set.as_ref())?;
+        let repo_root = self.repo_root.clone();
+        let scan_file_globs = file_globs.to_vec();
+        let scanned_files = tokio::task::spawn_blocking(move || {
+            let scan_glob_set = build_glob_set(&scan_file_globs)?;
+            scan_repo(&repo_root, scan_glob_set.as_ref())
+        })
+        .await
+        .context("repo scan task failed")??;
         let existing_files = self.load_existing_files().await?;
 
         let mut stats = RepoIndexRefreshStats {
@@ -892,7 +906,7 @@ impl RepoHybridIndex {
                 continue;
             }
 
-            let file_text = match read_text_file(&scanned.absolute_path)? {
+            let file_text = match read_text_file(&scanned.absolute_path).await? {
                 Some(file_text) => file_text,
                 None => {
                     let mut tx = self.pool.begin().await?;
@@ -925,7 +939,7 @@ impl RepoHybridIndex {
                     .iter()
                     .map(|chunk| chunk.content.clone())
                     .collect::<Vec<_>>();
-                embed_texts(&embedding_model, &inputs).await?
+                embed_texts(&self.embeddings_client, &embedding_model, &inputs).await?
             } else {
                 vec![Vec::new(); chunks.len()]
             };
@@ -1043,17 +1057,42 @@ impl RepoHybridIndex {
         embedding_model: String,
     ) -> anyhow::Result<SearchOutcome> {
         let glob_set = build_glob_set(file_globs)?;
+        let lexical_scores = self
+            .lexical_scores(
+                query,
+                limit.saturating_mul(LEXICAL_CANDIDATE_MULTIPLIER),
+                glob_set.as_ref(),
+            )
+            .await?;
+        let lexical_candidate_ids = lexical_scores.keys().copied().collect::<Vec<_>>();
+
         let mut vector_scores = Vec::new();
         let mut effective_alpha = 0.0;
         let mut embedding_fallback_reason = None;
         if self.embedding_ready().await? {
-            match embed_texts(&embedding_model, &[query.to_string()]).await {
+            match embed_texts(
+                &self.embeddings_client,
+                &embedding_model,
+                &[query.to_string()],
+            )
+            .await
+            {
                 Ok(embeddings) => {
                     let (query_embedding, fallback_reason) =
                         query_embedding_or_fallback_reason(embeddings);
                     if let Some(query_embedding) = query_embedding {
+                        let vector_prefilter = if lexical_candidate_ids.is_empty() {
+                            None
+                        } else {
+                            Some(lexical_candidate_ids.as_slice())
+                        };
                         vector_scores = self
-                            .vector_scores(&query_embedding, limit, glob_set.as_ref())
+                            .vector_scores(
+                                &query_embedding,
+                                limit,
+                                glob_set.as_ref(),
+                                vector_prefilter,
+                            )
                             .await?;
                         effective_alpha = alpha;
                     } else {
@@ -1067,14 +1106,6 @@ impl RepoHybridIndex {
                 }
             }
         }
-
-        let lexical_scores = self
-            .lexical_scores(
-                query,
-                limit.saturating_mul(LEXICAL_CANDIDATE_MULTIPLIER),
-                glob_set.as_ref(),
-            )
-            .await?;
 
         if vector_scores.is_empty() && lexical_scores.is_empty() {
             return Ok(SearchOutcome {
@@ -1144,28 +1175,63 @@ impl RepoHybridIndex {
         query_embedding: &[f32],
         limit: usize,
         glob_set: Option<&GlobSet>,
+        candidate_ids: Option<&[i64]>,
     ) -> anyhow::Result<Vec<(i64, f32)>> {
         let candidate_limit = limit.saturating_mul(VECTOR_CANDIDATE_MULTIPLIER).max(limit);
         let buffer_limit = candidate_limit.saturating_mul(4).max(candidate_limit);
-        let mut rows =
-            sqlx::query("SELECT id, path, embedding FROM chunks ORDER BY id ASC").fetch(&self.pool);
         let mut scores = Vec::new();
-        while let Some(row) = rows.try_next().await? {
-            let id: i64 = row.try_get("id")?;
-            let path: String = row.try_get("path")?;
-            if let Some(glob_set) = glob_set
-                && !glob_set.is_match(path.as_str())
-            {
-                continue;
+
+        if let Some(candidate_ids) = candidate_ids {
+            for id_chunk in candidate_ids.chunks(SQLITE_BIND_CHUNK_SIZE) {
+                let mut builder =
+                    QueryBuilder::new("SELECT id, path, embedding FROM chunks WHERE id IN (");
+                let mut separated = builder.separated(", ");
+                for id in id_chunk {
+                    separated.push_bind(id);
+                }
+                separated.push_unseparated(") ORDER BY id ASC");
+                let rows = builder.build().fetch_all(&self.pool).await?;
+                for row in rows {
+                    let id: i64 = row.try_get("id")?;
+                    let path: String = row.try_get("path")?;
+                    if let Some(glob_set) = glob_set
+                        && !glob_set.is_match(path.as_str())
+                    {
+                        continue;
+                    }
+                    let embedding_json: String = row.try_get("embedding")?;
+                    let embedding = serde_json::from_str::<Vec<f32>>(&embedding_json)
+                        .with_context(|| {
+                            format!("failed to parse embedding JSON for chunk id {id}")
+                        })?;
+                    let score = cosine_similarity(query_embedding, &embedding);
+                    scores.push((id, score));
+                    if scores.len() > buffer_limit {
+                        scores.sort_by(sort_score_desc);
+                        scores.truncate(candidate_limit);
+                    }
+                }
             }
-            let embedding_json: String = row.try_get("embedding")?;
-            let embedding = serde_json::from_str::<Vec<f32>>(&embedding_json)
-                .with_context(|| format!("failed to parse embedding JSON for chunk id {id}"))?;
-            let score = cosine_similarity(query_embedding, &embedding);
-            scores.push((id, score));
-            if scores.len() > buffer_limit {
-                scores.sort_by(sort_score_desc);
-                scores.truncate(candidate_limit);
+        } else {
+            let mut rows = sqlx::query("SELECT id, path, embedding FROM chunks ORDER BY id ASC")
+                .fetch(&self.pool);
+            while let Some(row) = rows.try_next().await? {
+                let id: i64 = row.try_get("id")?;
+                let path: String = row.try_get("path")?;
+                if let Some(glob_set) = glob_set
+                    && !glob_set.is_match(path.as_str())
+                {
+                    continue;
+                }
+                let embedding_json: String = row.try_get("embedding")?;
+                let embedding = serde_json::from_str::<Vec<f32>>(&embedding_json)
+                    .with_context(|| format!("failed to parse embedding JSON for chunk id {id}"))?;
+                let score = cosine_similarity(query_embedding, &embedding);
+                scores.push((id, score));
+                if scores.len() > buffer_limit {
+                    scores.sort_by(sort_score_desc);
+                    scores.truncate(candidate_limit);
+                }
             }
         }
         scores.sort_by(sort_score_desc);
@@ -1216,7 +1282,7 @@ impl RepoHybridIndex {
     ) -> anyhow::Result<HashMap<i64, f32>> {
         let query_for_fts = to_fts_query(query);
         let rows = sqlx::query(
-            "SELECT chunk_id, bm25(chunks_fts) AS rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
+            "SELECT chunk_id, path, bm25(chunks_fts) AS rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
         )
         .bind(query_for_fts)
         .bind(limit as i64)
@@ -1230,14 +1296,7 @@ impl RepoHybridIndex {
                     let chunk_id: i64 = row.try_get("chunk_id")?;
                     let rank: f64 = row.try_get("rank")?;
                     if let Some(glob_set) = glob_set {
-                        let path_row = sqlx::query("SELECT path FROM chunks WHERE id = ?")
-                            .bind(chunk_id)
-                            .fetch_optional(&self.pool)
-                            .await?;
-                        let Some(path_row) = path_row else {
-                            continue;
-                        };
-                        let path: String = path_row.try_get("path")?;
+                        let path: String = row.try_get("path")?;
                         if !glob_set.is_match(path.as_str()) {
                             continue;
                         }
@@ -1333,26 +1392,20 @@ async fn remove_file_from_index(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     path: &str,
 ) -> anyhow::Result<usize> {
-    let rows = sqlx::query("SELECT id FROM chunks WHERE path = ?")
-        .bind(path)
-        .fetch_all(&mut **tx)
-        .await?;
-    for row in &rows {
-        let chunk_id: i64 = row.try_get("id")?;
-        sqlx::query("DELETE FROM chunks_fts WHERE rowid = ?")
-            .bind(chunk_id)
-            .execute(&mut **tx)
-            .await?;
-    }
-    sqlx::query("DELETE FROM chunks WHERE path = ?")
+    sqlx::query("DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE path = ?)")
         .bind(path)
         .execute(&mut **tx)
         .await?;
+    let removed_chunk_count = sqlx::query("DELETE FROM chunks WHERE path = ?")
+        .bind(path)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected() as usize;
     sqlx::query("DELETE FROM indexed_files WHERE path = ?")
         .bind(path)
         .execute(&mut **tx)
         .await?;
-    Ok(rows.len())
+    Ok(removed_chunk_count)
 }
 
 fn build_glob_set(file_globs: &[String]) -> anyhow::Result<Option<GlobSet>> {
@@ -1449,9 +1502,10 @@ fn should_skip_index_path(path: &str) -> bool {
         || path.starts_with(".codex/repo_hybrid_index/")
 }
 
-fn read_text_file(path: &Path) -> anyhow::Result<Option<String>> {
-    let bytes =
-        std::fs::read(path).with_context(|| format!("failed to read file `{}`", path.display()))?;
+async fn read_text_file(path: &Path) -> anyhow::Result<Option<String>> {
+    let bytes = tokio::fs::read(path)
+        .await
+        .with_context(|| format!("failed to read file `{}`", path.display()))?;
     if bytes.contains(&0) {
         return Ok(None);
     }
@@ -1587,7 +1641,11 @@ struct EmbeddingItem {
     index: usize,
 }
 
-async fn embed_texts(model: &str, inputs: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+async fn embed_texts(
+    client: &reqwest::Client,
+    model: &str,
+    inputs: &[String],
+) -> anyhow::Result<Vec<Vec<f32>>> {
     if inputs.is_empty() {
         return Ok(Vec::new());
     }
@@ -1596,10 +1654,6 @@ async fn embed_texts(model: &str, inputs: &[String]) -> anyhow::Result<Vec<Vec<f
     let api_key = std::env::var(api_key_env_var)
         .with_context(|| format!("{api_key_env_var} is required for query_project embeddings"))?;
     let embeddings_url = provider.embeddings_url();
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(EMBEDDING_REQUEST_TIMEOUT_SECS))
-        .connect_timeout(Duration::from_secs(EMBEDDING_CONNECT_TIMEOUT_SECS))
-        .build()?;
 
     let mut all_embeddings = Vec::<Vec<f32>>::with_capacity(inputs.len());
     for batch in inputs.chunks(EMBED_BATCH_SIZE) {
@@ -1899,5 +1953,48 @@ mod tests {
         assert_eq!(second.stats.updated_files, 0);
         assert_eq!(second.stats.removed_files, 0);
         assert_eq!(second.embedding_status.ready, first.embedding_status.ready);
+    }
+
+    #[tokio::test]
+    async fn vector_scores_with_candidates_avoids_full_table_scan() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path();
+        let index = RepoHybridIndex::open(repo_root).await.expect("open index");
+        let mut tx = index.pool.begin().await.expect("begin tx");
+
+        let good_insert = sqlx::query(
+            "INSERT INTO chunks(path, start_line, end_line, snippet, content, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind("good.rs")
+        .bind(1_i64)
+        .bind(1_i64)
+        .bind("good")
+        .bind("good")
+        .bind("[1.0, 0.0]")
+        .execute(&mut *tx)
+        .await
+        .expect("insert good chunk");
+        let good_id = good_insert.last_insert_rowid();
+
+        sqlx::query(
+            "INSERT INTO chunks(path, start_line, end_line, snippet, content, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind("bad.rs")
+        .bind(1_i64)
+        .bind(1_i64)
+        .bind("bad")
+        .bind("bad")
+        .bind("not-json")
+        .execute(&mut *tx)
+        .await
+        .expect("insert bad chunk");
+        tx.commit().await.expect("commit");
+
+        let scores = index
+            .vector_scores(&[1.0, 0.0], 5, None, Some(&[good_id]))
+            .await
+            .expect("vector scores should only read candidate rows");
+
+        assert_eq!(scores, vec![(good_id, 1.0)]);
     }
 }
