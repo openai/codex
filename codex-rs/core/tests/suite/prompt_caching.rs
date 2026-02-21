@@ -672,26 +672,30 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     });
     let expected_permissions_msg = body1["input"][0].clone();
     let body1_input = body1["input"].as_array().expect("input array");
-    let expected_model_switch_msg = body2["input"][body1_input.len()].clone();
+    let expected_settings_update_msg = body2["input"][body1_input.len()].clone();
+    assert_ne!(
+        expected_settings_update_msg, expected_permissions_msg,
+        "expected updated permissions message after per-turn override"
+    );
     assert_eq!(
-        expected_model_switch_msg["role"].as_str(),
+        expected_settings_update_msg["role"].as_str(),
         Some("developer")
     );
     assert!(
-        expected_model_switch_msg["content"][0]["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("<model_switch>")),
-        "expected model switch message after model override: {expected_model_switch_msg:?}"
-    );
-    let expected_permissions_msg_2 = body2["input"][body1_input.len() + 2].clone();
-    assert_ne!(
-        expected_permissions_msg_2, expected_permissions_msg,
-        "expected updated permissions message after per-turn override"
+        expected_settings_update_msg["content"]
+            .as_array()
+            .is_some_and(|content| {
+                content.iter().any(|item| {
+                    item["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("<model_switch>"))
+                })
+            }),
+        "expected model switch section after model override: {expected_settings_update_msg:?}"
     );
     let mut expected_body2 = body1_input.to_vec();
-    expected_body2.push(expected_model_switch_msg);
+    expected_body2.push(expected_settings_update_msg);
     expected_body2.push(expected_env_msg_2);
-    expected_body2.push(expected_permissions_msg_2);
     expected_body2.push(expected_user_message_2);
     assert_eq!(body2["input"], serde_json::Value::Array(expected_body2));
 
@@ -900,21 +904,26 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     assert_eq!(body1["input"], expected_input_1);
 
     let body1_input = body1["input"].as_array().expect("input array");
-    let expected_model_switch_msg = body2["input"][body1_input.len()].clone();
+    let expected_settings_update_msg = body2["input"][body1_input.len()].clone();
+    assert_ne!(
+        expected_settings_update_msg, expected_permissions_msg,
+        "expected updated permissions message after policy change"
+    );
     assert_eq!(
-        expected_model_switch_msg["role"].as_str(),
+        expected_settings_update_msg["role"].as_str(),
         Some("developer")
     );
     assert!(
-        expected_model_switch_msg["content"][0]["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("<model_switch>")),
-        "expected model switch message after model override: {expected_model_switch_msg:?}"
-    );
-    let expected_permissions_msg_2 = body2["input"][body1_input.len() + 1].clone();
-    assert_ne!(
-        expected_permissions_msg_2, expected_permissions_msg,
-        "expected updated permissions message after policy change"
+        expected_settings_update_msg["content"]
+            .as_array()
+            .is_some_and(|content| {
+                content.iter().any(|item| {
+                    item["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("<model_switch>"))
+                })
+            }),
+        "expected model switch section after model override: {expected_settings_update_msg:?}"
     );
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
@@ -922,8 +931,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         expected_ui_msg,
         expected_env_msg_1,
         expected_user_message_1,
-        expected_model_switch_msg,
-        expected_permissions_msg_2,
+        expected_settings_update_msg,
         expected_user_message_2,
     ]);
     assert_eq!(body2["input"], expected_input_2);
