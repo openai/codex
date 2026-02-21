@@ -386,16 +386,21 @@ mod tests {
         };
 
         let args = create_filesystem_args(&sandbox_policy, Path::new("/")).expect("bwrap fs args");
-
-        let dev_mount_index = args
-            .windows(2)
-            .position(|window| window[0] == "--dev" && window[1] == "/dev")
-            .expect("expected --dev /dev mount");
-        let writable_dev_bind_index = args
-            .windows(3)
-            .position(|window| window[0] == "--bind" && window[1] == "/dev" && window[2] == "/dev")
-            .expect("expected writable /dev bind");
-
-        assert!(dev_mount_index < writable_dev_bind_index);
+        assert_eq!(
+            args,
+            vec![
+                "--ro-bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
+                "--dev".to_string(),
+                "/dev".to_string(),
+                "--bind".to_string(),
+                "/dev".to_string(),
+                "/dev".to_string(),
+                "--bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
+            ]
+        );
     }
 }

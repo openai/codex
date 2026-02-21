@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs::DirBuilder;
 use std::fs::File;
+use std::fs::Permissions;
 use std::io;
 use std::io::Read;
 use std::io::Write;
@@ -14,6 +15,7 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -78,8 +80,8 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, message));
     }
 
-    let temp_dir = std::env::temp_dir();
-    let _ = cleanup_stale_proxy_socket_dirs_in(temp_dir.as_path());
+    let socket_parent_dir = proxy_socket_parent_dir();
+    let _ = cleanup_stale_proxy_socket_dirs_in(socket_parent_dir.as_path());
 
     let socket_dir = create_proxy_socket_dir()?;
     let mut socket_by_endpoint: BTreeMap<SocketAddr, PathBuf> = BTreeMap::new();
@@ -274,7 +276,7 @@ fn rewrite_proxy_env_value(proxy_url: &str, local_port: u16) -> Option<String> {
 }
 
 fn create_proxy_socket_dir() -> io::Result<PathBuf> {
-    let temp_dir = std::env::temp_dir();
+    let temp_dir = proxy_socket_parent_dir();
     let pid = std::process::id();
     for attempt in 0..128 {
         let candidate = temp_dir.join(format!("{PROXY_SOCKET_DIR_PREFIX}{pid}-{attempt}"));
@@ -295,6 +297,28 @@ fn create_proxy_socket_dir() -> io::Result<PathBuf> {
             temp_dir.display()
         ),
     ))
+}
+
+fn proxy_socket_parent_dir() -> PathBuf {
+    if let Some(codex_home) = std::env::var_os("CODEX_HOME") {
+        let candidate = PathBuf::from(codex_home).join("tmp");
+        if ensure_private_proxy_socket_parent_dir(candidate.as_path()).is_ok() {
+            return candidate;
+        }
+    }
+    std::env::temp_dir()
+}
+
+fn ensure_private_proxy_socket_parent_dir(path: &Path) -> io::Result<()> {
+    let mut dir_builder = DirBuilder::new();
+    dir_builder.recursive(true);
+    dir_builder.mode(0o700);
+    match dir_builder.create(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(err) => return Err(err),
+    }
+    std::fs::set_permissions(path, Permissions::from_mode(0o700))
 }
 
 fn cleanup_stale_proxy_socket_dirs_in(temp_dir: &Path) -> io::Result<()> {
