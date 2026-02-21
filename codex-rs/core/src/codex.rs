@@ -2762,6 +2762,7 @@ impl Session {
         state.reference_context_item()
     }
 
+    #[cfg(test)]
     pub(crate) async fn clear_reference_context_item(&self) {
         let mut state = self.state.lock().await;
         state.set_reference_context_item(None);
