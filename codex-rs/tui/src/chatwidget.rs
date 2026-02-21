@@ -5450,17 +5450,8 @@ impl ChatWidget {
 
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
         self.apply_model_and_effort_without_persist(model.clone(), effort);
-        self.app_event_tx.send(AppEvent::PersistModelSelection {
-            model: model.clone(),
-            effort,
-        });
-        tracing::info!(
-            "Selected model: {}, Selected effort: {}",
-            model,
-            effort
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "default".to_string())
-        );
+        self.app_event_tx
+            .send(AppEvent::PersistModelSelection { model, effort });
     }
 
     /// Open the permissions popup (alias for /permissions).

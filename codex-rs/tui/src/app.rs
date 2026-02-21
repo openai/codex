@@ -2119,6 +2119,10 @@ impl App {
                     .await
                 {
                     Ok(()) => {
+                        let effort_label = effort
+                            .map(|selected_effort| selected_effort.to_string())
+                            .unwrap_or_else(|| "default".to_string());
+                        tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
                         let mut message = format!("Model changed to {model}");
                         if let Some(label) = Self::reasoning_label_for(&model, effort) {
                             message.push(' ');
