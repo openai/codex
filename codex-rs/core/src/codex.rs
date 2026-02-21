@@ -4975,7 +4975,8 @@ async fn run_sampling_request(
                 || sess
                     .services
                     .model_client
-                    .active_ws_version(&turn_context.model_info).is_none();
+                    .active_ws_version(&turn_context.model_info)
+                    .is_none();
 
             if report_error {
                 // Surface retry information to any UI/front‑end so the
