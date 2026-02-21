@@ -451,7 +451,7 @@ jobs:
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
   tests:
-    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}
+    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.job_name_suffix || '' }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
@@ -469,15 +469,31 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            profile: dev
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
             runs_on:
               group: codex-runners
               labels: codex-linux-x64
+            partition: hash:1/2
+            shard_index: 1
+            shard_count: 2
+            job_name_suffix: " (shard 1/2)"
+            timings_name_suffix: "-shard-1-of-2"
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            profile: dev
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-x64
+            partition: hash:2/2
+            shard_index: 2
+            shard_count: 2
+            job_name_suffix: " (shard 2/2)"
+            timings_name_suffix: "-shard-2-of-2"
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            profile: dev
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             profile: dev
@@ -506,7 +522,7 @@ jobs:
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev bubblewrap
           fi
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
@@ -579,22 +595,22 @@ jobs:
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: nextest
-          version: 0.9.103
+          version: 0.9.111
 
       - name: Enable unprivileged user namespaces (Linux)
         if: runner.os == 'Linux'
-        run: |
-          # Required for bubblewrap to work on Linux CI runners.
-          sudo sysctl -w kernel.unprivileged_userns_clone=1
-          # Ubuntu 24.04+ can additionally gate unprivileged user namespaces
-          # behind AppArmor.
-          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/enable-unprivileged-userns.sh"
 
       - name: tests
         id: test
-        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmd=(cargo nextest run --all-features --no-fail-fast --target "${{ matrix.target }}" --cargo-profile ci-test --timings)
+          if [[ -n "${{ matrix.partition || '' }}" ]]; then
+            cmd+=(--partition "${{ matrix.partition }}")
+          fi
+          "${cmd[@]}"
         env:
           RUST_BACKTRACE: 1
           NEXTEST_STATUS_LEVEL: leak
@@ -603,7 +619,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: cargo-timings-rust-ci-nextest-${{ matrix.target }}-${{ matrix.profile }}
+          name: cargo-timings-rust-ci-nextest-${{ matrix.target }}-${{ matrix.profile }}${{ matrix.timings_name_suffix || '' }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
