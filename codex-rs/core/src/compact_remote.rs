@@ -198,8 +198,10 @@ pub(crate) async fn process_compacted_history(
 /// - non-user-content `user` messages (session prefix/instruction wrappers),
 ///   keeping only real user messages as parsed by `parse_turn_item`.
 ///
-/// This intentionally keeps `user`-role warnings and compaction-generated
-/// summary messages because they parse as `TurnItem::UserMessage`.
+/// This intentionally keeps:
+/// - `assistant` messages (future remote compaction models may emit them)
+/// - `user`-role warnings and compaction-generated summary messages because
+///   they parse as `TurnItem::UserMessage`.
 fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } if role == "developer" => false,
@@ -207,6 +209,7 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
             crate::event_mapping::parse_turn_item(item),
             Some(TurnItem::UserMessage(_))
         ),
+        ResponseItem::Message { role, .. } if role == "assistant" => true,
         _ => true,
     }
 }
