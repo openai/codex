@@ -19,7 +19,9 @@ pub use plan::PLAN_TOOL;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
+use crate::protocol::SandboxPolicy;
 pub use apply_patch::ApplyPatchHandler;
+use codex_protocol::models::SandboxPermissions;
 pub use dynamic::DynamicToolHandler;
 pub use grep_files::GrepFilesHandler;
 pub use js_repl::JsReplHandler;
@@ -48,4 +50,59 @@ where
     serde_json::from_str(arguments).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}"))
     })
+}
+
+fn reject_explicit_escalation_if_deny_read_present(
+    sandbox_permissions: SandboxPermissions,
+    sandbox_policy: &SandboxPolicy,
+) -> Result<(), FunctionCallError> {
+    if sandbox_permissions.requires_escalated_permissions()
+        && sandbox_policy.has_denied_read_paths()
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "filesystem deny_read policy is enforced; reject command — you cannot ask for escalated permissions because managed read restrictions must remain sandboxed".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reject_explicit_escalation_if_deny_read_present;
+    use crate::function_tool::FunctionCallError;
+    use crate::protocol::SandboxPolicy;
+    use codex_protocol::models::SandboxPermissions;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+
+    #[test]
+    fn explicit_escalation_is_rejected_when_deny_read_paths_exist() {
+        let mut policy = SandboxPolicy::new_workspace_write_policy();
+        let path = AbsolutePathBuf::try_from("/tmp/deny-read-test").expect("absolute path");
+        policy.append_deny_read_paths(&[path]);
+
+        let result = reject_explicit_escalation_if_deny_read_present(
+            SandboxPermissions::RequireEscalated,
+            &policy,
+        );
+
+        let Err(FunctionCallError::RespondToModel(message)) = result else {
+            panic!("expected managed deny_read explicit escalation rejection");
+        };
+        assert!(message.contains("filesystem deny_read policy is enforced"));
+    }
+
+    #[test]
+    fn non_escalated_command_is_allowed_when_deny_read_paths_exist() {
+        let mut policy = SandboxPolicy::new_workspace_write_policy();
+        let path = AbsolutePathBuf::try_from("/tmp/deny-read-test").expect("absolute path");
+        policy.append_deny_read_paths(&[path]);
+
+        let result = reject_explicit_escalation_if_deny_read_present(
+            SandboxPermissions::UseDefault,
+            &policy,
+        );
+
+        assert!(result.is_ok());
+    }
 }

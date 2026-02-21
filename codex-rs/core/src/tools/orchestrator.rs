@@ -214,6 +214,17 @@ impl ToolOrchestrator {
                         network_policy_decision,
                     })));
                 }
+                // Managed filesystem read denies are non-overridable. If a command
+                // was denied by the sandbox and this was not a managed network
+                // policy denial, do not offer a no-sandbox retry path.
+                if turn_ctx.sandbox_policy.has_denied_read_paths()
+                    && network_approval_context.is_none()
+                {
+                    return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                        output,
+                        network_policy_decision,
+                    })));
+                }
                 if !tool.escalate_on_failure() {
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output,
