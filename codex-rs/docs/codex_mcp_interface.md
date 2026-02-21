@@ -152,7 +152,7 @@ All tools return standard MCP `CallToolResult` payloads.
 - `structuredContent` as the same parsed JSON object
 
 Repo tool payloads do not include `threadId`.
-`repo_index_refresh` accepts `require_embeddings` (default `false`) for callers
+`repo_index_refresh` accepts `require_embeddings` (defaults to the config setting, default `false`) for callers
 that want strict failure semantics when embeddings are unavailable.
 
 `query_project` input guidance:

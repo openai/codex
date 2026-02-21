@@ -1216,7 +1216,7 @@ impl RepoHybridIndex {
     ) -> anyhow::Result<HashMap<i64, f32>> {
         let query_for_fts = to_fts_query(query);
         let rows = sqlx::query(
-            "SELECT chunk_id, bm25(chunks_fts) AS rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
+            "SELECT chunk_id, path, bm25(chunks_fts) AS rank FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?",
         )
         .bind(query_for_fts)
         .bind(limit as i64)
@@ -1230,14 +1230,7 @@ impl RepoHybridIndex {
                     let chunk_id: i64 = row.try_get("chunk_id")?;
                     let rank: f64 = row.try_get("rank")?;
                     if let Some(glob_set) = glob_set {
-                        let path_row = sqlx::query("SELECT path FROM chunks WHERE id = ?")
-                            .bind(chunk_id)
-                            .fetch_optional(&self.pool)
-                            .await?;
-                        let Some(path_row) = path_row else {
-                            continue;
-                        };
-                        let path: String = path_row.try_get("path")?;
+                        let path: String = row.try_get("path")?;
                         if !glob_set.is_match(path.as_str()) {
                             continue;
                         }
