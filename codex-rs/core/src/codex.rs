@@ -4770,18 +4770,12 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
-/// Runs pre-sampling compaction checks and returns whether compaction actually ran.
-///
-/// Returns:
-/// - `Ok(true)` when at least one pre-sampling compact path ran successfully.
-/// - `Ok(false)` when no pre-sampling compaction was needed.
-/// - `Err(_)` only when a pre-sampling compact path was attempted and failed.
 async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-) -> CodexResult<bool> {
+) -> CodexResult<()> {
     let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
-    let mut compacted = maybe_run_previous_model_inline_compact(
+    maybe_run_previous_model_inline_compact(
         sess,
         turn_context,
         total_usage_tokens_before_compaction,
@@ -4795,9 +4789,8 @@ async fn run_pre_sampling_compact(
     // Compact if the total usage tokens are greater than the auto compact limit
     if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(sess, turn_context, InitialContextInjection::DoNotInject).await?;
-        compacted = true;
     }
-    Ok(compacted)
+    Ok(())
 }
 
 /// Runs pre-sampling compaction against the previous model when switching to a smaller
