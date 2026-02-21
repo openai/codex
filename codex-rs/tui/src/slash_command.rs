@@ -35,6 +35,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Index,
     DebugConfig,
     Statusline,
     Mcp,
@@ -73,6 +74,7 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Index => "show and configure query_project index defaults",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Ps => "list background terminals",
@@ -112,6 +114,7 @@ impl SlashCommand {
             SlashCommand::Review
                 | SlashCommand::Rename
                 | SlashCommand::Plan
+                | SlashCommand::Index
                 | SlashCommand::SandboxReadRoot
         )
     }
@@ -142,6 +145,7 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
+            | SlashCommand::Index
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Clean

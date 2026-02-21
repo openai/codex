@@ -3468,6 +3468,9 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
+            SlashCommand::Index => {
+                self.add_index_config_output();
+            }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
             }
@@ -3629,6 +3632,15 @@ impl ChatWidget {
                 });
                 self.bottom_pane.drain_pending_submission_state();
             }
+            SlashCommand::Index if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
+                self.apply_index_command_args(&prepared_args);
+                self.bottom_pane.drain_pending_submission_state();
+            }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) =
                     self.bottom_pane.prepare_inline_args_submission(false)
@@ -3675,6 +3687,18 @@ impl ChatWidget {
         );
 
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn set_query_project_index_auto_warm(&mut self, enabled: bool) {
+        self.config.query_project_index.auto_warm = enabled;
+    }
+
+    pub(crate) fn set_query_project_index_require_embeddings(&mut self, required: bool) {
+        self.config.query_project_index.require_embeddings = required;
+    }
+
+    pub(crate) fn set_query_project_index_embedding_model(&mut self, model: Option<String>) {
+        self.config.query_project_index.embedding_model = model;
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
@@ -4386,6 +4410,121 @@ impl ChatWidget {
             collaboration_mode,
             reasoning_effort_override,
         ));
+    }
+
+    pub(crate) fn add_index_config_output(&mut self) {
+        let auto_warm = self.config.query_project_index.auto_warm;
+        let require_embeddings = self.config.query_project_index.require_embeddings;
+        let embedding_model = self
+            .config
+            .query_project_index
+            .embedding_model
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let file_globs = self.config.query_project_index.file_globs.clone();
+
+        let mut lines = vec![
+            Line::from(vec!["• ".into(), "query_project index defaults".into()]),
+            Line::from(vec![
+                "  auto-warm: ".into(),
+                if auto_warm { "on" } else { "off" }.to_string().cyan(),
+            ]),
+            Line::from(vec![
+                "  require-embeddings: ".into(),
+                if require_embeddings { "on" } else { "off" }
+                    .to_string()
+                    .cyan(),
+            ]),
+            Line::from(vec!["  embedding-model: ".into(), embedding_model.cyan()]),
+        ];
+
+        if file_globs.is_empty() {
+            lines.push(Line::from(vec![
+                "  file-globs: ".into(),
+                "all indexable files".cyan(),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                "  file-globs: ".into(),
+                file_globs.join(", ").cyan(),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from("  TUI shortcuts:".dim()));
+        lines.push(Line::from("  /index auto-warm on|off".dim()));
+        lines.push(Line::from("  /index require-embeddings on|off".dim()));
+        lines.push(Line::from("  /index embedding-model <name|default>".dim()));
+        lines.push(Line::from("  /index".dim()));
+        lines.push(Line::from(
+            "  Use [query_project_index] in config.toml for file_globs and non-TUI edits.".dim(),
+        ));
+
+        self.add_plain_history_lines(lines);
+    }
+
+    fn apply_index_command_args(&mut self, args: &str) {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            self.add_index_config_output();
+            return;
+        }
+
+        let mut parts = trimmed.splitn(2, char::is_whitespace);
+        let key = parts.next().unwrap_or_default().trim().to_ascii_lowercase();
+        let value = parts.next().unwrap_or_default().trim();
+
+        match key.as_str() {
+            "auto-warm" => {
+                let Some(enabled) = parse_index_toggle(value) else {
+                    self.add_error_message("Usage: /index auto-warm on|off".to_string());
+                    return;
+                };
+                self.app_event_tx
+                    .send(AppEvent::PersistQueryProjectIndexConfig {
+                        auto_warm: Some(enabled),
+                        require_embeddings: None,
+                        embedding_model: None,
+                    });
+            }
+            "require-embeddings" => {
+                let Some(required) = parse_index_toggle(value) else {
+                    self.add_error_message("Usage: /index require-embeddings on|off".to_string());
+                    return;
+                };
+                self.app_event_tx
+                    .send(AppEvent::PersistQueryProjectIndexConfig {
+                        auto_warm: None,
+                        require_embeddings: Some(required),
+                        embedding_model: None,
+                    });
+            }
+            "embedding-model" => {
+                if value.is_empty() {
+                    self.add_error_message(
+                        "Usage: /index embedding-model <name|default>".to_string(),
+                    );
+                    return;
+                }
+                let model = if value.eq_ignore_ascii_case("default") {
+                    None
+                } else {
+                    Some(value.to_string())
+                };
+                self.app_event_tx
+                    .send(AppEvent::PersistQueryProjectIndexConfig {
+                        auto_warm: None,
+                        require_embeddings: None,
+                        embedding_model: Some(model),
+                    });
+            }
+            "show" | "help" => self.add_index_config_output(),
+            _ => {
+                self.add_error_message(
+                    "Unknown /index option. Try: auto-warm, require-embeddings, embedding-model, or /index".to_string(),
+                );
+            }
+        }
     }
 
     pub(crate) fn add_debug_config_output(&mut self) {
@@ -7371,6 +7510,17 @@ fn extract_first_bold(s: &str) -> Option<String> {
             return None;
         }
         i += 1;
+    }
+    None
+}
+
+fn parse_index_toggle(value: &str) -> Option<bool> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if ["on", "true", "yes", "1"].contains(&normalized.as_str()) {
+        return Some(true);
+    }
+    if ["off", "false", "no", "0"].contains(&normalized.as_str()) {
+        return Some(false);
     }
     None
 }

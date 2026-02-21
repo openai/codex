@@ -1041,6 +1041,36 @@
       },
       "type": "object"
     },
+    "QueryProjectIndex": {
+      "additionalProperties": false,
+      "description": "Configuration for the local `query_project` index used by MCP clients.",
+      "properties": {
+        "auto_warm": {
+          "default": true,
+          "description": "Whether to start a background warm-up after MCP initialization. Defaults to `true`.",
+          "type": "boolean"
+        },
+        "embedding_model": {
+          "default": null,
+          "description": "Optional default embedding model override.",
+          "type": "string"
+        },
+        "file_globs": {
+          "default": [],
+          "description": "Optional default include globs for indexing/search.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "require_embeddings": {
+          "default": false,
+          "description": "If `true`, indexing/search requests fail when embeddings are unavailable. Defaults to `false`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "RawMcpServerConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1935,6 +1965,14 @@
         "$ref": "#/definitions/ProjectConfig"
       },
       "type": "object"
+    },
+    "query_project_index": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/QueryProjectIndex"
+        }
+      ],
+      "description": "Configuration for the local `query_project` index used by MCP clients."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",

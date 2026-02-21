@@ -76,6 +76,8 @@ pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) 
 mod tests {
     use super::*;
     use crate::models_manager::model_info::model_info_from_slug;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
 
     #[test]
     fn build_stage_one_input_message_truncates_rollout_using_model_context_window() {
@@ -104,6 +106,45 @@ mod tests {
         assert!(expected_truncated.starts_with('a'));
         assert!(expected_truncated.ends_with('z'));
         assert!(message.contains(&expected_truncated));
+    }
+
+    #[tokio::test]
+    async fn build_memory_tool_developer_instructions_returns_none_for_missing_or_blank_summary() {
+        let codex_home = tempdir().expect("tempdir");
+
+        let missing = build_memory_tool_developer_instructions(codex_home.path()).await;
+        assert_eq!(missing, None);
+
+        let memory_root = memory_root(codex_home.path());
+        tokio::fs::create_dir_all(&memory_root)
+            .await
+            .expect("memory root should be created");
+        tokio::fs::write(memory_root.join("memory_summary.md"), "   \n")
+            .await
+            .expect("memory summary should be written");
+        let blank = build_memory_tool_developer_instructions(codex_home.path()).await;
+        assert_eq!(blank, None);
+    }
+
+    #[tokio::test]
+    async fn build_memory_tool_developer_instructions_renders_summary_and_root() {
+        let codex_home = tempdir().expect("tempdir");
+        let memory_root = memory_root(codex_home.path());
+        tokio::fs::create_dir_all(&memory_root)
+            .await
+            .expect("memory root should be created");
+        tokio::fs::write(
+            memory_root.join("memory_summary.md"),
+            "Remember this detail",
+        )
+        .await
+        .expect("memory summary should be written");
+
+        let instructions = build_memory_tool_developer_instructions(codex_home.path())
+            .await
+            .expect("instructions should be rendered");
+        assert!(instructions.contains("Remember this detail"));
+        assert!(instructions.contains(memory_root.to_string_lossy().as_ref()));
     }
 
     #[test]

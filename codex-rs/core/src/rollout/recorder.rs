@@ -1307,4 +1307,51 @@ mod tests {
         assert_eq!(repaired_path, Some(real_path));
         Ok(())
     }
+
+    #[tokio::test]
+    async fn list_threads_db_enabled_repairs_missing_rows() -> std::io::Result<()> {
+        let home = TempDir::new().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .build()
+            .await?;
+        config.features.enable(Feature::Sqlite);
+
+        let uuid = Uuid::from_u128(9012);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let real_path = write_session_file(home.path(), "2025-01-03T14-00-00", uuid)?;
+
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.model_provider_id.clone(),
+            None,
+        )
+        .await
+        .expect("state db should initialize");
+        runtime
+            .mark_backfill_complete(None)
+            .await
+            .expect("backfill should be complete");
+
+        let default_provider = config.model_provider_id.clone();
+        let page = RolloutRecorder::list_threads(
+            &config,
+            1,
+            None,
+            ThreadSortKey::CreatedAt,
+            &[],
+            None,
+            default_provider.as_str(),
+        )
+        .await?;
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].path, real_path);
+
+        let repaired_path = runtime
+            .find_rollout_path_by_id(thread_id, Some(false))
+            .await
+            .expect("state db lookup should succeed");
+        assert_eq!(repaired_path, Some(real_path));
+        Ok(())
+    }
 }

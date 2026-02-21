@@ -24,5 +24,7 @@ Notes:
   - `description`
   - `connector_name`
   - input schema property keys (`input_keys`)
+- Use `search_tool_bm25` when the user asks to work with one of apps ({{app_names}}) and the exact tool name is not already known.
+- If the user names an Apps tool directly (for example `mcp__codex_apps__calendar_create_event`) and it is not already available, do not run that name as a shell command. First call `search_tool_bm25` with that tool name, then invoke the matching `mcp__codex_apps__...` tool.
 - If the needed app is already explicit in the prompt (for example `[$app-name](app://{connector_id})`) or already present in the current `tools` list, you can call that tool directly.
 - Do not use `search_tool_bm25` for non-apps/local tasks (filesystem, repo search, or shell-only workflows) or anything not related to {{app_names}}.

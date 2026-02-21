@@ -218,6 +218,10 @@ impl McpProcess {
         .await
     }
 
+    pub async fn send_list_tools_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("tools/list", None).await
+    }
+
     async fn send_request(
         &mut self,
         method: &str,

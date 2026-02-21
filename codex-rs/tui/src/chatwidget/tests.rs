@@ -4058,6 +4058,47 @@ async fn slash_quit_requests_exit() {
 }
 
 #[tokio::test]
+async fn slash_index_shows_current_index_defaults() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Index);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected one index settings history message"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("query_project index defaults"),
+        "expected /index output header, got: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("/index auto-warm on|off"),
+        "expected /index usage hints, got: {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_index_with_args_sends_persist_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane
+        .set_composer_text("/index auto-warm off".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistQueryProjectIndexConfig {
+            auto_warm: Some(false),
+            require_embeddings: None,
+            embedding_model: None,
+        })
+    );
+}
+
+#[tokio::test]
 async fn slash_exit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

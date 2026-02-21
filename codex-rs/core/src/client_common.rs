@@ -259,6 +259,7 @@ mod tests {
             store: false,
             stream: true,
             include: vec![],
+            previous_response_id: None,
             prompt_cache_key: None,
             text: Some(TextControls {
                 verbosity: Some(OpenAiVerbosity::Low),
@@ -300,6 +301,7 @@ mod tests {
             store: false,
             stream: true,
             include: vec![],
+            previous_response_id: None,
             prompt_cache_key: None,
             text: Some(text_controls),
         };
@@ -336,6 +338,7 @@ mod tests {
             store: false,
             stream: true,
             include: vec![],
+            previous_response_id: None,
             prompt_cache_key: None,
             text: None,
         };

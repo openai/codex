@@ -831,6 +831,48 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_query_project_index_auto_warm(mut self, enabled: bool) -> Self {
+        self.edits.push(ConfigEdit::SetPath {
+            segments: vec!["query_project_index".to_string(), "auto_warm".to_string()],
+            value: value(enabled),
+        });
+        self
+    }
+
+    pub fn set_query_project_index_require_embeddings(mut self, required: bool) -> Self {
+        self.edits.push(ConfigEdit::SetPath {
+            segments: vec![
+                "query_project_index".to_string(),
+                "require_embeddings".to_string(),
+            ],
+            value: value(required),
+        });
+        self
+    }
+
+    pub fn set_query_project_index_embedding_model(mut self, model: Option<&str>) -> Self {
+        match model {
+            Some(model) => {
+                self.edits.push(ConfigEdit::SetPath {
+                    segments: vec![
+                        "query_project_index".to_string(),
+                        "embedding_model".to_string(),
+                    ],
+                    value: value(model),
+                });
+            }
+            None => {
+                self.edits.push(ConfigEdit::ClearPath {
+                    segments: vec![
+                        "query_project_index".to_string(),
+                        "embedding_model".to_string(),
+                    ],
+                });
+            }
+        }
+        self
+    }
+
     pub fn clear_legacy_windows_sandbox_keys(mut self) -> Self {
         for key in [
             "experimental_windows_sandbox",

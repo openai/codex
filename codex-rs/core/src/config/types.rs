@@ -683,6 +683,40 @@ pub struct Tui {
     pub status_line: Option<Vec<String>>,
 }
 
+/// Configuration for the local `query_project` index used by MCP clients.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct QueryProjectIndex {
+    /// Whether to start a background warm-up after MCP initialization.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub auto_warm: bool,
+
+    /// If `true`, indexing/search requests fail when embeddings are unavailable.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub require_embeddings: bool,
+
+    /// Optional default embedding model override.
+    #[serde(default)]
+    pub embedding_model: Option<String>,
+
+    /// Optional default include globs for indexing/search.
+    #[serde(default)]
+    pub file_globs: Vec<String>,
+}
+
+impl Default for QueryProjectIndex {
+    fn default() -> Self {
+        Self {
+            auto_warm: true,
+            require_embeddings: false,
+            embedding_model: None,
+            file_globs: Vec::new(),
+        }
+    }
+}
+
 const fn default_true() -> bool {
     true
 }
