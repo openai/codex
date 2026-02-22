@@ -111,7 +111,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             model: Some("mock-model".to_string()),
             effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
-            summary: Some(codex_core::protocol_config_types::ReasoningSummary::Auto),
+            summary: Some(codex_protocol::config_types::ReasoningSummary::Auto),
             ..Default::default()
         })
         .await?;
@@ -505,7 +505,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             }),
             model: Some("mock-model".to_string()),
             effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
-            summary: Some(codex_core::protocol_config_types::ReasoningSummary::Auto),
+            summary: Some(codex_protocol::config_types::ReasoningSummary::Auto),
             ..Default::default()
         })
         .await?;

@@ -37,6 +37,7 @@ pub enum SlashCommand {
     Status,
     DebugConfig,
     Statusline,
+    Theme,
     Mcp,
     Apps,
     Logout,
@@ -75,6 +76,7 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Statusline => "configure which items appear in the status line",
+            SlashCommand::Theme => "choose a syntax highlighting theme",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Clean => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
@@ -155,6 +157,7 @@ impl SlashCommand {
             SlashCommand::Collab => true,
             SlashCommand::Agent => true,
             SlashCommand::Statusline => false,
+            SlashCommand::Theme => false,
         }
     }
 

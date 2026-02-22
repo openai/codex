@@ -440,6 +440,14 @@
         "model": {
           "type": "string"
         },
+        "model_catalog_json": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional path to a JSON model catalog (applied on startup only)."
+        },
         "model_instructions_file": {
           "allOf": [
             {
@@ -466,6 +474,9 @@
         },
         "personality": {
           "$ref": "#/definitions/Personality"
+        },
+        "plan_mode_reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
         },
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
@@ -1389,6 +1400,11 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "theme": {
+          "default": null,
+          "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -1540,6 +1556,14 @@
     },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
+    },
+    "experimental_realtime_ws_backend_prompt": {
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport backend prompt (the `Op::RealtimeConversation` `/ws` session.create backend_prompt) without changing normal prompts.",
+      "type": "string"
+    },
+    "experimental_realtime_ws_base_url": {
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/ws` connection) without changing normal provider HTTP requests.",
+      "type": "string"
     },
     "experimental_use_freeform_apply_patch": {
       "type": "boolean"
@@ -1807,7 +1831,7 @@
           "$ref": "#/definitions/AbsolutePathBuf"
         }
       ],
-      "description": "Optional path to a JSON file containing a complete model catalog. When set, this replaces the bundled catalog for this process."
+      "description": "Optional path to a JSON model catalog (applied on startup only). Per-thread `config` overrides are accepted but do not reapply this (no-ops)."
     },
     "model_context_window": {
       "description": "Size of the context window for the model, in tokens.",
@@ -1896,6 +1920,9 @@
         }
       ],
       "description": "Optionally specify a personality for the model"
+    },
+    "plan_mode_reasoning_effort": {
+      "$ref": "#/definitions/ReasoningEffort"
     },
     "profile": {
       "description": "Profile to use from the `profiles` map.",

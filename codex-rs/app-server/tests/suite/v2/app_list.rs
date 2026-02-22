@@ -15,6 +15,7 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
+use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
 use codex_app_server_protocol::AppBranding;
@@ -1215,6 +1216,7 @@ async fn start_apps_server_with_delays_and_control(
 async fn list_directory_connectors(
     State(state): State<Arc<AppsServerState>>,
     headers: HeaderMap,
+    uri: Uri,
 ) -> Result<impl axum::response::IntoResponse, StatusCode> {
     if state.directory_delay > Duration::ZERO {
         tokio::time::sleep(state.directory_delay).await;
@@ -1228,16 +1230,21 @@ async fn list_directory_connectors(
         .get("chatgpt-account-id")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value == state.expected_account_id);
+    let external_logos_ok = uri
+        .query()
+        .is_some_and(|query| query.split('&').any(|pair| pair == "external_logos=true"));
 
-    if bearer_ok && account_ok {
+    if !bearer_ok || !account_ok {
+        Err(StatusCode::UNAUTHORIZED)
+    } else if !external_logos_ok {
+        Err(StatusCode::BAD_REQUEST)
+    } else {
         let response = state
             .response
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         Ok(Json(response))
-    } else {
-        Err(StatusCode::UNAUTHORIZED)
     }
 }
 

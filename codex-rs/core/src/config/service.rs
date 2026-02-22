@@ -1,4 +1,3 @@
-use super::CONFIG_TOML_FILE;
 use super::ConfigToml;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
@@ -26,6 +25,7 @@ use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::OverriddenMetadata;
 use codex_app_server_protocol::WriteStatus;
+use codex_config::CONFIG_TOML_FILE;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;

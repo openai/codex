@@ -1,5 +1,5 @@
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 
 /// A simple preset pairing an approval policy with a sandbox policy.
 #[derive(Debug, Clone)]

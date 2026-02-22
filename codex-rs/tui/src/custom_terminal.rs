@@ -43,6 +43,40 @@ use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::widgets::WidgetRef;
+use unicode_width::UnicodeWidthStr;
+
+/// Returns the display width of a cell symbol, ignoring OSC escape sequences.
+///
+/// OSC sequences (e.g. OSC 8 hyperlinks: `\x1B]8;;URL\x07`) are terminal
+/// control sequences that don't consume display columns.  The standard
+/// `UnicodeWidthStr::width()` method incorrectly counts the printable
+/// characters inside OSC payloads (like `]`, `8`, `;`, and URL characters).
+/// This function strips them first so that only visible characters contribute
+/// to the width.
+fn display_width(s: &str) -> usize {
+    // Fast path: no escape sequences present.
+    if !s.contains('\x1B') {
+        return s.width();
+    }
+
+    // Strip OSC sequences: ESC ] ... BEL
+    let mut visible = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1B' && chars.clone().next() == Some(']') {
+            // Consume the ']' and everything up to and including BEL.
+            chars.next(); // skip ']'
+            for c in chars.by_ref() {
+                if c == '\x07' {
+                    break;
+                }
+            }
+            continue;
+        }
+        visible.push(ch);
+    }
+    visible.width()
+}
 
 #[derive(Debug, Hash)]
 pub struct Frame<'a> {
@@ -412,7 +446,6 @@ where
 }
 
 use ratatui::buffer::Cell;
-use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, IsVariant)]
 enum DrawCommand {
@@ -441,7 +474,7 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         let mut column = 0usize;
         while column < row.len() {
             let cell = &row[column];
-            let width = cell.symbol().width();
+            let width = display_width(cell.symbol());
             if cell.symbol() != " " || cell.bg != bg || cell.modifier != Modifier::empty() {
                 last_nonblank_column = column + (width.saturating_sub(1));
             }
@@ -474,9 +507,12 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
             }
         }
 
-        to_skip = current.symbol().width().saturating_sub(1);
+        to_skip = display_width(current.symbol()).saturating_sub(1);
 
-        let affected_width = std::cmp::max(current.symbol().width(), previous.symbol().width());
+        let affected_width = std::cmp::max(
+            display_width(current.symbol()),
+            display_width(previous.symbol()),
+        );
         invalidated = std::cmp::max(affected_width, invalidated).saturating_sub(1);
     }
     updates

@@ -30,13 +30,13 @@ use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
-use codex_core::protocol::AskForApproval;
 use codex_core::read_session_meta_line;
 use codex_core::terminal::Multiplexer;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_state::log_db;
@@ -105,6 +105,7 @@ mod streaming;
 mod style;
 mod terminal_palette;
 mod text_formatting;
+mod theme_picker;
 mod tooltips;
 mod tui;
 mod ui_consts;
@@ -468,7 +469,7 @@ async fn run_ratatui_app(
                 UpdatePromptOutcome::RunUpdate(action) => {
                     crate::tui::restore()?;
                     return Ok(AppExitInfo {
-                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        token_usage: codex_protocol::protocol::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: Some(action),
@@ -511,7 +512,7 @@ async fn run_ratatui_app(
             session_log::log_session_end();
             let _ = tui.terminal.clear();
             return Ok(AppExitInfo {
-                token_usage: codex_core::protocol::TokenUsage::default(),
+                token_usage: codex_protocol::protocol::TokenUsage::default(),
                 thread_id: None,
                 thread_name: None,
                 update_action: None,
@@ -545,13 +546,14 @@ async fn run_ratatui_app(
     } else {
         initial_config
     };
+
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
         restore();
         session_log::log_session_end();
         let _ = tui.terminal.clear();
         Ok(AppExitInfo {
-            token_usage: codex_core::protocol::TokenUsage::default(),
+            token_usage: codex_protocol::protocol::TokenUsage::default(),
             thread_id: None,
             thread_name: None,
             update_action: None,
@@ -600,7 +602,7 @@ async fn run_ratatui_app(
                     restore();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
-                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        token_usage: codex_protocol::protocol::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: None,
@@ -651,7 +653,7 @@ async fn run_ratatui_app(
                 restore();
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
-                    token_usage: codex_core::protocol::TokenUsage::default(),
+                    token_usage: codex_protocol::protocol::TokenUsage::default(),
                     thread_id: None,
                     thread_name: None,
                     update_action: None,
@@ -681,7 +683,7 @@ async fn run_ratatui_app(
                     restore();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
-                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        token_usage: codex_protocol::protocol::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
                         update_action: None,
@@ -693,7 +695,7 @@ async fn run_ratatui_app(
         None => None,
     };
 
-    let config = match &session_selection {
+    let mut config = match &session_selection {
         resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
             load_config_or_exit_with_fallback_cwd(
                 cli_kv_overrides.clone(),
@@ -705,6 +707,17 @@ async fn run_ratatui_app(
         }
         _ => config,
     };
+
+    // Configure syntax highlighting theme from the final config — onboarding
+    // and resume/fork can both reload config with a different tui_theme, so
+    // this must happen after the last possible reload.
+    if let Some(w) = crate::render::highlight::set_theme_override(
+        config.tui_theme.clone(),
+        find_codex_home().ok(),
+    ) {
+        config.startup_warnings.push(w);
+    }
+
     set_default_client_residency_requirement(config.enforce_residency.value());
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
@@ -965,7 +978,7 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
-    use codex_core::protocol::AskForApproval;
+    use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SessionMeta;
@@ -1182,6 +1195,50 @@ trust_level = "untrusted"
         assert_eq!(
             untrusted_config.permissions.approval_policy.value(),
             AskForApproval::UnlessTrusted
+        );
+        Ok(())
+    }
+
+    /// Regression: theme must be configured from the *final* config.
+    ///
+    /// `run_ratatui_app` can reload config during onboarding and again
+    /// during session resume/fork.  The syntax theme override (stored in
+    /// a `OnceLock`) must use the final config's `tui_theme`, not the
+    /// initial one — otherwise users resuming a thread in a project with
+    /// a different theme get the wrong highlighting.
+    ///
+    /// We verify the invariant indirectly: `validate_theme_name` (the
+    /// pure validation core of `set_theme_override`) must be called with
+    /// the *final* config's theme, and its warning must land in the
+    /// final config's `startup_warnings`.
+    #[tokio::test]
+    async fn theme_warning_uses_final_config() -> std::io::Result<()> {
+        use crate::render::highlight::validate_theme_name;
+
+        let temp_dir = TempDir::new()?;
+
+        // initial_config has a valid theme — no warning.
+        let initial_config = build_config(&temp_dir).await?;
+        assert!(initial_config.tui_theme.is_none());
+
+        // Simulate resume/fork reload: the final config has an invalid theme.
+        let mut config = build_config(&temp_dir).await?;
+        config.tui_theme = Some("bogus-theme".into());
+
+        // Theme override must use the final config (not initial_config).
+        // This mirrors the real call site in run_ratatui_app.
+        if let Some(w) = validate_theme_name(config.tui_theme.as_deref(), Some(temp_dir.path())) {
+            config.startup_warnings.push(w);
+        }
+
+        assert_eq!(
+            config.startup_warnings.len(),
+            1,
+            "warning from final config's invalid theme should be present"
+        );
+        assert!(
+            config.startup_warnings[0].contains("bogus-theme"),
+            "warning should reference the final config's theme name"
         );
         Ok(())
     }
