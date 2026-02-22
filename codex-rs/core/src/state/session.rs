@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
+use crate::context_manager::UserTurnBaselineFrame;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
@@ -76,7 +77,7 @@ impl SessionState {
     ) {
         self.history.replace(items);
         self.history
-            .set_reference_context_item(reference_context_item);
+            .sync_reference_context_after_history_replacement(reference_context_item);
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -89,6 +90,19 @@ impl SessionState {
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
         self.history.reference_context_item()
+    }
+
+    pub(crate) fn set_user_turn_baselines(&mut self, baselines: Vec<UserTurnBaselineFrame>) {
+        self.history.set_user_turn_baselines(baselines);
+    }
+
+    pub(crate) fn record_regular_turn_baseline(&mut self, item: TurnContextItem) {
+        self.history.record_regular_turn_baseline(item);
+    }
+
+    pub(crate) fn rollback_user_turns(&mut self, num_turns: u32) {
+        self.history.drop_last_n_user_turns(num_turns);
+        self.previous_model = self.history.latest_user_turn_model();
     }
 
     // Token/rate limit helpers

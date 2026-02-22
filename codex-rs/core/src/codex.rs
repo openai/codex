@@ -131,6 +131,7 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
+use crate::context_manager::UserTurnBaselineFrame;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -807,6 +808,13 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
+}
+
+#[derive(Debug)]
+struct ReconstructedRolloutHistory {
+    items: Vec<ResponseItem>,
+    user_turn_baselines: Vec<UserTurnBaselineFrame>,
+    previous_model: Option<String>,
 }
 
 impl Session {
@@ -1610,23 +1618,16 @@ impl Session {
                 let rollout_items = resumed_history.history;
                 let restored_tool_selection =
                     Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
-                let (previous_regular_turn_context_item, crossed_compaction_after_turn) =
-                    Self::last_rollout_regular_turn_context_lookup(&rollout_items);
-                let previous_model =
-                    previous_regular_turn_context_item.map(|ctx| ctx.model.clone());
+                let reconstructed = self
+                    .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+                    .await;
+                let previous_model = reconstructed.previous_model.clone();
                 let curr = turn_context.model_info.slug.as_str();
-                let reference_context_item = if !crossed_compaction_after_turn {
-                    previous_regular_turn_context_item.cloned()
-                } else {
-                    // Keep the baseline empty when compaction may have stripped the referenced
-                    // context diffs so the first resumed regular turn fully reinjects context.
-                    None
-                };
                 {
                     let mut state = self.state.lock().await;
-                    state.set_reference_context_item(reference_context_item);
+                    state.set_user_turn_baselines(reconstructed.user_turn_baselines.clone());
+                    state.set_previous_model(previous_model.clone());
                 }
-                self.set_previous_model(previous_model.clone()).await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 if let Some(prev) = previous_model.as_deref().filter(|p| *p != curr) {
@@ -1644,11 +1645,8 @@ impl Session {
                 }
 
                 // Always add response items to conversation history
-                let reconstructed_history = self
-                    .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-                    .await;
-                if !reconstructed_history.is_empty() {
-                    self.record_into_history(&reconstructed_history, &turn_context)
+                if !reconstructed.items.is_empty() {
+                    self.record_into_history(&reconstructed.items, &turn_context)
                         .await;
                 }
 
@@ -1669,18 +1667,18 @@ impl Session {
             InitialHistory::Forked(rollout_items) => {
                 let restored_tool_selection =
                     Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
-                let (previous_regular_turn_context_item, _) =
-                    Self::last_rollout_regular_turn_context_lookup(&rollout_items);
-                let previous_model =
-                    previous_regular_turn_context_item.map(|ctx| ctx.model.clone());
-                self.set_previous_model(previous_model).await;
-
-                // Always add response items to conversation history
-                let reconstructed_history = self
+                let reconstructed = self
                     .reconstruct_history_from_rollout(&turn_context, &rollout_items)
                     .await;
-                if !reconstructed_history.is_empty() {
-                    self.record_into_history(&reconstructed_history, &turn_context)
+                {
+                    let mut state = self.state.lock().await;
+                    state.set_user_turn_baselines(reconstructed.user_turn_baselines.clone());
+                    state.set_previous_model(reconstructed.previous_model.clone());
+                }
+
+                // Always add response items to conversation history
+                if !reconstructed.items.is_empty() {
+                    self.record_into_history(&reconstructed.items, &turn_context)
                         .await;
                 }
 
@@ -1715,155 +1713,6 @@ impl Session {
                 self.flush_rollout().await;
             }
         }
-    }
-
-    /// Returns `(last_turn_context_item, crossed_compaction_after_turn)` from the
-    /// rollback-adjusted rollout view.
-    ///
-    /// This relies on the invariant that only regular turns persist `TurnContextItem`.
-    /// `ThreadRolledBack` markers are applied so resume/fork uses the post-rollback history view.
-    ///
-    /// Returns `(None, false)` when no persisted `TurnContextItem` can be found.
-    ///
-    /// Older/minimal rollouts may only contain `RolloutItem::TurnContext` entries without turn
-    /// lifecycle events. In that case we fall back to the last `TurnContextItem` (plus whether a
-    /// later `Compacted` item appears in rollout order).
-    // TODO(ccunningham): Simplify this lookup by sharing rollout traversal/rollback application
-    // with `reconstruct_history_from_rollout` so resume/fork baseline hydration does not need a
-    // second bespoke rollout scan.
-    fn last_rollout_regular_turn_context_lookup(
-        rollout_items: &[RolloutItem],
-    ) -> (Option<&TurnContextItem>, bool) {
-        // Reverse scan over rollout items. `ThreadRolledBack(num_turns)` is naturally handled by
-        // skipping the next `num_turns` completed turn spans we encounter while walking backward.
-        //
-        // "Active turn" here means: we have seen `TurnComplete`/`TurnAborted` and are currently
-        // scanning backward through that completed turn until its matching `TurnStarted`.
-        let mut turns_to_skip_due_to_rollback = 0usize;
-        let mut saw_surviving_compaction_after_candidate = false;
-        let mut saw_turn_lifecycle_event = false;
-        let mut active_turn_id: Option<&str> = None;
-        let mut active_turn_saw_user_message = false;
-        let mut active_turn_context: Option<&TurnContextItem> = None;
-        let mut active_turn_contains_compaction = false;
-
-        for item in rollout_items.iter().rev() {
-            match item {
-                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
-                    // Rollbacks count completed turns, not `TurnContextItem`s. We must continue
-                    // ignoring all items inside each skipped turn until we reach its
-                    // corresponding `TurnStarted`.
-                    let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
-                    turns_to_skip_due_to_rollback =
-                        turns_to_skip_due_to_rollback.saturating_add(num_turns);
-                }
-                RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
-                    saw_turn_lifecycle_event = true;
-                    // Enter the reverse "turn span" for this completed turn.
-                    active_turn_id = Some(event.turn_id.as_str());
-                    active_turn_saw_user_message = false;
-                    active_turn_context = None;
-                    active_turn_contains_compaction = false;
-                }
-                RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
-                    saw_turn_lifecycle_event = true;
-                    // Same reverse-turn handling as `TurnComplete`. Some aborted turns may not
-                    // have a turn id; in that case we cannot match `TurnContextItem`s to them.
-                    active_turn_id = event.turn_id.as_deref();
-                    active_turn_saw_user_message = false;
-                    active_turn_context = None;
-                    active_turn_contains_compaction = false;
-                }
-                RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
-                    if active_turn_id.is_some() {
-                        active_turn_saw_user_message = true;
-                    }
-                }
-                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
-                    saw_turn_lifecycle_event = true;
-                    if active_turn_id == Some(event.turn_id.as_str()) {
-                        let active_turn_is_user_turn = active_turn_saw_user_message;
-                        let active_turn_is_rolled_back =
-                            active_turn_is_user_turn && turns_to_skip_due_to_rollback > 0;
-                        if active_turn_is_rolled_back {
-                            // `ThreadRolledBack(num_turns)` counts user turns, so only consume a
-                            // skip once we've confirmed this reverse-scanned turn span contains a
-                            // user message. Standalone task turns must not consume rollback skips.
-                            turns_to_skip_due_to_rollback -= 1;
-                        }
-                        if !active_turn_is_rolled_back {
-                            if active_turn_is_user_turn
-                                && let Some(context_item) = active_turn_context
-                            {
-                                return (
-                                    Some(context_item),
-                                    saw_surviving_compaction_after_candidate,
-                                );
-                            }
-                            // Standalone task turns do not define the baseline candidate even if
-                            // older rollouts persisted a `TurnContextItem` for them. Keep
-                            // scanning older user turns, but still remember compaction from this
-                            // surviving turn so the eventual candidate reports "compaction
-                            // happened after it".
-                            if active_turn_contains_compaction {
-                                saw_surviving_compaction_after_candidate = true;
-                            }
-                        }
-                        active_turn_id = None;
-                        active_turn_saw_user_message = false;
-                        active_turn_context = None;
-                        active_turn_contains_compaction = false;
-                    }
-                }
-                RolloutItem::TurnContext(ctx) => {
-                    // Capture the latest turn context seen in this reverse-scanned turn span. If
-                    // the turn later proves to be rolled back, we discard it when we hit the
-                    // matching `TurnStarted`. Older rollouts may have lifecycle events but omit
-                    // `TurnContextItem.turn_id`; accept those as belonging to the active turn
-                    // span for resume/fork hydration.
-                    if let Some(active_id) = active_turn_id
-                        && ctx
-                            .turn_id
-                            .as_deref()
-                            .is_none_or(|turn_id| turn_id == active_id)
-                    {
-                        // Reverse scan sees the latest `TurnContextItem` for the turn first.
-                        active_turn_context.get_or_insert(ctx);
-                    }
-                }
-                RolloutItem::Compacted(_) => {
-                    if active_turn_id.is_some() {
-                        // Compaction inside the currently scanned turn is only "after" the
-                        // eventual candidate if this turn has no `TurnContextItem` and we keep
-                        // scanning into older turns.
-                        active_turn_contains_compaction = true;
-                    } else {
-                        saw_surviving_compaction_after_candidate = true;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Legacy/minimal rollouts may only persist `TurnContextItem`/`Compacted` without turn
-        // lifecycle events. Fall back to the last `TurnContextItem` in rollout order so
-        // resume/fork can still hydrate `previous_model` and detect compaction-after-baseline.
-        if !saw_turn_lifecycle_event {
-            let mut saw_compaction_after_last_turn_context = false;
-            for item in rollout_items.iter().rev() {
-                match item {
-                    RolloutItem::Compacted(_) => {
-                        saw_compaction_after_last_turn_context = true;
-                    }
-                    RolloutItem::TurnContext(ctx) => {
-                        return (Some(ctx), saw_compaction_after_last_turn_context);
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        (None, false)
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -2570,8 +2419,12 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
-    ) -> Vec<ResponseItem> {
+    ) -> ReconstructedRolloutHistory {
         let mut history = ContextManager::new();
+        let mut saw_turn_lifecycle_event = false;
+        let mut active_turn_id: Option<&str> = None;
+        let mut active_turn_saw_user_message = false;
+        let mut active_turn_context: Option<TurnContextItem> = None;
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
@@ -2592,14 +2445,96 @@ impl Session {
                         );
                         history.replace(rebuilt);
                     }
+
+                    let compaction_is_after_latest_user_turn =
+                        active_turn_id.is_none() || !active_turn_saw_user_message;
+                    if compaction_is_after_latest_user_turn {
+                        history.invalidate_top_user_turn_baseline();
+                    }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    let baseline_len_before = history.user_turn_baselines_len();
                     history.drop_last_n_user_turns(rollback.num_turns);
+                    if history.user_turn_baselines_len() == baseline_len_before {
+                        history.truncate_user_turn_baselines_from_end(rollback.num_turns);
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
+                    saw_turn_lifecycle_event = true;
+                    active_turn_id = Some(event.turn_id.as_str());
+                    active_turn_saw_user_message = false;
+                    active_turn_context = None;
+                }
+                RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
+                    if active_turn_id.is_some() {
+                        active_turn_saw_user_message = true;
+                    }
+                }
+                RolloutItem::TurnContext(ctx) => {
+                    if let Some(active_id) = active_turn_id
+                        && ctx
+                            .turn_id
+                            .as_deref()
+                            .is_none_or(|turn_id| turn_id == active_id)
+                    {
+                        active_turn_context = Some(ctx.clone());
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
+                    saw_turn_lifecycle_event = true;
+                    if active_turn_id == Some(event.turn_id.as_str()) {
+                        if active_turn_saw_user_message
+                            && let Some(ctx) = active_turn_context.take()
+                        {
+                            history.record_regular_turn_baseline(ctx);
+                        }
+                        active_turn_id = None;
+                        active_turn_saw_user_message = false;
+                        active_turn_context = None;
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
+                    saw_turn_lifecycle_event = true;
+                    if active_turn_id == event.turn_id.as_deref() {
+                        if active_turn_saw_user_message
+                            && let Some(ctx) = active_turn_context.take()
+                        {
+                            history.record_regular_turn_baseline(ctx);
+                        }
+                        active_turn_id = None;
+                        active_turn_saw_user_message = false;
+                        active_turn_context = None;
+                    }
                 }
                 _ => {}
             }
         }
-        history.raw_items().to_vec()
+
+        if !saw_turn_lifecycle_event {
+            let mut saw_compaction_after_last_turn_context = false;
+            for item in rollout_items.iter().rev() {
+                match item {
+                    RolloutItem::Compacted(_) => {
+                        saw_compaction_after_last_turn_context = true;
+                    }
+                    RolloutItem::TurnContext(ctx) => {
+                        history.set_user_turn_baselines(vec![UserTurnBaselineFrame {
+                            turn_context_item: ctx.clone(),
+                            invalidated_by_following_compaction:
+                                saw_compaction_after_last_turn_context,
+                        }]);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        ReconstructedRolloutHistory {
+            items: history.raw_items().to_vec(),
+            user_turn_baselines: history.user_turn_baselines(),
+            previous_model: history.latest_user_turn_model(),
+        }
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -2864,7 +2799,7 @@ impl Session {
         }
 
         let mut state = self.state.lock().await;
-        state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
+        state.record_regular_turn_baseline(turn_context.to_turn_context_item());
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -3516,7 +3451,6 @@ mod handlers {
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::mcp::effective_mcp_servers;
     use crate::review_prompts::resolve_review_request;
-    use crate::rollout::RolloutRecorder;
     use crate::rollout::session_index;
     use crate::tasks::CompactTask;
     use crate::tasks::UndoTask;
@@ -4109,14 +4043,10 @@ mod handlers {
 
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
-        let mut history = sess.clone_history().await;
-        history.drop_last_n_user_turns(num_turns);
-
-        // Replace with the raw items. We don't want to replace with a normalized
-        // version of the history.
-        sess.replace_history(history.raw_items().to_vec(), None)
-            .await;
-        sess.set_previous_model(None).await;
+        {
+            let mut state = sess.state.lock().await;
+            state.rollback_user_turns(num_turns);
+        }
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
         sess.send_event_raw_flushed(Event {
@@ -4124,30 +4054,6 @@ mod handlers {
             msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns }),
         })
         .await;
-
-        // Rehydrate the rollback-adjusted baseline from the persisted rollout view so the next
-        // regular turn gets correct model-switch and full-context-reinjection behavior.
-        let recorder = { sess.services.rollout.lock().await.clone() };
-        if let Some(recorder) = recorder {
-            match RolloutRecorder::load_rollout_items(recorder.rollout_path()).await {
-                Ok((rollout_items, _, _)) => {
-                    let (previous_turn_context_item, crossed_compaction_after_turn) =
-                        Session::last_rollout_regular_turn_context_lookup(&rollout_items);
-                    let previous_model = previous_turn_context_item.map(|ctx| ctx.model.clone());
-                    let reference_context_item = if crossed_compaction_after_turn {
-                        None
-                    } else {
-                        previous_turn_context_item.cloned()
-                    };
-                    let mut state = sess.state.lock().await;
-                    state.set_previous_model(previous_model);
-                    state.set_reference_context_item(reference_context_item);
-                }
-                Err(err) => {
-                    warn!("failed to reload rollout after rollback: {err}");
-                }
-            }
-        }
     }
 
     /// Persists the thread name in the session index, updates in-memory state, and emits
@@ -6614,7 +6520,7 @@ mod tests {
             .reconstruct_history_from_rollout(reconstruction_turn.as_ref(), &rollout_items)
             .await;
 
-        assert_eq!(expected, reconstructed);
+        assert_eq!(expected, reconstructed.items);
     }
 
     #[tokio::test]
@@ -6650,7 +6556,7 @@ mod tests {
             .reconstruct_history_from_rollout(&turn_context, &rollout_items)
             .await;
 
-        assert_eq!(reconstructed, replacement_history);
+        assert_eq!(reconstructed.items, replacement_history);
     }
 
     #[tokio::test]
@@ -7176,45 +7082,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_rollback_rehydrates_baseline_from_rollout() {
+    async fn thread_rollback_rehydrates_baseline_from_in_memory_user_turn_stack() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
-
-        let (config, session_source, base_instructions, dynamic_tools, persist_extended_history) = {
-            let state = sess.state.lock().await;
-            (
-                Arc::clone(&state.session_configuration.original_config_do_not_use),
-                state.session_configuration.session_source.clone(),
-                state.session_configuration.base_instructions.clone(),
-                state.session_configuration.dynamic_tools.clone(),
-                state.session_configuration.persist_extended_history,
-            )
-        };
-        let recorder = RolloutRecorder::new(
-            config.as_ref(),
-            RolloutRecorderParams::new(
-                sess.conversation_id,
-                None,
-                session_source,
-                BaseInstructions {
-                    text: base_instructions,
-                },
-                dynamic_tools,
-                if persist_extended_history {
-                    EventPersistenceMode::Extended
-                } else {
-                    EventPersistenceMode::Limited
-                },
-            ),
-            None,
-            None,
-        )
-        .await
-        .expect("create rollout recorder");
-        {
-            let mut guard = sess.services.rollout.lock().await;
-            *guard = Some(recorder);
-        }
-        sess.ensure_rollout_materialized().await;
 
         let turn_1 = vec![user_message("turn 1 user")];
         let turn_2 = vec![user_message("turn 2 user")];
@@ -7227,58 +7096,20 @@ mod tests {
         let mut turn_2_context = tc.to_turn_context_item();
         turn_2_context.turn_id = Some("turn-2".to_string());
         turn_2_context.model = "model-b".to_string();
-        sess.persist_rollout_items(&[
-            RolloutItem::EventMsg(EventMsg::TurnStarted(
-                codex_protocol::protocol::TurnStartedEvent {
-                    turn_id: "turn-1".to_string(),
-                    model_context_window: Some(128_000),
-                    collaboration_mode_kind: ModeKind::Default,
-                },
-            )),
-            RolloutItem::EventMsg(EventMsg::UserMessage(
-                codex_protocol::protocol::UserMessageEvent {
-                    message: "turn 1 user".to_string(),
-                    images: None,
-                    local_images: Vec::new(),
-                    text_elements: Vec::new(),
-                },
-            )),
-            RolloutItem::TurnContext(turn_1_context.clone()),
-            RolloutItem::EventMsg(EventMsg::TurnComplete(
-                codex_protocol::protocol::TurnCompleteEvent {
-                    turn_id: "turn-1".to_string(),
-                    last_agent_message: None,
-                },
-            )),
-            RolloutItem::EventMsg(EventMsg::TurnStarted(
-                codex_protocol::protocol::TurnStartedEvent {
-                    turn_id: "turn-2".to_string(),
-                    model_context_window: Some(128_000),
-                    collaboration_mode_kind: ModeKind::Default,
-                },
-            )),
-            RolloutItem::EventMsg(EventMsg::UserMessage(
-                codex_protocol::protocol::UserMessageEvent {
-                    message: "turn 2 user".to_string(),
-                    images: None,
-                    local_images: Vec::new(),
-                    text_elements: Vec::new(),
-                },
-            )),
-            RolloutItem::TurnContext(turn_2_context),
-            RolloutItem::EventMsg(EventMsg::TurnComplete(
-                codex_protocol::protocol::TurnCompleteEvent {
-                    turn_id: "turn-2".to_string(),
-                    last_agent_message: None,
-                },
-            )),
-        ])
-        .await;
-        sess.flush_rollout().await;
 
         sess.set_previous_model(Some("model-b".to_string())).await;
         {
             let mut state = sess.state.lock().await;
+            state.set_user_turn_baselines(vec![
+                UserTurnBaselineFrame {
+                    turn_context_item: turn_1_context.clone(),
+                    invalidated_by_following_compaction: false,
+                },
+                UserTurnBaselineFrame {
+                    turn_context_item: turn_2_context,
+                    invalidated_by_following_compaction: false,
+                },
+            ]);
             state.set_reference_context_item(Some(tc.to_turn_context_item()));
         }
 

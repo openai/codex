@@ -36,6 +36,18 @@ pub(crate) struct ContextManager {
     /// When this is `None`, settings diffing treats the next turn as having no
     /// baseline and emits a full reinjection of context state.
     reference_context_item: Option<TurnContextItem>,
+    /// Rollback-aware stack of regular user-turn context baselines.
+    ///
+    /// We keep this adjacent to model-visible history so rollback can trim user
+    /// turns and recompute the effective reference baseline without re-reading
+    /// rollout from disk.
+    user_turn_baselines: Vec<UserTurnBaselineFrame>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UserTurnBaselineFrame {
+    pub(crate) turn_context_item: TurnContextItem,
+    pub(crate) invalidated_by_following_compaction: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -52,6 +64,7 @@ impl ContextManager {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
             reference_context_item: None,
+            user_turn_baselines: Vec::new(),
         }
     }
 
@@ -69,6 +82,90 @@ impl ContextManager {
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
         self.reference_context_item.clone()
+    }
+
+    pub(crate) fn set_user_turn_baselines(&mut self, baselines: Vec<UserTurnBaselineFrame>) {
+        self.user_turn_baselines = baselines;
+        self.reference_context_item =
+            self.effective_reference_context_item_from_user_turn_baselines();
+    }
+
+    pub(crate) fn user_turn_baselines(&self) -> Vec<UserTurnBaselineFrame> {
+        self.user_turn_baselines.clone()
+    }
+
+    pub(crate) fn user_turn_baselines_len(&self) -> usize {
+        self.user_turn_baselines.len()
+    }
+
+    pub(crate) fn record_regular_turn_baseline(&mut self, item: TurnContextItem) {
+        if let Some(top) = self.user_turn_baselines.last_mut()
+            && top.turn_context_item.turn_id == item.turn_id
+        {
+            top.turn_context_item = item.clone();
+            top.invalidated_by_following_compaction = false;
+            self.reference_context_item = Some(item);
+            return;
+        }
+
+        self.user_turn_baselines.push(UserTurnBaselineFrame {
+            turn_context_item: item.clone(),
+            invalidated_by_following_compaction: false,
+        });
+        self.reference_context_item = Some(item);
+    }
+
+    pub(crate) fn invalidate_top_user_turn_baseline(&mut self) {
+        if let Some(top) = self.user_turn_baselines.last_mut() {
+            top.invalidated_by_following_compaction = true;
+        }
+        self.reference_context_item = None;
+    }
+
+    pub(crate) fn truncate_user_turn_baselines_from_end(&mut self, num_turns: u32) {
+        let frames_to_pop = usize::try_from(num_turns).unwrap_or(usize::MAX);
+        let new_len = self.user_turn_baselines.len().saturating_sub(frames_to_pop);
+        self.user_turn_baselines.truncate(new_len);
+        self.reference_context_item =
+            self.effective_reference_context_item_from_user_turn_baselines();
+    }
+
+    pub(crate) fn sync_reference_context_after_history_replacement(
+        &mut self,
+        reference_context_item: Option<TurnContextItem>,
+    ) {
+        match reference_context_item {
+            Some(item) => {
+                if let Some(top) = self.user_turn_baselines.last_mut()
+                    && top.turn_context_item.turn_id == item.turn_id
+                {
+                    top.turn_context_item = item.clone();
+                    top.invalidated_by_following_compaction = false;
+                }
+                self.reference_context_item = Some(item);
+            }
+            None => {
+                // Replacement histories that clear the reference baseline (for example
+                // standalone/pre-turn compaction) should also invalidate the top user-turn
+                // baseline so rollback and future turns do not reuse stale diffs.
+                self.invalidate_top_user_turn_baseline();
+            }
+        }
+    }
+
+    pub(crate) fn latest_user_turn_model(&self) -> Option<String> {
+        self.user_turn_baselines
+            .last()
+            .map(|frame| frame.turn_context_item.model.clone())
+    }
+
+    pub(crate) fn effective_reference_context_item_from_user_turn_baselines(
+        &self,
+    ) -> Option<TurnContextItem> {
+        self.user_turn_baselines
+            .last()
+            .filter(|frame| !frame.invalidated_by_following_compaction)
+            .map(|frame| frame.turn_context_item.clone())
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -227,6 +324,7 @@ impl ContextManager {
         };
 
         self.replace(snapshot[..cut_idx].to_vec());
+        self.truncate_user_turn_baselines_from_end(num_turns);
     }
 
     pub(crate) fn update_token_info(
