@@ -1520,7 +1520,6 @@ impl Session {
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
-        eprintln!("[rt-debug] route_realtime_text_input start: {text:?}");
         handlers::user_input_or_turn(
             self,
             self.next_internal_sub_id(),
@@ -1533,7 +1532,6 @@ impl Session {
             },
         )
         .await;
-        eprintln!("[rt-debug] route_realtime_text_input done");
     }
 
     pub(crate) async fn get_total_token_usage(&self) -> i64 {
@@ -3096,32 +3094,22 @@ impl Session {
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
     ) -> Result<String, SteerInputError> {
-        eprintln!(
-            "[rt-debug] steer_input enter: items={} expected_turn_id={expected_turn_id:?}",
-            input.len()
-        );
         if input.is_empty() {
-            eprintln!("[rt-debug] steer_input -> EmptyInput");
             return Err(SteerInputError::EmptyInput);
         }
 
         let mut active = self.active_turn.lock().await;
         let Some(active_turn) = active.as_mut() else {
-            eprintln!("[rt-debug] steer_input -> NoActiveTurn (no active_turn)");
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
         let Some((active_turn_id, _)) = active_turn.tasks.first() else {
-            eprintln!("[rt-debug] steer_input -> NoActiveTurn (no tasks)");
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
         if let Some(expected_turn_id) = expected_turn_id
             && expected_turn_id != active_turn_id
         {
-            eprintln!(
-                "[rt-debug] steer_input -> ExpectedTurnMismatch expected={expected_turn_id} actual={active_turn_id}"
-            );
             return Err(SteerInputError::ExpectedTurnMismatch {
                 expected: expected_turn_id.to_string(),
                 actual: active_turn_id.clone(),
@@ -3130,7 +3118,6 @@ impl Session {
 
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.push_pending_input(input.into());
-        eprintln!("[rt-debug] steer_input -> Ok active_turn_id={active_turn_id}");
         Ok(active_turn_id.clone())
     }
 
@@ -3622,7 +3609,6 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        eprintln!("[rt-debug] user_input_or_turn enter sub_id={sub_id}");
         let (items, updates) = match op {
             Op::UserTurn {
                 cwd,
@@ -3672,36 +3658,22 @@ mod handlers {
             ),
             _ => unreachable!(),
         };
-        eprintln!("[rt-debug] user_input_or_turn parsed items={}", items.len());
 
-        eprintln!("[rt-debug] user_input_or_turn new_turn_with_sub_id start");
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
-            eprintln!("[rt-debug] user_input_or_turn new_turn_with_sub_id failed");
             // new_turn_with_sub_id already emits the error event.
             return;
         };
-        eprintln!(
-            "[rt-debug] user_input_or_turn new_turn_with_sub_id done turn_id={}",
-            current_context.sub_id
-        );
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
         current_context.otel_manager.user_prompt(&items);
 
         // Attempt to inject input into current task.
-        eprintln!("[rt-debug] user_input_or_turn steer_input start");
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
-            eprintln!(
-                "[rt-debug] user_input_or_turn steer_input -> NoActiveTurn; spawning new task"
-            );
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
             sess.spawn_task(Arc::clone(&current_context), items, regular_task)
                 .await;
-            eprintln!("[rt-debug] user_input_or_turn spawned new regular task");
-        } else {
-            eprintln!("[rt-debug] user_input_or_turn steer_input succeeded");
         }
     }
 

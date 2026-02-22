@@ -1065,34 +1065,22 @@ pub async fn start_websocket_server_with_headers(
                 Ok(value) => value,
                 Err(_) => return,
             };
-            eprintln!("[rt-debug][ws-helper] accepted tcp connection");
             let connection = {
                 let mut pending = connections.lock().unwrap();
-                eprintln!(
-                    "[rt-debug][ws-helper] pending scripted connections before pop: {}",
-                    pending.len()
-                );
                 pending.pop_front()
             };
 
             let Some(connection) = connection else {
-                eprintln!("[rt-debug][ws-helper] no scripted connection available; dropping");
                 continue;
             };
 
             if let Some(delay) = connection.accept_delay {
-                eprintln!("[rt-debug][ws-helper] sleeping accept_delay={delay:?}");
                 tokio::time::sleep(delay).await;
             }
 
             let response_headers = connection.response_headers.clone();
             let handshake_log = Arc::clone(&handshakes);
             let callback = move |req: &Request, mut response: Response| {
-                eprintln!(
-                    "[rt-debug][ws-helper] ws handshake path={} headers={}",
-                    req.uri().path(),
-                    req.headers().len()
-                );
                 let headers = req
                     .headers()
                     .iter()
@@ -1129,10 +1117,7 @@ pub async fn start_websocket_server_with_headers(
             .await
             {
                 Ok(ws) => ws,
-                Err(err) => {
-                    eprintln!("[rt-debug][ws-helper] websocket accept failed: {err:?}");
-                    continue;
-                }
+                Err(_) => continue,
             };
 
             let connection_index = {
@@ -1140,63 +1125,30 @@ pub async fn start_websocket_server_with_headers(
                 log.push(Vec::new());
                 log.len() - 1
             };
-            eprintln!(
-                "[rt-debug][ws-helper] websocket connection established index={connection_index} scripted_requests={}",
-                connection.requests.len()
-            );
-            for (request_index, request_events) in connection.requests.into_iter().enumerate() {
+            for request_events in connection.requests {
                 let Some(Ok(message)) = ws_stream.next().await else {
-                    eprintln!(
-                        "[rt-debug][ws-helper] connection_index={connection_index} request_index={request_index} stream ended before request"
-                    );
                     break;
                 };
                 if let Some(body) = parse_ws_request_body(message) {
-                    let msg_type = body.get("type").and_then(Value::as_str);
-                    eprintln!(
-                        "[rt-debug][ws-helper] recv request connection_index={connection_index} request_index={request_index} type={msg_type:?}"
-                    );
                     let mut log = requests.lock().unwrap();
                     if let Some(connection_log) = log.get_mut(connection_index) {
                         connection_log.push(WebSocketRequest { body });
                     }
-                } else {
-                    eprintln!(
-                        "[rt-debug][ws-helper] recv non-json request connection_index={connection_index} request_index={request_index}"
-                    );
                 }
 
-                eprintln!(
-                    "[rt-debug][ws-helper] sending {} scripted events for connection_index={connection_index} request_index={request_index}",
-                    request_events.len()
-                );
                 for event in &request_events {
                     let Ok(payload) = serde_json::to_string(event) else {
-                        eprintln!(
-                            "[rt-debug][ws-helper] failed to serialize scripted event connection_index={connection_index} request_index={request_index}"
-                        );
                         continue;
                     };
-                    eprintln!(
-                        "[rt-debug][ws-helper] send event connection_index={connection_index} request_index={request_index} type={:?}",
-                        event.get("type").and_then(Value::as_str)
-                    );
                     if ws_stream.send(Message::Text(payload.into())).await.is_err() {
-                        eprintln!(
-                            "[rt-debug][ws-helper] send failed connection_index={connection_index} request_index={request_index}"
-                        );
                         break;
                     }
                 }
             }
 
             let _ = ws_stream.close(None).await;
-            eprintln!("[rt-debug][ws-helper] closed websocket connection index={connection_index}");
 
             if connections.lock().unwrap().is_empty() {
-                eprintln!(
-                    "[rt-debug][ws-helper] no pending scripted connections; server task exiting"
-                );
                 return;
             }
         }
