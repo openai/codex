@@ -7127,6 +7127,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn thread_rollback_trims_baselines_when_history_has_no_user_messages() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let assistant_only_history = vec![ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "compacted summary".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+        sess.record_into_history(&assistant_only_history, tc.as_ref())
+            .await;
+
+        let mut turn_1_context = tc.to_turn_context_item();
+        turn_1_context.turn_id = Some("turn-1".to_string());
+        turn_1_context.model = "model-a".to_string();
+        let mut turn_2_context = tc.to_turn_context_item();
+        turn_2_context.turn_id = Some("turn-2".to_string());
+        turn_2_context.model = "model-b".to_string();
+
+        sess.set_previous_model(Some("model-b".to_string())).await;
+        {
+            let mut state = sess.state.lock().await;
+            state.set_user_turn_baselines(vec![
+                UserTurnBaselineFrame {
+                    turn_context_item: turn_1_context.clone(),
+                    invalidated_by_following_compaction: false,
+                },
+                UserTurnBaselineFrame {
+                    turn_context_item: turn_2_context,
+                    invalidated_by_following_compaction: false,
+                },
+            ]);
+        }
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 1);
+        assert_eq!(sess.previous_model().await, Some("model-a".to_string()));
+        assert_eq!(
+            serde_json::to_value(sess.reference_context_item().await)
+                .expect("serialize post-rollback reference context item"),
+            serde_json::to_value(Some(turn_1_context))
+                .expect("serialize expected post-rollback reference context item")
+        );
+    }
+
+    #[tokio::test]
     async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 

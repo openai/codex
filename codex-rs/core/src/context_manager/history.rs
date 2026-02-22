@@ -313,6 +313,7 @@ impl ContextManager {
         let user_positions = user_message_positions(&snapshot);
         let Some(&first_user_idx) = user_positions.first() else {
             self.replace(snapshot);
+            self.truncate_user_turn_baselines_from_end(num_turns);
             return;
         };
 
