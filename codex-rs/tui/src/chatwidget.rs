@@ -923,7 +923,7 @@ impl ChatWidget {
             && self
                 .plan_stream_controller
                 .as_ref()
-                .map(|controller| controller.queued_lines() == 0)
+                .map(|controller| controller.queued_lines() == 0 && !controller.has_live_tail())
                 .unwrap_or(true)
     }
 
