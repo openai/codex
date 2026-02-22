@@ -6724,7 +6724,7 @@ async fn interrupt_drops_stream_deltas_until_turn_aborted() {
 
     chat.handle_codex_event(Event {
         id: "abort-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),

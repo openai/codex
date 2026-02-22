@@ -1789,8 +1789,9 @@ mod tests {
     }
 
     #[test]
-    fn column_classification_narrative_by_char_width() {
-        // Col with short word count but ≥28 avg char width → Narrative
+    fn column_classification_structured_by_url_like_token() {
+        // Col with short word count but ≥28 avg char width and long tokens → Structured
+        // (URL-like/token-heavy columns resist collapse)
         let header = vec![make_cell("URL")];
         let rows = vec![
             vec![make_cell("https://example.com/very/long/path")],
@@ -1798,7 +1799,7 @@ mod tests {
         ];
         let metrics = W::collect_table_column_metrics(&header, &rows, 1);
         assert!(metrics[0].avg_cell_width >= 28.0);
-        assert_eq!(metrics[0].kind, TableColumnKind::Narrative);
+        assert_eq!(metrics[0].kind, TableColumnKind::Structured);
     }
 
     #[test]
