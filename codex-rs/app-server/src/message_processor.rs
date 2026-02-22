@@ -50,6 +50,7 @@ use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use tokio::sync::broadcast;
+use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use toml::Value as TomlValue;
@@ -425,6 +426,11 @@ impl MessageProcessor {
         self.codex_message_processor
             .connection_closed(connection_id)
             .await;
+    }
+
+    pub(crate) fn subscribe_running_assistant_turn_count(&self) -> watch::Receiver<usize> {
+        self.codex_message_processor
+            .subscribe_running_assistant_turn_count()
     }
 
     /// Handle a standalone JSON-RPC response originating from the peer.

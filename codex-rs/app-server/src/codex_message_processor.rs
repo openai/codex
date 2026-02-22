@@ -269,6 +269,7 @@ use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use toml::Value as TomlValue;
 use tracing::error;
 use tracing::info;
@@ -2792,6 +2793,10 @@ impl CodexMessageProcessor {
         self.thread_state_manager
             .remove_connection(connection_id)
             .await;
+    }
+
+    pub(crate) fn subscribe_running_assistant_turn_count(&self) -> watch::Receiver<usize> {
+        self.thread_watch_manager.subscribe_running_turn_count()
     }
 
     /// Best-effort: ensure initialized connections are subscribed to this thread.

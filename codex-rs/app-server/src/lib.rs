@@ -98,6 +98,8 @@ enum OutboundControlEvent {
     },
     /// Remove state for a closed/disconnected connection.
     Closed { connection_id: ConnectionId },
+    /// Disconnect all connection-oriented clients during graceful restart.
+    DisconnectAll,
 }
 
 fn config_warning_from_error(
@@ -255,17 +257,27 @@ pub async fn run_main_with_transport(
 
     let mut stdio_handles = Vec::<JoinHandle<()>>::new();
     let mut websocket_accept_handle = None;
+    let mut websocket_accept_shutdown = None;
     match transport {
         AppServerTransport::Stdio => {
             start_stdio_connection(transport_event_tx.clone(), &mut stdio_handles).await?;
         }
         AppServerTransport::WebSocket { bind_address } => {
-            websocket_accept_handle =
-                Some(start_websocket_acceptor(bind_address, transport_event_tx.clone()).await?);
+            let shutdown_token = CancellationToken::new();
+            websocket_accept_handle = Some(
+                start_websocket_acceptor(
+                    bind_address,
+                    transport_event_tx.clone(),
+                    shutdown_token.clone(),
+                )
+                .await?,
+            );
+            websocket_accept_shutdown = Some(shutdown_token);
         }
     }
     let single_client_mode = matches!(transport, AppServerTransport::Stdio);
     let shutdown_when_no_connections = single_client_mode;
+    let graceful_ctrl_c_restart_enabled = !single_client_mode;
 
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
@@ -434,6 +446,16 @@ pub async fn run_main_with_transport(
                             OutboundControlEvent::Closed { connection_id } => {
                                 outbound_connections.remove(&connection_id);
                             }
+                            OutboundControlEvent::DisconnectAll => {
+                                info!(
+                                    "disconnecting {} outbound websocket connection(s) for graceful restart",
+                                    outbound_connections.len()
+                                );
+                                for connection_state in outbound_connections.values() {
+                                    connection_state.request_disconnect();
+                                }
+                                outbound_connections.clear();
+                            }
                         }
                     }
                     envelope = outgoing_rx.recv() => {
@@ -464,11 +486,57 @@ pub async fn run_main_with_transport(
             config_warnings,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
+        let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
+        let websocket_accept_shutdown = websocket_accept_shutdown.clone();
         async move {
             let mut listen_for_threads = true;
+            let mut restart_requested = false;
+            let mut last_logged_running_turn_count = None;
+            let mut ctrl_c_signal = std::pin::pin!(tokio::signal::ctrl_c());
             loop {
+                if restart_requested {
+                    let running_turn_count = *running_turn_count_rx.borrow();
+                    if running_turn_count == 0 {
+                        info!(
+                            "Ctrl-C restart: no assistant turns running; stopping acceptor and disconnecting {} connection(s)",
+                            connections.len()
+                        );
+                        if let Some(shutdown_token) = &websocket_accept_shutdown {
+                            shutdown_token.cancel();
+                        }
+                        let _ = outbound_control_tx
+                            .send(OutboundControlEvent::DisconnectAll)
+                            .await;
+                        break;
+                    }
+                    if last_logged_running_turn_count != Some(running_turn_count) {
+                        info!(
+                            "Ctrl-C restart: waiting for {running_turn_count} running assistant turn(s) to finish"
+                        );
+                        last_logged_running_turn_count = Some(running_turn_count);
+                    }
+                }
+
                 tokio::select! {
+                    ctrl_c_result = &mut ctrl_c_signal, if graceful_ctrl_c_restart_enabled && !restart_requested => {
+                        if let Err(err) = ctrl_c_result {
+                            warn!("failed to listen for Ctrl-C during graceful restart drain: {err}");
+                        }
+                        restart_requested = true;
+                        last_logged_running_turn_count = None;
+                        let running_turn_count = *running_turn_count_rx.borrow();
+                        info!(
+                            "received Ctrl-C; entering graceful restart drain (connections={}, runningAssistantTurns={}, requests still accepted until no assistant turns are running)",
+                            connections.len(),
+                            running_turn_count,
+                        );
+                    }
+                    changed = running_turn_count_rx.changed(), if graceful_ctrl_c_restart_enabled && restart_requested => {
+                        if changed.is_err() {
+                            warn!("running-turn watcher closed during graceful restart drain");
+                        }
+                    }
                     event = transport_event_rx.recv() => {
                         let Some(event) = event else {
                             break;
@@ -619,8 +687,11 @@ pub async fn run_main_with_transport(
     let _ = processor_handle.await;
     let _ = outbound_handle.await;
 
+    if let Some(shutdown_token) = websocket_accept_shutdown {
+        shutdown_token.cancel();
+    }
     if let Some(handle) = websocket_accept_handle {
-        handle.abort();
+        let _ = handle.await;
     }
 
     for handle in stdio_handles {
