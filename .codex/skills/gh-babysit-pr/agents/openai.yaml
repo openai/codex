@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub PR Babysitter"
+  short_description: "Watch PR CI and review comments"
+  default_prompt: "Babysit the current PR: monitor CI and reviewer comments, fix valid issues, push updates, and rerun flaky failures up to 3 times."
