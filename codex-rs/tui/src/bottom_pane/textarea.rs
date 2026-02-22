@@ -615,10 +615,11 @@ impl TextArea {
         if let KeyCode::Char(c) = event.code {
             if self.cursor_pos < self.text.len() {
                 self.push_undo();
+                let original_cursor = self.cursor_pos;
                 let next = self.next_atomic_boundary(self.cursor_pos);
                 self.replace_range(self.cursor_pos..next, &c.to_string());
                 // Keep cursor on the replaced character.
-                self.set_cursor(self.cursor_pos.saturating_sub(c.len_utf8()));
+                self.set_cursor(original_cursor);
             }
         }
         self.vim_mode = VimMode::Normal;
@@ -626,6 +627,9 @@ impl TextArea {
 
     fn handle_vim_insert(&mut self, event: KeyEvent) {
         if matches!(event.code, KeyCode::Esc) {
+            if self.cursor_pos > 0 {
+                self.move_cursor_left();
+            }
             self.vim_mode = VimMode::Normal;
             self.vim_operator = None;
             self.preferred_col = None;
@@ -2081,6 +2085,7 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         assert_eq!(t.text(), "h");
+        assert_eq!(t.cursor(), 0);
         assert!(!t.is_vim_insert());
     }
 
@@ -2158,6 +2163,58 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
 
         assert_eq!(t.text(), "two");
+    }
+
+    #[test]
+    fn vim_replace_char_keeps_cursor_on_replaced_char() {
+        let mut t = ta_with("abc");
+        t.set_cursor(1);
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "aZc");
+        assert_eq!(t.cursor(), 1);
+        assert!(!t.is_vim_insert());
+    }
+
+    #[test]
+    fn vim_u_undoes_replace() {
+        let mut t = ta_with("abc");
+        t.set_cursor(1);
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "abc");
+    }
+
+    #[test]
+    fn vim_u_undoes_delete_word() {
+        let mut t = ta_with("hello world");
+        t.set_cursor(0);
+        t.set_vim_enabled(true);
+
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "hello world");
+    }
+
+    #[test]
+    fn vim_undo_stack_is_capped() {
+        let mut t = ta_with(&"x".repeat(MAX_UNDO_ENTRIES + 5));
+        t.set_cursor(0);
+        t.set_vim_enabled(true);
+        // Generate many undo snapshots via destructive normal-mode operations.
+        for _ in 0..(MAX_UNDO_ENTRIES + 5) {
+            t.input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        }
+        assert_eq!(t.undo_stack.len(), MAX_UNDO_ENTRIES);
     }
 
     #[test]

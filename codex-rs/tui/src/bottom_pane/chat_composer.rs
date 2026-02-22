@@ -3690,13 +3690,13 @@ impl ChatComposer {
                         show_shortcuts_hint,
                         show_queue_hint,
                     );
-                }
-
-                // Render vim mode indicator at the far left of the footer.
-                if let Some(label) = self.textarea.vim_mode_label() {
-                    let vim_line = Line::from(format!("-- {label} --")).dim();
-                    let area = inset_footer_hint_area(hint_rect);
-                    vim_line.render(area, buf);
+                    // Render vim mode indicator only in the default footer path so it does not
+                    // obscure flash/status/override content.
+                    if let Some(label) = self.textarea.vim_mode_label() {
+                        let vim_line = Line::from(format!("-- {label} --")).dim();
+                        let area = inset_footer_hint_area(hint_rect);
+                        vim_line.render(area, buf);
+                    }
                 }
 
                 if show_right && let Some(line) = &right_line {
