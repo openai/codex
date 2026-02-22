@@ -681,14 +681,22 @@ impl App {
             .add_info_message(format!("Opened {url} in your browser."), None);
     }
 
-    fn clear_ui_header_lines(&self, width: u16) -> Vec<Line<'static>> {
+    fn clear_ui_header_lines_with_version(
+        &self,
+        width: u16,
+        version: &'static str,
+    ) -> Vec<Line<'static>> {
         history_cell::SessionHeaderHistoryCell::new(
             self.chat_widget.current_model().to_string(),
             self.chat_widget.current_reasoning_effort(),
             self.config.cwd.clone(),
-            CODEX_CLI_VERSION,
+            version,
         )
         .display_lines(width)
+    }
+
+    fn clear_ui_header_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.clear_ui_header_lines_with_version(width, CODEX_CLI_VERSION)
     }
 
     fn clear_terminal_ui(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -3422,7 +3430,7 @@ mod tests {
         app.has_emitted_history_lines = true;
 
         let rendered = app
-            .clear_ui_header_lines(80)
+            .clear_ui_header_lines_with_version(80, "<VERSION>")
             .iter()
             .map(|line| {
                 line.spans
@@ -3431,8 +3439,7 @@ mod tests {
                     .collect::<String>()
             })
             .collect::<Vec<_>>()
-            .join("\n")
-            .replace(CODEX_CLI_VERSION, "<VERSION>");
+            .join("\n");
 
         assert!(
             !rendered.contains("startup tip that used to replay"),
