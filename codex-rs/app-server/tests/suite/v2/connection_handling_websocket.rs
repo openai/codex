@@ -1,8 +1,10 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+#[cfg(unix)]
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
+#[cfg(unix)]
 use app_test_support::to_response;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeParams;
@@ -11,10 +13,15 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+#[cfg(unix)]
 use codex_app_server_protocol::ThreadStartParams;
+#[cfg(unix)]
 use codex_app_server_protocol::ThreadStartResponse;
+#[cfg(unix)]
 use codex_app_server_protocol::TurnStartParams;
+#[cfg(unix)]
 use codex_app_server_protocol::UserInput as V2UserInput;
+#[cfg(unix)]
 use core_test_support::responses;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -29,7 +36,9 @@ use tokio::io::AsyncBufReadExt;
 use tokio::process::Child;
 use tokio::process::Command;
 use tokio::time::Duration;
+#[cfg(unix)]
 use tokio::time::Instant;
+#[cfg(unix)]
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio_tungstenite::MaybeTlsStream;
@@ -221,6 +230,7 @@ async fn send_config_read_request(stream: &mut WsClient, id: i64) -> Result<()> 
     .await
 }
 
+#[cfg(unix)]
 async fn send_thread_start_request(stream: &mut WsClient, id: i64) -> Result<()> {
     send_request(
         stream,
@@ -234,6 +244,7 @@ async fn send_thread_start_request(stream: &mut WsClient, id: i64) -> Result<()>
     .await
 }
 
+#[cfg(unix)]
 async fn send_turn_start_request(stream: &mut WsClient, id: i64, thread_id: &str) -> Result<()> {
     send_request(
         stream,
