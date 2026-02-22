@@ -36,6 +36,7 @@ Accept any of the following:
 11. After any push or rerun action, immediately return to step 1 and continue polling on the updated SHA/state.
 12. If you had been using `--watch` before pausing to patch/commit/push, relaunch `--watch` yourself in the same turn immediately after the push (do not wait for the user to re-invoke the skill).
 13. Repeat polling until the PR is green + review-clean + mergeable, `stop_pr_closed` appears, or a user-help-required blocker is reached.
+14. Maintain terminal/session ownership: while babysitting is active, keep consuming watcher output in the same turn; do not leave a detached `--watch` process running and then end the turn as if monitoring were complete.
 
 ## Commands
 
@@ -107,6 +108,7 @@ If a code review comment/thread is already marked as resolved in GitHub, treat i
 - Before editing, check for unrelated uncommitted changes. If present, stop and ask the user.
 - After each successful fix, commit and `git push`, then re-run the watcher.
 - If you interrupted a live `--watch` session to make the fix, restart `--watch` immediately after the push in the same turn.
+- Do not run multiple concurrent `--watch` processes for the same PR/state file; keep one watcher session active and reuse it until it stops or you intentionally restart it.
 - A push is not a terminal outcome; continue the monitoring loop unless a strict stop condition is met.
 
 Commit message defaults:
@@ -133,6 +135,7 @@ Use this loop in a live Codex session:
 When the user explicitly asks to monitor/watch/babysit a PR, prefer `--watch` so polling continues autonomously in one command. Use repeated `--once` snapshots only for debugging, local testing, or when the user explicitly asks for a one-shot check.
 Do not stop to ask the user whether to continue polling; continue autonomously until a strict stop condition is met or the user explicitly interrupts.
 Do not hand control back to the user after a review-fix push just because a new SHA was created; restarting the watcher and re-entering the poll loop is part of the same babysitting task.
+If a `--watch` process is still running and no strict stop condition has been reached, the babysitting task is still in progress; keep streaming/consuming watcher output instead of ending the turn.
 
 ## Polling Cadence
 Use adaptive polling and continue monitoring even after CI turns green:
@@ -167,6 +170,7 @@ Provide concise progress updates while monitoring and a final summary that inclu
 - A user request to "monitor" is not satisfied by a couple of sample polls; remain in the loop until a strict stop condition or an explicit user interruption.
 - A review-fix commit + push is not a completion event; immediately resume live monitoring (`--watch`) in the same turn and continue reporting progress updates.
 - When CI first transitions to all green for the current SHA, emit a one-time celebratory progress update (do not repeat it on every green poll). Preferred style: `🚀 CI is all green! 33/33 passed. Still on watch for review approval.`
+- Do not send the final summary while a watcher terminal is still running unless the watcher has emitted/confirmed a strict stop condition; otherwise continue with progress updates.
 
 - Final PR SHA
 - CI status summary
