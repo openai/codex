@@ -722,6 +722,7 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
             "type": "session.created",
             "session": { "id": "sess_steer" }
         })],
+        vec![],
         vec![json!({
             "type": "conversation.item.added",
             "item": {
