@@ -747,17 +747,20 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
     .await;
 
     let mut completion_iter = completions.into_iter();
-    let _first_completion = completion_iter.next().expect("missing first completion");
+    let first_completion = completion_iter.next().expect("missing first completion");
     let second_completion = completion_iter.next().expect("missing second completion");
 
     let _ = gate_completed_tx.send(());
+    first_completion
+        .await
+        .expect("first request did not complete");
+    second_completion
+        .await
+        .expect("second request did not complete");
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    second_completion
-        .await
-        .expect("second request did not complete");
 
     let requests = api_server.requests().await;
     assert_eq!(requests.len(), 2);
