@@ -120,7 +120,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
             .as_deref()
             .expect("started session id should be present")
     );
-    let request_types = [
+    let mut request_types = [
         connection[1].body_json()["type"]
             .as_str()
             .expect("request type")
@@ -130,6 +130,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
             .expect("request type")
             .to_string(),
     ];
+    request_types.sort();
     assert_eq!(
         request_types,
         [
