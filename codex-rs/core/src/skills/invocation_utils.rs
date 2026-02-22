@@ -106,7 +106,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
         codex_protocol::protocol::SkillScope::Admin => "admin",
     };
     let skill_path = candidate.invocation.skill_path.to_string_lossy();
-    let skill_name = candidate.invocation.skill_name.as_str();
+    let skill_name = candidate.invocation.skill_name.clone();
     let seen_key = format!("{skill_scope}:{skill_path}:{skill_name}");
     let inserted = {
         let mut seen_skills = turn_context.implicit_invocation_seen_skills.lock().await;
@@ -121,7 +121,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
         1,
         &[
             ("status", "ok"),
-            ("skill", skill_name),
+            ("skill", skill_name.as_str()),
             ("invoke_type", "implicit"),
         ],
     );
