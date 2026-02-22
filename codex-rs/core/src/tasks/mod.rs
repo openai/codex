@@ -144,7 +144,6 @@ impl Session {
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
-                    let model_slug = ctx_for_finish.model_info.slug.clone();
                     let TaskRunOutput {
                         last_agent_message,
                         abort_reason,
@@ -158,9 +157,6 @@ impl Session {
                         .await;
                     let sess = session_ctx.clone_session();
                     sess.flush_rollout().await;
-                    // Update previous model before TurnComplete is emitted so
-                    // immediately following turns observe the correct switch state.
-                    sess.set_previous_model(Some(model_slug)).await;
                     if let Some(reason) = abort_reason {
                         ctx_for_finish
                             .turn_metadata_state
