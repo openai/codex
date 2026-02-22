@@ -61,15 +61,9 @@ prefix_rule(
 /// Verify the same prompt/escalation flow works when the server is launched
 /// with a patched zsh binary.
 ///
-/// Set CODEX_TEST_ZSH_PATH to enable this test locally or in CI.
+/// The suite resolves `tests/suite/zsh` via DotSlash on first use.
 #[tokio::test(flavor = "current_thread")]
 async fn accept_elicitation_for_prompt_rule_with_zsh() -> Result<()> {
-    let Some(zsh_path) = std::env::var_os("CODEX_TEST_ZSH_PATH") else {
-        eprintln!("skipping zsh test: CODEX_TEST_ZSH_PATH is not set");
-        return Ok(());
-    };
-    let zsh_path = PathBuf::from(zsh_path);
-
     let codex_home = TempDir::new()?;
     write_default_execpolicy(
         r#"
@@ -87,6 +81,11 @@ prefix_rule(
     .await?;
     let dotslash_cache_temp_dir = TempDir::new()?;
     let dotslash_cache = dotslash_cache_temp_dir.path();
+    let zsh_path = resolve_test_zsh_path(dotslash_cache).await?;
+    eprintln!(
+        "using zsh path for exec-server test: {}",
+        zsh_path.display()
+    );
     let transport =
         create_transport_with_shell_path(codex_home.as_ref(), dotslash_cache, &zsh_path).await?;
     run_accept_elicitation_for_prompt_rule_with_transport(transport).await
@@ -95,13 +94,13 @@ prefix_rule(
 async fn run_accept_elicitation_for_prompt_rule_with_transport(
     transport: rmcp::transport::TokioChildProcess,
 ) -> Result<()> {
-    // Create an MCP client that approves expected elicitation messages.
+    // Create an MCP client that approves the expected elicitation message.
     let project_root = TempDir::new()?;
     let project_root_path = project_root.path().canonicalize().unwrap();
     let git_path = resolve_git_path(USE_LOGIN_SHELL).await?;
+    let git_init_command = format!("{git_path} init --quiet .");
     let expected_elicitation_message = format!(
-        "Allow agent to run `{} init .` in `{}`?",
-        git_path,
+        "Allow agent to run `{git_path} init --quiet .` in `{}`?",
         project_root_path.display()
     );
     let elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParams>>> = Default::default();
@@ -142,7 +141,7 @@ async fn run_accept_elicitation_for_prompt_rule_with_transport(
             arguments: Some(object(json!(
                 {
                     "login": USE_LOGIN_SHELL,
-                    "command": "git init .",
+                    "command": git_init_command,
                     "workdir": project_root_path.to_string_lossy(),
                 }
             ))),
@@ -157,15 +156,11 @@ async fn run_accept_elicitation_for_prompt_rule_with_transport(
     let ExecResult {
         exit_code, output, ..
     } = serde_json::from_str::<ExecResult>(&tool_call_content.text)?;
-    let git_init_succeeded = format!(
-        "Initialized empty Git repository in {}/.git/\n",
-        project_root_path.display()
-    );
-    // Normally, this would be an exact match, but it might include extra output
-    // if `git config set advice.defaultBranchName false` has not been set.
+    // `git init --quiet` is expected to suppress the usual initialization
+    // banner, so assert on success and filesystem effects instead of output.
     assert!(
-        output.contains(&git_init_succeeded),
-        "expected output `{output}` to contain `{git_init_succeeded}`"
+        output.is_empty(),
+        "expected no output from `git init --quiet .`, got `{output}`"
     );
     assert_eq!(exit_code, 0, "command should succeed");
     assert_eq!(is_error, Some(false), "command should succeed");
@@ -190,6 +185,12 @@ async fn run_accept_elicitation_for_prompt_rule_with_transport(
     assert_eq!(vec![expected_elicitation_message], elicitation_messages);
 
     Ok(())
+}
+
+async fn resolve_test_zsh_path(dotslash_cache: &std::path::Path) -> Result<PathBuf> {
+    let dotslash_zsh = codex_utils_cargo_bin::find_resource!("tests/suite/zsh")?;
+    core_test_support::fetch_dotslash_file(&dotslash_zsh, Some(dotslash_cache))
+        .with_context(|| format!("failed to fetch test zsh from {}", dotslash_zsh.display()))
 }
 
 fn ensure_codex_cli() -> Result<PathBuf> {

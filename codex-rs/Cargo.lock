@@ -1787,6 +1787,7 @@ dependencies = [
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-cargo-bin",
+ "core_test_support",
  "exec_server_test_support",
  "libc",
  "maplit",
