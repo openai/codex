@@ -2747,6 +2747,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
+        widget.sync_vim_keymap_enabled();
         widget.sync_personality_command_enabled();
         widget
             .bottom_pane
@@ -2917,6 +2918,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
+        widget.sync_vim_keymap_enabled();
         widget.sync_personality_command_enabled();
         widget
             .bottom_pane
@@ -3076,6 +3078,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
+        widget.sync_vim_keymap_enabled();
         widget.sync_personality_command_enabled();
         widget
             .bottom_pane
@@ -3380,6 +3383,9 @@ impl ChatWidget {
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
             }
+            SlashCommand::Keymap => {
+                self.add_error_message("Usage: /keymap standard|vim".to_string());
+            }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {
@@ -3653,6 +3659,22 @@ impl ChatWidget {
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
                         path: prepared_args,
                     });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Keymap if !trimmed.is_empty() => {
+                match trimmed.to_ascii_lowercase().as_str() {
+                    "vim" => {
+                        self.bottom_pane.set_vim_enabled(true);
+                        self.add_info_message("Composer keymap set to vim.".to_string(), None);
+                    }
+                    "standard" => {
+                        self.bottom_pane.set_vim_enabled(false);
+                        self.add_info_message("Composer keymap set to standard.".to_string(), None);
+                    }
+                    _ => {
+                        self.add_error_message("Usage: /keymap standard|vim".to_string());
+                    }
+                }
                 self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),
@@ -6389,6 +6411,13 @@ impl ChatWidget {
     fn sync_personality_command_enabled(&mut self) {
         self.bottom_pane
             .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
+    }
+
+    fn sync_vim_keymap_enabled(&mut self) {
+        self.bottom_pane.set_vim_enabled(matches!(
+            self.config.tui_keymap,
+            codex_core::config::types::TuiKeymap::Vim
+        ));
     }
 
     fn current_model_supports_personality(&self) -> bool {

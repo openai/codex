@@ -1370,6 +1370,15 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
+        "keymap": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiKeymap"
+            }
+          ],
+          "default": "standard",
+          "description": "Composer input keymap mode.\n\n- `standard` (default): current non-modal editing behavior. - `vim`: vim-style modal editing in the composer input."
+        },
         "notification_method": {
           "allOf": [
             {
@@ -1408,6 +1417,13 @@
         }
       },
       "type": "object"
+    },
+    "TuiKeymap": {
+      "enum": [
+        "standard",
+        "vim"
+      ],
+      "type": "string"
     },
     "UriBasedFileOpener": {
       "oneOf": [

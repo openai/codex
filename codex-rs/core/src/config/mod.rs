@@ -20,6 +20,7 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
 use crate::config::types::Tui;
+use crate::config::types::TuiKeymap;
 use crate::config::types::UriBasedFileOpener;
 use crate::config::types::WindowsSandboxModeToml;
 use crate::config::types::WindowsToml;
@@ -280,6 +281,9 @@ pub struct Config {
 
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
+
+    /// Composer input keymap mode for the TUI.
+    pub tui_keymap: TuiKeymap,
 
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
@@ -2124,6 +2128,7 @@ impl Config {
                 .unwrap_or_default(),
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
+            tui_keymap: cfg.tui.as_ref().map(|t| t.keymap).unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -2547,6 +2552,44 @@ theme = "dracula"
     }
 
     #[test]
+    fn tui_keymap_defaults_to_standard() {
+        let cfg = r#"
+[tui]
+"#;
+        let parsed =
+            toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+        assert_eq!(
+            parsed.tui.as_ref().map(|t| t.keymap),
+            Some(TuiKeymap::Standard),
+        );
+    }
+
+    #[test]
+    fn tui_keymap_deserializes_vim() {
+        let cfg = r#"
+[tui]
+keymap = "vim"
+"#;
+        let parsed =
+            toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+        assert_eq!(parsed.tui.as_ref().map(|t| t.keymap), Some(TuiKeymap::Vim));
+    }
+
+    #[test]
+    fn tui_keymap_invalid_value_errors() {
+        let cfg = r#"
+[tui]
+keymap = "bad"
+"#;
+        let err = toml::from_str::<ConfigToml>(cfg).expect_err("invalid keymap should fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("keymap"),
+            "expected error mentioning keymap, got: {msg}"
+        );
+    }
+
+    #[test]
     fn tui_config_missing_notifications_field_defaults_to_enabled() {
         let cfg = r#"
 [tui]
@@ -2566,6 +2609,7 @@ theme = "dracula"
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
                 theme: None,
+                keymap: TuiKeymap::Standard,
             }
         );
     }
@@ -4676,6 +4720,7 @@ model_verbosity = "high"
                 tui_alternate_screen: AltScreenMode::Auto,
                 tui_status_line: None,
                 tui_theme: None,
+                tui_keymap: TuiKeymap::Standard,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -4799,6 +4844,7 @@ model_verbosity = "high"
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
             tui_theme: None,
+            tui_keymap: TuiKeymap::Standard,
             otel: OtelConfig::default(),
         };
 
@@ -4920,6 +4966,7 @@ model_verbosity = "high"
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
             tui_theme: None,
+            tui_keymap: TuiKeymap::Standard,
             otel: OtelConfig::default(),
         };
 
@@ -5027,6 +5074,7 @@ model_verbosity = "high"
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
             tui_theme: None,
+            tui_keymap: TuiKeymap::Standard,
             otel: OtelConfig::default(),
         };
 

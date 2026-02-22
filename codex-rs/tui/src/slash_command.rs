@@ -15,6 +15,7 @@ pub enum SlashCommand {
     Model,
     Approvals,
     Permissions,
+    Keymap,
     #[strum(serialize = "setup-default-sandbox")]
     ElevateSandbox,
     #[strum(serialize = "sandbox-add-read-dir")]
@@ -90,6 +91,7 @@ impl SlashCommand {
             SlashCommand::Agent => "switch the active agent thread",
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
+            SlashCommand::Keymap => "switch composer keymap: /keymap standard|vim",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::SandboxReadRoot => {
                 "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
@@ -117,6 +119,7 @@ impl SlashCommand {
                 | SlashCommand::Rename
                 | SlashCommand::Plan
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::Keymap
         )
     }
 
@@ -157,6 +160,7 @@ impl SlashCommand {
             | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
+            SlashCommand::Keymap => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent => true,
             SlashCommand::Statusline => false,
@@ -179,4 +183,28 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
         .filter(|command| command.is_visible())
         .map(|c| (c.command(), c))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn keymap_command_metadata_is_wired() {
+        assert_eq!(SlashCommand::Keymap.command(), "keymap");
+        assert!(SlashCommand::Keymap.supports_inline_args());
+        assert!(SlashCommand::Keymap.available_during_task());
+        assert!(
+            SlashCommand::Keymap
+                .description()
+                .contains("/keymap standard|vim")
+        );
+    }
+
+    #[test]
+    fn built_in_slash_commands_include_keymap() {
+        let commands = built_in_slash_commands();
+        assert!(commands.contains(&("keymap", SlashCommand::Keymap)));
+    }
 }

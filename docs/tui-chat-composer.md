@@ -38,6 +38,17 @@ The solution is to detect paste-like _bursts_ and buffer them into a single expl
 2. **Paste burst**: transient detection state for non-bracketed paste.
    - implemented by `PasteBurst`
 
+`ChatComposer` also coordinates the textarea input mode:
+
+- **Vim mode**: modal editing (normal/insert). While in Vim normal mode, paste-burst detection
+  is disabled so rapid command keystrokes are never buffered as paste.
+- Slash command `/keymap vim` enables vim mode in the TUI composer; `/keymap standard` restores
+  the default keymap. The `/keymap` toggle is session-scoped: it does **not** persist across
+  restarts. To enable vim mode permanently, set `tui.keymap = "vim"` in your config file.
+- Scope note: this keymap support is for the in-app composer input only; it does not change key
+  behavior in external editors launched for message editing.
+- `/keymap` can be toggled while a task is running.
+
 ### Key event routing
 
 `ChatComposer::handle_key_event` dispatches based on `active_popup`:
