@@ -21,6 +21,7 @@ pub struct NetworkProxyConstraints {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
@@ -40,6 +41,7 @@ pub struct PartialNetworkConfig {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub dangerously_allow_all_unix_sockets: Option<bool>,
     #[serde(default)]
     pub allowed_domains: Option<Vec<String>>,
     #[serde(default)]
@@ -54,6 +56,7 @@ pub fn build_config_state(
     config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
 ) -> anyhow::Result<ConfigState> {
+    crate::config::validate_unix_socket_allowlist_paths(&config)?;
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
     let mitm = if config.network.mitm {
@@ -179,6 +182,24 @@ pub fn validate_policy_against_constraints(
                 } else {
                     Ok(())
                 }
+            }
+        },
+    )?;
+
+    let allow_all_unix_sockets = constraints
+        .dangerously_allow_all_unix_sockets
+        .unwrap_or(constraints.allow_unix_sockets.is_none());
+    validate(
+        config.network.dangerously_allow_all_unix_sockets,
+        move |candidate| {
+            if *candidate && !allow_all_unix_sockets {
+                Err(invalid_value(
+                    "network.dangerously_allow_all_unix_sockets",
+                    "true",
+                    "false (disabled by managed config)",
+                ))
+            } else {
+                Ok(())
             }
         },
     )?;

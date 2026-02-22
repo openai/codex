@@ -5,13 +5,13 @@
 //! booleans through multiple types, call sites consult a single `Features`
 //! container attached to `Config`.
 
-use crate::config::CONFIG_TOML_FILE;
 use crate::config::Config;
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::WarningEvent;
+use codex_config::CONFIG_TOML_FILE;
 use codex_otel::OtelManager;
 use schemars::JsonSchema;
 use serde::Deserialize;

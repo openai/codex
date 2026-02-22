@@ -25,6 +25,7 @@ strum_macros = { workspace = true }
 thiserror = { workspace = true }
 ts-rs = { workspace = true }
 inventory = { workspace = true }
+tracing = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]

@@ -78,6 +78,9 @@ mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::ColumnWidthMode;
 pub(crate) use list_selection_view::SelectionViewParams;
+pub(crate) use list_selection_view::SideContentWidth;
+pub(crate) use list_selection_view::popup_content_width;
+pub(crate) use list_selection_view::side_by_side_layout_widths;
 mod feedback_view;
 pub(crate) use feedback_view::FeedbackAudience;
 pub(crate) use feedback_view::feedback_disabled_params;
@@ -284,6 +287,13 @@ impl BottomPane {
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.composer.set_personality_command_enabled(enabled);
+        self.request_redraw();
+    }
+
+    /// Update the key hint shown next to queued messages so it matches the
+    /// binding that `ChatWidget` actually listens for.
+    pub(crate) fn set_queued_message_edit_binding(&mut self, binding: KeyBinding) {
+        self.queued_user_messages.set_edit_binding(binding);
         self.request_redraw();
     }
 
@@ -972,7 +982,7 @@ impl Renderable for BottomPane {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use codex_core::protocol::Op;
+    use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;

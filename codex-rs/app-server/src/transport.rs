@@ -32,6 +32,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -135,6 +136,7 @@ pub(crate) enum TransportEvent {
     ConnectionOpened {
         connection_id: ConnectionId,
         writer: mpsc::Sender<OutgoingMessage>,
+        disconnect_sender: Option<CancellationToken>,
     },
     ConnectionClosed {
         connection_id: ConnectionId,
@@ -168,6 +170,7 @@ pub(crate) struct OutboundConnectionState {
     pub(crate) initialized: Arc<AtomicBool>,
     pub(crate) opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     pub(crate) writer: mpsc::Sender<OutgoingMessage>,
+    disconnect_sender: Option<CancellationToken>,
 }
 
 impl OutboundConnectionState {
@@ -175,11 +178,23 @@ impl OutboundConnectionState {
         writer: mpsc::Sender<OutgoingMessage>,
         initialized: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
+        disconnect_sender: Option<CancellationToken>,
     ) -> Self {
         Self {
             initialized,
             opted_out_notification_methods,
             writer,
+            disconnect_sender,
+        }
+    }
+
+    fn can_disconnect(&self) -> bool {
+        self.disconnect_sender.is_some()
+    }
+
+    fn request_disconnect(&self) {
+        if let Some(disconnect_sender) = &self.disconnect_sender {
+            disconnect_sender.cancel();
         }
     }
 }
@@ -195,6 +210,7 @@ pub(crate) async fn start_stdio_connection(
         .send(TransportEvent::ConnectionOpened {
             connection_id,
             writer: writer_tx,
+            disconnect_sender: None,
         })
         .await
         .map_err(|_| std::io::Error::new(ErrorKind::BrokenPipe, "processor unavailable"))?;
@@ -299,12 +315,14 @@ async fn run_websocket_connection(
         }
     };
 
-    let (writer_tx, mut writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    let (writer_tx, writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
     let writer_tx_for_reader = writer_tx.clone();
+    let disconnect_token = CancellationToken::new();
     if transport_event_tx
         .send(TransportEvent::ConnectionOpened {
             connection_id,
             writer: writer_tx,
+            disconnect_sender: Some(disconnect_token.clone()),
         })
         .await
         .is_err()
@@ -312,9 +330,62 @@ async fn run_websocket_connection(
         return;
     }
 
-    let (mut websocket_writer, mut websocket_reader) = websocket_stream.split();
+    let (websocket_writer, websocket_reader) = websocket_stream.split();
+    let (writer_control_tx, writer_control_rx) =
+        mpsc::channel::<WebSocketMessage>(CHANNEL_CAPACITY);
+    let mut outbound_task = tokio::spawn(run_websocket_outbound_loop(
+        websocket_writer,
+        writer_rx,
+        writer_control_rx,
+        disconnect_token.clone(),
+    ));
+    let mut inbound_task = tokio::spawn(run_websocket_inbound_loop(
+        websocket_reader,
+        transport_event_tx.clone(),
+        writer_tx_for_reader,
+        writer_control_tx,
+        connection_id,
+        disconnect_token.clone(),
+    ));
+
+    tokio::select! {
+        _ = &mut outbound_task => {
+            disconnect_token.cancel();
+            inbound_task.abort();
+        }
+        _ = &mut inbound_task => {
+            disconnect_token.cancel();
+            outbound_task.abort();
+        }
+    }
+
+    let _ = transport_event_tx
+        .send(TransportEvent::ConnectionClosed { connection_id })
+        .await;
+}
+
+async fn run_websocket_outbound_loop(
+    mut websocket_writer: futures::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<TcpStream>,
+        WebSocketMessage,
+    >,
+    mut writer_rx: mpsc::Receiver<OutgoingMessage>,
+    mut writer_control_rx: mpsc::Receiver<WebSocketMessage>,
+    disconnect_token: CancellationToken,
+) {
     loop {
         tokio::select! {
+            _ = disconnect_token.cancelled() => {
+                break;
+            }
+            message = writer_control_rx.recv() => {
+                let Some(message) = message else {
+                    break;
+                };
+                if websocket_writer.send(message).await.is_err() {
+                    break;
+                }
+            }
             outgoing_message = writer_rx.recv() => {
                 let Some(outgoing_message) = outgoing_message else {
                     break;
@@ -325,6 +396,25 @@ async fn run_websocket_connection(
                 if websocket_writer.send(WebSocketMessage::Text(json.into())).await.is_err() {
                     break;
                 }
+            }
+        }
+    }
+}
+
+async fn run_websocket_inbound_loop(
+    mut websocket_reader: futures::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<TcpStream>,
+    >,
+    transport_event_tx: mpsc::Sender<TransportEvent>,
+    writer_tx_for_reader: mpsc::Sender<OutgoingMessage>,
+    writer_control_tx: mpsc::Sender<WebSocketMessage>,
+    connection_id: ConnectionId,
+    disconnect_token: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            _ = disconnect_token.cancelled() => {
+                break;
             }
             incoming_message = websocket_reader.next() => {
                 match incoming_message {
@@ -341,8 +431,13 @@ async fn run_websocket_connection(
                         }
                     }
                     Some(Ok(WebSocketMessage::Ping(payload))) => {
-                        if websocket_writer.send(WebSocketMessage::Pong(payload)).await.is_err() {
-                            break;
+                        match writer_control_tx.try_send(WebSocketMessage::Pong(payload)) {
+                            Ok(()) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                warn!("websocket control queue full while replying to ping; closing connection");
+                                break;
+                            }
                         }
                     }
                     Some(Ok(WebSocketMessage::Pong(_))) => {}
@@ -359,10 +454,6 @@ async fn run_websocket_connection(
             }
         }
     }
-
-    let _ = transport_event_tx
-        .send(TransportEvent::ConnectionClosed { connection_id })
-        .await;
 }
 
 async fn forward_incoming_message(
@@ -461,30 +552,61 @@ fn should_skip_notification_for_connection(
     }
 }
 
+fn disconnect_connection(
+    connections: &mut HashMap<ConnectionId, OutboundConnectionState>,
+    connection_id: ConnectionId,
+) -> bool {
+    if let Some(connection_state) = connections.remove(&connection_id) {
+        connection_state.request_disconnect();
+        return true;
+    }
+    false
+}
+
+async fn send_message_to_connection(
+    connections: &mut HashMap<ConnectionId, OutboundConnectionState>,
+    connection_id: ConnectionId,
+    message: OutgoingMessage,
+) -> bool {
+    let Some(connection_state) = connections.get(&connection_id) else {
+        warn!("dropping message for disconnected connection: {connection_id:?}");
+        return false;
+    };
+    if should_skip_notification_for_connection(connection_state, &message) {
+        return false;
+    }
+
+    let writer = connection_state.writer.clone();
+    if connection_state.can_disconnect() {
+        match writer.try_send(message) {
+            Ok(()) => false,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                warn!(
+                    "disconnecting slow connection after outbound queue filled: {connection_id:?}"
+                );
+                disconnect_connection(connections, connection_id)
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                disconnect_connection(connections, connection_id)
+            }
+        }
+    } else if writer.send(message).await.is_err() {
+        disconnect_connection(connections, connection_id)
+    } else {
+        false
+    }
+}
+
 pub(crate) async fn route_outgoing_envelope(
     connections: &mut HashMap<ConnectionId, OutboundConnectionState>,
     envelope: OutgoingEnvelope,
-) -> Vec<ConnectionId> {
-    let mut disconnected = Vec::new();
+) {
     match envelope {
         OutgoingEnvelope::ToConnection {
             connection_id,
             message,
         } => {
-            let Some(connection_state) = connections.get(&connection_id) else {
-                warn!(
-                    "dropping message for disconnected connection: {:?}",
-                    connection_id
-                );
-                return disconnected;
-            };
-            if should_skip_notification_for_connection(connection_state, &message) {
-                return disconnected;
-            }
-            if connection_state.writer.send(message).await.is_err() {
-                connections.remove(&connection_id);
-                disconnected.push(connection_id);
-            }
+            let _ = send_message_to_connection(connections, connection_id, message).await;
         }
         OutgoingEnvelope::Broadcast { message } => {
             let target_connections: Vec<ConnectionId> = connections
@@ -501,17 +623,11 @@ pub(crate) async fn route_outgoing_envelope(
                 .collect();
 
             for connection_id in target_connections {
-                let Some(connection_state) = connections.get(&connection_id) else {
-                    continue;
-                };
-                if connection_state.writer.send(message.clone()).await.is_err() {
-                    connections.remove(&connection_id);
-                    disconnected.push(connection_id);
-                }
+                let _ =
+                    send_message_to_connection(connections, connection_id, message.clone()).await;
             }
         }
     }
-    disconnected
 }
 
 #[cfg(test)]
@@ -520,6 +636,8 @@ mod tests {
     use crate::error_code::OVERLOADED_ERROR_CODE;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
 
     #[test]
     fn app_server_transport_parses_stdio_listen_url() {
@@ -754,10 +872,15 @@ mod tests {
         let mut connections = HashMap::new();
         connections.insert(
             connection_id,
-            OutboundConnectionState::new(writer_tx, initialized, opted_out_notification_methods),
+            OutboundConnectionState::new(
+                writer_tx,
+                initialized,
+                opted_out_notification_methods,
+                None,
+            ),
         );
 
-        let disconnected = route_outgoing_envelope(
+        route_outgoing_envelope(
             &mut connections,
             OutgoingEnvelope::ToConnection {
                 connection_id,
@@ -771,10 +894,161 @@ mod tests {
         )
         .await;
 
-        assert_eq!(disconnected, Vec::<ConnectionId>::new());
         assert!(
             writer_rx.try_recv().is_err(),
             "opted-out notification should be dropped"
         );
+    }
+
+    #[tokio::test]
+    async fn broadcast_does_not_block_on_slow_connection() {
+        let fast_connection_id = ConnectionId(1);
+        let slow_connection_id = ConnectionId(2);
+
+        let (fast_writer_tx, mut fast_writer_rx) = mpsc::channel(1);
+        let (slow_writer_tx, mut slow_writer_rx) = mpsc::channel(1);
+        let fast_disconnect_token = CancellationToken::new();
+        let slow_disconnect_token = CancellationToken::new();
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            fast_connection_id,
+            OutboundConnectionState::new(
+                fast_writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(RwLock::new(HashSet::new())),
+                Some(fast_disconnect_token.clone()),
+            ),
+        );
+        connections.insert(
+            slow_connection_id,
+            OutboundConnectionState::new(
+                slow_writer_tx.clone(),
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(RwLock::new(HashSet::new())),
+                Some(slow_disconnect_token.clone()),
+            ),
+        );
+
+        let queued_message =
+            OutgoingMessage::Notification(crate::outgoing_message::OutgoingNotification {
+                method: "codex/event/already-buffered".to_string(),
+                params: None,
+            });
+        slow_writer_tx
+            .try_send(queued_message)
+            .expect("channel should have room");
+
+        let broadcast_message =
+            OutgoingMessage::Notification(crate::outgoing_message::OutgoingNotification {
+                method: "codex/event/test".to_string(),
+                params: None,
+            });
+        timeout(
+            Duration::from_millis(100),
+            route_outgoing_envelope(
+                &mut connections,
+                OutgoingEnvelope::Broadcast {
+                    message: broadcast_message,
+                },
+            ),
+        )
+        .await
+        .expect("broadcast should not block on a full writer");
+        assert!(!connections.contains_key(&slow_connection_id));
+        assert!(slow_disconnect_token.is_cancelled());
+        assert!(!fast_disconnect_token.is_cancelled());
+        let fast_message = fast_writer_rx
+            .try_recv()
+            .expect("fast connection should receive broadcast");
+        assert!(matches!(
+            fast_message,
+            OutgoingMessage::Notification(crate::outgoing_message::OutgoingNotification {
+                method,
+                params: None,
+            }) if method == "codex/event/test"
+        ));
+
+        let slow_message = slow_writer_rx
+            .try_recv()
+            .expect("slow connection should retain its original buffered message");
+        assert!(matches!(
+            slow_message,
+            OutgoingMessage::Notification(crate::outgoing_message::OutgoingNotification {
+                method,
+                params: None,
+            }) if method == "codex/event/already-buffered"
+        ));
+    }
+
+    #[tokio::test]
+    async fn to_connection_stdio_waits_instead_of_disconnecting_when_writer_queue_is_full() {
+        let connection_id = ConnectionId(3);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+        writer_tx
+            .send(OutgoingMessage::Notification(
+                crate::outgoing_message::OutgoingNotification {
+                    method: "queued".to_string(),
+                    params: None,
+                },
+            ))
+            .await
+            .expect("channel should accept the first queued message");
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(RwLock::new(HashSet::new())),
+                None,
+            ),
+        );
+
+        let route_task = tokio::spawn(async move {
+            route_outgoing_envelope(
+                &mut connections,
+                OutgoingEnvelope::ToConnection {
+                    connection_id,
+                    message: OutgoingMessage::Notification(
+                        crate::outgoing_message::OutgoingNotification {
+                            method: "second".to_string(),
+                            params: None,
+                        },
+                    ),
+                },
+            )
+            .await
+        });
+
+        let first = timeout(Duration::from_millis(100), writer_rx.recv())
+            .await
+            .expect("first queued message should be readable")
+            .expect("first queued message should exist");
+        let second = timeout(Duration::from_millis(100), writer_rx.recv())
+            .await
+            .expect("second message should eventually be delivered")
+            .expect("second message should exist");
+
+        timeout(Duration::from_millis(100), route_task)
+            .await
+            .expect("routing should finish after writer drains")
+            .expect("routing task should succeed");
+
+        assert!(matches!(
+            first,
+            OutgoingMessage::Notification(crate::outgoing_message::OutgoingNotification {
+                method,
+                params: None,
+            }) if method == "queued"
+        ));
+        assert!(matches!(
+            second,
+            OutgoingMessage::Notification(crate::outgoing_message::OutgoingNotification {
+                method,
+                params: None,
+            }) if method == "second"
+        ));
     }
 }

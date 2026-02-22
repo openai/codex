@@ -5,8 +5,8 @@ expression: rendered
 • Updated Plan
   └ I’ll update Grafana call
     error handling by adding
-    retries and clearer
-    messages when the backend is
+    retries and clearer messages
+    when the backend is
     unreachable.
     ✔ Investigate existing error
       paths and logging around
