@@ -305,26 +305,21 @@ async fn test_fuzzy_file_search_excludes_dotenv_files() -> Result<()> {
         .ok_or_else(|| anyhow!("files not array"))?
         .clone();
 
-    assert_eq!(
-        files
+    assert!(
+        !files
             .iter()
-            .any(|file| file["path"].as_str().is_some_and(|path| path == ".env")),
-        false
+            .any(|file| file["path"].as_str().is_some_and(|path| path == ".env"))
     );
-    assert_eq!(
-        files.iter().any(|file| file["path"]
+    assert!(!files.iter().any(|file| {
+        file["path"]
             .as_str()
-            .is_some_and(|path| path == ".env.local")),
-        false
-    );
-    assert_eq!(
-        files.iter().any(|file| {
-            file["path"]
-                .as_str()
-                .is_some_and(|path| path == "env-notes.txt")
-        }),
-        true
-    );
+            .is_some_and(|path| path == ".env.local")
+    }));
+    assert!(files.iter().any(|file| {
+        file["path"]
+            .as_str()
+            .is_some_and(|path| path == "env-notes.txt")
+    }));
 
     Ok(())
 }
@@ -356,7 +351,7 @@ async fn test_fuzzy_file_search_respects_gitignore() -> Result<()> {
         .as_array()
         .ok_or_else(|| anyhow!("files not array"))?
         .clone();
-    assert_eq!(ignored_files.is_empty(), true);
+    assert!(ignored_files.is_empty());
 
     let keep_request_id = mcp
         .send_fuzzy_file_search_request("keep-indexed", vec![root_path.clone()], None)
