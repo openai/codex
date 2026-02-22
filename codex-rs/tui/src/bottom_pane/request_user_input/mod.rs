@@ -89,6 +89,9 @@ impl ComposerDraft {
 struct AnswerState {
     // Scrollable cursor state for option navigation/highlight.
     options_state: ScrollState,
+    // Last explicitly committed option selection. We preserve this across later
+    // edits so partial interrupt submission can keep the committed selection.
+    committed_option_idx: Option<usize>,
     // Per-question notes draft.
     draft: ComposerDraft,
     // Whether the answer for this question has been explicitly submitted.
@@ -559,6 +562,7 @@ impl RequestUserInputOverlay {
                 }
                 AnswerState {
                     options_state,
+                    committed_option_idx: None,
                     draft: ComposerDraft::default(),
                     answer_committed: false,
                     notes_visible: !has_options,
@@ -645,6 +649,9 @@ impl RequestUserInputOverlay {
         let updated = if let Some(answer) = self.current_answer_mut() {
             answer.options_state.clamp_selection(options_len);
             answer.answer_committed = committed;
+            if committed {
+                answer.committed_option_idx = answer.options_state.selected_idx;
+            }
             true
         } else {
             false
@@ -661,6 +668,7 @@ impl RequestUserInputOverlay {
         }
         if let Some(answer) = self.current_answer_mut() {
             answer.options_state.reset();
+            answer.committed_option_idx = None;
             answer.draft = ComposerDraft::default();
             answer.answer_committed = false;
             answer.notes_visible = false;
@@ -718,18 +726,26 @@ impl RequestUserInputOverlay {
         committed_only: bool,
     ) -> Option<RequestUserInputAnswer> {
         let answer_state = &self.answers[idx];
-        if committed_only && !answer_state.answer_committed {
+        if committed_only
+            && !answer_state.answer_committed
+            && answer_state.committed_option_idx.is_none()
+        {
             return None;
         }
 
         let options = question.options.as_ref();
         // For option questions we may still produce no selection.
-        let selected_idx =
-            if options.is_some_and(|opts| !opts.is_empty()) && answer_state.answer_committed {
+        let selected_idx = if options.is_some_and(|opts| !opts.is_empty()) {
+            if answer_state.answer_committed {
                 answer_state.options_state.selected_idx
+            } else if committed_only {
+                answer_state.committed_option_idx
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
         // Notes are appended as extra answers. For freeform questions, only submit when
         // the user explicitly committed the draft.
         let notes = if answer_state.answer_committed {
@@ -995,6 +1011,7 @@ impl RequestUserInputOverlay {
                 if self.has_options() {
                     if let Some(answer) = self.current_answer_mut() {
                         answer.answer_committed = true;
+                        answer.committed_option_idx = answer.options_state.selected_idx;
                     }
                 } else if let Some(answer) = self.current_answer_mut() {
                     answer.answer_committed = !text.trim().is_empty();
@@ -2108,6 +2125,49 @@ mod tests {
             !response.answers.contains_key("q2"),
             "uncommitted question should not be submitted"
         );
+    }
+
+    #[test]
+    fn esc_interrupt_preserves_committed_selection_after_notes_clear() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options_and_other("q1", "First"),
+                    question_with_options_and_other("q2", "Second"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+        assert_eq!(overlay.current_index(), 1);
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvent before interruption"
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('h')));
+        assert_eq!(overlay.current_index(), 0);
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        let answer = overlay.current_answer().expect("answer missing");
+        assert_eq!(answer.answer_committed, false);
+        assert_eq!(answer.options_state.selected_idx, Some(1));
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        let response = expect_partial_interrupt_submission(&mut rx, "turn-1");
+        let answer = response
+            .answers
+            .get("q1")
+            .expect("missing committed answer");
+        assert_eq!(answer.answers, vec!["Option 2".to_string()]);
     }
 
     #[test]
