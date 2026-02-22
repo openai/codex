@@ -1160,7 +1160,9 @@ impl App {
         }
 
         let width = tui.terminal.size()?.width;
-        for cell in self.transcript_cells.clone() {
+        // Iterate by index to avoid cloning the Vec and bumping Arc refcounts.
+        for i in 0..self.transcript_cells.len() {
+            let cell = self.transcript_cells[i].clone();
             self.insert_history_cell_lines(tui, cell.as_ref(), width);
         }
 

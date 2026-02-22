@@ -95,8 +95,8 @@ impl StreamCore {
         Self {
             state: StreamState::new(width),
             width,
-            raw_source: String::new(),
-            rendered_lines: Vec::new(),
+            raw_source: String::with_capacity(1024),
+            rendered_lines: Vec::with_capacity(64),
             enqueued_stable_len: 0,
             emitted_stable_len: 0,
             stable_prefix_len_cache: None,
@@ -161,14 +161,20 @@ impl StreamCore {
         step
     }
 
+    // Trivial StreamCore accessors inlined — called on every animation tick
+    // and render frame during active streaming.
+
+    #[inline]
     fn is_idle(&self) -> bool {
         self.state.is_idle()
     }
 
+    #[inline]
     fn queued_lines(&self) -> usize {
         self.state.queued_len()
     }
 
+    #[inline]
     fn oldest_queued_age(&self, now: Instant) -> Option<Duration> {
         self.state.oldest_queued_age(now)
     }
@@ -177,11 +183,13 @@ impl StreamCore {
     ///
     /// The tail starts at `enqueued_stable_len` -- everything from that offset to
     /// the end of `rendered_lines` is displayed live in the active-cell slot.
+    #[inline]
     fn current_tail_lines(&self) -> Vec<Line<'static>> {
         let start = self.enqueued_stable_len.min(self.rendered_lines.len());
         self.rendered_lines[start..].to_vec()
     }
 
+    #[inline]
     fn has_tail(&self) -> bool {
         self.enqueued_stable_len < self.rendered_lines.len()
     }
@@ -393,8 +401,8 @@ impl StreamController {
             return (None, None);
         }
 
-        // Capture the source before reset clears it.
-        let source = self.core.raw_source.clone();
+        // Move ownership — source is consumed before reset() clears it.
+        let source = std::mem::take(&mut self.core.raw_source);
         let out = self.emit(remaining);
         self.core.reset();
         (out, Some(source))
@@ -413,6 +421,10 @@ impl StreamController {
         (self.emit(step), self.core.is_idle())
     }
 
+    // Thin StreamController accessors inlined — one-liner delegates called
+    // on every render frame and animation tick.
+
+    #[inline]
     pub(crate) fn queued_lines(&self) -> usize {
         self.core.queued_lines()
     }
@@ -421,14 +433,17 @@ impl StreamController {
         self.core.oldest_queued_age(now)
     }
 
+    #[inline]
     pub(crate) fn current_tail_lines(&self) -> Vec<Line<'static>> {
         self.core.current_tail_lines()
     }
 
+    #[inline]
     pub(crate) fn tail_starts_stream(&self) -> bool {
         !self.header_emitted && self.core.enqueued_stable_len == 0
     }
 
+    #[inline]
     pub(crate) fn has_live_tail(&self) -> bool {
         self.core.has_tail()
     }
@@ -484,7 +499,8 @@ impl PlanStreamController {
             return (None, None);
         }
 
-        let source = self.core.raw_source.clone();
+        // Move ownership — source is consumed before reset() clears it.
+        let source = std::mem::take(&mut self.core.raw_source);
         let out = self.emit(remaining, true);
         self.core.reset();
         (out, Some(source))
@@ -503,6 +519,7 @@ impl PlanStreamController {
         (self.emit(step, false), self.core.is_idle())
     }
 
+    #[inline]
     pub(crate) fn queued_lines(&self) -> usize {
         self.core.queued_lines()
     }
@@ -524,7 +541,7 @@ impl PlanStreamController {
             return None;
         }
 
-        let mut out_lines: Vec<Line<'static>> = Vec::new();
+        let mut out_lines: Vec<Line<'static>> = Vec::with_capacity(4);
         let is_stream_continuation = self.header_emitted;
         if !self.header_emitted {
             out_lines.push(vec!["• ".dim(), "Proposed Plan".bold()].into());
@@ -532,7 +549,7 @@ impl PlanStreamController {
             self.header_emitted = true;
         }
 
-        let mut plan_lines: Vec<Line<'static>> = Vec::new();
+        let mut plan_lines: Vec<Line<'static>> = Vec::with_capacity(4);
         if !self.top_padding_emitted {
             plan_lines.push(Line::from(" "));
             self.top_padding_emitted = true;

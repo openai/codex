@@ -117,13 +117,16 @@ struct TableCell {
     lines: Vec<Line<'static>>,
 }
 
+// TableCell mutators inlined — called per-span during table event parsing.
 impl TableCell {
+    #[inline]
     fn ensure_line(&mut self) {
         if self.lines.is_empty() {
             self.lines.push(Line::default());
         }
     }
 
+    #[inline]
     fn push_span(&mut self, span: Span<'static>) {
         self.ensure_line();
         if let Some(line) = self.lines.last_mut() {
@@ -131,21 +134,23 @@ impl TableCell {
         }
     }
 
+    #[inline]
     fn hard_break(&mut self) {
         self.lines.push(Line::default());
     }
 
     fn plain_text(&self) -> String {
-        self.lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.clone())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
+        use std::fmt::Write;
+        let mut buf = String::new();
+        for (i, line) in self.lines.iter().enumerate() {
+            if i > 0 {
+                buf.push(' ');
+            }
+            for span in &line.spans {
+                let _ = write!(buf, "{}", span.content);
+            }
+        }
+        buf
     }
 }
 
@@ -843,8 +848,8 @@ where
             };
         }
 
-        let mut spillover_rows: Vec<TableCell> = Vec::new();
-        let mut rows: Vec<Vec<TableCell>> = Vec::new();
+        let mut spillover_rows: Vec<TableCell> = Vec::with_capacity(4);
+        let mut rows: Vec<Vec<TableCell>> = Vec::with_capacity(table_state.rows.len());
         for (row_idx, row) in table_state.rows.iter().enumerate() {
             let next_row = table_state.rows.get(row_idx + 1);
             // pulldown-cmark accepts body rows without pipes, which can turn a following paragraph
@@ -889,7 +894,7 @@ where
         };
 
         let border_style = Style::new().dim();
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(3 + rows.len() * 2);
         out.push(self.render_border_line('┌', '┬', '┐', &column_widths, border_style));
         out.extend(self.render_table_row(
             &header,
@@ -1128,13 +1133,13 @@ where
         style: Style,
     ) -> Line<'static> {
         let mut spans = Vec::with_capacity(column_widths.len() * 2 + 1);
-        spans.push(Span::styled(left.to_string(), style));
+        spans.push(Span::styled(String::from(left), style));
         for (idx, width) in column_widths.iter().enumerate() {
             spans.push(Span::styled("─".repeat(*width + 2), style));
             if idx + 1 == column_widths.len() {
-                spans.push(Span::styled(right.to_string(), style));
+                spans.push(Span::styled(String::from(right), style));
             } else {
-                spans.push(Span::styled(sep.to_string(), style));
+                spans.push(Span::styled(String::from(sep), style));
             }
         }
         Line::from(spans)
@@ -1152,12 +1157,12 @@ where
             .zip(column_widths)
             .map(|(cell, width)| self.wrap_cell(cell, *width))
             .collect();
-        let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
+        let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
 
         let mut out = Vec::with_capacity(row_height);
         for row_line in 0..row_height {
             let mut spans = Vec::new();
-            spans.push(Span::styled("│".to_string(), border_style));
+            spans.push(Span::styled("│", border_style));
             for (column, width) in column_widths.iter().enumerate() {
                 spans.push(Span::raw(" "));
                 let line = wrapped_cells[column]
@@ -1179,7 +1184,7 @@ where
                     spans.push(Span::raw(" ".repeat(right_padding)));
                 }
                 spans.push(Span::raw(" "));
-                spans.push(Span::styled("│".to_string(), border_style));
+                spans.push(Span::styled("│", border_style));
             }
             out.push(Line::from(spans));
         }
@@ -1351,14 +1356,20 @@ where
             .any(|word| word.eq_ignore_ascii_case("html"))
     }
 
+    // Width-measurement helpers inlined — called per-cell during table column
+    // width computation, which runs on every re-render.
+
+    #[inline]
     fn spans_display_width(spans: &[Span<'_>]) -> usize {
         spans.iter().map(|span| span.content.width()).sum()
     }
 
+    #[inline]
     fn line_display_width(line: &Line<'_>) -> usize {
         Self::spans_display_width(&line.spans)
     }
 
+    #[inline]
     fn cell_display_width(cell: &TableCell) -> usize {
         cell.lines
             .iter()
@@ -1367,6 +1378,7 @@ where
             .unwrap_or(0)
     }
 
+    #[inline]
     fn longest_token_width(text: &str) -> usize {
         text.split_whitespace().map(str::width).max().unwrap_or(0)
     }

@@ -40,8 +40,8 @@ pub(crate) fn parse_table_segments(line: &str) -> Option<Vec<&str>> {
     let content = content.strip_suffix('|').unwrap_or(content);
 
     let segments: Vec<&str> = split_unescaped_pipe(content)
-        .iter()
-        .map(|s| s.trim())
+        .into_iter()
+        .map(str::trim)
         .collect();
     (!segments.is_empty()).then_some(segments)
 }
@@ -52,7 +52,7 @@ pub(crate) fn parse_table_segments(line: &str) -> Option<Vec<&str>> {
 /// The backslash remains in the segment (this is structure detection, not
 /// rendering).
 fn split_unescaped_pipe(content: &str) -> Vec<&str> {
-    let mut segments = Vec::new();
+    let mut segments = Vec::with_capacity(8);
     let mut start = 0;
     let bytes = content.as_bytes();
     let mut i = 0;
@@ -72,14 +72,19 @@ fn split_unescaped_pipe(content: &str) -> Vec<&str> {
     segments
 }
 
+// Small table-detection helpers inlined for the streaming hot path — they are
+// called on every source line during incremental holdback scanning.
+
 /// Whether `line` looks like a table header row (has pipe-separated
 /// segments with at least one non-empty cell).
+#[inline]
 pub(crate) fn is_table_header_line(line: &str) -> bool {
     parse_table_segments(line).is_some_and(|segments| segments.iter().any(|s| !s.is_empty()))
 }
 
 /// Whether a single segment matches the `---`, `:---`, `---:`, or `:---:`
 /// alignment-colon syntax used in markdown table delimiter rows.
+#[inline]
 fn is_table_delimiter_segment(segment: &str) -> bool {
     let trimmed = segment.trim();
     if trimmed.is_empty() {
@@ -92,6 +97,7 @@ fn is_table_delimiter_segment(segment: &str) -> bool {
 
 /// Whether `line` is a valid table delimiter row (every segment passes
 /// [`is_table_delimiter_segment`]).
+#[inline]
 pub(crate) fn is_table_delimiter_line(line: &str) -> bool {
     parse_table_segments(line)
         .is_some_and(|segments| segments.into_iter().all(is_table_delimiter_segment))
@@ -128,6 +134,7 @@ pub(crate) struct FenceTracker {
 }
 
 impl FenceTracker {
+    #[inline]
     pub(crate) fn new() -> Self {
         Self { state: None }
     }
@@ -170,6 +177,7 @@ impl FenceTracker {
     }
 
     /// Current fence context for the most-recently-advanced line.
+    #[inline]
     pub(crate) fn kind(&self) -> FenceKind {
         self.state.map_or(FenceKind::Outside, |(_, _, k)| k)
     }
@@ -180,6 +188,7 @@ impl FenceTracker {
 /// Recognises backtick and tilde fences with a minimum run of 3.
 /// The input should already have leading whitespace and blockquote prefixes
 /// stripped.
+#[inline]
 pub(crate) fn parse_fence_marker(line: &str) -> Option<(char, usize)> {
     let first = line.as_bytes().first().copied()?;
     if first != b'`' && first != b'~' {
@@ -195,6 +204,7 @@ pub(crate) fn parse_fence_marker(line: &str) -> Option<(char, usize)> {
 /// Whether the info string after a fence marker indicates markdown content.
 ///
 /// Matches `md` and `markdown` (case-insensitive).
+#[inline]
 pub(crate) fn is_markdown_fence_info(trimmed_line: &str, marker_len: usize) -> bool {
     let info = trimmed_line[marker_len..]
         .split_whitespace()
@@ -207,6 +217,7 @@ pub(crate) fn is_markdown_fence_info(trimmed_line: &str, marker_len: usize) -> b
 ///
 /// Tables can appear inside blockquotes (`> | A | B |`), so the holdback
 /// scanner must strip these markers before checking for table syntax.
+#[inline]
 pub(crate) fn strip_blockquote_prefix(line: &str) -> &str {
     let mut rest = line.trim_start();
     loop {
