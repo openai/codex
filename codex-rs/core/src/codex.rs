@@ -2164,6 +2164,9 @@ impl Session {
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
+        if text.trim().is_empty() {
+            return;
+        }
         handlers::user_input_or_turn(
             self,
             self.next_internal_sub_id(),
@@ -7021,12 +7024,72 @@ fn agent_message_text(item: &codex_protocol::items::AgentMessageItem) -> String 
 }
 
 fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
+    const REALTIME_MIRROR_MAX_CHARS: usize = 2_000;
+    const REALTIME_MIRROR_MAX_FILES: usize = 50;
+
     match msg {
         EventMsg::AgentMessage(event) => Some(event.message.clone()),
         EventMsg::ItemCompleted(event) => match &event.item {
             TurnItem::AgentMessage(item) => Some(agent_message_text(item)),
             _ => None,
         },
+        EventMsg::ExecCommandBegin(event) => {
+            let command = event.command.join(" ");
+            Some(format!(
+                "Exec command started: {command}\nWorking directory: {}",
+                event.cwd.display()
+            ))
+        }
+        EventMsg::PatchApplyBegin(event) => {
+            let mut files: Vec<String> = event
+                .changes
+                .keys()
+                .map(|path| path.display().to_string())
+                .collect();
+            files.sort();
+            let total_file_count = files.len();
+            let truncated_file_count = total_file_count.saturating_sub(REALTIME_MIRROR_MAX_FILES);
+            if truncated_file_count > 0 {
+                files.truncate(REALTIME_MIRROR_MAX_FILES);
+            }
+            let file_list = if files.is_empty() {
+                "none".to_string()
+            } else {
+                files.join(", ")
+            };
+            let file_list = if truncated_file_count > 0 {
+                format!("{file_list} ...(truncated, +{truncated_file_count} more)")
+            } else {
+                file_list
+            };
+            Some(format!(
+                "apply_patch started ({count} file change(s))\nFiles: {file_list}",
+                count = total_file_count
+            ))
+        }
+        EventMsg::PatchApplyEnd(event) => {
+            let status = match event.status {
+                codex_protocol::protocol::PatchApplyStatus::Completed => "completed",
+                codex_protocol::protocol::PatchApplyStatus::Failed => "failed",
+                codex_protocol::protocol::PatchApplyStatus::Declined => "declined",
+            };
+            let mut text = format!("apply_patch {status}");
+            if !event.stdout.is_empty() {
+                text.push_str(&format!("\nstdout:\n{}", event.stdout));
+            }
+            if !event.stderr.is_empty() {
+                text.push_str(&format!("\nstderr:\n{}", event.stderr));
+            }
+            if text.len() > REALTIME_MIRROR_MAX_CHARS {
+                let mut end = REALTIME_MIRROR_MAX_CHARS;
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text.truncate(end);
+                text.push_str("\n...(truncated)");
+            }
+            Some(text)
+        }
         EventMsg::Error(_)
         | EventMsg::Warning(_)
         | EventMsg::RealtimeConversationStarted(_)
@@ -7053,12 +7116,9 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::McpToolCallEnd(_)
         | EventMsg::WebSearchBegin(_)
         | EventMsg::WebSearchEnd(_)
-        | EventMsg::ExecCommandBegin(_)
         | EventMsg::ExecCommandOutputDelta(_)
         | EventMsg::TerminalInteraction(_)
         | EventMsg::ExecCommandEnd(_)
-        | EventMsg::PatchApplyBegin(_)
-        | EventMsg::PatchApplyEnd(_)
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::ImageGenerationBegin(_)
         | EventMsg::ImageGenerationEnd(_)
