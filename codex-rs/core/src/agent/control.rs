@@ -113,19 +113,18 @@ impl AgentControl {
                         Ok(parent_thread) => parent_thread.rollout_path(),
                         Err(_) => None,
                     }
-                    .or(
-                        find_thread_path_by_id_str(
-                            config.codex_home.as_path(),
-                            &parent_thread_id.to_string(),
-                        )
-                        .await?,
+                    .or(find_thread_path_by_id_str(
+                        config.codex_home.as_path(),
+                        &parent_thread_id.to_string(),
                     )
+                    .await?)
                     .ok_or_else(|| {
                         CodexErr::Fatal(format!(
                             "parent thread rollout unavailable for fork: {parent_thread_id}"
                         ))
                     })?;
-                    let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+                    let initial_history =
+                        RolloutRecorder::get_rollout_history(&rollout_path).await?;
                     state
                         .fork_thread_with_source(
                             config,
@@ -476,6 +475,20 @@ mod tests {
         })
     }
 
+    fn history_contains_text(history_items: &[ResponseItem], needle: &str) -> bool {
+        history_items.iter().any(|item| {
+            let ResponseItem::Message { content, .. } = item else {
+                return false;
+            };
+            content.iter().any(|content_item| match content_item {
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    text.contains(needle)
+                }
+                ContentItem::InputImage { .. } => false,
+            })
+        })
+    }
+
     async fn wait_for_subagent_notification(parent_thread: &Arc<CodexThread>) -> bool {
         let wait = async {
             loop {
@@ -715,6 +728,64 @@ mod tests {
             Op::UserInput {
                 items: vec![UserInput::Text {
                     text: "spawned".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            },
+        );
+        let captured = harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .find(|entry| *entry == expected);
+        assert_eq!(captured, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_can_fork_parent_thread_history() {
+        let harness = AgentControlHarness::new().await;
+        let (parent_thread_id, parent_thread) = harness.start_thread().await;
+        parent_thread
+            .inject_user_message_without_turn("parent seed context".to_string())
+            .await;
+        parent_thread
+            .codex
+            .session
+            .ensure_rollout_materialized()
+            .await;
+        parent_thread.codex.session.flush_rollout().await;
+
+        let child_thread_id = harness
+            .control
+            .spawn_agent_with_options(
+                harness.config.clone(),
+                text_input("child task"),
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth: 1,
+                    agent_nickname: None,
+                    agent_role: None,
+                })),
+                SpawnAgentOptions {
+                    fork_parent_thread: true,
+                },
+            )
+            .await
+            .expect("forked spawn should succeed");
+
+        let child_thread = harness
+            .manager
+            .get_thread(child_thread_id)
+            .await
+            .expect("child thread should be registered");
+        let history_items = child_thread.codex.session.clone_history().await;
+        assert!(history_contains_text(&history_items, "parent seed context"));
+
+        let expected = (
+            child_thread_id,
+            Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: "child task".to_string(),
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,

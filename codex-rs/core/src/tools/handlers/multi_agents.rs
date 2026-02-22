@@ -93,8 +93,8 @@ impl ToolHandler for MultiAgentHandler {
 
 mod spawn {
     use super::*;
-    use crate::agent::role::apply_role_to_config;
     use crate::agent::control::SpawnAgentOptions;
+    use crate::agent::role::apply_role_to_config;
 
     use crate::agent::exceeds_thread_spawn_depth_limit;
     use crate::agent::next_thread_spawn_depth;
