@@ -1520,6 +1520,9 @@ impl Session {
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
+        if text.trim().is_empty() {
+            return;
+        }
         handlers::user_input_or_turn(
             self,
             self.next_internal_sub_id(),
@@ -2217,13 +2220,24 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
+        let mirror_source = legacy_source.clone();
         let event = Event {
             id: turn_context.sub_id.clone(),
             msg,
         };
         self.send_event_raw(event).await;
-        self.maybe_mirror_event_text_to_realtime(&legacy_source)
-            .await;
+        let conversation = Arc::clone(&self.conversation);
+        tokio::spawn(async move {
+            let Some(text) = realtime_text_for_event(&mirror_source) else {
+                return;
+            };
+            if conversation.running_state().await.is_none() {
+                return;
+            }
+            if let Err(err) = conversation.text_in(text).await {
+                debug!("failed to mirror event text to realtime conversation: {err}");
+            }
+        });
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
@@ -2232,18 +2246,6 @@ impl Session {
                 msg: legacy,
             };
             self.send_event_raw(legacy_event).await;
-        }
-    }
-
-    async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {
-        let Some(text) = realtime_text_for_event(msg) else {
-            return;
-        };
-        if self.conversation.running_state().await.is_none() {
-            return;
-        }
-        if let Err(err) = self.conversation.text_in(text).await {
-            debug!("failed to mirror event text to realtime conversation: {err}");
         }
     }
 
@@ -5482,6 +5484,9 @@ fn agent_message_text(item: &codex_protocol::items::AgentMessageItem) -> String 
 }
 
 fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
+    const REALTIME_MIRROR_MAX_CHARS: usize = 2_000;
+    const REALTIME_MIRROR_MAX_FILES: usize = 50;
+
     match msg {
         EventMsg::AgentMessage(event) => Some(event.message.clone()),
         EventMsg::ItemCompleted(event) => match &event.item {
@@ -5502,14 +5507,24 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
                 .map(|path| path.display().to_string())
                 .collect();
             files.sort();
+            let total_file_count = files.len();
+            let truncated_file_count = total_file_count.saturating_sub(REALTIME_MIRROR_MAX_FILES);
+            if truncated_file_count > 0 {
+                files.truncate(REALTIME_MIRROR_MAX_FILES);
+            }
             let file_list = if files.is_empty() {
                 "none".to_string()
             } else {
                 files.join(", ")
             };
+            let file_list = if truncated_file_count > 0 {
+                format!("{file_list} ...(truncated, +{truncated_file_count} more)")
+            } else {
+                file_list
+            };
             Some(format!(
                 "apply_patch started ({count} file change(s))\nFiles: {file_list}",
-                count = files.len()
+                count = total_file_count
             ))
         }
         EventMsg::PatchApplyEnd(event) => {
@@ -5524,6 +5539,14 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
             }
             if !event.stderr.is_empty() {
                 text.push_str(&format!("\nstderr:\n{}", event.stderr));
+            }
+            if text.len() > REALTIME_MIRROR_MAX_CHARS {
+                let mut end = REALTIME_MIRROR_MAX_CHARS;
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text.truncate(end);
+                text.push_str("\n...(truncated)");
             }
             Some(text)
         }
