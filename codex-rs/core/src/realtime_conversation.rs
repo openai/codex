@@ -440,4 +440,13 @@ mod tests {
         });
         assert_eq!(realtime_text_from_conversation_item(&no_text), None);
     }
+
+    #[test]
+    fn returns_none_when_content_missing() {
+        let item = json!({
+            "type": "message",
+            "role": "assistant",
+        });
+        assert_eq!(realtime_text_from_conversation_item(&item), None);
+    }
 }
