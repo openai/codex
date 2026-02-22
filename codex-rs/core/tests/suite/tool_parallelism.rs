@@ -22,6 +22,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::StreamingSseSignals;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
@@ -325,7 +326,13 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
     let (first_gate_tx, first_gate_rx) = oneshot::channel();
     let (completion_gate_tx, completion_gate_rx) = oneshot::channel();
     let (follow_up_gate_tx, follow_up_gate_rx) = oneshot::channel();
-    let (streaming_server, completion_receivers) = start_streaming_sse_server(vec![
+    let (
+        streaming_server,
+        StreamingSseSignals {
+            request_received: _,
+            stream_completed: completion_receivers,
+        },
+    ) = start_streaming_sse_server(vec![
         vec![
             StreamingSseChunk {
                 gate: Some(first_gate_rx),

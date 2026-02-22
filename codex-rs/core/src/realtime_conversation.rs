@@ -216,6 +216,9 @@ pub(crate) async fn handle_start(
                 }
                 _ => None,
             };
+            if let Some(text) = maybe_routed_text {
+                sess_clone.route_realtime_text_input(text).await;
+            }
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
                     RealtimeConversationRealtimeEvent {
@@ -223,9 +226,6 @@ pub(crate) async fn handle_start(
                     },
                 )))
                 .await;
-            if let Some(text) = maybe_routed_text {
-                sess_clone.route_realtime_text_input(text).await;
-            }
         }
         if let Some(()) = sess_clone.conversation.running_state().await {
             sess_clone
