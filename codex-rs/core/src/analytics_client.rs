@@ -206,8 +206,7 @@ struct SkillInvocationEventParams {
     skill_scope: Option<String>,
     repo_url: Option<String>,
     thread_id: Option<String>,
-    #[serde(rename = "invoke_type")]
-    invocation_type: Option<InvocationType>,
+    invoke_type: Option<InvocationType>,
     model_slug: Option<String>,
 }
 
@@ -218,8 +217,7 @@ struct CodexAppMetadata {
     turn_id: Option<String>,
     app_name: Option<String>,
     product_client_id: Option<String>,
-    #[serde(rename = "invoke_type")]
-    invocation_type: Option<InvocationType>,
+    invoke_type: Option<InvocationType>,
     model_slug: Option<String>,
 }
 
@@ -339,7 +337,7 @@ async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackSkil
                 skill_name: invocation.skill_name.clone(),
                 event_params: SkillInvocationEventParams {
                     thread_id: Some(tracking.thread_id.clone()),
-                    invocation_type: Some(invocation.invocation_type),
+                    invoke_type: Some(invocation.invocation_type),
                     model_slug: Some(tracking.model_slug.clone()),
                     product_client_id: Some(crate::default_client::originator().value),
                     repo_url,
@@ -394,7 +392,7 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
         turn_id: Some(tracking.turn_id.clone()),
         app_name: app.app_name,
         product_client_id: Some(crate::default_client::originator().value),
-        invocation_type: app.invocation_type,
+        invoke_type: app.invocation_type,
         model_slug: Some(tracking.model_slug.clone()),
     }
 }
