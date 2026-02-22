@@ -33,6 +33,52 @@ async fn test_shell_command_interruption() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_conversation_without_active_turn_returns_immediately() -> anyhow::Result<()> {
+    skip_if_no_network!();
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let working_directory = tmp.path().join("workdir");
+    std::fs::create_dir(&working_directory)?;
+
+    let server = create_mock_responses_server_sequence(Vec::new()).await;
+    create_config_toml(&codex_home, server.uri())?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let new_conv_id = mcp
+        .send_new_conversation_request(NewConversationParams {
+            cwd: Some(working_directory.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let new_conv_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
+    )
+    .await??;
+    let NewConversationResponse {
+        conversation_id, ..
+    } = to_response::<NewConversationResponse>(new_conv_resp)?;
+
+    let interrupt_id = mcp
+        .send_interrupt_conversation_request(InterruptConversationParams { conversation_id })
+        .await?;
+    let interrupt_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(interrupt_id)),
+    )
+    .await??;
+    let InterruptConversationResponse { abort_reason } =
+        to_response::<InterruptConversationResponse>(interrupt_resp)?;
+    assert_eq!(TurnAbortReason::Interrupted, abort_reason);
+
+    Ok(())
+}
+
 async fn shell_command_interruption() -> anyhow::Result<()> {
     // Use a cross-platform blocking command. On Windows plain `sleep` is not guaranteed to exist
     // (MSYS/GNU coreutils may be absent) and the failure causes the tool call to finish immediately,

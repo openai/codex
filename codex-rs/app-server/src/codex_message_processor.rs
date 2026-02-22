@@ -71,6 +71,7 @@ use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::HazelnutScope as ApiHazelnutScope;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
+use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
@@ -248,6 +249,7 @@ use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
@@ -5325,6 +5327,25 @@ impl CodexMessageProcessor {
         };
 
         let request = request_id.clone();
+        let has_in_progress_turn = self.thread_has_in_progress_turn(conversation_id).await;
+
+        if !has_in_progress_turn {
+            let _ = conversation.submit(Op::Interrupt).await;
+            if let Err(err) = conversation.submit(Op::CleanBackgroundTerminals).await {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to clean background terminals: {err}"),
+                )
+                .await;
+                return;
+            }
+
+            let response = InterruptConversationResponse {
+                abort_reason: TurnAbortReason::Interrupted,
+            };
+            self.outgoing.send_response(request_id, response).await;
+            return;
+        }
 
         // Record the pending interrupt so we can reply when TurnAborted arrives.
         {
@@ -5741,6 +5762,24 @@ impl CodexMessageProcessor {
         };
 
         let request = request_id.clone();
+        let has_in_progress_turn = self.thread_has_in_progress_turn(thread_uuid).await;
+
+        if !has_in_progress_turn {
+            let _ = thread.submit(Op::Interrupt).await;
+            if let Err(err) = thread.submit(Op::CleanBackgroundTerminals).await {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to clean background terminals: {err}"),
+                )
+                .await;
+                return;
+            }
+
+            self.outgoing
+                .send_response(request_id, TurnInterruptResponse {})
+                .await;
+            return;
+        }
 
         // Record the pending interrupt so we can reply when TurnAborted arrives.
         {
@@ -6281,6 +6320,14 @@ impl CodexMessageProcessor {
             Ok(conv) => conv.rollout_path(),
             Err(_) => None,
         }
+    }
+
+    async fn thread_has_in_progress_turn(&mut self, thread_id: ThreadId) -> bool {
+        let thread_state = self.thread_state_manager.thread_state(thread_id);
+        let thread_state = thread_state.lock().await;
+        thread_state
+            .active_turn_snapshot()
+            .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress))
     }
 }
 
