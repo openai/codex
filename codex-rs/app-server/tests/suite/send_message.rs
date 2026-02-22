@@ -564,6 +564,7 @@ fn append_rollout_turn_context(path: &Path, timestamp: &str, model: &str) -> std
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             network: None,
+            approved_prefix_rules: None,
             model: model.to_string(),
             personality: None,
             collaboration_mode: None,

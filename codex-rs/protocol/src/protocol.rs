@@ -2107,6 +2107,8 @@ pub struct TurnContextItem {
     pub sandbox_policy: SandboxPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<TurnContextNetworkItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_prefix_rules: Option<String>,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
@@ -3325,6 +3327,7 @@ mod tests {
                 allowed_domains: vec!["api.example.com".to_string()],
                 denied_domains: vec!["blocked.example.com".to_string()],
             }),
+            approved_prefix_rules: None,
             model: "gpt-5".to_string(),
             personality: None,
             collaboration_mode: None,

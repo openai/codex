@@ -239,18 +239,8 @@ impl DeveloperInstructions {
         Self { text: text.into() }
     }
 
-    pub fn from(approval_policy: AskForApproval, exec_policy: &Policy) -> DeveloperInstructions {
-        let on_request_instructions = || {
-            let command_prefixes = format_allow_prefixes(exec_policy.get_allowed_prefixes());
-            match command_prefixes {
-                Some(prefixes) => {
-                    format!(
-                        "{APPROVAL_POLICY_ON_REQUEST_RULE}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
-                    )
-                }
-                None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
-            }
-        };
+    pub fn from(approval_policy: AskForApproval, _exec_policy: &Policy) -> DeveloperInstructions {
+        let on_request_instructions = || APPROVAL_POLICY_ON_REQUEST_RULE.to_string();
         let text = match approval_policy {
             AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
             AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.to_string(),
@@ -392,7 +382,10 @@ impl DeveloperInstructions {
             SandboxMode::WorkspaceWrite => SANDBOX_MODE_WORKSPACE_WRITE.trim_end(),
             SandboxMode::ReadOnly => SANDBOX_MODE_READ_ONLY.trim_end(),
         };
-        let text = template.replace("{network_access}", &network_access.to_string());
+        let text = format!(
+            "{} Approved command prefix rules (if any) are provided in `<environment_context>` under `<approved_prefix_rules>`.",
+            template.replace("{network_access}", &network_access.to_string())
+        );
 
         DeveloperInstructions::new(text)
     }
@@ -1184,7 +1177,7 @@ mod tests {
         assert_eq!(
             workspace_write,
             DeveloperInstructions::new(
-                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted. Approved command prefix rules (if any) are provided in `<environment_context>` under `<approved_prefix_rules>`."
             )
         );
 
@@ -1192,7 +1185,7 @@ mod tests {
         assert_eq!(
             read_only,
             DeveloperInstructions::new(
-                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted. Approved command prefix rules (if any) are provided in `<environment_context>` under `<approved_prefix_rules>`."
             )
         );
     }
@@ -1258,8 +1251,8 @@ mod tests {
 
         let text = instructions.into_text();
         assert!(text.contains("prefix_rule"));
-        assert!(text.contains("Approved command prefixes"));
-        assert!(text.contains(r#"["git", "pull"]"#));
+        assert!(text.contains("<approved_prefix_rules>"));
+        assert!(!text.contains("Approved command prefixes"));
     }
 
     #[test]
