@@ -27,12 +27,13 @@ Accept any of the following:
 2. Inspect the `actions` list in the JSON response.
 3. If `diagnose_ci_failure` is present, inspect failed run logs and classify the failure.
 4. If the failure is likely caused by the current branch, patch code locally, commit, and push.
-5. If the failure is likely flaky/unrelated and `retry_failed_checks` is present, rerun failed jobs with `--retry-failed-now`.
-6. If `process_review_comment` is present, inspect new review items and decide whether to address them.
-7. If a review item is actionable and correct, patch code locally, commit, and push.
-8. On every loop, verify mergeability / merge-conflict status (for example via `gh pr view`) in addition to CI and review state.
-9. After any push or rerun action, immediately return to step 1 and continue polling on the updated SHA/state.
-10. Repeat polling until the PR is green + review-clean + mergeable, `stop_pr_closed` appears, or a user-help-required blocker is reached.
+5. If `process_review_comment` is present, inspect new review items and decide whether to address them.
+6. If a review item is actionable and correct, patch code locally, commit, and push.
+7. If the failure is likely flaky/unrelated and `retry_failed_checks` is present, rerun failed jobs with `--retry-failed-now`.
+8. If both actionable review feedback and `retry_failed_checks` are present, prioritize review feedback first; a new commit will retrigger CI, so avoid rerunning flaky checks on the old SHA unless you intentionally defer the review change.
+9. On every loop, verify mergeability / merge-conflict status (for example via `gh pr view`) in addition to CI and review state.
+10. After any push or rerun action, immediately return to step 1 and continue polling on the updated SHA/state.
+11. Repeat polling until the PR is green + review-clean + mergeable, `stop_pr_closed` appears, or a user-help-required blocker is reached.
 
 ## Commands
 
@@ -114,11 +115,13 @@ Use this loop in a live Codex session:
 2. Read `actions`.
 3. First check whether the PR is now merged or otherwise closed; if so, report that terminal state and stop polling immediately.
 4. Check CI summary, new review items, and mergeability/conflict status.
-5. Diagnose/fix/push or retry failed checks if appropriate.
-6. If you pushed a commit or triggered a rerun, report the action briefly and continue polling (do not stop).
-7. If everything is passing, mergeable, not blocked on required review approval, and there are no unaddressed review items, report success and stop.
-8. If blocked on a user-help-required issue (infra outage, exhausted flaky retries, unclear reviewer request, permissions), report the blocker and stop.
-9. Otherwise sleep according to the polling cadence below and repeat.
+5. Diagnose CI failures and classify branch-related vs flaky/unrelated.
+6. Process actionable review comments before flaky reruns when both are present; if a review fix requires a commit, push it and skip rerunning failed checks on the old SHA.
+7. Retry failed checks only when `retry_failed_checks` is present and you are not about to replace the current SHA with a review/CI fix commit.
+8. If you pushed a commit or triggered a rerun, report the action briefly and continue polling (do not stop).
+9. If everything is passing, mergeable, not blocked on required review approval, and there are no unaddressed review items, report success and stop.
+10. If blocked on a user-help-required issue (infra outage, exhausted flaky retries, unclear reviewer request, permissions), report the blocker and stop.
+11. Otherwise sleep according to the polling cadence below and repeat.
 
 Use `--watch` when you want JSONL snapshots streamed continuously instead of manual polling.
 Do not stop to ask the user whether to continue polling; continue autonomously until a strict stop condition is met or the user explicitly interrupts.
