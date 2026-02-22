@@ -663,7 +663,7 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
             body: sse_event(responses::ev_completed("resp-2")),
         },
     ];
-    let (api_server, _completions) =
+    let (api_server, completions) =
         start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
 
     let realtime_server = start_websocket_server(vec![vec![
@@ -746,11 +746,18 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
     })
     .await;
 
+    let mut completion_iter = completions.into_iter();
+    let _first_completion = completion_iter.next().expect("missing first completion");
+    let second_completion = completion_iter.next().expect("missing second completion");
+
     let _ = gate_completed_tx.send(());
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    second_completion
+        .await
+        .expect("second request did not complete");
 
     let requests = api_server.requests().await;
     assert_eq!(requests.len(), 2);
