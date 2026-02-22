@@ -395,8 +395,6 @@ def fetch_new_review_items(pr, state, fresh_state):
     repo = pr["repo"]
     pr_number = pr["number"]
     endpoints = comment_endpoints(repo, pr_number)
-    self_login = state.get("self_login") or get_authenticated_login()
-    state["self_login"] = self_login
 
     issue_payload = gh_json(["api", endpoints["issue_comment"]], repo=repo) or []
     review_comment_payload = gh_json(["api", endpoints["review_comment"]], repo=repo) or []
@@ -431,8 +429,6 @@ def fetch_new_review_items(pr, state, fresh_state):
             continue
         author = item.get("author") or ""
         if not author:
-            continue
-        if author == self_login:
             continue
         if is_bot_login(author):
             continue

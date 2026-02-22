@@ -9,7 +9,7 @@ description: Babysit a GitHub pull request after creation by continuously pollin
 Babysit a PR persistently until one of these terminal outcomes occurs:
 
 - The PR is merged or closed.
-- CI is successful, there are no unaddressed review comments surfaced by the watcher, and there are no potential merge conflicts (PR is mergeable / not reporting conflict risk).
+- CI is successful, there are no unaddressed review comments surfaced by the watcher, required review approval is not blocking merge, and there are no potential merge conflicts (PR is mergeable / not reporting conflict risk).
 - A situation requires user help (for example CI infrastructure issues, repeated flaky failures after retry budget is exhausted, permission problems, or ambiguity that cannot be resolved safely).
 
 Do not stop merely because a single snapshot returns `idle` while checks are still pending.
@@ -110,17 +110,19 @@ Use this loop in a live Codex session:
 3. First check whether the PR is now merged or otherwise closed; if so, report that terminal state and stop polling immediately.
 4. Check CI summary, new review items, and mergeability/conflict status.
 5. Diagnose/fix/push or retry failed checks if appropriate.
-6. If everything is passing and mergeable with no unaddressed review items, report success and stop.
+6. If everything is passing, mergeable, not blocked on required review approval, and there are no unaddressed review items, report success and stop.
 7. If blocked on a user-help-required issue (infra outage, exhausted flaky retries, unclear reviewer request, permissions), report the blocker and stop.
 8. Otherwise sleep according to the polling cadence below and repeat.
 
 Use `--watch` when you want JSONL snapshots streamed continuously instead of manual polling.
+Do not stop to ask the user whether to continue polling; continue autonomously until a strict stop condition is met or the user explicitly interrupts.
 
 ## Polling Cadence
 Use adaptive polling and continue monitoring even after CI turns green:
 
 - While CI is not green (pending/running/queued or failing): poll every 1 minute.
-- After CI turns green: poll every 5 minutes to watch for new review comments and new merge conflicts (and to catch CI regressions/re-runs).
+- After CI turns green: start at every 1 minute, then back off exponentially when there is no change (for example 1m, 2m, 4m, 8m, 16m, 32m), capping at every 1 hour.
+- Reset the green-state polling interval back to 1 minute whenever anything changes (new commit/SHA, check status changes, new review comments, mergeability changes, review decision changes).
 - If CI stops being green again (new commit, rerun, or regression): return to 1-minute polling.
 - If any poll shows the PR is merged or otherwise closed: stop polling immediately and report the terminal state.
 
@@ -128,7 +130,7 @@ Use adaptive polling and continue monitoring even after CI turns green:
 Stop only when one of the following is true:
 
 - PR merged or closed (stop as soon as a poll/snapshot confirms this).
-- PR is ready to merge: CI succeeded, no surfaced unaddressed review comments, and no merge conflict risk.
+- PR is ready to merge: CI succeeded, no surfaced unaddressed review comments, not blocked on required review approval, and no merge conflict risk.
 - User intervention is required and Codex cannot safely proceed alone.
 
 Keep polling when:
@@ -137,10 +139,13 @@ Keep polling when:
 - CI is still running/queued.
 - Review state is quiet but CI is not terminal.
 - CI is green but mergeability is unknown/pending.
-- CI is green and mergeable, but the PR is still open and you are waiting for possible new review comments or merge-conflict changes per the 5-minute cadence.
+- CI is green and mergeable, but the PR is still open and you are waiting for possible new review comments or merge-conflict changes per the green-state cadence.
+- The PR is green but blocked on review approval (`REVIEW_REQUIRED` / similar); continue polling on the green-state cadence and surface any new review comments without asking for confirmation to keep watching.
 
 ## Output Expectations
 Provide concise progress updates while monitoring and a final summary that includes:
+
+- During long unchanged monitoring periods, avoid emitting a full update on every poll; summarize only status changes plus occasional heartbeat updates.
 
 - Final PR SHA
 - CI status summary
