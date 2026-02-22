@@ -33,6 +33,17 @@ TRUSTED_AUTHOR_ASSOCIATIONS = {
     "MEMBER",
     "COLLABORATOR",
 }
+MERGE_BLOCKING_REVIEW_DECISIONS = {
+    "REVIEW_REQUIRED",
+    "CHANGES_REQUESTED",
+}
+MERGE_CONFLICT_OR_BLOCKING_STATES = {
+    "BLOCKED",
+    "DIRTY",
+    "DRAFT",
+    "UNKNOWN",
+}
+GREEN_STATE_MAX_POLL_SECONDS = 60 * 60
 
 
 class GhCommandError(RuntimeError):
@@ -528,12 +539,34 @@ def unique_actions(actions):
     return out
 
 
+def is_pr_ready_to_merge(pr, checks_summary, new_review_items):
+    if pr["closed"] or pr["merged"]:
+        return False
+    if not checks_summary["all_terminal"]:
+        return False
+    if checks_summary["failed_count"] > 0 or checks_summary["pending_count"] > 0:
+        return False
+    if new_review_items:
+        return False
+    if str(pr.get("mergeable") or "") != "MERGEABLE":
+        return False
+    if str(pr.get("merge_state_status") or "") in MERGE_CONFLICT_OR_BLOCKING_STATES:
+        return False
+    if str(pr.get("review_decision") or "") in MERGE_BLOCKING_REVIEW_DECISIONS:
+        return False
+    return True
+
+
 def recommend_actions(pr, checks_summary, failed_runs, new_review_items, retries_used, max_retries):
     actions = []
     if pr["closed"] or pr["merged"]:
         if new_review_items:
             actions.append("process_review_comment")
         actions.append("stop_pr_closed")
+        return unique_actions(actions)
+
+    if is_pr_ready_to_merge(pr, checks_summary, new_review_items):
+        actions.append("stop_ready_to_merge")
         return unique_actions(actions)
 
     if new_review_items:
@@ -668,15 +701,72 @@ def print_event(event, payload):
     print_json({"event": event, "payload": payload})
 
 
+def is_ci_green(snapshot):
+    checks = snapshot.get("checks") or {}
+    return (
+        bool(checks.get("all_terminal"))
+        and int(checks.get("failed_count") or 0) == 0
+        and int(checks.get("pending_count") or 0) == 0
+    )
+
+
+def snapshot_change_key(snapshot):
+    pr = snapshot.get("pr") or {}
+    checks = snapshot.get("checks") or {}
+    review_items = snapshot.get("new_review_items") or []
+    return (
+        str(pr.get("head_sha") or ""),
+        str(pr.get("state") or ""),
+        str(pr.get("mergeable") or ""),
+        str(pr.get("merge_state_status") or ""),
+        str(pr.get("review_decision") or ""),
+        int(checks.get("passed_count") or 0),
+        int(checks.get("failed_count") or 0),
+        int(checks.get("pending_count") or 0),
+        tuple(
+            (str(item.get("kind") or ""), str(item.get("id") or ""))
+            for item in review_items
+            if isinstance(item, dict)
+        ),
+        tuple(snapshot.get("actions") or []),
+    )
+
+
 def run_watch(args):
+    poll_seconds = args.poll_seconds
+    last_change_key = None
     while True:
         snapshot, state_path = collect_snapshot(args)
-        print_event("snapshot", {"snapshot": snapshot, "state_file": str(state_path)})
+        print_event(
+            "snapshot",
+            {
+                "snapshot": snapshot,
+                "state_file": str(state_path),
+                "next_poll_seconds": poll_seconds,
+            },
+        )
         actions = set(snapshot.get("actions") or [])
-        if "stop_pr_closed" in actions or "stop_exhausted_retries" in actions:
+        if (
+            "stop_pr_closed" in actions
+            or "stop_exhausted_retries" in actions
+            or "stop_ready_to_merge" in actions
+        ):
             print_event("stop", {"actions": snapshot.get("actions"), "pr": snapshot.get("pr")})
             return 0
-        time.sleep(args.poll_seconds)
+
+        current_change_key = snapshot_change_key(snapshot)
+        changed = current_change_key != last_change_key
+        green = is_ci_green(snapshot)
+
+        if not green:
+            poll_seconds = args.poll_seconds
+        elif changed or last_change_key is None:
+            poll_seconds = args.poll_seconds
+        else:
+            poll_seconds = min(poll_seconds * 2, GREEN_STATE_MAX_POLL_SECONDS)
+
+        last_change_key = current_change_key
+        time.sleep(poll_seconds)
 
 
 def main():
