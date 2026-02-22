@@ -65,6 +65,7 @@ pub async fn start_streaming_sse_server(
     let state = Arc::new(TokioMutex::new(StreamingSseState {
         responses: VecDeque::from(responses),
         completions: VecDeque::from(completion_senders),
+        next_stream_index: 0,
     }));
     let requests = Arc::new(TokioMutex::new(Vec::new()));
     let requests_for_task = Arc::clone(&requests);
@@ -76,20 +77,24 @@ pub async fn start_streaming_sse_server(
                 _ = &mut shutdown_rx => break,
                 accept_res = listener.accept() => {
                     let (mut stream, _) = accept_res.expect("accept streaming SSE connection");
+                    eprintln!("[rt-debug][sse-helper] accepted tcp connection");
                     let state = Arc::clone(&state);
                     let requests = Arc::clone(&requests_for_task);
                     tokio::spawn(async move {
                         let (request, body_prefix) = read_http_request(&mut stream).await;
                         let Some((method, path)) = parse_request_line(&request) else {
+                            eprintln!("[rt-debug][sse-helper] bad request line: {:?}", request.lines().next());
                             let _ = write_http_response(&mut stream, 400, "bad request", "text/plain").await;
                             return;
                         };
+                        eprintln!("[rt-debug][sse-helper] request {method} {path}");
 
                         if method == "GET" && path == "/v1/models" {
                             if read_request_body(&mut stream, &request, body_prefix)
                                 .await
                                 .is_err()
                             {
+                                eprintln!("[rt-debug][sse-helper] failed to read /v1/models body");
                                 let _ = write_http_response(&mut stream, 400, "bad request", "text/plain").await;
                                 return;
                             }
@@ -99,6 +104,7 @@ pub async fn start_streaming_sse_server(
                             })
                             .to_string();
                             let _ = write_http_response(&mut stream, 200, &body, "application/json").await;
+                            eprintln!("[rt-debug][sse-helper] served /v1/models");
                             return;
                         }
 
@@ -108,36 +114,71 @@ pub async fn start_streaming_sse_server(
                             {
                                 Ok(body) => body,
                                 Err(_) => {
+                                    eprintln!("[rt-debug][sse-helper] failed to read /v1/responses body");
                                     let _ = write_http_response(&mut stream, 400, "bad request", "text/plain").await;
                                     return;
                                 }
                             };
-                            requests.lock().await.push(body);
-                            let Some((chunks, completion)) = take_next_stream(&state).await else {
+                            let request_index = {
+                                let mut log = requests.lock().await;
+                                log.push(body);
+                                log.len() - 1
+                            };
+                            eprintln!(
+                                "[rt-debug][sse-helper] recorded /v1/responses request_index={request_index}"
+                            );
+                            let Some((chunks, completion, stream_index)) = take_next_stream(&state).await else {
+                                eprintln!("[rt-debug][sse-helper] no queued SSE response for request_index={request_index}");
                                 let _ = write_http_response(&mut stream, 500, "no responses queued", "text/plain").await;
                                 return;
                             };
+                            eprintln!(
+                                "[rt-debug][sse-helper] request_index={request_index} assigned stream_index={stream_index} chunk_count={}",
+                                chunks.len()
+                            );
 
                             if write_sse_headers(&mut stream).await.is_err() {
+                                eprintln!("[rt-debug][sse-helper] failed to write SSE headers request_index={request_index}");
                                 return;
                             }
+                            eprintln!("[rt-debug][sse-helper] wrote SSE headers request_index={request_index}");
 
-                            for chunk in chunks {
+                            for (chunk_index, chunk) in chunks.into_iter().enumerate() {
+                                let had_gate = chunk.gate.is_some();
                                 if let Some(gate) = chunk.gate
                                     && gate.await.is_err() {
+                                        eprintln!(
+                                            "[rt-debug][sse-helper] gate canceled request_index={request_index} stream_index={stream_index} chunk_index={chunk_index}"
+                                        );
                                         return;
                                     }
+                                if had_gate {
+                                    eprintln!(
+                                        "[rt-debug][sse-helper] gate opened request_index={request_index} stream_index={stream_index} chunk_index={chunk_index}"
+                                    );
+                                }
+                                eprintln!(
+                                    "[rt-debug][sse-helper] sending chunk request_index={request_index} stream_index={stream_index} chunk_index={chunk_index} bytes={}",
+                                    chunk.body.len()
+                                );
                                 if stream.write_all(chunk.body.as_bytes()).await.is_err() {
+                                    eprintln!(
+                                        "[rt-debug][sse-helper] write chunk failed request_index={request_index} stream_index={stream_index} chunk_index={chunk_index}"
+                                    );
                                     return;
                                 }
                                 let _ = stream.flush().await;
                             }
 
+                            eprintln!(
+                                "[rt-debug][sse-helper] stream complete request_index={request_index} stream_index={stream_index}"
+                            );
                             let _ = completion.send(unix_ms_now());
                             let _ = stream.shutdown().await;
                             return;
                         }
 
+                        eprintln!("[rt-debug][sse-helper] unhandled request {method} {path}");
                         let _ = write_http_response(&mut stream, 404, "not found", "text/plain").await;
                     });
                 }
@@ -159,15 +200,22 @@ pub async fn start_streaming_sse_server(
 struct StreamingSseState {
     responses: VecDeque<Vec<StreamingSseChunk>>,
     completions: VecDeque<oneshot::Sender<i64>>,
+    next_stream_index: usize,
 }
 
 async fn take_next_stream(
     state: &TokioMutex<StreamingSseState>,
-) -> Option<(Vec<StreamingSseChunk>, oneshot::Sender<i64>)> {
+) -> Option<(Vec<StreamingSseChunk>, oneshot::Sender<i64>, usize)> {
     let mut guard = state.lock().await;
+    let stream_index = guard.next_stream_index;
     let chunks = guard.responses.pop_front()?;
     let completion = guard.completions.pop_front()?;
-    Some((chunks, completion))
+    guard.next_stream_index += 1;
+    eprintln!(
+        "[rt-debug][sse-helper] take_next_stream stream_index={stream_index} remaining_streams={}",
+        guard.responses.len()
+    );
+    Some((chunks, completion, stream_index))
 }
 
 async fn read_http_request(stream: &mut tokio::net::TcpStream) -> (String, Vec<u8>) {

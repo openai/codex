@@ -206,10 +206,14 @@ where
     use tokio::time::timeout;
     loop {
         // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery)
-        let ev = timeout(wait_time.max(Duration::from_secs(10)), codex.next_event())
-            .await
-            .expect("timeout waiting for event")
-            .expect("stream ended unexpectedly");
+        let effective_wait = wait_time.max(Duration::from_secs(10));
+        let ev = match timeout(effective_wait, codex.next_event()).await {
+            Ok(next) => next.expect("stream ended unexpectedly"),
+            Err(err) => {
+                eprintln!("[rt-debug] wait_for_event timeout after {effective_wait:?}: {err:?}");
+                panic!("timeout waiting for event: {err:?}");
+            }
+        };
         if predicate(&ev.msg) {
             return ev.msg;
         }

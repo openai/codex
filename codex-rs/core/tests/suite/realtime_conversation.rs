@@ -471,6 +471,7 @@ async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() ->
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_mirrors_assistant_message_text_to_realtime_websocket() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    eprintln!("[rt-debug][test mirror] start");
 
     let api_server = start_mock_server().await;
     let _response_mock = responses::mount_sse_once(
@@ -499,7 +500,9 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_websocket() -> 
         }
     });
     let test = builder.build(&api_server).await?;
+    eprintln!("[rt-debug][test mirror] built test");
 
+    eprintln!("[rt-debug][test mirror] submit RealtimeConversationStart");
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
@@ -507,6 +510,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_websocket() -> 
         }))
         .await?;
 
+    eprintln!("[rt-debug][test mirror] waiting for session.created");
     let session_created = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
             payload: RealtimeEvent::SessionCreated { session_id },
@@ -514,13 +518,39 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_websocket() -> 
         _ => None,
     })
     .await;
+    eprintln!("[rt-debug][test mirror] got session.created={session_created}");
     assert_eq!(session_created, "sess_1");
 
+    eprintln!("[rt-debug][test mirror] submit_turn hello");
     test.submit_turn("hello").await?;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut last_snapshot = String::new();
     while tokio::time::Instant::now() < deadline {
         let connections = realtime_server.connections();
+        let snapshot = format!(
+            "{:?}",
+            connections
+                .iter()
+                .enumerate()
+                .map(|(i, conn)| {
+                    let types = conn
+                        .iter()
+                        .map(|req| {
+                            req.body_json()["type"]
+                                .as_str()
+                                .unwrap_or("<missing>")
+                                .to_string()
+                        })
+                        .collect::<Vec<_>>();
+                    (i, conn.len(), types)
+                })
+                .collect::<Vec<_>>()
+        );
+        if snapshot != last_snapshot {
+            eprintln!("[rt-debug][test mirror] connections snapshot {snapshot}");
+            last_snapshot = snapshot;
+        }
         if connections.len() == 1 && connections[0].len() >= 2 {
             break;
         }
@@ -528,6 +558,14 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_websocket() -> 
     }
 
     let realtime_connections = realtime_server.connections();
+    eprintln!(
+        "[rt-debug][test mirror] final realtime connections count={} lens={:?}",
+        realtime_connections.len(),
+        realtime_connections
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>()
+    );
     assert_eq!(realtime_connections.len(), 1);
     assert_eq!(realtime_connections[0].len(), 2);
     assert_eq!(
@@ -636,6 +674,7 @@ async fn inbound_realtime_text_starts_turn_and_ignores_role() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    eprintln!("[rt-debug][test steer] start");
 
     let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
     let first_chunks = vec![
@@ -676,6 +715,7 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
     ];
     let (api_server, completions) =
         start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+    eprintln!("[rt-debug][test steer] started streaming SSE server");
 
     let realtime_server = start_websocket_server(vec![vec![
         vec![json!({
@@ -700,13 +740,16 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
         }
     });
     let test = builder.build_with_streaming_server(&api_server).await?;
+    eprintln!("[rt-debug][test steer] built test");
 
+    eprintln!("[rt-debug][test steer] submit RealtimeConversationStart");
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "backend prompt".to_string(),
             session_id: None,
         }))
         .await?;
+    eprintln!("[rt-debug][test steer] waiting for session.created");
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
             payload: RealtimeEvent::SessionCreated { session_id },
@@ -714,7 +757,9 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
         _ => None,
     })
     .await;
+    eprintln!("[rt-debug][test steer] got session.created");
 
+    eprintln!("[rt-debug][test steer] submit first user input");
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -725,11 +770,14 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
         })
         .await?;
 
+    eprintln!("[rt-debug][test steer] waiting for AgentMessageContentDelta");
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::AgentMessageContentDelta(_))
     })
     .await;
+    eprintln!("[rt-debug][test steer] got AgentMessageContentDelta");
 
+    eprintln!("[rt-debug][test steer] submit realtime audio");
     test.codex
         .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
             frame: RealtimeAudioFrame {
@@ -741,6 +789,9 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
         }))
         .await?;
 
+    eprintln!(
+        "[rt-debug][test steer] waiting for mirrored conversation.item.added(text=steer via realtime)"
+    );
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
             payload: RealtimeEvent::ConversationItemAdded(item),
@@ -756,24 +807,33 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
         _ => None,
     })
     .await;
+    eprintln!("[rt-debug][test steer] got mirrored conversation.item.added");
 
     let mut completion_iter = completions.into_iter();
     let first_completion = completion_iter.next().expect("missing first completion");
     let second_completion = completion_iter.next().expect("missing second completion");
 
+    eprintln!("[rt-debug][test steer] release resp-1 completed gate");
     let _ = gate_completed_tx.send(());
+    eprintln!("[rt-debug][test steer] waiting first SSE completion");
     first_completion
         .await
         .expect("first request did not complete");
+    eprintln!("[rt-debug][test steer] got first SSE completion");
+    eprintln!("[rt-debug][test steer] waiting second SSE completion");
     second_completion
         .await
         .expect("second request did not complete");
+    eprintln!("[rt-debug][test steer] got second SSE completion");
+    eprintln!("[rt-debug][test steer] waiting TurnComplete");
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    eprintln!("[rt-debug][test steer] got TurnComplete");
 
     let requests = api_server.requests().await;
+    eprintln!("[rt-debug][test steer] api requests len={}", requests.len());
     assert_eq!(requests.len(), 2);
 
     let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");

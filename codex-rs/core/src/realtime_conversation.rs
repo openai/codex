@@ -57,6 +57,8 @@ impl RealtimeConversationManager {
 
     pub(crate) async fn running_state(&self) -> Option<()> {
         let state = self.state.lock().await;
+        let running = state.is_some();
+        eprintln!("[rt-debug] conversation.running_state -> {running}");
         state.as_ref().map(|_| ())
     }
 
@@ -67,11 +69,16 @@ impl RealtimeConversationManager {
         prompt: String,
         session_id: Option<String>,
     ) -> CodexResult<Receiver<RealtimeEvent>> {
+        eprintln!(
+            "[rt-debug] conversation.start begin prompt_len={} session_id={session_id:?}",
+            prompt.len()
+        );
         let previous_state = {
             let mut guard = self.state.lock().await;
             guard.take()
         };
         if let Some(state) = previous_state {
+            eprintln!("[rt-debug] conversation.start aborting previous realtime task");
             state.task.abort();
             let _ = state.task.await;
         }
@@ -86,6 +93,7 @@ impl RealtimeConversationManager {
             )
             .await
             .map_err(map_api_error)?;
+        eprintln!("[rt-debug] conversation.start websocket connected");
 
         let writer = connection.writer();
         let events = connection.events();
@@ -96,6 +104,7 @@ impl RealtimeConversationManager {
             async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
         let task = spawn_realtime_input_task(writer, events, text_rx, audio_rx, events_tx);
+        eprintln!("[rt-debug] conversation.start spawned realtime input task");
 
         let mut guard = self.state.lock().await;
         *guard = Some(ConversationState {
@@ -103,10 +112,18 @@ impl RealtimeConversationManager {
             text_tx,
             task,
         });
+        eprintln!("[rt-debug] conversation.start state installed");
         Ok(events_rx)
     }
 
     pub(crate) async fn audio_in(&self, frame: RealtimeAudioFrame) -> CodexResult<()> {
+        eprintln!(
+            "[rt-debug] conversation.audio_in sample_rate={} channels={} samples_per_channel={:?} data_len={}",
+            frame.sample_rate,
+            frame.num_channels,
+            frame.samples_per_channel,
+            frame.data.len()
+        );
         let sender = {
             let guard = self.state.lock().await;
             guard.as_ref().map(|state| state.audio_tx.clone())
@@ -119,18 +136,29 @@ impl RealtimeConversationManager {
         };
 
         match sender.try_send(frame) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                eprintln!("[rt-debug] conversation.audio_in queued");
+                Ok(())
+            }
             Err(TrySendError::Full(_)) => {
+                eprintln!("[rt-debug] conversation.audio_in queue full; dropping frame");
                 warn!("dropping input audio frame due to full queue");
                 Ok(())
             }
-            Err(TrySendError::Closed(_)) => Err(CodexErr::InvalidRequest(
-                "conversation is not running".to_string(),
-            )),
+            Err(TrySendError::Closed(_)) => {
+                eprintln!("[rt-debug] conversation.audio_in queue closed");
+                Err(CodexErr::InvalidRequest(
+                    "conversation is not running".to_string(),
+                ))
+            }
         }
     }
 
     pub(crate) async fn text_in(&self, text: String) -> CodexResult<()> {
+        eprintln!(
+            "[rt-debug] conversation.text_in len={} text={text:?}",
+            text.len()
+        );
         let sender = {
             let guard = self.state.lock().await;
             guard.as_ref().map(|state| state.text_tx.clone())
@@ -146,19 +174,23 @@ impl RealtimeConversationManager {
             .send(text)
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
+        eprintln!("[rt-debug] conversation.text_in queued");
         Ok(())
     }
 
     pub(crate) async fn shutdown(&self) -> CodexResult<()> {
+        eprintln!("[rt-debug] conversation.shutdown begin");
         let state = {
             let mut guard = self.state.lock().await;
             guard.take()
         };
 
         if let Some(state) = state {
+            eprintln!("[rt-debug] conversation.shutdown aborting realtime task");
             state.task.abort();
             let _ = state.task.await;
         }
+        eprintln!("[rt-debug] conversation.shutdown done");
         Ok(())
     }
 }
@@ -168,12 +200,21 @@ pub(crate) async fn handle_start(
     sub_id: String,
     params: ConversationStartParams,
 ) -> CodexResult<()> {
+    eprintln!(
+        "[rt-debug] handle_start begin sub_id={sub_id} prompt_len={} requested_session_id={:?}",
+        params.prompt.len(),
+        params.session_id
+    );
     let provider = sess.provider().await;
     let auth = sess.services.auth_manager.auth().await;
     let mut api_provider = provider.to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
     let config = sess.get_config().await;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
+        eprintln!(
+            "[rt-debug] handle_start overriding realtime base_url={}",
+            api_provider.base_url
+        );
     }
     let prompt = config
         .experimental_realtime_ws_backend_prompt
@@ -183,6 +224,10 @@ pub(crate) async fn handle_start(
     let requested_session_id = params
         .session_id
         .or_else(|| Some(sess.conversation_id.to_string()));
+    eprintln!(
+        "[rt-debug] handle_start effective prompt_len={} requested_session_id={requested_session_id:?}",
+        prompt.len()
+    );
     let events_rx = match sess
         .conversation
         .start(api_provider, None, prompt, requested_session_id.clone())
@@ -190,10 +235,12 @@ pub(crate) async fn handle_start(
     {
         Ok(events_rx) => events_rx,
         Err(err) => {
+            eprintln!("[rt-debug] handle_start conversation.start failed: {err}");
             send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other).await;
             return Ok(());
         }
     };
+    eprintln!("[rt-debug] handle_start conversation.start ok");
 
     sess.send_event_raw(Event {
         id: sub_id.clone(),
@@ -202,14 +249,17 @@ pub(crate) async fn handle_start(
         }),
     })
     .await;
+    eprintln!("[rt-debug] handle_start emitted RealtimeConversationStarted");
 
     let sess_clone = Arc::clone(sess);
     tokio::spawn(async move {
+        eprintln!("[rt-debug] handle_start event-forwarder task started");
         let ev = |msg| Event {
             id: sub_id.clone(),
             msg,
         };
         while let Ok(event) = events_rx.recv().await {
+            eprintln!("[rt-debug] realtime event recv: {event:?}");
             let maybe_routed_text = match &event {
                 RealtimeEvent::ConversationItemAdded(item) => {
                     realtime_text_from_conversation_item(item)
@@ -217,8 +267,11 @@ pub(crate) async fn handle_start(
                 _ => None,
             };
             if let Some(text) = maybe_routed_text {
+                eprintln!("[rt-debug] routing inbound realtime text start: {text:?}");
                 sess_clone.route_realtime_text_input(text).await;
+                eprintln!("[rt-debug] routing inbound realtime text done");
             }
+            eprintln!("[rt-debug] emitting mirrored realtime event");
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
                     RealtimeConversationRealtimeEvent {
@@ -226,8 +279,11 @@ pub(crate) async fn handle_start(
                     },
                 )))
                 .await;
+            eprintln!("[rt-debug] mirrored realtime event emitted");
         }
+        eprintln!("[rt-debug] handle_start event-forwarder loop ended");
         if let Some(()) = sess_clone.conversation.running_state().await {
+            eprintln!("[rt-debug] handle_start emitting transport_closed");
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationClosed(
                     RealtimeConversationClosedEvent {
@@ -236,6 +292,7 @@ pub(crate) async fn handle_start(
                 )))
                 .await;
         }
+        eprintln!("[rt-debug] handle_start event-forwarder task exiting");
     });
 
     Ok(())
@@ -246,7 +303,9 @@ pub(crate) async fn handle_audio(
     sub_id: String,
     params: ConversationAudioParams,
 ) {
+    eprintln!("[rt-debug] handle_audio sub_id={sub_id}");
     if let Err(err) = sess.conversation.audio_in(params.frame).await {
+        eprintln!("[rt-debug] handle_audio error: {err}");
         send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
     }
 }
@@ -269,12 +328,18 @@ pub(crate) async fn handle_text(
     sub_id: String,
     params: ConversationTextParams,
 ) {
+    eprintln!(
+        "[rt-debug] handle_text sub_id={sub_id} text={:?}",
+        params.text
+    );
     if let Err(err) = sess.conversation.text_in(params.text).await {
+        eprintln!("[rt-debug] handle_text error: {err}");
         send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
     }
 }
 
 pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
+    eprintln!("[rt-debug] handle_close sub_id={sub_id}");
     match sess.conversation.shutdown().await {
         Ok(()) => {
             sess.send_event_raw(Event {
@@ -284,8 +349,10 @@ pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
                 }),
             })
             .await;
+            eprintln!("[rt-debug] handle_close emitted requested close");
         }
         Err(err) => {
+            eprintln!("[rt-debug] handle_close error: {err}");
             send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other).await;
         }
     }
@@ -299,34 +366,46 @@ fn spawn_realtime_input_task(
     events_tx: Sender<RealtimeEvent>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        eprintln!("[rt-debug] spawn_realtime_input_task started");
         loop {
             tokio::select! {
                 biased;
                 text = text_rx.recv() => {
                     match text {
                         Ok(text) => {
+                            eprintln!("[rt-debug] spawn_realtime_input_task text_rx recv: {text:?}");
                             if let Err(err) = writer.send_conversation_item_create(text).await {
                                 let mapped_error = map_api_error(err);
+                                eprintln!("[rt-debug] spawn_realtime_input_task send_conversation_item_create error: {mapped_error}");
                                 warn!("failed to send input text: {mapped_error}");
                                 break;
                             }
+                            eprintln!("[rt-debug] spawn_realtime_input_task send_conversation_item_create ok");
                         }
-                        Err(_) => break,
+                        Err(_) => {
+                            eprintln!("[rt-debug] spawn_realtime_input_task text_rx closed");
+                            break;
+                        }
                     }
                 }
                 event = events.next_event() => {
                     match event {
                         Ok(Some(event)) => {
+                            eprintln!("[rt-debug] spawn_realtime_input_task ws event: {event:?}");
                             let should_stop = matches!(&event, RealtimeEvent::Error(_));
                             if events_tx.send(event).await.is_err() {
+                                eprintln!("[rt-debug] spawn_realtime_input_task events_tx closed");
                                 break;
                             }
+                            eprintln!("[rt-debug] spawn_realtime_input_task ws event forwarded");
                             if should_stop {
+                                eprintln!("[rt-debug] spawn_realtime_input_task stopping on error event");
                                 error!("realtime stream error event received");
                                 break;
                             }
                         }
                         Ok(None) => {
+                            eprintln!("[rt-debug] spawn_realtime_input_task ws event stream closed");
                             let _ = events_tx
                                 .send(RealtimeEvent::Error(
                                     "realtime websocket connection is closed".to_string(),
@@ -336,6 +415,7 @@ fn spawn_realtime_input_task(
                         }
                         Err(err) => {
                             let mapped_error = map_api_error(err);
+                            eprintln!("[rt-debug] spawn_realtime_input_task ws error: {mapped_error}");
                             if events_tx
                                 .send(RealtimeEvent::Error(mapped_error.to_string()))
                                 .await
@@ -351,17 +431,24 @@ fn spawn_realtime_input_task(
                 frame = audio_rx.recv() => {
                     match frame {
                         Ok(frame) => {
+                            eprintln!("[rt-debug] spawn_realtime_input_task audio_rx recv");
                             if let Err(err) = writer.send_audio_frame(frame).await {
                                 let mapped_error = map_api_error(err);
+                                eprintln!("[rt-debug] spawn_realtime_input_task send_audio_frame error: {mapped_error}");
                                 error!("failed to send input audio: {mapped_error}");
                                 break;
                             }
+                            eprintln!("[rt-debug] spawn_realtime_input_task send_audio_frame ok");
                         }
-                        Err(_) => break,
+                        Err(_) => {
+                            eprintln!("[rt-debug] spawn_realtime_input_task audio_rx closed");
+                            break;
+                        }
                     }
                 }
             }
         }
+        eprintln!("[rt-debug] spawn_realtime_input_task exiting");
     })
 }
 
