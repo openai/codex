@@ -87,7 +87,8 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         },
     ];
 
-    let (server, _signals) = start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
 
     let codex = test_codex()
         .with_model("gpt-5.1")

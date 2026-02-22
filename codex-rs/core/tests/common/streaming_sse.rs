@@ -16,12 +16,6 @@ pub struct StreamingSseChunk {
     pub body: String,
 }
 
-/// Per-stream lifecycle signals for queued `/v1/responses` requests.
-pub struct StreamingSseSignals {
-    pub request_received: Vec<oneshot::Receiver<i64>>,
-    pub stream_completed: Vec<oneshot::Receiver<i64>>,
-}
-
 /// Minimal streaming SSE server for tests that need gated per-chunk delivery.
 pub struct StreamingSseServer {
     uri: String,
@@ -49,34 +43,28 @@ impl StreamingSseServer {
 /// - GET /v1/models -> empty models response
 /// - POST /v1/responses -> SSE stream gated per-chunk, served in order
 ///
-/// Returns the server handle plus per-stream signals for request receipt and
-/// stream completion (both in queued response order).
+/// Returns the server handle and a list of receivers that fire when each
+/// response stream finishes sending its final chunk.
 pub async fn start_streaming_sse_server(
     responses: Vec<Vec<StreamingSseChunk>>,
-) -> (StreamingSseServer, StreamingSseSignals) {
+) -> (StreamingSseServer, Vec<oneshot::Receiver<i64>>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind streaming SSE server");
     let addr = listener.local_addr().expect("streaming SSE server address");
     let uri = format!("http://{addr}");
 
-    let mut request_received_senders = Vec::with_capacity(responses.len());
-    let mut request_received_receivers = Vec::with_capacity(responses.len());
-    let mut stream_completed_senders = Vec::with_capacity(responses.len());
-    let mut stream_completed_receivers = Vec::with_capacity(responses.len());
+    let mut completion_senders = Vec::with_capacity(responses.len());
+    let mut completion_receivers = Vec::with_capacity(responses.len());
     for _ in 0..responses.len() {
         let (tx, rx) = oneshot::channel();
-        request_received_senders.push(tx);
-        request_received_receivers.push(rx);
-        let (tx, rx) = oneshot::channel();
-        stream_completed_senders.push(tx);
-        stream_completed_receivers.push(rx);
+        completion_senders.push(tx);
+        completion_receivers.push(rx);
     }
 
     let state = Arc::new(TokioMutex::new(StreamingSseState {
         responses: VecDeque::from(responses),
-        request_received: VecDeque::from(request_received_senders),
-        stream_completed: VecDeque::from(stream_completed_senders),
+        completions: VecDeque::from(completion_senders),
     }));
     let requests = Arc::new(TokioMutex::new(Vec::new()));
     let requests_for_task = Arc::clone(&requests);
@@ -125,13 +113,10 @@ pub async fn start_streaming_sse_server(
                                 }
                             };
                             requests.lock().await.push(body);
-                            let Some((chunks, request_received, stream_completed)) =
-                                take_next_stream(&state).await
-                            else {
+                            let Some((chunks, completion)) = take_next_stream(&state).await else {
                                 let _ = write_http_response(&mut stream, 500, "no responses queued", "text/plain").await;
                                 return;
                             };
-                            let _ = request_received.send(unix_ms_now());
 
                             if write_sse_headers(&mut stream).await.is_err() {
                                 return;
@@ -148,7 +133,7 @@ pub async fn start_streaming_sse_server(
                                 let _ = stream.flush().await;
                             }
 
-                            let _ = stream_completed.send(unix_ms_now());
+                            let _ = completion.send(unix_ms_now());
                             let _ = stream.shutdown().await;
                             return;
                         }
@@ -167,31 +152,22 @@ pub async fn start_streaming_sse_server(
             shutdown: shutdown_tx,
             task,
         },
-        StreamingSseSignals {
-            request_received: request_received_receivers,
-            stream_completed: stream_completed_receivers,
-        },
+        completion_receivers,
     )
 }
 
 struct StreamingSseState {
     responses: VecDeque<Vec<StreamingSseChunk>>,
-    request_received: VecDeque<oneshot::Sender<i64>>,
-    stream_completed: VecDeque<oneshot::Sender<i64>>,
+    completions: VecDeque<oneshot::Sender<i64>>,
 }
 
 async fn take_next_stream(
     state: &TokioMutex<StreamingSseState>,
-) -> Option<(
-    Vec<StreamingSseChunk>,
-    oneshot::Sender<i64>,
-    oneshot::Sender<i64>,
-)> {
+) -> Option<(Vec<StreamingSseChunk>, oneshot::Sender<i64>)> {
     let mut guard = state.lock().await;
     let chunks = guard.responses.pop_front()?;
-    let request_received = guard.request_received.pop_front()?;
-    let stream_completed = guard.stream_completed.pop_front()?;
-    Some((chunks, request_received, stream_completed))
+    let completion = guard.completions.pop_front()?;
+    Some((chunks, completion))
 }
 
 async fn read_http_request(stream: &mut tokio::net::TcpStream) -> (String, Vec<u8>) {
@@ -407,7 +383,7 @@ mod tests {
                 body: "event: two\n\n".to_string(),
             },
         ];
-        let (server, mut signals) = start_streaming_sse_server(vec![chunks]).await;
+        let (server, mut completions) = start_streaming_sse_server(vec![chunks]).await;
         let mut stream = connect(server.uri()).await;
         send_request(
             &mut stream,
@@ -425,16 +401,9 @@ mod tests {
         let mut extra = [0u8; 1];
         let read = stream.read(&mut extra).await.expect("read after eof");
         assert_eq!(read, 0);
-        let request_received = signals
-            .request_received
-            .pop()
-            .expect("request_received receiver");
-        let received_at = request_received.await.expect("request_received timestamp");
-        assert!(received_at > 0);
-        let completion = signals.stream_completed.pop().expect("completion receiver");
+        let completion = completions.pop().expect("completion receiver");
         let timestamp = completion.await.expect("completion timestamp");
         assert!(timestamp > 0);
-        assert!(received_at <= timestamp);
         server.shutdown().await;
     }
 
@@ -538,7 +507,7 @@ mod tests {
             gate: None,
             body: "event: second\n\n".to_string(),
         }];
-        let (server, mut signals) =
+        let (server, mut completions) =
             start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
 
         let mut first_stream = connect(server.uri()).await;
@@ -561,14 +530,14 @@ mod tests {
         let (_, second_body) = split_response(&second_response);
         assert_eq!(second_body, "event: second\n\n");
 
-        let first_completion = signals.stream_completed.remove(0);
-        let second_completion = signals.stream_completed.remove(0);
+        let first_completion = completions.remove(0);
+        let second_completion = completions.remove(0);
         let first_timestamp = first_completion.await.expect("first completion");
         let second_timestamp = second_completion.await.expect("second completion");
         assert!(first_timestamp > 0);
         assert!(second_timestamp > 0);
         assert!(first_timestamp <= second_timestamp);
-        assert!(signals.stream_completed.is_empty());
+        assert!(completions.is_empty());
         server.shutdown().await;
     }
 
@@ -608,7 +577,7 @@ mod tests {
 data: {"type":"response.completed","response":{"id":"resp-1"}}
 
 "#;
-        let (server, mut signals) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
+        let (server, mut completions) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
             gate: None,
             body: response_body.to_string(),
         }]])
@@ -633,7 +602,7 @@ data: {"type":"response.completed","response":{"id":"resp-1"}}
         let bytes = resp.bytes().await.expect("read response body");
         assert_eq!(bytes, response_body.as_bytes());
 
-        let completion = signals.stream_completed.remove(0);
+        let completion = completions.remove(0);
         let completed_at = completion.await.expect("completion timestamp");
         assert!(completed_at > 0);
 
@@ -683,10 +652,8 @@ data: {"type":"response.completed","response":{"id":"resp-1"}}
 
     #[tokio::test]
     async fn take_next_stream_consumes_in_lockstep() {
-        let (first_request_tx, first_request_rx) = oneshot::channel();
-        let (second_request_tx, second_request_rx) = oneshot::channel();
-        let (first_completion_tx, first_completion_rx) = oneshot::channel();
-        let (second_completion_tx, second_completion_rx) = oneshot::channel();
+        let (first_tx, first_rx) = oneshot::channel();
+        let (second_tx, second_rx) = oneshot::channel();
         let state = TokioMutex::new(StreamingSseState {
             responses: VecDeque::from(vec![
                 vec![StreamingSseChunk {
@@ -698,28 +665,20 @@ data: {"type":"response.completed","response":{"id":"resp-1"}}
                     body: "second".to_string(),
                 }],
             ]),
-            request_received: VecDeque::from(vec![first_request_tx, second_request_tx]),
-            stream_completed: VecDeque::from(vec![first_completion_tx, second_completion_tx]),
+            completions: VecDeque::from(vec![first_tx, second_tx]),
         });
 
-        let (first_chunks, first_request_received, first_stream_completed) =
+        let (first_chunks, first_completion) =
             take_next_stream(&state).await.expect("first stream");
         assert_eq!(first_chunks[0].body, "first");
-        let _ = first_request_received.send(10);
-        let _ = first_stream_completed.send(11);
-        assert_eq!(first_request_rx.await.expect("first request_received"), 10);
-        assert_eq!(first_completion_rx.await.expect("first completion"), 11);
+        let _ = first_completion.send(11);
+        assert_eq!(first_rx.await.expect("first completion"), 11);
 
-        let (second_chunks, second_request_received, second_stream_completed) =
+        let (second_chunks, second_completion) =
             take_next_stream(&state).await.expect("second stream");
         assert_eq!(second_chunks[0].body, "second");
-        let _ = second_request_received.send(21);
-        let _ = second_stream_completed.send(22);
-        assert_eq!(
-            second_request_rx.await.expect("second request_received"),
-            21
-        );
-        assert_eq!(second_completion_rx.await.expect("second completion"), 22);
+        let _ = second_completion.send(22);
+        assert_eq!(second_rx.await.expect("second completion"), 22);
 
         let third = take_next_stream(&state).await;
         assert!(third.is_none());

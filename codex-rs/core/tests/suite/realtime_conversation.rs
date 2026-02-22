@@ -15,7 +15,6 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
-use core_test_support::streaming_sse::StreamingSseSignals;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -664,13 +663,8 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
             body: sse_event(responses::ev_completed("resp-2")),
         },
     ];
-    let (
-        api_server,
-        StreamingSseSignals {
-            request_received,
-            stream_completed,
-        },
-    ) = start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+    let (api_server, completions) =
+        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
 
     let realtime_server = start_websocket_server(vec![vec![
         vec![json!({
@@ -752,15 +746,7 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
     })
     .await;
 
-    let mut request_received_iter = request_received.into_iter();
-    let _first_request_received = request_received_iter
-        .next()
-        .expect("missing first request_received");
-    let second_request_received = request_received_iter
-        .next()
-        .expect("missing second request_received");
-
-    let mut completion_iter = stream_completed.into_iter();
+    let mut completion_iter = completions.into_iter();
     let first_completion = completion_iter.next().expect("missing first completion");
     let second_completion = completion_iter.next().expect("missing second completion");
 
@@ -768,9 +754,6 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
     first_completion
         .await
         .expect("first request did not complete");
-    second_request_received
-        .await
-        .expect("second request was not received");
     second_completion
         .await
         .expect("second request did not complete");
