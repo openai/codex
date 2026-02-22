@@ -58,6 +58,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
+core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-protocol = { workspace = true }
 exec_server_test_support = { workspace = true }
