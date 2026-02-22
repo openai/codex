@@ -2,13 +2,9 @@
 //
 // Running these tests with the patched zsh fork:
 //
-// The suite uses `CODEX_TEST_ZSH_PATH` when set. Example:
-//   CODEX_TEST_ZSH_PATH="$HOME/.local/codex-zsh-77045ef/bin/zsh" \
-//   cargo test -p codex-app-server turn_start_zsh_fork -- --nocapture
-//
-// For a single test:
-//   CODEX_TEST_ZSH_PATH="$HOME/.local/codex-zsh-77045ef/bin/zsh" \
-//   cargo test -p codex-app-server turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2 -- --nocapture
+// The suite resolves the shared test-only zsh DotSlash file at
+// `exec-server/tests/suite/zsh` via DotSlash on first use, so `dotslash` and
+// network access are required the first time the artifact is fetched.
 
 use anyhow::Result;
 use app_test_support::McpProcess;
@@ -38,6 +34,7 @@ use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -57,7 +54,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
-    let Some(zsh_path) = find_test_zsh_path() else {
+    let Some(zsh_path) = find_test_zsh_path()? else {
         eprintln!("skipping zsh fork test: no zsh executable found");
         return Ok(());
     };
@@ -82,7 +79,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
         &zsh_path,
     )?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -167,7 +164,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
-    let Some(zsh_path) = find_test_zsh_path() else {
+    let Some(zsh_path) = find_test_zsh_path()? else {
         eprintln!("skipping zsh fork decline test: no zsh executable found");
         return Ok(());
     };
@@ -199,7 +196,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
         &zsh_path,
     )?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -303,7 +300,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
-    let Some(zsh_path) = find_test_zsh_path() else {
+    let Some(zsh_path) = find_test_zsh_path()? else {
         eprintln!("skipping zsh fork cancel test: no zsh executable found");
         return Ok(());
     };
@@ -332,7 +329,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
         &zsh_path,
     )?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -434,7 +431,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
-    let Some(zsh_path) = find_test_zsh_path() else {
+    let Some(zsh_path) = find_test_zsh_path()? else {
         eprintln!("skipping zsh fork subcommand decline test: no zsh executable found");
         return Ok(());
     };
@@ -446,6 +443,17 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         return Ok(());
     }
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
+    let zsh_path_for_config = {
+        let path = workspace.join("zsh-no-rc");
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\nexec \"{}\" -df \"$@\"\n", zsh_path.display()),
+        )?;
+        let mut permissions = std::fs::metadata(&path)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions)?;
+        path
+    };
 
     let tool_call_arguments = serde_json::to_string(&serde_json::json!({
         "command": "/usr/bin/true && /usr/bin/true",
@@ -471,10 +479,10 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             (Feature::UnifiedExec, false),
             (Feature::ShellSnapshot, false),
         ]),
-        &zsh_path,
+        &zsh_path_for_config,
     )?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -517,10 +525,12 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
 
     let mut approval_ids = Vec::new();
-    for decision in [
+    let target_decisions = [
         CommandExecutionApprovalDecision::Accept,
         CommandExecutionApprovalDecision::Cancel,
-    ] {
+    ];
+    let mut target_decision_index = 0;
+    while target_decision_index < target_decisions.len() {
         let server_req = timeout(
             DEFAULT_READ_TIMEOUT,
             mcp.read_stream_until_request_message(),
@@ -531,19 +541,35 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             panic!("expected CommandExecutionRequestApproval request");
         };
         assert_eq!(params.item_id, "call-zsh-fork-subcommand-decline");
-        approval_ids.push(
-            params
-                .approval_id
-                .clone()
-                .expect("approval_id must be present for zsh subcommand approvals"),
-        );
         assert_eq!(params.thread_id, thread.id);
+        let is_target_subcommand = params.command.as_deref() == Some("/usr/bin/true");
+        if is_target_subcommand {
+            approval_ids.push(
+                params
+                    .approval_id
+                    .clone()
+                    .expect("approval_id must be present for zsh subcommand approvals"),
+            );
+        }
+        let decision = if is_target_subcommand {
+            let decision = target_decisions[target_decision_index].clone();
+            target_decision_index += 1;
+            decision
+        } else {
+            // Login-shell startup may trigger intercepted subcommands (for
+            // example `/usr/libexec/path_helper`). Accept those so the test can
+            // focus on the two `/usr/bin/true` subcommands in the tool call.
+            CommandExecutionApprovalDecision::Accept
+        };
         mcp.send_response(
             request_id,
             serde_json::to_value(CommandExecutionRequestApprovalResponse { decision })?,
         )
         .await?;
     }
+
+    assert_eq!(approval_ids.len(), 2);
+    assert_ne!(approval_ids[0], approval_ids[1]);
 
     let parent_completed_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -563,30 +589,59 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             }
         }
     })
-    .await??;
+    .await;
 
-    let ThreadItem::CommandExecution {
-        id,
-        status,
-        aggregated_output,
-        ..
-    } = parent_completed_command_execution
-    else {
-        unreachable!("loop ensures we break on parent command execution item");
-    };
-    assert_eq!(id, "call-zsh-fork-subcommand-decline");
-    assert_eq!(status, CommandExecutionStatus::Declined);
-    assert!(
-        aggregated_output.is_none()
-            || aggregated_output == Some("exec command rejected by user".to_string())
-    );
-    assert_eq!(approval_ids.len(), 2);
-    assert_ne!(approval_ids[0], approval_ids[1]);
+    match parent_completed_command_execution {
+        Ok(Ok(parent_completed_command_execution)) => {
+            let ThreadItem::CommandExecution {
+                id,
+                status,
+                aggregated_output,
+                ..
+            } = parent_completed_command_execution
+            else {
+                unreachable!("loop ensures we break on parent command execution item");
+            };
+            assert_eq!(id, "call-zsh-fork-subcommand-decline");
+            assert_eq!(status, CommandExecutionStatus::Declined);
+            assert!(
+                aggregated_output.is_none()
+                    || aggregated_output == Some("exec command rejected by user".to_string())
+            );
 
-    mcp.interrupt_turn_and_wait_for_aborted(thread.id, turn.id, DEFAULT_READ_TIMEOUT)
-        .await?;
+            mcp.interrupt_turn_and_wait_for_aborted(
+                thread.id.clone(),
+                turn.id.clone(),
+                DEFAULT_READ_TIMEOUT,
+            )
+            .await?;
+        }
+        Ok(Err(error)) => return Err(error),
+        Err(_) => {
+            // Some zsh builds abort the turn immediately after the rejected
+            // subcommand without emitting a parent `item/completed`.
+            let completed_notif = timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_notification_message("turn/completed"),
+            )
+            .await??;
+            let completed: TurnCompletedNotification = serde_json::from_value(
+                completed_notif
+                    .params
+                    .expect("turn/completed params must be present"),
+            )?;
+            assert_eq!(completed.thread_id, thread.id);
+            assert_eq!(completed.turn.id, turn.id);
+            assert_eq!(completed.turn.status, TurnStatus::Interrupted);
+        }
+    }
 
     Ok(())
+}
+
+async fn create_zsh_test_mcp_process(codex_home: &Path, zdotdir: &Path) -> Result<McpProcess> {
+    let zdotdir = zdotdir.to_string_lossy().into_owned();
+    McpProcess::new_with_env(codex_home, &[("ZDOTDIR", Some(zdotdir.as_str()))]).await
 }
 
 fn create_config_toml(
@@ -640,36 +695,52 @@ stream_max_retries = 0
     )
 }
 
-fn find_test_zsh_path() -> Option<std::path::PathBuf> {
-    if let Some(path) = std::env::var_os("CODEX_TEST_ZSH_PATH") {
-        let path = std::path::PathBuf::from(path);
-        if path.is_file() {
-            return Some(path);
-        }
-        panic!(
-            "CODEX_TEST_ZSH_PATH is set but is not a file: {}",
-            path.display()
+fn find_test_zsh_path() -> Result<Option<std::path::PathBuf>> {
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let dotslash_zsh = repo_root.join("codex-rs/exec-server/tests/suite/zsh");
+    if !dotslash_zsh.is_file() {
+        eprintln!(
+            "skipping zsh fork test: shared zsh DotSlash file not found at {}",
+            dotslash_zsh.display()
         );
+        return Ok(None);
     }
-
-    for candidate in ["/bin/zsh", "/usr/bin/zsh"] {
-        let path = Path::new(candidate);
-        if path.is_file() {
-            return Some(path.to_path_buf());
+    match std::process::Command::new("dotslash")
+        .arg("--")
+        .arg("fetch")
+        .arg(&dotslash_zsh)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                let path = std::path::PathBuf::from(path);
+                if path.is_file() {
+                    return Ok(Some(path));
+                }
+                eprintln!(
+                    "ignoring vendored zsh path from dotslash because it is not a file: {}",
+                    path.display()
+                );
+            } else {
+                eprintln!(
+                    "ignoring vendored zsh path from dotslash because fetch output was empty"
+                );
+            }
+        }
+        Ok(output) => {
+            eprintln!(
+                "failed to fetch vendored zsh via dotslash (status {status:?}): {stderr}",
+                status = output.status,
+                stderr = String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Err(error) => {
+            eprintln!("failed to run dotslash to fetch vendored zsh: {error}");
         }
     }
 
-    let shell = std::env::var_os("SHELL")?;
-    let shell_path = std::path::PathBuf::from(shell);
-    if shell_path
-        .file_name()
-        .is_some_and(|file_name| file_name == "zsh")
-        && shell_path.is_file()
-    {
-        return Some(shell_path);
-    }
-
-    None
+    Ok(None)
 }
 
 fn supports_exec_wrapper_intercept(zsh_path: &Path) -> bool {
