@@ -16,6 +16,23 @@ use crate::outgoing_message::OutgoingMessageSender;
 
 const MATCH_LIMIT: usize = 50;
 const MAX_THREADS: usize = 12;
+const DEFAULT_EXCLUDED_PATTERNS: &[&str] = &["**/.env", "**/.env.*"];
+
+fn fuzzy_search_options(
+    limit: NonZero<usize>,
+    threads: NonZero<usize>,
+) -> file_search::FileSearchOptions {
+    file_search::FileSearchOptions {
+        limit,
+        exclude: DEFAULT_EXCLUDED_PATTERNS
+            .iter()
+            .map(|pattern| (*pattern).to_string())
+            .collect(),
+        threads,
+        compute_indices: true,
+        ..Default::default()
+    }
+}
 
 pub(crate) async fn run_fuzzy_file_search(
     query: String,
@@ -41,12 +58,7 @@ pub(crate) async fn run_fuzzy_file_search(
         file_search::run(
             query.as_str(),
             search_dirs,
-            file_search::FileSearchOptions {
-                limit,
-                threads,
-                compute_indices: true,
-                ..Default::default()
-            },
+            fuzzy_search_options(limit, threads),
             Some(cancellation_flag),
         )
     })
@@ -139,12 +151,7 @@ pub(crate) fn start_fuzzy_file_search_session(
     });
     let session = file_search::create_session(
         search_dirs,
-        file_search::FileSearchOptions {
-            limit,
-            threads,
-            compute_indices: true,
-            ..Default::default()
-        },
+        fuzzy_search_options(limit, threads),
         reporter,
         Some(canceled),
     )?;

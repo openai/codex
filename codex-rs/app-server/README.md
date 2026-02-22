@@ -570,6 +570,11 @@ The fuzzy file search session API emits per-query notifications:
 - `fuzzyFileSearch/sessionUpdated` — `{ sessionId, query, files }` with the current matching files for the active query.
 - `fuzzyFileSearch/sessionCompleted` — `{ sessionId, query }` once indexing/matching for that query has completed.
 
+Security and filtering behavior:
+
+- Searches respect `.gitignore` and related ignore files by default.
+- Dotenv files are excluded by default (`.env` and `.env.*`).
+
 ### Windows sandbox setup events
 
 - `windowsSandbox/setupCompleted` — `{ mode, success, error }` after a `windowsSandbox/setupStart` request finishes.

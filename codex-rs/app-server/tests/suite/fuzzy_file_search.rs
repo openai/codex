@@ -277,6 +277,110 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_fuzzy_file_search_excludes_dotenv_files() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let root = TempDir::new()?;
+
+    std::fs::write(root.path().join(".env"), "OPENAI_API_KEY=sk-test-key")?;
+    std::fs::write(root.path().join(".env.local"), "TOKEN=test-token")?;
+    std::fs::write(root.path().join("env-notes.txt"), "safe")?;
+
+    let mut mcp = initialized_mcp(&codex_home).await?;
+    let root_path = root.path().to_string_lossy().to_string();
+    let request_id = mcp
+        .send_fuzzy_file_search_request("env", vec![root_path.clone()], None)
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let files = resp
+        .result
+        .get("files")
+        .ok_or_else(|| anyhow!("files key missing"))?
+        .as_array()
+        .ok_or_else(|| anyhow!("files not array"))?
+        .clone();
+
+    assert_eq!(
+        files
+            .iter()
+            .any(|file| file["path"].as_str().is_some_and(|path| path == ".env")),
+        false
+    );
+    assert_eq!(
+        files.iter().any(|file| file["path"]
+            .as_str()
+            .is_some_and(|path| path == ".env.local")),
+        false
+    );
+    assert_eq!(
+        files.iter().any(|file| {
+            file["path"]
+                .as_str()
+                .is_some_and(|path| path == "env-notes.txt")
+        }),
+        true
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_fuzzy_file_search_respects_gitignore() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let root = TempDir::new()?;
+
+    std::fs::write(root.path().join(".gitignore"), "do-not-index.txt\n")?;
+    std::fs::write(root.path().join("do-not-index.txt"), "ignored")?;
+    std::fs::write(root.path().join("keep-indexed.txt"), "visible")?;
+
+    let mut mcp = initialized_mcp(&codex_home).await?;
+    let root_path = root.path().to_string_lossy().to_string();
+
+    let ignored_request_id = mcp
+        .send_fuzzy_file_search_request("do-not-index", vec![root_path.clone()], None)
+        .await?;
+    let ignored_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(ignored_request_id)),
+    )
+    .await??;
+    let ignored_files = ignored_resp
+        .result
+        .get("files")
+        .ok_or_else(|| anyhow!("files key missing"))?
+        .as_array()
+        .ok_or_else(|| anyhow!("files not array"))?
+        .clone();
+    assert_eq!(ignored_files.is_empty(), true);
+
+    let keep_request_id = mcp
+        .send_fuzzy_file_search_request("keep-indexed", vec![root_path.clone()], None)
+        .await?;
+    let keep_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(keep_request_id)),
+    )
+    .await??;
+    let keep_files = keep_resp
+        .result
+        .get("files")
+        .ok_or_else(|| anyhow!("files key missing"))?
+        .as_array()
+        .ok_or_else(|| anyhow!("files not array"))?
+        .clone();
+
+    assert_eq!(keep_files.len(), 1);
+    assert_eq!(keep_files[0]["path"], "keep-indexed.txt");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_fuzzy_file_search_session_streams_updates() -> Result<()> {
     let codex_home = TempDir::new()?;
     let root = TempDir::new()?;
