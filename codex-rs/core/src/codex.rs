@@ -566,7 +566,7 @@ pub(crate) struct TurnContext {
     pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
-    pub(crate) implicit_invocation_seen_skill_ids: Arc<Mutex<HashSet<String>>>,
+    pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<String>>>,
     pub(crate) implicit_invocation_context: Arc<OnceLock<Option<Arc<ImplicitInvocationContext>>>>,
 }
 impl TurnContext {
@@ -649,7 +649,7 @@ impl TurnContext {
             js_repl: Arc::clone(&self.js_repl),
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
-            implicit_invocation_seen_skill_ids: self.implicit_invocation_seen_skill_ids.clone(),
+            implicit_invocation_seen_skills: self.implicit_invocation_seen_skills.clone(),
             implicit_invocation_context: self.implicit_invocation_context.clone(),
         }
     }
@@ -993,7 +993,7 @@ impl Session {
             js_repl,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
-            implicit_invocation_seen_skill_ids: Arc::new(Mutex::new(HashSet::new())),
+            implicit_invocation_seen_skills: Arc::new(Mutex::new(HashSet::new())),
             implicit_invocation_context: Arc::new(OnceLock::new()),
         }
     }
@@ -4151,7 +4151,7 @@ async fn spawn_review_thread(
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,
-        implicit_invocation_seen_skill_ids: Arc::new(Mutex::new(HashSet::new())),
+        implicit_invocation_seen_skills: Arc::new(Mutex::new(HashSet::new())),
         implicit_invocation_context: Arc::new(OnceLock::new()),
     };
 

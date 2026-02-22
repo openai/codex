@@ -109,7 +109,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     let skill_name = candidate.invocation.skill_name.as_str();
     let seen_key = format!("{skill_scope}:{skill_path}:{skill_name}");
     let inserted = {
-        let mut seen_skills = turn_context.implicit_invocation_seen_skill_ids.lock().await;
+        let mut seen_skills = turn_context.implicit_invocation_seen_skills.lock().await;
         seen_skills.insert(seen_key)
     };
     if !inserted {
