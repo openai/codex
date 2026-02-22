@@ -1,6 +1,7 @@
 use crate::CodexAuth;
 use crate::api_bridge::map_api_error;
 use crate::codex::Session;
+use crate::codex::SteerInputError;
 use crate::default_client::default_headers;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -24,6 +25,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
+use codex_protocol::user_input::UserInput;
 use http::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
@@ -217,7 +219,32 @@ pub(crate) async fn handle_start(
                 _ => None,
             };
             if let Some(text) = maybe_routed_text {
-                sess_clone.route_realtime_text_input(text).await;
+                let steered_active_turn = match sess_clone
+                    .steer_input(
+                        vec![UserInput::Text {
+                            text: text.clone(),
+                            text_elements: Vec::new(),
+                        }],
+                        None,
+                    )
+                    .await
+                {
+                    Ok(_) => true,
+                    Err(SteerInputError::NoActiveTurn(_))
+                    | Err(SteerInputError::EmptyInput)
+                    | Err(SteerInputError::ExpectedTurnMismatch { .. }) => false,
+                };
+                sess_clone
+                    .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
+                        RealtimeConversationRealtimeEvent {
+                            payload: event.clone(),
+                        },
+                    )))
+                    .await;
+                if !steered_active_turn {
+                    sess_clone.route_realtime_text_input(text).await;
+                }
+                continue;
             }
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
