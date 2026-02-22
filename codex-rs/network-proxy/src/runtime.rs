@@ -1,7 +1,7 @@
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
-use crate::mitm::MitmState;
 use crate::config::ValidatedUnixSocketPath;
+use crate::mitm::MitmState;
 use crate::policy::Host;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;

@@ -1,5 +1,4 @@
 use crate::config::NetworkMode;
-use crate::metadata::attempt_id_from_proxy_authorization;
 use crate::mitm;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkDecisionSource;
