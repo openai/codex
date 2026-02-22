@@ -13,7 +13,6 @@ use std::path::Path;
 use std::sync::LazyLock;
 use toml::Value as TomlValue;
 
-const BUILT_IN_EXPLORER_CONFIG: &str = include_str!("builtins/explorer.toml");
 const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
@@ -186,6 +185,19 @@ Rules:
 - Always tell workers they are **not alone in the codebase**, and they should ignore edits made by others without touching them."#.to_string()),
                         config_file: None,
                     }
+                ),
+                (
+                    "monitor".to_string(),
+                    AgentRoleConfig {
+                        description: Some(r#"Use a `monitor` agent EVERY TIME you must run a command that might take some time.
+This includes, but not only:
+* testing
+* monitoring of a long running process
+* explicit ask to wait for something
+
+When YOU wait for the `monitor` agent to be done, use the largest possible timeout."#.to_string()),
+                        config_file: Some("monitor.toml".to_string().parse().unwrap_or_default()),
+                    }
                 )
             ])
         });
@@ -194,8 +206,11 @@ Rules:
 
     /// Resolves a built-in role `config_file` path to embedded content.
     pub(super) fn config_file_contents(path: &Path) -> Option<&'static str> {
+        const EXPLORER: &str = include_str!("builtins/explorer.toml");
+        const MONITOR: &str = include_str!("builtins/monitor.toml");
         match path.to_str()? {
-            "explorer.toml" => Some(BUILT_IN_EXPLORER_CONFIG),
+            "explorer.toml" => Some(EXPLORER),
+            "monitor.toml" => Some(MONITOR),
             _ => None,
         }
     }
@@ -481,10 +496,6 @@ writable_roots = ["./sandbox-root"]
 
     #[test]
     fn built_in_config_file_contents_resolves_explorer_only() {
-        assert_eq!(
-            built_in::config_file_contents(Path::new("explorer.toml")),
-            Some(BUILT_IN_EXPLORER_CONFIG)
-        );
         assert_eq!(
             built_in::config_file_contents(Path::new("missing.toml")),
             None
