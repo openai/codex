@@ -7300,6 +7300,14 @@ impl ChatWidget {
     pub(crate) fn submit_op(&mut self, op: Op) {
         if matches!(&op, Op::Interrupt) && self.agent_turn_running {
             self.interrupt_requested_for_turn = true;
+            if let Some(controller) = self.stream_controller.as_mut() {
+                controller.clear_queue();
+            }
+            if let Some(controller) = self.plan_stream_controller.as_mut() {
+                controller.clear_queue();
+            }
+            self.clear_active_stream_tail();
+            self.request_redraw();
         }
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);

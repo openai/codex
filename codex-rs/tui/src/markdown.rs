@@ -83,15 +83,25 @@ fn unwrap_markdown_fences<'a>(markdown_source: &'a str) -> Cow<'a, str> {
     // (which makes it an indented code line per CommonMark).
     fn strip_line_indent(line: &str) -> Option<&str> {
         let without_newline = line.strip_suffix('\n').unwrap_or(line);
-        let leading_ws = without_newline
-            .as_bytes()
-            .iter()
-            .take_while(|byte| **byte == b' ')
-            .count();
-        if leading_ws > 3 {
-            return None;
+        let mut byte_idx = 0usize;
+        let mut column = 0usize;
+        for b in without_newline.as_bytes() {
+            match b {
+                b' ' => {
+                    byte_idx += 1;
+                    column += 1;
+                }
+                b'\t' => {
+                    byte_idx += 1;
+                    column += 4;
+                }
+                _ => break,
+            }
+            if column >= 4 {
+                return None;
+            }
         }
-        Some(&without_newline[leading_ws..])
+        Some(&without_newline[byte_idx..])
     }
 
     // Parse an opening fence line, returning the fence metadata and whether
@@ -205,11 +215,10 @@ fn unwrap_markdown_fences<'a>(markdown_source: &'a str) -> Cow<'a, str> {
                 }
                 ActiveFence::MarkdownCandidate(mut data) => {
                     if is_close_fence(line, data.fence) {
-                        if markdown_fence_contains_table(&content_from_ranges(
-                            markdown_source,
-                            &data.content_ranges,
-                        ), data.fence.is_blockquoted)
-                        {
+                        if markdown_fence_contains_table(
+                            &content_from_ranges(markdown_source, &data.content_ranges),
+                            data.fence.is_blockquoted,
+                        ) {
                             for range in data.content_ranges {
                                 push_source_range(range);
                             }

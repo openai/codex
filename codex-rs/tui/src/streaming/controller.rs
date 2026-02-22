@@ -311,9 +311,9 @@ impl StreamCore {
         let holdback_state = self.holdback_scanner.state();
         let tail_budget = match holdback_state {
             TableHoldbackState::Confirmed { table_start: start }
-            | TableHoldbackState::PendingHeader { header_start: start } => {
-                self.tail_budget_from_source_start(start)
-            }
+            | TableHoldbackState::PendingHeader {
+                header_start: start,
+            } => self.tail_budget_from_source_start(start),
             TableHoldbackState::None => 0,
         };
         tracing::trace!(
@@ -448,6 +448,11 @@ impl StreamController {
         self.core.has_tail()
     }
 
+    pub(crate) fn clear_queue(&mut self) {
+        self.core.state.clear_queue();
+        self.core.enqueued_stable_len = self.core.emitted_stable_len;
+    }
+
     pub(crate) fn set_width(&mut self, width: Option<usize>) {
         self.core.set_width(width);
     }
@@ -526,6 +531,11 @@ impl PlanStreamController {
 
     pub(crate) fn oldest_queued_age(&self, now: Instant) -> Option<Duration> {
         self.core.oldest_queued_age(now)
+    }
+
+    pub(crate) fn clear_queue(&mut self) {
+        self.core.state.clear_queue();
+        self.core.enqueued_stable_len = self.core.emitted_stable_len;
     }
 
     pub(crate) fn set_width(&mut self, width: Option<usize>) {

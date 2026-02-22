@@ -1062,16 +1062,29 @@ impl App {
         }
     }
 
-    fn schedule_resize_reflow(&mut self) {
-        self.resize_reflow_pending_until = Some(Instant::now() + RESIZE_REFLOW_DEBOUNCE);
+    fn schedule_resize_reflow(&mut self) -> bool {
+        let now = Instant::now();
+        let due_now = self
+            .resize_reflow_pending_until
+            .is_some_and(|deadline| now >= deadline);
+        self.resize_reflow_pending_until = Some(now + RESIZE_REFLOW_DEBOUNCE);
+        due_now
     }
 
     /// After stream consolidation, schedule a follow-up reflow if one ran mid-stream.
     fn maybe_finish_stream_reflow(&mut self, tui: &mut tui::Tui) {
         if self.reflow_ran_during_stream {
-            self.schedule_resize_reflow();
-            tui.frame_requester()
-                .schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
+            if self.schedule_resize_reflow() {
+                tui.frame_requester().schedule_frame();
+            } else {
+                tui.frame_requester()
+                    .schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
+            }
+        } else if self
+            .resize_reflow_pending_until
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            tui.frame_requester().schedule_frame();
         }
         self.reflow_ran_during_stream = false;
     }
@@ -1086,8 +1099,11 @@ impl App {
         let width_changed = previous_width.is_some_and(|width| width != size.width);
         if width_changed {
             self.chat_widget.on_terminal_resize(size.width);
-            self.schedule_resize_reflow();
-            frame_requester.schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
+            if self.schedule_resize_reflow() {
+                frame_requester.schedule_frame();
+            } else {
+                frame_requester.schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
+            }
         } else if previous_width.is_none() {
             self.chat_widget.on_terminal_resize(size.width);
         }
