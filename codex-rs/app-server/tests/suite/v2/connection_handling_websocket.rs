@@ -36,9 +36,7 @@ use tokio::io::AsyncBufReadExt;
 use tokio::process::Child;
 use tokio::process::Command;
 use tokio::time::Duration;
-#[cfg(unix)]
 use tokio::time::Instant;
-#[cfg(unix)]
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio_tungstenite::MaybeTlsStream;
@@ -105,45 +103,49 @@ async fn websocket_transport_routes_per_connection_handshake_and_responses() -> 
 #[cfg(unix)]
 #[tokio::test]
 async fn websocket_transport_ctrl_c_waits_for_running_turn_before_exit() -> Result<()> {
-    let server = responses::start_mock_server().await;
-    let delayed_turn_response = create_final_assistant_message_sse_response("Done")?;
-    Mock::given(method("POST"))
-        .and(path_regex(".*/responses$"))
-        .respond_with(
-            responses::sse_response(delayed_turn_response).set_delay(Duration::from_secs(3)),
-        )
-        .up_to_n_times(1)
-        .mount(&server)
-        .await;
-
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
-
-    let bind_addr = reserve_local_addr()?;
-    let mut process = spawn_websocket_server(codex_home.path(), bind_addr).await?;
-    let mut ws = connect_websocket(bind_addr).await?;
-
-    send_initialize_request(&mut ws, 1, "ws_graceful_shutdown").await?;
-    let init_response = read_response_for_id(&mut ws, 1).await?;
-    assert_eq!(init_response.id, RequestId::Integer(1));
-
-    send_thread_start_request(&mut ws, 2).await?;
-    let thread_start_response = read_response_for_id(&mut ws, 2).await?;
-    let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
-
-    send_turn_start_request(&mut ws, 3, &thread.id).await?;
-    let turn_start_response = read_response_for_id(&mut ws, 3).await?;
-    assert_eq!(turn_start_response.id, RequestId::Integer(3));
-
-    wait_for_responses_post(&server, Duration::from_secs(5)).await?;
+    let GracefulCtrlCFixture {
+        _codex_home,
+        _server,
+        mut process,
+        mut ws,
+    } = start_ctrl_c_restart_fixture(Duration::from_secs(3)).await?;
 
     send_sigint(&process)?;
     assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
 
-    let status = timeout(Duration::from_secs(10), process.wait())
-        .await
-        .context("timed out waiting for graceful Ctrl-C restart shutdown")?
-        .context("failed waiting for websocket app-server process exit")?;
+    let status = wait_for_process_exit_within(
+        &mut process,
+        Duration::from_secs(10),
+        "timed out waiting for graceful Ctrl-C restart shutdown",
+    )
+    .await?;
+    assert!(status.success(), "expected graceful exit, got {status}");
+
+    expect_websocket_disconnect(&mut ws).await?;
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn websocket_transport_second_ctrl_c_forces_exit_while_turn_running() -> Result<()> {
+    let GracefulCtrlCFixture {
+        _codex_home,
+        _server,
+        mut process,
+        mut ws,
+    } = start_ctrl_c_restart_fixture(Duration::from_secs(3)).await?;
+
+    send_sigint(&process)?;
+    assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
+
+    send_sigint(&process)?;
+    let status = wait_for_process_exit_within(
+        &mut process,
+        Duration::from_secs(2),
+        "timed out waiting for forced Ctrl-C restart shutdown",
+    )
+    .await?;
     assert!(status.success(), "expected graceful exit, got {status}");
 
     expect_websocket_disconnect(&mut ws).await?;
@@ -341,6 +343,54 @@ async fn assert_no_message(stream: &mut WsClient, wait_for: Duration) -> Result<
 }
 
 #[cfg(unix)]
+struct GracefulCtrlCFixture {
+    _codex_home: TempDir,
+    _server: wiremock::MockServer,
+    process: Child,
+    ws: WsClient,
+}
+
+#[cfg(unix)]
+async fn start_ctrl_c_restart_fixture(turn_delay: Duration) -> Result<GracefulCtrlCFixture> {
+    let server = responses::start_mock_server().await;
+    let delayed_turn_response = create_final_assistant_message_sse_response("Done")?;
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(responses::sse_response(delayed_turn_response).set_delay(turn_delay))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let bind_addr = reserve_local_addr()?;
+    let process = spawn_websocket_server(codex_home.path(), bind_addr).await?;
+    let mut ws = connect_websocket(bind_addr).await?;
+
+    send_initialize_request(&mut ws, 1, "ws_graceful_shutdown").await?;
+    let init_response = read_response_for_id(&mut ws, 1).await?;
+    assert_eq!(init_response.id, RequestId::Integer(1));
+
+    send_thread_start_request(&mut ws, 2).await?;
+    let thread_start_response = read_response_for_id(&mut ws, 2).await?;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_response)?;
+
+    send_turn_start_request(&mut ws, 3, &thread.id).await?;
+    let turn_start_response = read_response_for_id(&mut ws, 3).await?;
+    assert_eq!(turn_start_response.id, RequestId::Integer(3));
+
+    wait_for_responses_post(&server, Duration::from_secs(5)).await?;
+
+    Ok(GracefulCtrlCFixture {
+        _codex_home: codex_home,
+        _server: server,
+        process,
+        ws,
+    })
+}
+
+#[cfg(unix)]
 async fn wait_for_responses_post(server: &wiremock::MockServer, wait_for: Duration) -> Result<()> {
     let deadline = Instant::now() + wait_for;
     loop {
@@ -384,6 +434,18 @@ async fn assert_process_does_not_exit_within(process: &mut Child, window: Durati
         Ok(Ok(status)) => bail!("process exited too early during graceful drain: {status}"),
         Ok(Err(err)) => Err(err).context("failed waiting for process"),
     }
+}
+
+#[cfg(unix)]
+async fn wait_for_process_exit_within(
+    process: &mut Child,
+    window: Duration,
+    timeout_context: &'static str,
+) -> Result<std::process::ExitStatus> {
+    timeout(window, process.wait())
+        .await
+        .context(timeout_context)?
+        .context("failed waiting for websocket app-server process exit")
 }
 
 #[cfg(unix)]

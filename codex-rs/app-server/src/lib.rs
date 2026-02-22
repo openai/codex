@@ -492,16 +492,24 @@ pub async fn run_main_with_transport(
         async move {
             let mut listen_for_threads = true;
             let mut restart_requested = false;
+            let mut restart_forced = false;
             let mut last_logged_running_turn_count = None;
-            let mut ctrl_c_signal = std::pin::pin!(tokio::signal::ctrl_c());
             loop {
                 if restart_requested {
                     let running_turn_count = *running_turn_count_rx.borrow();
-                    if running_turn_count == 0 {
-                        info!(
-                            "Ctrl-C restart: no assistant turns running; stopping acceptor and disconnecting {} connection(s)",
-                            connections.len()
-                        );
+                    if restart_forced || running_turn_count == 0 {
+                        if restart_forced {
+                            info!(
+                                "received second Ctrl-C; forcing restart with {} running assistant turn(s) and {} connection(s)",
+                                running_turn_count,
+                                connections.len()
+                            );
+                        } else {
+                            info!(
+                                "Ctrl-C restart: no assistant turns running; stopping acceptor and disconnecting {} connection(s)",
+                                connections.len()
+                            );
+                        }
                         if let Some(shutdown_token) = &websocket_accept_shutdown {
                             shutdown_token.cancel();
                         }
@@ -519,18 +527,22 @@ pub async fn run_main_with_transport(
                 }
 
                 tokio::select! {
-                    ctrl_c_result = &mut ctrl_c_signal, if graceful_ctrl_c_restart_enabled && !restart_requested => {
+                    ctrl_c_result = tokio::signal::ctrl_c(), if graceful_ctrl_c_restart_enabled && !restart_forced => {
                         if let Err(err) = ctrl_c_result {
                             warn!("failed to listen for Ctrl-C during graceful restart drain: {err}");
                         }
-                        restart_requested = true;
-                        last_logged_running_turn_count = None;
-                        let running_turn_count = *running_turn_count_rx.borrow();
-                        info!(
-                            "received Ctrl-C; entering graceful restart drain (connections={}, runningAssistantTurns={}, requests still accepted until no assistant turns are running)",
-                            connections.len(),
-                            running_turn_count,
-                        );
+                        if restart_requested {
+                            restart_forced = true;
+                        } else {
+                            restart_requested = true;
+                            last_logged_running_turn_count = None;
+                            let running_turn_count = *running_turn_count_rx.borrow();
+                            info!(
+                                "received Ctrl-C; entering graceful restart drain (connections={}, runningAssistantTurns={}, requests still accepted until no assistant turns are running)",
+                                connections.len(),
+                                running_turn_count,
+                            );
+                        }
                     }
                     changed = running_turn_count_rx.changed(), if graceful_ctrl_c_restart_enabled && restart_requested => {
                         if changed.is_err() {
