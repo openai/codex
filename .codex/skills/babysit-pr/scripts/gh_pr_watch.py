@@ -28,6 +28,11 @@ PENDING_CHECK_STATES = {
 REVIEW_BOT_LOGIN_KEYWORDS = {
     "codex",
 }
+TRUSTED_AUTHOR_ASSOCIATIONS = {
+    "OWNER",
+    "MEMBER",
+    "COLLABORATOR",
+}
 
 
 class GhCommandError(RuntimeError):
@@ -128,7 +133,7 @@ def parse_pr_spec(pr_spec):
 def pr_view_fields():
     return (
         "number,url,state,mergedAt,closedAt,headRefName,headRefOid,"
-        "headRepository,headRepositoryOwner"
+        "headRepository,headRepositoryOwner,mergeable,mergeStateStatus,reviewDecision"
     )
 
 
@@ -168,6 +173,9 @@ def resolve_pr(pr_spec, repo_override=None):
         "state": state,
         "merged": merged,
         "closed": closed,
+        "mergeable": str(data.get("mergeable") or ""),
+        "merge_state_status": str(data.get("mergeStateStatus") or ""),
+        "review_decision": str(data.get("reviewDecision") or ""),
     }
 
 
@@ -351,6 +359,7 @@ def normalize_issue_comments(items):
                 "kind": "issue_comment",
                 "id": str(item.get("id") or ""),
                 "author": extract_login(item.get("user")),
+                "author_association": str(item.get("author_association") or ""),
                 "created_at": str(item.get("created_at") or ""),
                 "body": str(item.get("body") or ""),
                 "path": None,
@@ -374,6 +383,7 @@ def normalize_review_comments(items):
                 "kind": "review_comment",
                 "id": str(item.get("id") or ""),
                 "author": extract_login(item.get("user")),
+                "author_association": str(item.get("author_association") or ""),
                 "created_at": str(item.get("created_at") or ""),
                 "body": str(item.get("body") or ""),
                 "path": item.get("path"),
@@ -394,6 +404,7 @@ def normalize_reviews(items):
                 "kind": "review",
                 "id": str(item.get("id") or ""),
                 "author": extract_login(item.get("user")),
+                "author_association": str(item.get("author_association") or ""),
                 "created_at": str(item.get("submitted_at") or item.get("created_at") or ""),
                 "body": str(item.get("body") or ""),
                 "path": None,
@@ -421,7 +432,17 @@ def is_actionable_review_bot_login(login):
     return any(keyword in lower_login for keyword in REVIEW_BOT_LOGIN_KEYWORDS)
 
 
-def fetch_new_review_items(pr, state, fresh_state):
+def is_trusted_human_review_author(item, authenticated_login):
+    author = str(item.get("author") or "")
+    if not author:
+        return False
+    if authenticated_login and author == authenticated_login:
+        return True
+    association = str(item.get("author_association") or "").upper()
+    return association in TRUSTED_AUTHOR_ASSOCIATIONS
+
+
+def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
     repo = pr["repo"]
     pr_number = pr["number"]
     endpoints = comment_endpoints(repo, pr_number)
@@ -451,7 +472,10 @@ def fetch_new_review_items(pr, state, fresh_state):
         author = item.get("author") or ""
         if not author:
             continue
-        if is_bot_login(author) and not is_actionable_review_bot_login(author):
+        if is_bot_login(author):
+            if not is_actionable_review_bot_login(author):
+                continue
+        elif not is_trusted_human_review_author(item, authenticated_login):
             continue
 
         kind = item["kind"]
@@ -515,8 +539,8 @@ def recommend_actions(pr, checks_summary, failed_runs, new_review_items, retries
     if new_review_items:
         actions.append("process_review_comment")
 
-    has_ci_failures = bool(failed_runs) or checks_summary["failed_count"] > 0
-    if has_ci_failures:
+    has_failed_pr_checks = checks_summary["failed_count"] > 0
+    if has_failed_pr_checks:
         if checks_summary["all_terminal"] and retries_used >= max_retries:
             actions.append("stop_exhausted_retries")
         else:
@@ -543,7 +567,13 @@ def collect_snapshot(args):
     checks_summary = summarize_checks(checks)
     workflow_runs = get_workflow_runs_for_sha(pr["repo"], pr["head_sha"])
     failed_runs = failed_runs_from_workflow_runs(workflow_runs, pr["head_sha"])
-    new_review_items = fetch_new_review_items(pr, state, fresh_state=fresh_state)
+    authenticated_login = get_authenticated_login()
+    new_review_items = fetch_new_review_items(
+        pr,
+        state,
+        fresh_state=fresh_state,
+        authenticated_login=authenticated_login,
+    )
 
     retries_used = current_retry_count(state, pr["head_sha"])
     actions = recommend_actions(
@@ -593,6 +623,9 @@ def retry_failed_now(args):
 
     if pr["closed"] or pr["merged"]:
         result["reason"] = "pr_closed"
+        return result
+    if checks_summary["failed_count"] <= 0:
+        result["reason"] = "no_failed_pr_checks"
         return result
     if not failed_runs:
         result["reason"] = "no_failed_runs"
