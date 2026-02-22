@@ -439,18 +439,9 @@ def fetch_new_review_items(pr, state, fresh_state):
     seen_review_comment = {str(x) for x in state.get("seen_review_comment_ids") or []}
     seen_review = {str(x) for x in state.get("seen_review_ids") or []}
 
-    if fresh_state and not state.get("last_snapshot_at"):
-        for item in all_items:
-            if item["kind"] == "issue_comment" and item["id"]:
-                seen_issue.add(item["id"])
-            elif item["kind"] == "review_comment" and item["id"]:
-                seen_review_comment.add(item["id"])
-            elif item["kind"] == "review" and item["id"]:
-                seen_review.add(item["id"])
-        state["seen_issue_comment_ids"] = sorted(seen_issue)
-        state["seen_review_comment_ids"] = sorted(seen_review_comment)
-        state["seen_review_ids"] = sorted(seen_review)
-        return []
+    # On a brand-new state file, surface existing review activity instead of
+    # silently treating it as seen. This avoids missing already-pending review
+    # feedback when monitoring starts after comments were posted.
 
     new_items = []
     for item in all_items:

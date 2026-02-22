@@ -23,17 +23,18 @@ Accept any of the following:
 
 ## Core Workflow
 
-1. Run the watcher script to snapshot PR/CI/review state.
-2. Inspect the `actions` list in the JSON response.
-3. If `diagnose_ci_failure` is present, inspect failed run logs and classify the failure.
-4. If the failure is likely caused by the current branch, patch code locally, commit, and push.
-5. If `process_review_comment` is present, inspect new review items and decide whether to address them.
-6. If a review item is actionable and correct, patch code locally, commit, and push.
-7. If the failure is likely flaky/unrelated and `retry_failed_checks` is present, rerun failed jobs with `--retry-failed-now`.
-8. If both actionable review feedback and `retry_failed_checks` are present, prioritize review feedback first; a new commit will retrigger CI, so avoid rerunning flaky checks on the old SHA unless you intentionally defer the review change.
-9. On every loop, verify mergeability / merge-conflict status (for example via `gh pr view`) in addition to CI and review state.
-10. After any push or rerun action, immediately return to step 1 and continue polling on the updated SHA/state.
-11. Repeat polling until the PR is green + review-clean + mergeable, `stop_pr_closed` appears, or a user-help-required blocker is reached.
+1. When the user asks to "monitor"/"watch"/"babysit" a PR, start with the watcher's continuous mode (`--watch`) unless you are intentionally doing a one-shot diagnostic snapshot.
+2. Run the watcher script to snapshot PR/CI/review state (or consume each streamed snapshot from `--watch`).
+3. Inspect the `actions` list in the JSON response.
+4. If `diagnose_ci_failure` is present, inspect failed run logs and classify the failure.
+5. If the failure is likely caused by the current branch, patch code locally, commit, and push.
+6. If `process_review_comment` is present, inspect surfaced review items and decide whether to address them.
+7. If a review item is actionable and correct, patch code locally, commit, and push.
+8. If the failure is likely flaky/unrelated and `retry_failed_checks` is present, rerun failed jobs with `--retry-failed-now`.
+9. If both actionable review feedback and `retry_failed_checks` are present, prioritize review feedback first; a new commit will retrigger CI, so avoid rerunning flaky checks on the old SHA unless you intentionally defer the review change.
+10. On every loop, verify mergeability / merge-conflict status (for example via `gh pr view`) in addition to CI and review state.
+11. After any push or rerun action, immediately return to step 1 and continue polling on the updated SHA/state.
+12. Repeat polling until the PR is green + review-clean + mergeable, `stop_pr_closed` appears, or a user-help-required blocker is reached.
 
 ## Commands
 
@@ -76,13 +77,14 @@ If classification is ambiguous, perform one manual diagnosis attempt before choo
 Read `.codex/skills/babysit-pr/references/heuristics.md` for a concise checklist.
 
 ## Review Comment Handling
-The watcher surfaces new review items from:
+The watcher surfaces review items from:
 
 - PR issue comments
 - Inline review comments
 - Review submissions (COMMENT / APPROVED / CHANGES_REQUESTED)
 
 It intentionally surfaces Codex reviewer bot feedback (for example comments/reviews from `chatgpt-codex-connector[bot]`) in addition to human reviewer feedback. Most unrelated bot noise should still be ignored.
+On a fresh watcher state file, existing pending review feedback may be surfaced immediately (not only comments that arrive after monitoring starts). This is intentional so already-open review comments are not missed.
 
 When you agree with a comment and it is actionable:
 
@@ -91,7 +93,7 @@ When you agree with a comment and it is actionable:
 3. Push to the PR head branch.
 4. Resume watching on the new SHA immediately (do not stop after reporting the push).
 
-If you disagree or the comment is non-actionable/already addressed, record it as handled by continuing the watcher loop (the script de-duplicates surfaced items via state).
+If you disagree or the comment is non-actionable/already addressed, record it as handled by continuing the watcher loop (the script de-duplicates surfaced items via state after surfacing them).
 If a code review comment/thread is already marked as resolved in GitHub, treat it as non-actionable and safely ignore it unless new unresolved follow-up feedback appears.
 
 ## Git Safety Rules
@@ -123,7 +125,7 @@ Use this loop in a live Codex session:
 10. If blocked on a user-help-required issue (infra outage, exhausted flaky retries, unclear reviewer request, permissions), report the blocker and stop.
 11. Otherwise sleep according to the polling cadence below and repeat.
 
-Use `--watch` when you want JSONL snapshots streamed continuously instead of manual polling.
+When the user explicitly asks to monitor/watch/babysit a PR, prefer `--watch` so polling continues autonomously in one command. Use repeated `--once` snapshots only for debugging, local testing, or when the user explicitly asks for a one-shot check.
 Do not stop to ask the user whether to continue polling; continue autonomously until a strict stop condition is met or the user explicitly interrupts.
 
 ## Polling Cadence
@@ -156,6 +158,7 @@ Provide concise progress updates while monitoring and a final summary that inclu
 
 - During long unchanged monitoring periods, avoid emitting a full update on every poll; summarize only status changes plus occasional heartbeat updates.
 - Treat push confirmations, intermediate CI snapshots, and review-action updates as progress updates only; do not emit the final summary or end the babysitting session unless a strict stop condition is met.
+- A user request to "monitor" is not satisfied by a couple of sample polls; remain in the loop until a strict stop condition or an explicit user interruption.
 
 - Final PR SHA
 - CI status summary
