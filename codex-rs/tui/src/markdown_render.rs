@@ -1048,7 +1048,11 @@ where
             } else {
                 total_cell_width as f64 / total_cells as f64
             };
-            let kind = if avg_words_per_cell >= 4.0 || avg_cell_width >= 28.0 {
+            let kind = if body_token_width >= 20 && avg_words_per_cell <= 2.0 {
+                // URL-like/token-heavy columns should resist collapse even if their
+                // average cell width is high.
+                TableColumnKind::Structured
+            } else if avg_words_per_cell >= 4.0 || avg_cell_width >= 28.0 {
                 TableColumnKind::Narrative
             } else {
                 TableColumnKind::Structured
