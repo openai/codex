@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
@@ -16,7 +17,6 @@ use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::InvocationType;
-use crate::analytics_client::TrackEventsContext;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
@@ -35,7 +35,6 @@ use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::rollout::session_index;
 use crate::skills::ImplicitInvocationContext;
-use crate::skills::build_implicit_invocation_context;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -568,6 +567,7 @@ pub(crate) struct TurnContext {
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) implicit_invocation_seen_skill_ids: Arc<Mutex<HashSet<String>>>,
+    pub(crate) implicit_invocation_context: Arc<OnceLock<Option<Arc<ImplicitInvocationContext>>>>,
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -650,6 +650,7 @@ impl TurnContext {
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
             implicit_invocation_seen_skill_ids: self.implicit_invocation_seen_skill_ids.clone(),
+            implicit_invocation_context: self.implicit_invocation_context.clone(),
         }
     }
 
@@ -993,6 +994,7 @@ impl Session {
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
             implicit_invocation_seen_skill_ids: Arc::new(Mutex::new(HashSet::new())),
+            implicit_invocation_context: Arc::new(OnceLock::new()),
         }
     }
 
@@ -4150,6 +4152,7 @@ async fn spawn_review_thread(
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,
         implicit_invocation_seen_skill_ids: Arc::new(Mutex::new(HashSet::new())),
+        implicit_invocation_context: Arc::new(OnceLock::new()),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -4273,6 +4276,11 @@ pub(crate) async fn run_turn(
             .skills_for_cwd(&turn_context.cwd, false)
             .await,
     );
+    let _ = turn_context.implicit_invocation_context.set(
+        skills_outcome
+            .as_ref()
+            .and_then(|outcome| outcome.implicit_invocation_context.clone()),
+    );
 
     let available_connectors = if turn_context.config.features.enabled(Feature::Apps) {
         let mcp_tools = match sess
@@ -4331,11 +4339,6 @@ pub(crate) async fn run_turn(
         turn_context.model_info.slug.clone(),
         thread_id,
         turn_context.sub_id.clone(),
-    );
-    let implicit_invocation_context = build_implicit_invocation_context(
-        skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
-            outcome.allowed_skills_for_implicit_invocation()
-        }),
     );
     let SkillInjections {
         items: skill_items,
@@ -4459,8 +4462,6 @@ pub(crate) async fn run_turn(
             &explicitly_enabled_connectors,
             skills_outcome.as_ref(),
             &mut server_model_warning_emitted_for_turn,
-            implicit_invocation_context.as_ref(),
-            &tracking,
             cancellation_token.child_token(),
         )
         .await
@@ -4835,8 +4836,6 @@ async fn run_sampling_request(
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     server_model_warning_emitted_for_turn: &mut bool,
-    implicit_invocation_context: Option<&ImplicitInvocationContext>,
-    tracking: &TrackEventsContext,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let router = built_tools(
@@ -4863,7 +4862,6 @@ async fn run_sampling_request(
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
     };
-
     let mut retries = 0;
     loop {
         let err = match try_run_sampling_request(
@@ -4875,8 +4873,6 @@ async fn run_sampling_request(
             Arc::clone(&turn_diff_tracker),
             server_model_warning_emitted_for_turn,
             &prompt,
-            implicit_invocation_context,
-            tracking,
             cancellation_token.child_token(),
         )
         .await
@@ -5446,8 +5442,6 @@ async fn try_run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     server_model_warning_emitted_for_turn: &mut bool,
     prompt: &Prompt,
-    implicit_invocation_context: Option<&ImplicitInvocationContext>,
-    tracking: &TrackEventsContext,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let collaboration_mode = sess.current_collaboration_mode().await;
@@ -5561,8 +5555,6 @@ async fn try_run_sampling_request(
                     turn_context: turn_context.clone(),
                     tool_runtime: tool_runtime.clone(),
                     cancellation_token: cancellation_token.child_token(),
-                    implicit_invocation_context,
-                    tracking,
                 };
 
                 let output_result = handle_output_item_done(&mut ctx, item, previously_active_item)

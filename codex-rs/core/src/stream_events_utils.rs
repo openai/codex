@@ -5,7 +5,6 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
 use tokio_util::sync::CancellationToken;
 
-use crate::analytics_client::TrackEventsContext;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
@@ -13,8 +12,6 @@ use crate::error::Result;
 use crate::function_tool::FunctionCallError;
 use crate::parse_turn_item;
 use crate::proposed_plan_parser::strip_proposed_plan_blocks;
-use crate::skills::ImplicitInvocationContext;
-use crate::skills::detect_implicit_skill_invocation;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -38,18 +35,16 @@ pub(crate) struct OutputItemResult {
     pub tool_future: Option<InFlightFuture<'static>>,
 }
 
-pub(crate) struct HandleOutputCtx<'a> {
+pub(crate) struct HandleOutputCtx {
     pub sess: Arc<Session>,
     pub turn_context: Arc<TurnContext>,
     pub tool_runtime: ToolCallRuntime,
     pub cancellation_token: CancellationToken,
-    pub implicit_invocation_context: Option<&'a ImplicitInvocationContext>,
-    pub tracking: &'a TrackEventsContext,
 }
 
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn handle_output_item_done(
-    ctx: &mut HandleOutputCtx<'_>,
+    ctx: &mut HandleOutputCtx,
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
 ) -> Result<OutputItemResult> {
@@ -66,8 +61,6 @@ pub(crate) async fn handle_output_item_done(
                 call.tool_name,
                 payload_preview
             );
-
-            maybe_emit_implicit_skill_invocation(ctx, &item).await;
 
             ctx.sess
                 .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&item))
@@ -163,51 +156,6 @@ pub(crate) async fn handle_output_item_done(
     }
 
     Ok(output)
-}
-
-async fn maybe_emit_implicit_skill_invocation(ctx: &mut HandleOutputCtx<'_>, item: &ResponseItem) {
-    let Some(implicit) = ctx.implicit_invocation_context else {
-        return;
-    };
-    let Some(candidate) =
-        detect_implicit_skill_invocation(&implicit.detector, ctx.turn_context.as_ref(), item)
-    else {
-        return;
-    };
-    let skill_scope = match candidate.invocation.skill_scope {
-        codex_protocol::protocol::SkillScope::User => "user",
-        codex_protocol::protocol::SkillScope::Repo => "repo",
-        codex_protocol::protocol::SkillScope::System => "system",
-        codex_protocol::protocol::SkillScope::Admin => "admin",
-    };
-    let skill_path = candidate.invocation.skill_path.to_string_lossy();
-    let skill_name = candidate.invocation.skill_name.as_str();
-    let seen_key = format!("{skill_scope}:{skill_path}:{skill_name}");
-    let inserted = {
-        let mut seen_skills = ctx
-            .turn_context
-            .implicit_invocation_seen_skill_ids
-            .lock()
-            .await;
-        seen_skills.insert(seen_key)
-    };
-    if !inserted {
-        return;
-    }
-
-    ctx.turn_context.otel_manager.counter(
-        "codex.skill.injected",
-        1,
-        &[
-            ("status", "ok"),
-            ("skill", skill_name),
-            ("invoke_type", "implicit"),
-        ],
-    );
-    ctx.sess
-        .services
-        .analytics_events_client
-        .track_skill_invocations(ctx.tracking.clone(), vec![candidate.invocation]);
 }
 
 pub(crate) async fn handle_non_tool_response_item(

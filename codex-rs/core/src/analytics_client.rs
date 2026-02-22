@@ -34,7 +34,7 @@ pub(crate) fn build_track_events_context(
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct SkillInvocation {
     pub(crate) skill_name: String,
     pub(crate) skill_scope: SkillScope,
@@ -42,7 +42,7 @@ pub(crate) struct SkillInvocation {
     pub(crate) invocation_type: InvocationType,
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum InvocationType {
     Explicit,

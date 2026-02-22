@@ -16,7 +16,7 @@ pub(crate) use injection::build_skill_injections;
 pub(crate) use injection::collect_explicit_skill_mentions;
 pub(crate) use invocation_utils::ImplicitInvocationContext;
 pub(crate) use invocation_utils::build_implicit_invocation_context;
-pub(crate) use invocation_utils::detect_implicit_skill_invocation;
+pub(crate) use invocation_utils::maybe_emit_implicit_skill_invocation;
 pub use loader::load_skills;
 pub use manager::SkillsManager;
 pub use model::SkillError;

@@ -2,39 +2,27 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::models::ResponseItem;
-use serde::Deserialize;
-
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::SkillInvocation;
+use crate::analytics_client::build_track_events_context;
+use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::skills::SkillMetadata;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ImplicitSkillCandidate {
     pub(crate) invocation: SkillInvocation,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct ImplicitSkillDetector {
     pub(crate) by_scripts_dir: HashMap<PathBuf, ImplicitSkillCandidate>,
     pub(crate) by_skill_doc_path: HashMap<PathBuf, ImplicitSkillCandidate>,
 }
 
+#[derive(Debug)]
 pub(crate) struct ImplicitInvocationContext {
     pub(crate) detector: ImplicitSkillDetector,
-}
-
-#[derive(Deserialize)]
-struct ShellCommandDetectionArgs {
-    command: String,
-    workdir: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ExecCommandDetectionArgs {
-    cmd: String,
-    workdir: Option<String>,
 }
 
 pub(crate) fn build_implicit_invocation_context(
@@ -68,21 +56,15 @@ pub(crate) fn build_implicit_invocation_context(
     Some(ImplicitInvocationContext { detector })
 }
 
-pub(crate) fn detect_implicit_skill_invocation(
+fn detect_implicit_skill_invocation_for_command(
     detector: &ImplicitSkillDetector,
     turn_context: &TurnContext,
-    item: &ResponseItem,
+    command: &str,
+    workdir: Option<&str>,
 ) -> Option<ImplicitSkillCandidate> {
-    let ResponseItem::FunctionCall {
-        name, arguments, ..
-    } = item
-    else {
-        return None;
-    };
-    let (command, workdir) = parse_implicit_detection_command(name, arguments)?;
-    let workdir = turn_context.resolve_path(workdir);
+    let workdir = turn_context.resolve_path(workdir.map(str::to_owned));
     let workdir = normalize_path(workdir.as_path());
-    let tokens = tokenize_command(command.as_str());
+    let tokens = tokenize_command(command);
 
     if let Some(candidate) = detect_skill_script_run(detector, tokens.as_slice(), workdir.as_path())
     {
@@ -96,19 +78,63 @@ pub(crate) fn detect_implicit_skill_invocation(
     None
 }
 
-fn parse_implicit_detection_command(
-    tool_name: &str,
-    arguments: &str,
-) -> Option<(String, Option<String>)> {
-    match tool_name {
-        "shell_command" => serde_json::from_str::<ShellCommandDetectionArgs>(arguments)
-            .ok()
-            .map(|args| (args.command, args.workdir)),
-        "exec_command" => serde_json::from_str::<ExecCommandDetectionArgs>(arguments)
-            .ok()
-            .map(|args| (args.cmd, args.workdir)),
-        _ => None,
+pub(crate) async fn maybe_emit_implicit_skill_invocation(
+    sess: &Session,
+    turn_context: &TurnContext,
+    command: &str,
+    workdir: Option<&str>,
+) {
+    let Some(implicit) = turn_context
+        .implicit_invocation_context
+        .get()
+        .and_then(|value| value.as_deref())
+    else {
+        return;
+    };
+    let Some(candidate) = detect_implicit_skill_invocation_for_command(
+        &implicit.detector,
+        turn_context,
+        command,
+        workdir,
+    ) else {
+        return;
+    };
+    let skill_scope = match candidate.invocation.skill_scope {
+        codex_protocol::protocol::SkillScope::User => "user",
+        codex_protocol::protocol::SkillScope::Repo => "repo",
+        codex_protocol::protocol::SkillScope::System => "system",
+        codex_protocol::protocol::SkillScope::Admin => "admin",
+    };
+    let skill_path = candidate.invocation.skill_path.to_string_lossy();
+    let skill_name = candidate.invocation.skill_name.as_str();
+    let seen_key = format!("{skill_scope}:{skill_path}:{skill_name}");
+    let inserted = {
+        let mut seen_skills = turn_context.implicit_invocation_seen_skill_ids.lock().await;
+        seen_skills.insert(seen_key)
+    };
+    if !inserted {
+        return;
     }
+
+    turn_context.otel_manager.counter(
+        "codex.skill.injected",
+        1,
+        &[
+            ("status", "ok"),
+            ("skill", skill_name),
+            ("invoke_type", "implicit"),
+        ],
+    );
+    sess.services
+        .analytics_events_client
+        .track_skill_invocations(
+            build_track_events_context(
+                turn_context.model_info.slug.clone(),
+                sess.conversation_id.to_string(),
+                turn_context.sub_id.clone(),
+            ),
+            vec![candidate.invocation],
+        );
 }
 
 fn tokenize_command(command: &str) -> Vec<String> {
