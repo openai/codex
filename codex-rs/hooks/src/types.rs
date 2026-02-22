@@ -67,6 +67,8 @@ pub struct HookPayload {
     pub cwd: PathBuf,
     #[serde(serialize_with = "serialize_triggered_at")]
     pub triggered_at: DateTime<Utc>,
+    /// Which client surface initiated the session (e.g. "cli", "vscode").
+    pub client: String,
     pub hook_event: HookEvent,
 }
 
@@ -185,6 +187,7 @@ mod tests {
                 .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
                 .single()
                 .expect("valid timestamp"),
+            client: "cli".to_string(),
             hook_event: HookEvent::AfterAgent {
                 event: HookEventAfterAgent {
                     thread_id,
@@ -200,6 +203,7 @@ mod tests {
             "session_id": session_id.to_string(),
             "cwd": "tmp",
             "triggered_at": "2025-01-01T00:00:00Z",
+            "client": "cli",
             "hook_event": {
                 "event_type": "after_agent",
                 "thread_id": thread_id.to_string(),
@@ -222,6 +226,7 @@ mod tests {
                 .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
                 .single()
                 .expect("valid timestamp"),
+            client: "cli".to_string(),
             hook_event: HookEvent::AfterToolUse {
                 event: HookEventAfterToolUse {
                     turn_id: "turn-2".to_string(),
@@ -254,6 +259,7 @@ mod tests {
             "session_id": session_id.to_string(),
             "cwd": "tmp",
             "triggered_at": "2025-01-01T00:00:00Z",
+            "client": "cli",
             "hook_event": {
                 "event_type": "after_tool_use",
                 "turn_id": "turn-2",

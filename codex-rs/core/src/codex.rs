@@ -4779,6 +4779,7 @@ pub(crate) async fn run_turn(
                             session_id: sess.conversation_id,
                             cwd: turn_context.cwd.clone(),
                             triggered_at: chrono::Utc::now(),
+                            client: session_source_to_client_string(&turn_context.session_source),
                             hook_event: HookEvent::AfterAgent {
                                 event: HookEventAfterAgent {
                                     thread_id: sess.conversation_id,
@@ -6088,6 +6089,19 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
 }
 
 use crate::memories::prompts::build_memory_tool_developer_instructions;
+
+/// Convert a [`SessionSource`] into the string used in hook payloads.
+pub(crate) fn session_source_to_client_string(source: &SessionSource) -> String {
+    match source {
+        SessionSource::Cli => "cli".to_string(),
+        SessionSource::VSCode => "vscode".to_string(),
+        SessionSource::Exec => "exec".to_string(),
+        SessionSource::Mcp => "mcp".to_string(),
+        SessionSource::SubAgent(_) => "sub-agent".to_string(),
+        SessionSource::Unknown => "unknown".to_string(),
+    }
+}
+
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 #[cfg(test)]

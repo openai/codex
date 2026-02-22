@@ -4,6 +4,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::client_common::tools::ToolSpec;
+use crate::codex::session_source_to_client_string;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::memories::usage::emit_metric_for_tool_read;
@@ -380,6 +381,7 @@ async fn dispatch_after_tool_use_hook(
             session_id: session.conversation_id,
             cwd: turn.cwd.clone(),
             triggered_at: chrono::Utc::now(),
+            client: session_source_to_client_string(&turn.session_source),
             hook_event: HookEvent::AfterToolUse {
                 event: HookEventAfterToolUse {
                     turn_id: turn.sub_id.clone(),

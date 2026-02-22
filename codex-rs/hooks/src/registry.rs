@@ -108,6 +108,7 @@ mod tests {
                 .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
                 .single()
                 .expect("valid timestamp"),
+            client: "cli".to_string(),
             hook_event: HookEvent::AfterAgent {
                 event: HookEventAfterAgent {
                     thread_id: ThreadId::new(),
@@ -176,6 +177,7 @@ mod tests {
                 .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
                 .single()
                 .expect("valid timestamp"),
+            client: "cli".to_string(),
             hook_event: HookEvent::AfterToolUse {
                 event: HookEventAfterToolUse {
                     turn_id: format!("turn-{label}"),
