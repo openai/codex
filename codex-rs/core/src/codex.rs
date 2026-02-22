@@ -6102,25 +6102,15 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
 
-    use crate::protocol::AgentMessageEvent;
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
-    use crate::protocol::ExecCommandBeginEvent;
-    use crate::protocol::ExecCommandOutputDeltaEvent;
-    use crate::protocol::ExecCommandSource;
-    use crate::protocol::ExecOutputStream;
     use crate::protocol::InitialHistory;
-    use crate::protocol::PatchApplyBeginEvent;
-    use crate::protocol::PatchApplyEndEvent;
-    use crate::protocol::PatchApplyStatus;
     use crate::protocol::RateLimitSnapshot;
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
-    use crate::protocol::TerminalInteractionEvent;
     use crate::protocol::TokenCountEvent;
     use crate::protocol::TokenUsage;
     use crate::protocol::TokenUsageInfo;
-    use crate::protocol::TurnDiffEvent;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
