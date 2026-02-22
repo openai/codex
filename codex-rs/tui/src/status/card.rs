@@ -202,6 +202,13 @@ impl StatusHistoryCell {
                 ..
             } => "workspace-write with network access".to_string(),
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
+            SandboxPolicy::Custom { network_access, .. } => {
+                if matches!(network_access, NetworkAccess::Enabled) {
+                    "custom sandbox with network access".to_string()
+                } else {
+                    "custom sandbox".to_string()
+                }
+            }
             SandboxPolicy::ExternalSandbox { network_access } => {
                 if matches!(network_access, NetworkAccess::Enabled) {
                     "external-sandbox (network access enabled)".to_string()

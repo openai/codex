@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -610,6 +611,25 @@ pub enum SandboxPolicy {
         #[serde(default)]
         exclude_slash_tmp: bool,
     },
+
+    /// Internal-only exact path policy with explicit read/write roots.
+    #[serde(rename = "custom")]
+    Custom {
+        /// Read access granted while running under this policy.
+        #[serde(
+            default,
+            skip_serializing_if = "ReadOnlyAccess::has_full_disk_read_access"
+        )]
+        read_only_access: ReadOnlyAccess,
+
+        /// Exact writable roots and custom read-only subpaths under each root.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        writable_roots: Vec<CustomWritableRoot>,
+
+        /// Whether outbound network access is allowed.
+        #[serde(default)]
+        network_access: NetworkAccess,
+    },
 }
 
 /// A writable root path accompanied by a list of subpaths that should remain
@@ -623,6 +643,16 @@ pub struct WritableRoot {
 
     /// By construction, these subpaths are all under `root`.
     pub read_only_subpaths: Vec<AbsolutePathBuf>,
+}
+
+/// Declarative writable root configuration for [`SandboxPolicy::Custom`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct CustomWritableRoot {
+    pub root: AbsolutePathBuf,
+
+    /// Relative subpaths under `root` that should remain read-only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_only_paths: Vec<PathBuf>,
 }
 
 impl WritableRoot {
@@ -640,6 +670,90 @@ impl WritableRoot {
         }
 
         true
+    }
+}
+
+fn normalize_relative_subpath(path: &Path) -> Option<PathBuf> {
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        return None;
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn build_writable_root(
+    writable_root: AbsolutePathBuf,
+    explicit_read_only_paths: &[PathBuf],
+) -> WritableRoot {
+    let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
+    let mut seen = HashSet::new();
+
+    for read_only_path in explicit_read_only_paths {
+        let Some(normalized) = normalize_relative_subpath(read_only_path) else {
+            error!(
+                "Ignoring invalid custom read-only subpath {:?} under {}",
+                read_only_path,
+                writable_root.as_path().display()
+            );
+            continue;
+        };
+        #[allow(clippy::expect_used)]
+        let absolute_subpath = writable_root
+            .join(normalized)
+            .expect("normalized relative path is valid");
+        if seen.insert(absolute_subpath.clone()) {
+            subpaths.push(absolute_subpath);
+        }
+    }
+
+    #[allow(clippy::expect_used)]
+    let top_level_git = writable_root
+        .join(".git")
+        .expect(".git is a valid relative path");
+    // This applies to typical repos (directory .git), worktrees/submodules
+    // (file .git with gitdir pointer), and bare repos when the gitdir is the
+    // writable root itself.
+    let top_level_git_is_file = top_level_git.as_path().is_file();
+    let top_level_git_is_dir = top_level_git.as_path().is_dir();
+    if top_level_git_is_dir || top_level_git_is_file {
+        if top_level_git_is_file
+            && is_git_pointer_file(&top_level_git)
+            && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
+            && seen.insert(gitdir.clone())
+        {
+            subpaths.push(gitdir);
+        }
+        if seen.insert(top_level_git.clone()) {
+            subpaths.push(top_level_git);
+        }
+    }
+
+    // Make .agents/skills and .codex/config.toml and related files read-only
+    // to the agent, by default.
+    for subdir in &[".agents", ".codex"] {
+        #[allow(clippy::expect_used)]
+        let top_level_codex = writable_root.join(subdir).expect("valid relative path");
+        if top_level_codex.as_path().is_dir() && seen.insert(top_level_codex.clone()) {
+            subpaths.push(top_level_codex);
+        }
+    }
+
+    WritableRoot {
+        root: writable_root,
+        read_only_subpaths: subpaths,
     }
 }
 
@@ -680,6 +794,9 @@ impl SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
                 read_only_access, ..
             } => read_only_access.has_full_disk_read_access(),
+            SandboxPolicy::Custom {
+                read_only_access, ..
+            } => read_only_access.has_full_disk_read_access(),
         }
     }
 
@@ -689,6 +806,7 @@ impl SandboxPolicy {
             SandboxPolicy::ExternalSandbox { .. } => true,
             SandboxPolicy::ReadOnly { .. } => false,
             SandboxPolicy::WorkspaceWrite { .. } => false,
+            SandboxPolicy::Custom { .. } => false,
         }
     }
 
@@ -698,6 +816,7 @@ impl SandboxPolicy {
             SandboxPolicy::ExternalSandbox { network_access } => network_access.is_enabled(),
             SandboxPolicy::ReadOnly { .. } => false,
             SandboxPolicy::WorkspaceWrite { network_access, .. } => *network_access,
+            SandboxPolicy::Custom { network_access, .. } => network_access.is_enabled(),
         }
     }
 
@@ -709,6 +828,9 @@ impl SandboxPolicy {
         match self {
             SandboxPolicy::ReadOnly { access } => access.include_platform_defaults(),
             SandboxPolicy::WorkspaceWrite {
+                read_only_access, ..
+            } => read_only_access.include_platform_defaults(),
+            SandboxPolicy::Custom {
                 read_only_access, ..
             } => read_only_access.include_platform_defaults(),
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => false,
@@ -725,6 +847,9 @@ impl SandboxPolicy {
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => Vec::new(),
             SandboxPolicy::ReadOnly { access } => access.get_readable_roots_with_cwd(cwd),
             SandboxPolicy::WorkspaceWrite {
+                read_only_access, ..
+            }
+            | SandboxPolicy::Custom {
                 read_only_access, ..
             } => {
                 let mut roots = read_only_access.get_readable_roots_with_cwd(cwd);
@@ -812,48 +937,19 @@ impl SandboxPolicy {
                 // For each root, compute subpaths that should remain read-only.
                 roots
                     .into_iter()
-                    .map(|writable_root| {
-                        let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
-                        #[allow(clippy::expect_used)]
-                        let top_level_git = writable_root
-                            .join(".git")
-                            .expect(".git is a valid relative path");
-                        // This applies to typical repos (directory .git), worktrees/submodules
-                        // (file .git with gitdir pointer), and bare repos when the gitdir is the
-                        // writable root itself.
-                        let top_level_git_is_file = top_level_git.as_path().is_file();
-                        let top_level_git_is_dir = top_level_git.as_path().is_dir();
-                        if top_level_git_is_dir || top_level_git_is_file {
-                            if top_level_git_is_file
-                                && is_git_pointer_file(&top_level_git)
-                                && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
-                                && !subpaths
-                                    .iter()
-                                    .any(|subpath| subpath.as_path() == gitdir.as_path())
-                            {
-                                subpaths.push(gitdir);
-                            }
-                            subpaths.push(top_level_git);
-                        }
-
-                        // Make .agents/skills and .codex/config.toml and
-                        // related files read-only to the agent, by default.
-                        for subdir in &[".agents", ".codex"] {
-                            #[allow(clippy::expect_used)]
-                            let top_level_codex =
-                                writable_root.join(subdir).expect("valid relative path");
-                            if top_level_codex.as_path().is_dir() {
-                                subpaths.push(top_level_codex);
-                            }
-                        }
-
-                        WritableRoot {
-                            root: writable_root,
-                            read_only_subpaths: subpaths,
-                        }
-                    })
+                    .map(|writable_root| build_writable_root(writable_root, &[]))
                     .collect()
             }
+            SandboxPolicy::Custom {
+                writable_roots,
+                read_only_access: _,
+                network_access: _,
+            } => writable_roots
+                .iter()
+                .map(|writable_root| {
+                    build_writable_root(writable_root.root.clone(), &writable_root.read_only_paths)
+                })
+                .collect(),
         }
     }
 }
@@ -3069,6 +3165,79 @@ mod tests {
                 writable_root.root.as_path().display()
             );
         }
+    }
+
+    #[test]
+    fn custom_writable_roots_are_readable_and_exact_only() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let custom_root_path = tmp.path().join("custom");
+        std::fs::create_dir_all(&custom_root_path).expect("custom root");
+        let custom_root = AbsolutePathBuf::try_from(custom_root_path.as_path()).expect("absolute");
+        let cwd = tmp.path().join("cwd");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+
+        let policy = SandboxPolicy::Custom {
+            read_only_access: ReadOnlyAccess::FullAccess,
+            writable_roots: vec![CustomWritableRoot {
+                root: custom_root.clone(),
+                read_only_paths: vec![PathBuf::from("Cargo.lock")],
+            }],
+            network_access: NetworkAccess::Restricted,
+        };
+
+        let writable_roots = policy.get_writable_roots_with_cwd(&cwd);
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(writable_roots[0].root, custom_root);
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .iter()
+                .any(|path| path.as_path() == custom_root_path.join("Cargo.lock"))
+        );
+
+        let readable_roots = policy.get_readable_roots_with_cwd(&cwd);
+        assert!(
+            readable_roots
+                .iter()
+                .any(|path| path.as_path() == custom_root_path)
+        );
+        assert!(!readable_roots.iter().any(|path| path.as_path() == cwd));
+    }
+
+    #[test]
+    fn custom_ignores_invalid_read_only_subpaths() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root_path = tmp.path().join("custom");
+        std::fs::create_dir_all(&root_path).expect("custom root");
+        let root = AbsolutePathBuf::try_from(root_path.as_path()).expect("absolute");
+
+        let policy = SandboxPolicy::Custom {
+            read_only_access: ReadOnlyAccess::FullAccess,
+            writable_roots: vec![CustomWritableRoot {
+                root: root,
+                read_only_paths: vec![
+                    PathBuf::from("."),
+                    PathBuf::from("../escape"),
+                    PathBuf::from("/absolute"),
+                    PathBuf::from("ok"),
+                ],
+            }],
+            network_access: NetworkAccess::Enabled,
+        };
+
+        let writable_roots = policy.get_writable_roots_with_cwd(tmp.path());
+        assert_eq!(writable_roots.len(), 1);
+        let subpaths = &writable_roots[0].read_only_subpaths;
+        assert!(
+            subpaths
+                .iter()
+                .any(|path| path.as_path() == root_path.join("ok"))
+        );
+        assert!(
+            !subpaths
+                .iter()
+                .any(|path| path.as_path() == root_path.join("escape"))
+        );
     }
 
     #[test]

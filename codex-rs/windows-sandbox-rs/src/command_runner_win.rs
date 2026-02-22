@@ -140,6 +140,13 @@ pub fn main() -> Result<()> {
             SandboxPolicy::WorkspaceWrite { .. } => {
                 create_workspace_write_token_with_caps_from(base, &cap_psids)
             }
+            SandboxPolicy::Custom { writable_roots, .. } => {
+                if writable_roots.is_empty() {
+                    create_readonly_token_with_caps_from(base, &cap_psids)
+                } else {
+                    create_workspace_write_token_with_caps_from(base, &cap_psids)
+                }
+            }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!()
             }

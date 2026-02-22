@@ -133,7 +133,9 @@ fn is_write_patch_constrained_to_writable_paths(
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             return true;
         }
-        SandboxPolicy::WorkspaceWrite { .. } => sandbox_policy.get_writable_roots_with_cwd(cwd),
+        SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::Custom { .. } => {
+            sandbox_policy.get_writable_roots_with_cwd(cwd)
+        }
     };
 
     // Normalize a path by removing `.` and resolving `..` without touching the

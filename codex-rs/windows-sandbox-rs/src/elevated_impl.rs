@@ -256,6 +256,22 @@ mod windows_impl {
                     crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
                 ],
             ),
+            SandboxPolicy::Custom { writable_roots, .. } => {
+                if writable_roots.is_empty() {
+                    (
+                        unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
+                        vec![caps.readonly.clone()],
+                    )
+                } else {
+                    (
+                        unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
+                        vec![
+                            caps.workspace.clone(),
+                            crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
+                        ],
+                    )
+                }
+            }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!("DangerFullAccess handled above")
             }
