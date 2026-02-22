@@ -2,19 +2,20 @@
 //
 // Running these tests with the patched zsh fork:
 //
-// The suite uses `CODEX_TEST_ZSH_PATH` when set. Example:
-//   CODEX_TEST_ZSH_PATH="$HOME/.local/codex-zsh-77045ef/bin/zsh" \
+// The suite uses `tests/suite/zsh` (a DotSlash-pinned fork).
+//
+// Run all zsh-fork tests:
 //   cargo test -p codex-app-server turn_start_zsh_fork -- --nocapture
 //
 // For a single test:
-//   CODEX_TEST_ZSH_PATH="$HOME/.local/codex-zsh-77045ef/bin/zsh" \
-//   cargo test -p codex-app-server turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2 -- --nocapture
+//   cargo test -p codex-app-server \
+//     turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2 -- --nocapture
 
 use anyhow::Result;
-use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_shell_command_sse_response;
+use app_test_support::find_dotslash_test_zsh;
 use app_test_support::to_response;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -57,12 +58,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
-    let Some(zsh_path) = find_test_zsh_path() else {
-        eprintln!("skipping zsh fork test: no zsh executable found");
-        return Ok(());
-    };
-    eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
-
+    let zsh = find_dotslash_test_zsh().await?;
     let responses = vec![create_shell_command_sse_response(
         vec!["echo".to_string(), "hi".to_string()],
         None,
@@ -79,10 +75,10 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
             (Feature::UnifiedExec, false),
             (Feature::ShellSnapshot, false),
         ]),
-        &zsh_path,
+        &zsh.path,
     )?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = zsh.new_mcp_process(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -147,7 +143,6 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     };
     assert_eq!(id, "call-zsh-fork");
     assert_eq!(status, CommandExecutionStatus::InProgress);
-    assert!(command.starts_with(&zsh_path.display().to_string()));
     assert!(command.contains(" -lc 'echo hi'"));
     assert_eq!(cwd, workspace);
 
@@ -167,12 +162,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
-    let Some(zsh_path) = find_test_zsh_path() else {
-        eprintln!("skipping zsh fork decline test: no zsh executable found");
-        return Ok(());
-    };
-    eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
-
+    let zsh = find_dotslash_test_zsh().await?;
     let responses = vec![
         create_shell_command_sse_response(
             vec![
@@ -196,10 +186,10 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
             (Feature::UnifiedExec, false),
             (Feature::ShellSnapshot, false),
         ]),
-        &zsh_path,
+        &zsh.path,
     )?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = zsh.new_mcp_process(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -303,12 +293,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
-    let Some(zsh_path) = find_test_zsh_path() else {
-        eprintln!("skipping zsh fork cancel test: no zsh executable found");
-        return Ok(());
-    };
-    eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
-
+    let zsh = find_dotslash_test_zsh().await?;
     let responses = vec![create_shell_command_sse_response(
         vec![
             "python3".to_string(),
@@ -329,10 +314,10 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
             (Feature::UnifiedExec, false),
             (Feature::ShellSnapshot, false),
         ]),
-        &zsh_path,
+        &zsh.path,
     )?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = zsh.new_mcp_process(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -434,19 +419,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     let workspace = tmp.path().join("workspace");
     std::fs::create_dir(&workspace)?;
 
-    let Some(zsh_path) = find_test_zsh_path() else {
-        eprintln!("skipping zsh fork subcommand decline test: no zsh executable found");
-        return Ok(());
-    };
-    if !supports_exec_wrapper_intercept(&zsh_path) {
-        eprintln!(
-            "skipping zsh fork subcommand decline test: zsh does not support EXEC_WRAPPER intercepts ({})",
-            zsh_path.display()
-        );
-        return Ok(());
-    }
-    eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
-
+    let zsh = find_dotslash_test_zsh().await?;
     let tool_call_arguments = serde_json::to_string(&serde_json::json!({
         "command": "/usr/bin/true && /usr/bin/true",
         "workdir": serde_json::Value::Null,
@@ -471,10 +444,10 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             (Feature::UnifiedExec, false),
             (Feature::ShellSnapshot, false),
         ]),
-        &zsh_path,
+        &zsh.path,
     )?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = zsh.new_mcp_process(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -638,48 +611,4 @@ stream_max_retries = 0
             zsh_path = zsh_path.display()
         ),
     )
-}
-
-fn find_test_zsh_path() -> Option<std::path::PathBuf> {
-    if let Some(path) = std::env::var_os("CODEX_TEST_ZSH_PATH") {
-        let path = std::path::PathBuf::from(path);
-        if path.is_file() {
-            return Some(path);
-        }
-        panic!(
-            "CODEX_TEST_ZSH_PATH is set but is not a file: {}",
-            path.display()
-        );
-    }
-
-    for candidate in ["/bin/zsh", "/usr/bin/zsh"] {
-        let path = Path::new(candidate);
-        if path.is_file() {
-            return Some(path.to_path_buf());
-        }
-    }
-
-    let shell = std::env::var_os("SHELL")?;
-    let shell_path = std::path::PathBuf::from(shell);
-    if shell_path
-        .file_name()
-        .is_some_and(|file_name| file_name == "zsh")
-        && shell_path.is_file()
-    {
-        return Some(shell_path);
-    }
-
-    None
-}
-
-fn supports_exec_wrapper_intercept(zsh_path: &Path) -> bool {
-    let status = std::process::Command::new(zsh_path)
-        .arg("-fc")
-        .arg("/usr/bin/true")
-        .env("EXEC_WRAPPER", "/usr/bin/false")
-        .status();
-    match status {
-        Ok(status) => !status.success(),
-        Err(_) => false,
-    }
 }
