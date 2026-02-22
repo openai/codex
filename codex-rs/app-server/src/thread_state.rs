@@ -94,6 +94,10 @@ impl ThreadState {
         self.subscribed_connections.remove(&connection_id);
     }
 
+    pub(crate) fn has_subscribers(&self) -> bool {
+        !self.subscribed_connections.is_empty()
+    }
+
     pub(crate) fn subscribed_connection_ids(&self) -> Vec<ConnectionId> {
         self.subscribed_connections.iter().copied().collect()
     }
@@ -131,11 +135,15 @@ pub(crate) struct ThreadStateManager {
     thread_states: HashMap<ThreadId, Arc<Mutex<ThreadState>>>,
     subscription_state_by_id: HashMap<Uuid, SubscriptionState>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
+    clear_listener_when_unsubscribed: bool,
 }
 
 impl ThreadStateManager {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn new(clear_listener_when_unsubscribed: bool) -> Self {
+        Self {
+            clear_listener_when_unsubscribed,
+            ..Self::default()
+        }
     }
 
     pub(crate) fn thread_state(&mut self, thread_id: ThreadId) -> Arc<Mutex<ThreadState>> {
@@ -174,14 +182,25 @@ impl ThreadStateManager {
             if !connection_still_subscribed_to_thread {
                 thread_state.remove_connection(subscription_state.connection_id);
             }
-            if thread_state.subscribed_connection_ids().is_empty() {
-                tracing::debug!(
-                    thread_id = %thread_id,
-                    subscription_id = %subscription_id,
-                    connection_id = ?subscription_state.connection_id,
-                    listener_generation = thread_state.listener_generation,
-                    "retaining thread listener after last subscription removed"
-                );
+            if !thread_state.has_subscribers() {
+                if self.clear_listener_when_unsubscribed {
+                    thread_state.clear_listener();
+                    tracing::debug!(
+                        thread_id = %thread_id,
+                        subscription_id = %subscription_id,
+                        connection_id = ?subscription_state.connection_id,
+                        listener_generation = thread_state.listener_generation,
+                        "cleared thread listener after last subscription removed"
+                    );
+                } else {
+                    tracing::debug!(
+                        thread_id = %thread_id,
+                        subscription_id = %subscription_id,
+                        connection_id = ?subscription_state.connection_id,
+                        listener_generation = thread_state.listener_generation,
+                        "retaining thread listener after last subscription removed"
+                    );
+                }
             }
         }
         Some(thread_id)
@@ -267,12 +286,21 @@ impl ThreadStateManager {
             for thread_state in self.thread_states.values() {
                 let mut thread_state = thread_state.lock().await;
                 thread_state.remove_connection(connection_id);
-                if thread_state.subscribed_connection_ids().is_empty() {
-                    tracing::debug!(
-                        connection_id = ?connection_id,
-                        listener_generation = thread_state.listener_generation,
-                        "retaining thread listener after connection disconnect left zero subscribers"
-                    );
+                if !thread_state.has_subscribers() {
+                    if self.clear_listener_when_unsubscribed {
+                        thread_state.clear_listener();
+                        tracing::debug!(
+                            connection_id = ?connection_id,
+                            listener_generation = thread_state.listener_generation,
+                            "cleared thread listener after connection disconnect left zero subscribers"
+                        );
+                    } else {
+                        tracing::debug!(
+                            connection_id = ?connection_id,
+                            listener_generation = thread_state.listener_generation,
+                            "retaining thread listener after connection disconnect left zero subscribers"
+                        );
+                    }
                 }
             }
             return;
@@ -282,13 +310,23 @@ impl ThreadStateManager {
             if let Some(thread_state) = self.thread_states.get(&thread_id) {
                 let mut thread_state = thread_state.lock().await;
                 thread_state.remove_connection(connection_id);
-                if thread_state.subscribed_connection_ids().is_empty() {
-                    tracing::debug!(
-                        thread_id = %thread_id,
-                        connection_id = ?connection_id,
-                        listener_generation = thread_state.listener_generation,
-                        "retaining thread listener after connection disconnect left zero subscribers"
-                    );
+                if !thread_state.has_subscribers() {
+                    if self.clear_listener_when_unsubscribed {
+                        thread_state.clear_listener();
+                        tracing::debug!(
+                            thread_id = %thread_id,
+                            connection_id = ?connection_id,
+                            listener_generation = thread_state.listener_generation,
+                            "cleared thread listener after connection disconnect left zero subscribers"
+                        );
+                    } else {
+                        tracing::debug!(
+                            thread_id = %thread_id,
+                            connection_id = ?connection_id,
+                            listener_generation = thread_state.listener_generation,
+                            "retaining thread listener after connection disconnect left zero subscribers"
+                        );
+                    }
                 }
             }
         }

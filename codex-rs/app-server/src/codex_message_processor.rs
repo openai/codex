@@ -415,7 +415,9 @@ impl CodexMessageProcessor {
             cli_overrides,
             cloud_requirements,
             active_login: Arc::new(Mutex::new(None)),
-            thread_state_manager: ThreadStateManager::new(),
+            thread_state_manager: ThreadStateManager::new(
+                config.features.enabled(Feature::ThreadListenerCleanup),
+            ),
             thread_watch_manager: ThreadWatchManager::new_with_outgoing(outgoing),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -4760,10 +4762,10 @@ impl CodexMessageProcessor {
                     error!("failed to submit Shutdown to thread {thread_id}: {err}");
                 }
             }
-            self.thread_state_manager
-                .remove_thread_state(thread_id)
-                .await;
         }
+        self.thread_state_manager
+            .remove_thread_state(thread_id)
+            .await;
 
         self.thread_watch_manager
             .remove_thread(&thread_id.to_string())
@@ -5888,30 +5890,6 @@ impl CodexMessageProcessor {
                             }
                         };
 
-                        // For now, we send a notification for every event,
-                        // JSON-serializing the `Event` as-is, but these should
-                        // be migrated to be variants of `ServerNotification`
-                        // instead.
-                        let event_formatted = match &event.msg {
-                            EventMsg::TurnStarted(_) => "task_started",
-                            EventMsg::TurnComplete(_) => "task_complete",
-                            _ => &event.msg.to_string(),
-                        };
-                        let mut params = match serde_json::to_value(event.clone()) {
-                            Ok(serde_json::Value::Object(map)) => map,
-                            Ok(_) => {
-                                error!("event did not serialize to an object");
-                                continue;
-                            }
-                            Err(err) => {
-                                error!("failed to serialize event: {err}");
-                                continue;
-                            }
-                        };
-                        params.insert(
-                            "conversationId".to_string(),
-                            conversation_id.to_string().into(),
-                        );
                         let (subscribed_connection_ids, raw_events_enabled) = {
                             let mut thread_state = thread_state.lock().await;
                             if !single_client_mode {
@@ -5927,6 +5905,30 @@ impl CodexMessageProcessor {
                         }
 
                         if !subscribed_connection_ids.is_empty() {
+                            // For now, we send a notification for every event,
+                            // JSON-serializing the `Event` as-is, but these should
+                            // be migrated to be variants of `ServerNotification`
+                            // instead.
+                            let event_formatted = match &event.msg {
+                                EventMsg::TurnStarted(_) => "task_started",
+                                EventMsg::TurnComplete(_) => "task_complete",
+                                _ => &event.msg.to_string(),
+                            };
+                            let mut params = match serde_json::to_value(event.clone()) {
+                                Ok(serde_json::Value::Object(map)) => map,
+                                Ok(_) => {
+                                    error!("event did not serialize to an object");
+                                    continue;
+                                }
+                                Err(err) => {
+                                    error!("failed to serialize event: {err}");
+                                    continue;
+                                }
+                            };
+                            params.insert(
+                                "conversationId".to_string(),
+                                conversation_id.to_string().into(),
+                            );
                             outgoing_for_task
                                 .send_notification_to_connections(
                                     &subscribed_connection_ids,
@@ -7354,7 +7356,7 @@ mod tests {
     #[tokio::test]
     async fn removing_listeners_retains_thread_listener_when_last_subscriber_leaves() -> Result<()>
     {
-        let mut manager = ThreadStateManager::new();
+        let mut manager = ThreadStateManager::new(false);
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let listener_a = Uuid::new_v4();
         let listener_b = Uuid::new_v4();
@@ -7386,13 +7388,52 @@ mod tests {
                 .is_err()
         );
         let state = manager.thread_state(thread_id);
-        assert!(state.lock().await.subscribed_connection_ids().is_empty());
+        let state = state.lock().await;
+        assert!(state.subscribed_connection_ids().is_empty());
+        assert!(state.cancel_tx.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn removing_listeners_clears_thread_listener_when_last_subscriber_leaves_with_flag()
+    -> Result<()> {
+        let mut manager = ThreadStateManager::new(true);
+        let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
+        let listener_a = Uuid::new_v4();
+        let listener_b = Uuid::new_v4();
+        let connection_a = ConnectionId(1);
+        let connection_b = ConnectionId(2);
+        let (cancel_tx, mut cancel_rx) = oneshot::channel();
+
+        manager
+            .set_listener(listener_a, thread_id, connection_a, false)
+            .await;
+        manager
+            .set_listener(listener_b, thread_id, connection_b, false)
+            .await;
+        {
+            let state = manager.thread_state(thread_id);
+            state.lock().await.cancel_tx = Some(cancel_tx);
+        }
+
+        assert_eq!(manager.remove_listener(listener_a).await, Some(thread_id));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut cancel_rx)
+                .await
+                .is_err()
+        );
+        assert_eq!(manager.remove_listener(listener_b).await, Some(thread_id));
+        assert_eq!(cancel_rx.await, Ok(()));
+        let state = manager.thread_state(thread_id);
+        let state = state.lock().await;
+        assert!(state.subscribed_connection_ids().is_empty());
+        assert!(state.cancel_tx.is_none());
         Ok(())
     }
 
     #[tokio::test]
     async fn removing_listener_unsubscribes_its_connection() -> Result<()> {
-        let mut manager = ThreadStateManager::new();
+        let mut manager = ThreadStateManager::new(false);
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let listener_a = Uuid::new_v4();
         let listener_b = Uuid::new_v4();
@@ -7415,7 +7456,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_listener_uses_last_write_for_raw_events() -> Result<()> {
-        let mut manager = ThreadStateManager::new();
+        let mut manager = ThreadStateManager::new(false);
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let listener_a = Uuid::new_v4();
         let listener_b = Uuid::new_v4();
@@ -7440,7 +7481,7 @@ mod tests {
     #[tokio::test]
     async fn removing_connection_retains_listener_and_active_turn_when_last_subscriber_disconnects()
     -> Result<()> {
-        let mut manager = ThreadStateManager::new();
+        let mut manager = ThreadStateManager::new(false);
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let listener = Uuid::new_v4();
         let connection = ConnectionId(1);
@@ -7481,8 +7522,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn removing_connection_clears_listener_and_active_turn_when_last_subscriber_disconnects_with_flag()
+    -> Result<()> {
+        let mut manager = ThreadStateManager::new(true);
+        let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
+        let listener = Uuid::new_v4();
+        let connection = ConnectionId(1);
+        let (cancel_tx, mut cancel_rx) = oneshot::channel();
+
+        manager
+            .set_listener(listener, thread_id, connection, false)
+            .await;
+        {
+            let state = manager.thread_state(thread_id);
+            let mut state = state.lock().await;
+            state.cancel_tx = Some(cancel_tx);
+            state.track_current_turn_event(&EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: "turn-1".to_string(),
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                },
+            ));
+        }
+
+        manager.remove_connection(connection).await;
+        assert_eq!(cancel_rx.await, Ok(()));
+        assert_eq!(manager.remove_listener(listener).await, None);
+
+        let state = manager.thread_state(thread_id);
+        let state = state.lock().await;
+        assert!(state.subscribed_connection_ids().is_empty());
+        assert!(state.cancel_tx.is_none());
+        assert!(state.active_turn_snapshot().is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn removing_thread_state_clears_listener_and_active_turn_history() -> Result<()> {
-        let mut manager = ThreadStateManager::new();
+        let mut manager = ThreadStateManager::new(false);
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let connection = ConnectionId(1);
         let (cancel_tx, cancel_rx) = oneshot::channel();
@@ -7517,7 +7595,7 @@ mod tests {
     #[tokio::test]
     async fn removing_auto_attached_connection_preserves_listener_for_other_connections()
     -> Result<()> {
-        let mut manager = ThreadStateManager::new();
+        let mut manager = ThreadStateManager::new(false);
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let connection_a = ConnectionId(1);
         let connection_b = ConnectionId(2);

@@ -139,6 +139,8 @@ pub enum Feature {
     Personality,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
+    /// Clear app-server thread listeners when the last subscriber disconnects.
+    ThreadListenerCleanup,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
@@ -637,6 +639,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             }
         } else {
             Stage::UnderDevelopment
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ThreadListenerCleanup,
+        key: "thread_listener_cleanup",
+        stage: Stage::Experimental {
+            name: "Thread listener cleanup",
+            menu_description: "Release app-server thread listeners when no clients are subscribed.",
+            announcement: "NEW: Thread listener cleanup can reduce idle memory usage in long app sessions. Enable in /experimental and restart Codex.",
         },
         default_enabled: false,
     },
