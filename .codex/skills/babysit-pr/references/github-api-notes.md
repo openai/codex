@@ -1,4 +1,4 @@
-# GitHub CLI / API Notes For `gh-babysit-pr`
+# GitHub CLI / API Notes For `babysit-pr`
 
 ## Primary commands used
 

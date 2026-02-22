@@ -228,7 +228,7 @@ def save_state(path, state):
 
 def default_state_file_for(pr):
     repo_slug = pr["repo"].replace("/", "-")
-    return Path(f"/tmp/codex-gh-babysit-pr-{repo_slug}-pr{pr['number']}.json")
+    return Path(f"/tmp/codex-babysit-pr-{repo_slug}-pr{pr['number']}.json")
 
 
 def get_pr_checks(pr_spec, repo):

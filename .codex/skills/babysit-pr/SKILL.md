@@ -1,9 +1,9 @@
 ---
-name: gh-babysit-pr
+name: babysit-pr
 description: Babysit a GitHub pull request after creation by continuously polling CI checks/workflow runs, new review comments, and mergeability state until the PR is ready to merge (or merged/closed). Diagnose failures, retry likely flaky failures up to 3 times, auto-fix/push branch-related issues when appropriate, and stop only when user help is required (for example CI infrastructure issues, exhausted flaky retries, or ambiguous/blocking situations). Use when the user asks Codex to monitor a PR, watch CI, handle review comments, or keep an eye on failures and feedback on an open PR.
 ---
 
-# GitHub PR Babysitter
+# PR Babysitter
 
 ## Objective
 Babysit a PR persistently until one of these terminal outcomes occurs:
@@ -40,25 +40,25 @@ Accept any of the following:
 ### One-shot snapshot
 
 ```bash
-python3 .codex/skills/gh-babysit-pr/scripts/gh_pr_watch.py --pr auto --once
+python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --once
 ```
 
 ### Continuous watch (JSONL)
 
 ```bash
-python3 .codex/skills/gh-babysit-pr/scripts/gh_pr_watch.py --pr auto --watch
+python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --watch
 ```
 
 ### Trigger flaky retry cycle (only when watcher indicates)
 
 ```bash
-python3 .codex/skills/gh-babysit-pr/scripts/gh_pr_watch.py --pr auto --retry-failed-now
+python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --retry-failed-now
 ```
 
 ### Explicit PR target
 
 ```bash
-python3 .codex/skills/gh-babysit-pr/scripts/gh_pr_watch.py --pr <number-or-url> --once
+python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr <number-or-url> --once
 ```
 
 ## CI Failure Classification
@@ -73,7 +73,7 @@ Prefer treating failures as flaky/unrelated when logs show transient infra/exter
 
 If classification is ambiguous, perform one manual diagnosis attempt before choosing rerun.
 
-Read `.codex/skills/gh-babysit-pr/references/heuristics.md` for a concise checklist.
+Read `.codex/skills/babysit-pr/references/heuristics.md` for a concise checklist.
 
 ## Review Comment Handling
 The watcher surfaces new review items from:
@@ -166,5 +166,5 @@ Provide concise progress updates while monitoring and a final summary that inclu
 
 ## References
 
-- Heuristics and decision tree: `.codex/skills/gh-babysit-pr/references/heuristics.md`
-- GitHub CLI/API details used by the watcher: `.codex/skills/gh-babysit-pr/references/github-api-notes.md`
+- Heuristics and decision tree: `.codex/skills/babysit-pr/references/heuristics.md`
+- GitHub CLI/API details used by the watcher: `.codex/skills/babysit-pr/references/github-api-notes.md`
