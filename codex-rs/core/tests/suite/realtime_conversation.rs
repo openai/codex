@@ -37,12 +37,22 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
                 "session": { "id": "sess_1" }
             })],
             vec![],
-            vec![json!({
-                "type": "response.output_audio.delta",
-                "delta": "AQID",
-                "sample_rate": 24000,
-                "num_channels": 1
-            })],
+            vec![
+                json!({
+                    "type": "response.output_audio.delta",
+                    "delta": "AQID",
+                    "sample_rate": 24000,
+                    "num_channels": 1
+                }),
+                json!({
+                    "type": "conversation.item.added",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "hi"}]
+                    }
+                }),
+            ],
         ],
     ])
     .await;
