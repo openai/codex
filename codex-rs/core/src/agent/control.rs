@@ -739,6 +739,16 @@ mod tests {
             .into_iter()
             .find(|entry| *entry == expected);
         assert_eq!(captured, Some(expected));
+
+        let _ = harness
+            .control
+            .shutdown_agent(child_thread_id)
+            .await
+            .expect("child shutdown should submit");
+        let _ = parent_thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("parent shutdown should submit");
     }
 
     #[tokio::test]
@@ -778,8 +788,11 @@ mod tests {
             .get_thread(child_thread_id)
             .await
             .expect("child thread should be registered");
-        let history_items = child_thread.codex.session.clone_history().await;
-        assert!(history_contains_text(&history_items, "parent seed context"));
+        let history = child_thread.codex.session.clone_history().await;
+        assert!(history_contains_text(
+            history.raw_items(),
+            "parent seed context"
+        ));
 
         let expected = (
             child_thread_id,
