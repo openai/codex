@@ -62,10 +62,81 @@ pub fn sanitize_metric_tag_value(value: &str) -> String {
     }
 }
 
+/// Find all UUIDs in a string.
+pub fn find_uuids(s: &str) -> Vec<String> {
+    let mut uuids = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+
+    let is_hex = |b: u8| b.is_ascii_hexdigit();
+    let is_uuid = |start: usize, bytes: &[u8]| -> bool {
+        let mut i = start;
+        let groups = [8, 4, 4, 4, 12];
+
+        for (group_idx, group_len) in groups.iter().enumerate() {
+            for offset in 0..*group_len {
+                if i + offset >= bytes.len() || !is_hex(bytes[i + offset]) {
+                    return false;
+                }
+            }
+            i += group_len;
+
+            if group_idx < groups.len() - 1 {
+                if i >= bytes.len() || bytes[i] != b'-' {
+                    return false;
+                }
+                i += 1;
+            }
+        }
+
+        true
+    };
+
+    while i + 36 <= bytes.len() {
+        if is_uuid(i, bytes) {
+            uuids.push(s[i..i + 36].to_string());
+            i += 36;
+            continue;
+        }
+        i += 1;
+    }
+
+    uuids
+}
+
 #[cfg(test)]
 mod tests {
+    use super::find_uuids;
     use super::sanitize_metric_tag_value;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn find_uuids_finds_multiple() {
+        let input =
+            "x 00112233-4455-6677-8899-aabbccddeeff-k y 12345678-90ab-cdef-0123-456789abcdef";
+        assert_eq!(
+            find_uuids(input),
+            vec![
+                "00112233-4455-6677-8899-aabbccddeeff".to_string(),
+                "12345678-90ab-cdef-0123-456789abcdef".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn find_uuids_ignores_invalid() {
+        let input = "not-a-uuid-1234-5678-9abc-def0-123456789abc";
+        assert_eq!(find_uuids(input), Vec::<String>::new());
+    }
+
+    #[test]
+    fn find_uuids_handles_non_ascii_without_overlap() {
+        let input = "🙂 55e5d6f7-8a7f-4d2a-8d88-123456789012abc";
+        assert_eq!(
+            find_uuids(input),
+            vec!["55e5d6f7-8a7f-4d2a-8d88-123456789012".to_string()]
+        );
+    }
 
     #[test]
     fn sanitize_metric_tag_value_trims_and_fills_unspecified() {
