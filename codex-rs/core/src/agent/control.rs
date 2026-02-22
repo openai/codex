@@ -739,16 +739,6 @@ mod tests {
             .into_iter()
             .find(|entry| *entry == expected);
         assert_eq!(captured, Some(expected));
-
-        let _ = harness
-            .control
-            .shutdown_agent(child_thread_id)
-            .await
-            .expect("child shutdown should submit");
-        let _ = parent_thread
-            .submit(Op::Shutdown {})
-            .await
-            .expect("parent shutdown should submit");
     }
 
     #[tokio::test]
@@ -810,6 +800,16 @@ mod tests {
             .into_iter()
             .find(|entry| *entry == expected);
         assert_eq!(captured, Some(expected));
+
+        let _ = harness
+            .control
+            .shutdown_agent(child_thread_id)
+            .await
+            .expect("child shutdown should submit");
+        let _ = parent_thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("parent shutdown should submit");
     }
 
     #[tokio::test]
