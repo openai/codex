@@ -34,7 +34,8 @@ Accept any of the following:
 9. If both actionable review feedback and `retry_failed_checks` are present, prioritize review feedback first; a new commit will retrigger CI, so avoid rerunning flaky checks on the old SHA unless you intentionally defer the review change.
 10. On every loop, verify mergeability / merge-conflict status (for example via `gh pr view`) in addition to CI and review state.
 11. After any push or rerun action, immediately return to step 1 and continue polling on the updated SHA/state.
-12. Repeat polling until the PR is green + review-clean + mergeable, `stop_pr_closed` appears, or a user-help-required blocker is reached.
+12. If you had been using `--watch` before pausing to patch/commit/push, relaunch `--watch` yourself in the same turn immediately after the push (do not wait for the user to re-invoke the skill).
+13. Repeat polling until the PR is green + review-clean + mergeable, `stop_pr_closed` appears, or a user-help-required blocker is reached.
 
 ## Commands
 
@@ -93,6 +94,7 @@ When you agree with a comment and it is actionable:
 2. Commit with `codex: address PR review feedback (#<n>)`.
 3. Push to the PR head branch.
 4. Resume watching on the new SHA immediately (do not stop after reporting the push).
+5. If monitoring was running in `--watch` mode, restart `--watch` immediately after the push in the same turn; do not wait for the user to ask again.
 
 If you disagree or the comment is non-actionable/already addressed, record it as handled by continuing the watcher loop (the script de-duplicates surfaced items via state after surfacing them).
 If a code review comment/thread is already marked as resolved in GitHub, treat it as non-actionable and safely ignore it unless new unresolved follow-up feedback appears.
@@ -104,6 +106,7 @@ If a code review comment/thread is already marked as resolved in GitHub, treat i
 - Do not switch branches unless necessary to recover context.
 - Before editing, check for unrelated uncommitted changes. If present, stop and ask the user.
 - After each successful fix, commit and `git push`, then re-run the watcher.
+- If you interrupted a live `--watch` session to make the fix, restart `--watch` immediately after the push in the same turn.
 - A push is not a terminal outcome; continue the monitoring loop unless a strict stop condition is met.
 
 Commit message defaults:
@@ -122,12 +125,14 @@ Use this loop in a live Codex session:
 6. Process actionable review comments before flaky reruns when both are present; if a review fix requires a commit, push it and skip rerunning failed checks on the old SHA.
 7. Retry failed checks only when `retry_failed_checks` is present and you are not about to replace the current SHA with a review/CI fix commit.
 8. If you pushed a commit or triggered a rerun, report the action briefly and continue polling (do not stop).
-9. If everything is passing, mergeable, not blocked on required review approval, and there are no unaddressed review items, report success and stop.
-10. If blocked on a user-help-required issue (infra outage, exhausted flaky retries, unclear reviewer request, permissions), report the blocker and stop.
-11. Otherwise sleep according to the polling cadence below and repeat.
+9. After a review-fix push, proactively restart continuous monitoring (`--watch`) in the same turn unless a strict stop condition has already been reached.
+10. If everything is passing, mergeable, not blocked on required review approval, and there are no unaddressed review items, report success and stop.
+11. If blocked on a user-help-required issue (infra outage, exhausted flaky retries, unclear reviewer request, permissions), report the blocker and stop.
+12. Otherwise sleep according to the polling cadence below and repeat.
 
 When the user explicitly asks to monitor/watch/babysit a PR, prefer `--watch` so polling continues autonomously in one command. Use repeated `--once` snapshots only for debugging, local testing, or when the user explicitly asks for a one-shot check.
 Do not stop to ask the user whether to continue polling; continue autonomously until a strict stop condition is met or the user explicitly interrupts.
+Do not hand control back to the user after a review-fix push just because a new SHA was created; restarting the watcher and re-entering the poll loop is part of the same babysitting task.
 
 ## Polling Cadence
 Use adaptive polling and continue monitoring even after CI turns green:
@@ -160,6 +165,7 @@ Provide concise progress updates while monitoring and a final summary that inclu
 - During long unchanged monitoring periods, avoid emitting a full update on every poll; summarize only status changes plus occasional heartbeat updates.
 - Treat push confirmations, intermediate CI snapshots, and review-action updates as progress updates only; do not emit the final summary or end the babysitting session unless a strict stop condition is met.
 - A user request to "monitor" is not satisfied by a couple of sample polls; remain in the loop until a strict stop condition or an explicit user interruption.
+- A review-fix commit + push is not a completion event; immediately resume live monitoring (`--watch`) in the same turn and continue reporting progress updates.
 
 - Final PR SHA
 - CI status summary

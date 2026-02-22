@@ -1,4 +1,4 @@
 interface:
   display_name: "PR Babysitter"
   short_description: "Watch PR CI, reviews, and merge conflicts"
-  default_prompt: "Babysit the current PR: monitor CI, reviewer comments, and merge-conflict status (prefer the watcher’s --watch mode for live monitoring); fix valid issues, push updates, and rerun flaky failures up to 3 times. Continue polling autonomously after any push/rerun until a strict terminal stop condition is reached or the user interrupts."
+  default_prompt: "Babysit the current PR: monitor CI, reviewer comments, and merge-conflict status (prefer the watcher’s --watch mode for live monitoring); fix valid issues, push updates, and rerun flaky failures up to 3 times. If you pause monitoring to patch review/CI feedback, restart --watch yourself immediately after the push in the same turn. Continue polling autonomously after any push/rerun until a strict terminal stop condition is reached or the user interrupts."
