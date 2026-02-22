@@ -28,21 +28,23 @@
 
 /// Split a pipe-delimited line into trimmed segments.
 ///
-/// Returns `None` if the line is empty or has no `|` marker.
+/// Returns `None` if the line is empty or has no unescaped separator marker.
 /// Leading/trailing pipes are stripped before splitting.
 pub(crate) fn parse_table_segments(line: &str) -> Option<Vec<&str>> {
     let trimmed = line.trim();
-    if trimmed.is_empty() || !trimmed.contains('|') {
+    if trimmed.is_empty() {
         return None;
     }
 
+    let has_outer_pipe = trimmed.starts_with('|') || trimmed.ends_with('|');
     let content = trimmed.strip_prefix('|').unwrap_or(trimmed);
     let content = content.strip_suffix('|').unwrap_or(content);
+    let raw_segments = split_unescaped_pipe(content);
+    if !has_outer_pipe && raw_segments.len() <= 1 {
+        return None;
+    }
 
-    let segments: Vec<&str> = split_unescaped_pipe(content)
-        .into_iter()
-        .map(str::trim)
-        .collect();
+    let segments: Vec<&str> = raw_segments.into_iter().map(str::trim).collect();
     (!segments.is_empty()).then_some(segments)
 }
 

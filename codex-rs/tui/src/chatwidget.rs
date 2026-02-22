@@ -10599,6 +10599,14 @@ impl ChatWidget {
             && self.agent_turn_running
         {
             self.interrupt_requested_for_turn = true;
+            if let Some(controller) = self.stream_controller.as_mut() {
+                controller.clear_queue();
+            }
+            if let Some(controller) = self.plan_stream_controller.as_mut() {
+                controller.clear_queue();
+            }
+            self.clear_active_stream_tail();
+            self.request_redraw();
         }
         if op.is_review() && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(/*running*/ true);
