@@ -21,6 +21,7 @@ use super::AuthModeWidget;
 use super::ContinueInBrowserState;
 use super::ContinueWithDeviceCodeState;
 use super::SignInState;
+use super::mark_url_hyperlink;
 
 pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, mut opts: ServerOptions) {
     opts.open_browser = false;
@@ -153,7 +154,8 @@ pub(super) fn render_device_code_login(
 
     let mut lines = vec![spans.into(), "".into()];
 
-    if let Some(device_code) = &state.device_code {
+    // Capture the verification URL for OSC 8 hyperlink marking after render.
+    let verification_url = if let Some(device_code) = &state.device_code {
         lines.push("  1. Open this link in your browser and sign in".into());
         lines.push("".into());
         lines.push(Line::from(vec![
@@ -176,15 +178,23 @@ pub(super) fn render_device_code_login(
                 .into(),
         );
         lines.push("".into());
+        Some(device_code.verification_url.clone())
     } else {
         lines.push("  Requesting a one-time code...".dim().into());
         lines.push("".into());
-    }
+        None
+    };
 
     lines.push("  Press Esc to cancel".dim().into());
     Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .render(area, buf);
+
+    // Wrap cyan+underlined URL cells with OSC 8 so the terminal treats
+    // the entire region as a single clickable hyperlink.
+    if let Some(url) = &verification_url {
+        mark_url_hyperlink(buf, area, url);
+    }
 }
 
 fn device_code_attempt_matches(state: &SignInState, cancel: &Arc<Notify>) -> bool {

@@ -30,6 +30,7 @@ use crate::resume_picker::SessionSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
+use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
@@ -678,6 +679,65 @@ impl App {
 
         self.chat_widget
             .add_info_message(format!("Opened {url} in your browser."), None);
+    }
+
+    fn clear_ui_header_lines_with_version(
+        &self,
+        width: u16,
+        version: &'static str,
+    ) -> Vec<Line<'static>> {
+        history_cell::SessionHeaderHistoryCell::new(
+            self.chat_widget.current_model().to_string(),
+            self.chat_widget.current_reasoning_effort(),
+            self.config.cwd.clone(),
+            version,
+        )
+        .display_lines(width)
+    }
+
+    fn clear_ui_header_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.clear_ui_header_lines_with_version(width, CODEX_CLI_VERSION)
+    }
+
+    fn clear_terminal_ui(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let is_alt_screen_active = tui.is_alt_screen_active();
+        let use_apple_terminal_clear_workaround = !is_alt_screen_active
+            && matches!(
+                codex_core::terminal::terminal_info().name,
+                codex_core::terminal::TerminalName::AppleTerminal
+            );
+
+        // Drop queued history insertions so stale transcript lines cannot be flushed after /clear.
+        tui.clear_pending_history_lines();
+
+        if is_alt_screen_active {
+            tui.terminal.clear_visible_screen()?;
+        } else if use_apple_terminal_clear_workaround {
+            // Terminal.app can leave mixed old/new glyphs behind when we purge + clear.
+            // Use a stricter ANSI reset, then redraw only a fresh session header box instead of
+            // replaying the initialization transcript preamble.
+            tui.terminal.clear_scrollback_and_visible_screen_ansi()?;
+        } else {
+            tui.terminal.clear_scrollback()?;
+            tui.terminal.clear_visible_screen()?;
+        }
+
+        let mut area = tui.terminal.viewport_area;
+        if area.y > 0 {
+            // After a full clear, anchor the inline viewport at the top and redraw a fresh header
+            // box. `insert_history_lines()` will shift the viewport down by the rendered height.
+            area.y = 0;
+            tui.terminal.set_viewport_area(area);
+        }
+        self.has_emitted_history_lines = false;
+
+        let width = tui.terminal.last_known_screen_size.width;
+        let header_lines = self.clear_ui_header_lines(width);
+        if !header_lines.is_empty() {
+            tui.insert_history_lines(header_lines);
+            self.has_emitted_history_lines = true;
+        }
+        Ok(())
     }
 
     async fn shutdown_current_thread(&mut self) {
@@ -1457,6 +1517,10 @@ impl App {
                     }
                     self.chat_widget.add_plain_history_lines(lines);
                 }
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::ClearUi => {
+                self.clear_terminal_ui(tui)?;
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenResumePicker => {
@@ -2605,6 +2669,34 @@ impl App {
             AppEvent::StatusLineSetupCancelled => {
                 self.chat_widget.cancel_status_line_setup();
             }
+            AppEvent::SyntaxThemeSelected { name } => {
+                let edit = codex_core::config::edit::syntax_theme_edit(&name);
+                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await;
+                match apply_result {
+                    Ok(()) => {
+                        // Ensure the selected theme is active in the current
+                        // session.  The preview callback covers arrow-key
+                        // navigation, but if the user presses Enter without
+                        // navigating, the runtime theme must still be applied.
+                        if let Some(theme) = crate::render::highlight::resolve_theme_by_name(
+                            &name,
+                            Some(&self.config.codex_home),
+                        ) {
+                            crate::render::highlight::set_syntax_theme(theme);
+                        }
+                        self.sync_tui_theme_selection(name);
+                    }
+                    Err(err) => {
+                        self.restore_runtime_theme_from_config();
+                        tracing::error!(error = %err, "failed to persist theme selection");
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save theme: {err}"));
+                    }
+                }
+            }
         }
         Ok(AppRunControl::Continue)
     }
@@ -2781,6 +2873,29 @@ impl App {
     fn on_update_personality(&mut self, personality: Personality) {
         self.config.personality = Some(personality);
         self.chat_widget.set_personality(personality);
+    }
+
+    fn sync_tui_theme_selection(&mut self, name: String) {
+        self.config.tui_theme = Some(name.clone());
+        self.chat_widget.set_tui_theme(Some(name));
+    }
+
+    fn restore_runtime_theme_from_config(&self) {
+        if let Some(name) = self.config.tui_theme.as_deref()
+            && let Some(theme) =
+                crate::render::highlight::resolve_theme_by_name(name, Some(&self.config.codex_home))
+        {
+            crate::render::highlight::set_syntax_theme(theme);
+            return;
+        }
+
+        let auto_theme_name = crate::render::highlight::adaptive_default_theme_name();
+        if let Some(theme) = crate::render::highlight::resolve_theme_by_name(
+            auto_theme_name,
+            Some(&self.config.codex_home),
+        ) {
+            crate::render::highlight::set_syntax_theme(theme);
+        }
     }
 
     fn personality_label(personality: Personality) -> &'static str {
@@ -3279,6 +3394,115 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn clear_ui_after_long_transcript_snapshots_fresh_header_only() {
+        let mut app = make_test_app().await;
+        app.config.cwd = PathBuf::from("/tmp/project");
+        app.chat_widget.set_model("gpt-test");
+        app.chat_widget
+            .set_reasoning_effort(Some(ReasoningEffortConfig::High));
+        let story_part_one = "In the cliffside town of Bracken Ferry, the lighthouse had been dark for \
+            nineteen years, and the children were told it was because the sea no longer wanted a \
+            guide. Mara, who repaired clocks for a living, found that hard to believe. Every dawn she \
+            heard the gulls circling the empty tower, and every dusk she watched ships hesitate at the \
+            mouth of the bay as if listening for a signal that never came. When an old brass key fell \
+            out of a cracked parcel in her workshop, tagged only with the words 'for the lamp room,' \
+            she decided to climb the hill and see what the town had forgotten.";
+        let story_part_two = "Inside the lighthouse she found gears wrapped in oilcloth, logbooks filled \
+            with weather notes, and a lens shrouded beneath salt-stiff canvas. The mechanism was not \
+            broken, only unfinished. Someone had removed the governor spring and hidden it in a false \
+            drawer, along with a letter from the last keeper admitting he had darkened the light on \
+            purpose after smugglers threatened his family. Mara spent the night rebuilding the clockwork \
+            from spare watch parts, her fingers blackened with soot and grease, while a storm gathered \
+            over the water and the harbor bells began to ring.";
+        let story_part_three = "At midnight the first squall hit, and the fishing boats returned early, \
+            blind in sheets of rain. Mara wound the mechanism, set the teeth by hand, and watched the \
+            great lens begin to turn in slow, certain arcs. The beam swept across the bay, caught the \
+            whitecaps, and reached the boats just as they were drifting toward the rocks below the \
+            eastern cliffs. In the morning the town square was crowded with wet sailors, angry elders, \
+            and wide-eyed children, but when the oldest captain placed the keeper's log on the fountain \
+            and thanked Mara for relighting the coast, nobody argued. By sunset, Bracken Ferry had a \
+            lighthouse again, and Mara had more clocks to mend than ever because everyone wanted \
+            something in town to keep better time.";
+
+        let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(UserHistoryCell {
+                message: text.to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            }) as Arc<dyn HistoryCell>
+        };
+        let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from(text.to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>
+        };
+        let make_header = |is_first| -> Arc<dyn HistoryCell> {
+            let event = SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: Some(ReasoningEffortConfig::High),
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            };
+            Arc::new(new_session_info(
+                app.chat_widget.config_ref(),
+                app.chat_widget.current_model(),
+                event,
+                is_first,
+                None,
+            )) as Arc<dyn HistoryCell>
+        };
+
+        app.transcript_cells = vec![
+            make_header(true),
+            Arc::new(crate::history_cell::new_info_event(
+                "startup tip that used to replay".to_string(),
+                None,
+            )) as Arc<dyn HistoryCell>,
+            user_cell("Tell me a long story about a town with a dark lighthouse."),
+            agent_cell(story_part_one),
+            user_cell("Continue the story and reveal why the light went out."),
+            agent_cell(story_part_two),
+            user_cell("Finish the story with a storm and a resolution."),
+            agent_cell(story_part_three),
+        ];
+        app.has_emitted_history_lines = true;
+
+        let rendered = app
+            .clear_ui_header_lines_with_version(80, "<VERSION>")
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            !rendered.contains("startup tip that used to replay"),
+            "clear header should not replay startup notices"
+        );
+        assert!(
+            !rendered.contains("Bracken Ferry"),
+            "clear header should not replay prior conversation turns"
+        );
+        assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -3653,6 +3877,19 @@ mod tests {
             Some(false)
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn sync_tui_theme_selection_updates_chat_widget_config_copy() {
+        let mut app = make_test_app().await;
+
+        app.sync_tui_theme_selection("dracula".to_string());
+
+        assert_eq!(app.config.tui_theme.as_deref(), Some("dracula"));
+        assert_eq!(
+            app.chat_widget.config_ref().tui_theme.as_deref(),
+            Some("dracula")
+        );
     }
 
     #[tokio::test]

@@ -54,6 +54,9 @@ pub(crate) enum AppEvent {
     /// Start a new session.
     NewSession,
 
+    /// Clear the terminal UI (screen + scrollback) without changing session state.
+    ClearUi,
+
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
@@ -360,6 +363,11 @@ pub(crate) enum AppEvent {
     },
     /// Dismiss the status-line setup UI without changing config.
     StatusLineSetupCancelled,
+
+    /// Apply a user-confirmed syntax theme selection.
+    SyntaxThemeSelected {
+        name: String,
+    },
 }
 
 /// The exit strategy requested by the UI layer.
