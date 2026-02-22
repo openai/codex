@@ -483,15 +483,14 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_websocket() -> 
     )
     .await;
 
-    let realtime_connection = vec![
+    let realtime_server = start_websocket_server(vec![vec![
         vec![json!({
             "type": "session.created",
             "session": { "id": "sess_1" }
         })],
         vec![],
-    ];
-    let realtime_server =
-        start_websocket_server(vec![realtime_connection.clone(), realtime_connection]).await;
+    ]])
+    .await;
 
     let mut builder = test_codex().with_config({
         let realtime_base_url = realtime_server.uri().to_string();
@@ -522,27 +521,25 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_websocket() -> 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     while tokio::time::Instant::now() < deadline {
         let connections = realtime_server.connections();
-        if connections.iter().any(|connection| connection.len() >= 2) {
+        if connections.len() == 1 && connections[0].len() >= 2 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
     let realtime_connections = realtime_server.connections();
-    let mirrored_connection = realtime_connections
-        .iter()
-        .find(|connection| connection.len() >= 2)
-        .expect("missing realtime connection with mirrored assistant message");
+    assert_eq!(realtime_connections.len(), 1);
+    assert_eq!(realtime_connections[0].len(), 2);
     assert_eq!(
-        mirrored_connection[0].body_json()["type"].as_str(),
+        realtime_connections[0][0].body_json()["type"].as_str(),
         Some("session.create")
     );
     assert_eq!(
-        mirrored_connection[1].body_json()["type"].as_str(),
+        realtime_connections[0][1].body_json()["type"].as_str(),
         Some("conversation.item.create")
     );
     assert_eq!(
-        mirrored_connection[1].body_json()["item"]["content"][0]["text"].as_str(),
+        realtime_connections[0][1].body_json()["item"]["content"][0]["text"].as_str(),
         Some("assistant says hi")
     );
 
@@ -583,7 +580,7 @@ async fn inbound_realtime_text_starts_turn_and_ignores_role() -> Result<()> {
     )
     .await;
 
-    let realtime_connection = vec![vec![
+    let realtime_server = start_websocket_server(vec![vec![vec![
         json!({
             "type": "session.created",
             "session": { "id": "sess_inbound" }
@@ -596,9 +593,8 @@ async fn inbound_realtime_text_starts_turn_and_ignores_role() -> Result<()> {
                 "content": [{"type": "text", "text": "text from realtime"}]
             }
         }),
-    ]];
-    let realtime_server =
-        start_websocket_server(vec![realtime_connection.clone(), realtime_connection]).await;
+    ]]])
+    .await;
 
     let mut builder = test_codex().with_config({
         let realtime_base_url = realtime_server.uri().to_string();
@@ -681,7 +677,7 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
     let (api_server, completions) =
         start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
 
-    let realtime_connection = vec![
+    let realtime_server = start_websocket_server(vec![vec![
         vec![json!({
             "type": "session.created",
             "session": { "id": "sess_steer" }
@@ -694,9 +690,8 @@ async fn inbound_realtime_text_steers_active_turn() -> Result<()> {
                 "content": [{"type": "text", "text": "steer via realtime"}]
             }
         })],
-    ];
-    let realtime_server =
-        start_websocket_server(vec![realtime_connection.clone(), realtime_connection]).await;
+    ]])
+    .await;
 
     let mut builder = test_codex().with_model("gpt-5.1").with_config({
         let realtime_base_url = realtime_server.uri().to_string();
