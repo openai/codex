@@ -46,8 +46,6 @@ use crate::turn_metadata::TurnMetadataState;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
-use codex_execpolicy::Decision as ExecPolicyDecision;
-use codex_execpolicy::NetworkRuleProtocol as ExecPolicyNetworkRuleProtocol;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -168,6 +166,7 @@ use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_tool_mentions_from_messages;
+use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::project_doc::get_user_instructions;
 use crate::proposed_plan_parser::ProposedPlanParser;
 use crate::proposed_plan_parser::ProposedPlanSegment;
@@ -186,7 +185,6 @@ use crate::protocol::McpServerRefreshConfig;
 use crate::protocol::ModelRerouteEvent;
 use crate::protocol::ModelRerouteReason;
 use crate::protocol::NetworkApprovalContext;
-use crate::protocol::NetworkApprovalProtocol;
 use crate::protocol::Op;
 use crate::protocol::PlanDeltaEvent;
 use crate::protocol::RateLimitSnapshot;
@@ -2236,23 +2234,8 @@ impl Session {
             .session_configuration
             .codex_home()
             .clone();
-        let protocol = match network_approval_context.protocol {
-            NetworkApprovalProtocol::Http => ExecPolicyNetworkRuleProtocol::Http,
-            NetworkApprovalProtocol::Https => ExecPolicyNetworkRuleProtocol::Https,
-            NetworkApprovalProtocol::Socks5Tcp => ExecPolicyNetworkRuleProtocol::Socks5Tcp,
-            NetworkApprovalProtocol::Socks5Udp => ExecPolicyNetworkRuleProtocol::Socks5Udp,
-        };
-        let (decision, action_verb) = match amendment.action {
-            NetworkPolicyRuleAction::Allow => (ExecPolicyDecision::Allow, "Allow"),
-            NetworkPolicyRuleAction::Deny => (ExecPolicyDecision::Forbidden, "Deny"),
-        };
-        let protocol_label = match network_approval_context.protocol {
-            NetworkApprovalProtocol::Http => "http",
-            NetworkApprovalProtocol::Https => "https_connect",
-            NetworkApprovalProtocol::Socks5Tcp => "socks5_tcp",
-            NetworkApprovalProtocol::Socks5Udp => "socks5_udp",
-        };
-        let justification = format!("{action_verb} {protocol_label} access to {host}");
+        let execpolicy_amendment =
+            execpolicy_network_rule_amendment(amendment, network_approval_context, &host);
 
         if let Some(started_network_proxy) = self.services.network_proxy.as_ref() {
             let proxy = started_network_proxy.proxy();
@@ -2273,9 +2256,9 @@ impl Session {
             .append_network_rule_and_update(
                 &codex_home,
                 &host,
-                protocol,
-                decision,
-                Some(justification),
+                execpolicy_amendment.protocol,
+                execpolicy_amendment.decision,
+                Some(execpolicy_amendment.justification),
             )
             .await
             .map_err(|err| {
@@ -5980,6 +5963,7 @@ mod tests {
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
     use crate::protocol::InitialHistory;
+    use crate::protocol::NetworkApprovalProtocol;
     use crate::protocol::RateLimitSnapshot;
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
