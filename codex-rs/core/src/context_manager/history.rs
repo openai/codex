@@ -100,7 +100,11 @@ impl ContextManager {
 
     pub(crate) fn record_regular_turn_baseline(&mut self, item: TurnContextItem) {
         if let Some(top) = self.user_turn_baselines.last_mut()
-            && top.turn_context_item.turn_id == item.turn_id
+            && let (Some(top_turn_id), Some(item_turn_id)) = (
+                top.turn_context_item.turn_id.as_deref(),
+                item.turn_id.as_deref(),
+            )
+            && top_turn_id == item_turn_id
         {
             top.turn_context_item = item.clone();
             top.invalidated_by_following_compaction = false;

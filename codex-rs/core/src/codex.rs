@@ -6679,6 +6679,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_initial_history_resumed_rollback_with_missing_turn_context_ids_keeps_distinct_baselines()
+     {
+        let (session, turn_context) = make_session_and_context().await;
+        let first_turn_id = "turn-1".to_string();
+        let second_turn_id = "turn-2".to_string();
+
+        let mut first_context_item = turn_context.to_turn_context_item();
+        first_context_item.turn_id = None;
+        first_context_item.model = "model-a".to_string();
+
+        let mut second_context_item = turn_context.to_turn_context_item();
+        second_context_item.turn_id = None;
+        second_context_item.model = "model-b".to_string();
+
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: first_turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "first".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::TurnContext(first_context_item.clone()),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: first_turn_id,
+                    last_agent_message: None,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: second_turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "second".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::TurnContext(second_context_item),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: second_turn_id,
+                    last_agent_message: None,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+                codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+            )),
+        ];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(session.previous_model().await, Some("model-a".to_string()));
+        assert_eq!(
+            serde_json::to_value(session.reference_context_item().await)
+                .expect("serialize seeded reference context item"),
+            serde_json::to_value(Some(first_context_item))
+                .expect("serialize expected reference context item")
+        );
+    }
+
+    #[tokio::test]
     async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
         let (session, turn_context) = make_session_and_context().await;
         let previous_context_item = turn_context.to_turn_context_item();
