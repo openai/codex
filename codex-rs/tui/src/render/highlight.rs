@@ -321,8 +321,9 @@ pub(crate) fn list_available_themes(codex_home: Option<&Path>) -> Vec<ThemeEntry
         }
     }
 
-    // Keep picker ordering stable across platforms/filesystems.
-    entries.sort_by(|a, b| (a.is_custom, a.name.as_str()).cmp(&(b.is_custom, b.name.as_str())));
+    // Keep picker ordering stable across platforms/filesystems while sorting
+    // custom and bundled themes together, case-insensitively.
+    entries.sort_by_cached_key(|entry| (entry.name.to_ascii_lowercase(), entry.name.clone()));
 
     entries
 }
@@ -1012,7 +1013,7 @@ mod tests {
         let themes_dir = dir.path().join("themes");
         std::fs::create_dir(&themes_dir).unwrap();
         write_minimal_tmtheme(&themes_dir.join("zzz-custom.tmTheme"));
-        write_minimal_tmtheme(&themes_dir.join("aaa-custom.tmTheme"));
+        write_minimal_tmtheme(&themes_dir.join("Aaa-custom.tmTheme"));
         write_minimal_tmtheme(&themes_dir.join("mmm-custom.tmTheme"));
 
         let entries = list_available_themes(Some(dir.path()));
@@ -1022,11 +1023,11 @@ mod tests {
             .collect();
 
         let mut expected = actual.clone();
-        expected.sort_by(|a, b| (a.0, a.1.as_str()).cmp(&(b.0, b.1.as_str())));
+        expected.sort_by_cached_key(|entry| (entry.1.to_ascii_lowercase(), entry.1.clone()));
 
         assert_eq!(
             actual, expected,
-            "theme entries should be stable and sorted (builtins first, then custom by name)"
+            "theme entries should be stable and sorted case-insensitively across built-in and custom themes"
         );
     }
 
