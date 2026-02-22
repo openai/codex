@@ -1797,6 +1797,17 @@
       ],
       "type": "object"
     },
+    "ThreadBackgroundTerminalsCleanParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadCompactStartParams": {
       "properties": {
         "threadId": {
@@ -2766,6 +2777,30 @@
         "params"
       ],
       "title": "Thread/compact/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/backgroundTerminals/clean"
+          ],
+          "title": "Thread/backgroundTerminals/cleanRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadBackgroundTerminalsCleanParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/backgroundTerminals/cleanRequest",
       "type": "object"
     },
     {

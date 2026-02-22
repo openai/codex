@@ -600,10 +600,10 @@ impl McpProcess {
     /// without an explicit interrupt + `codex/event/turn_aborted` wait can leave in-flight work
     /// racing teardown and intermittently show up as `LEAK` in nextest.
     ///
-    /// In rare races, the turn can also fail or complete on its own after we send
-    /// `turn/interrupt` but before the server emits the interrupt response. The helper treats a
-    /// buffered matching `turn/completed` notification as sufficient terminal cleanup in that
-    /// case so teardown does not flap on timing.
+    /// In rare races, the turn can complete on its own after we send `turn/interrupt` and before
+    /// the server emits `codex/event/turn_aborted`. The helper treats a buffered matching
+    /// `turn/completed` notification as sufficient terminal cleanup in that case so teardown does
+    /// not flap on timing.
     pub async fn interrupt_turn_and_wait_for_aborted(
         &mut self,
         thread_id: String,

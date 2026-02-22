@@ -11,6 +11,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
+use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use pretty_assertions::assert_eq;
@@ -124,7 +125,8 @@ async fn thread_start_without_dynamic_tools_allows_without_experimental_api_capa
 }
 
 #[tokio::test]
-async fn thread_background_terminals_clean_requires_experimental_api_capability() -> Result<()> {
+async fn thread_background_terminals_clean_works_without_experimental_api_capability() -> Result<()>
+{
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -161,12 +163,12 @@ async fn thread_background_terminals_clean_requires_experimental_api_capability(
             thread_id: thread.id,
         })
         .await?;
-    let error = timeout(
+    let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    assert_experimental_capability_error(error, "thread/backgroundTerminals/clean");
+    let _: ThreadBackgroundTerminalsCleanResponse = to_response(response)?;
     Ok(())
 }
 

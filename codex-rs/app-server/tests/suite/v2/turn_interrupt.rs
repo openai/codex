@@ -121,7 +121,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_interrupt_without_active_turn_times_out() -> Result<()> {
+async fn turn_interrupt_without_active_turn_returns_success() -> Result<()> {
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
@@ -152,14 +152,21 @@ async fn turn_interrupt_without_active_turn_times_out() -> Result<()> {
         })
         .await?;
 
-    let interrupt_response = timeout(
-        std::time::Duration::from_secs(2),
+    let interrupt_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(interrupt_id)),
+    )
+    .await??;
+    let _resp: TurnInterruptResponse = to_response::<TurnInterruptResponse>(interrupt_response)?;
+
+    let completed_notification = timeout(
+        std::time::Duration::from_secs(1),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await;
     assert!(
-        interrupt_response.is_err(),
-        "expected turn/interrupt to time out when no turn is active"
+        completed_notification.is_err(),
+        "did not expect turn/completed when interrupting without an active turn"
     );
 
     Ok(())

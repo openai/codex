@@ -154,6 +154,7 @@ use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -5732,7 +5733,7 @@ impl CodexMessageProcessor {
     ) {
         let TurnInterruptParams { thread_id, .. } = params;
 
-        let (thread_uuid, thread) = match self.load_thread(&thread_id).await {
+        let (_, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -5740,19 +5741,17 @@ impl CodexMessageProcessor {
             }
         };
 
-        let request = request_id.clone();
-
-        // Record the pending interrupt so we can reply when TurnAborted arrives.
-        {
-            let thread_state = self.thread_state_manager.thread_state(thread_uuid);
-            let mut thread_state = thread_state.lock().await;
-            thread_state
-                .pending_interrupts
-                .push((request, ApiVersion::V2));
+        match thread.submit(Op::Interrupt).await {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, TurnInterruptResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to interrupt turn: {err}"))
+                    .await;
+            }
         }
-
-        // Submit the interrupt; we'll respond upon TurnAborted.
-        let _ = thread.submit(Op::Interrupt).await;
     }
 
     async fn add_conversation_listener(
