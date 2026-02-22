@@ -433,6 +433,7 @@ fn run_exec_wrapper_mode() -> anyhow::Result<()> {
 
     #[cfg(unix)]
     {
+        use std::os::unix::fs::PermissionsExt;
         use std::os::unix::net::UnixStream as StdUnixStream;
 
         let args: Vec<String> = std::env::args().collect();
@@ -459,6 +460,13 @@ fn run_exec_wrapper_mode() -> anyhow::Result<()> {
             argv: argv.clone(),
             cwd,
         };
+        tracing::info!(
+            target: "codex_core::zsh_exec_bridge",
+            "zsh exec wrapper request: file={file:?} argv={argv:?} cwd={cwd}",
+            cwd = match &request {
+                WrapperIpcRequest::ExecRequest { cwd, .. } => cwd,
+            }
+        );
 
         let mut stream = StdUnixStream::connect(&socket_path)
             .with_context(|| format!("connect to wrapper socket at {socket_path}"))?;
@@ -502,6 +510,11 @@ fn run_exec_wrapper_mode() -> anyhow::Result<()> {
             std::process::exit(1);
         }
 
+        tracing::info!(
+            target: "codex_core::zsh_exec_bridge",
+            "zsh exec wrapper allow: file={file:?} argv={argv:?}"
+        );
+
         let mut command = std::process::Command::new(&file);
         if argv.len() > 1 {
             command.args(&argv[1..]);
@@ -509,7 +522,26 @@ fn run_exec_wrapper_mode() -> anyhow::Result<()> {
         command.env_remove(ZSH_EXEC_WRAPPER_MODE_ENV_VAR);
         command.env_remove(ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR);
         command.env_remove(EXEC_WRAPPER_ENV_VAR);
-        let status = command.status().context("spawn wrapped executable")?;
+        let status = command.status().with_context(|| {
+            let path_env = std::env::var_os("PATH")
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "<unset>".to_string());
+            let file_path = std::path::Path::new(&file);
+            let file_exists = file_path.exists();
+            let file_is_absolute = file_path.is_absolute();
+            let file_canonical = std::fs::canonicalize(file_path)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|err| format!("<canonicalize failed: {err}>"));
+            let file_metadata = std::fs::metadata(file_path)
+                .map(|meta| format!("mode={:o} len={}", meta.permissions().mode(), meta.len()))
+                .unwrap_or_else(|err| format!("<metadata failed: {err}>"));
+            format!(
+                "spawn wrapped executable: file={file:?} argv={argv:?} cwd={} PATH={path_env} file_exists={file_exists} file_is_absolute={file_is_absolute} file_canonical={file_canonical} file_metadata={file_metadata}",
+                std::env::current_dir()
+                    .map(|cwd| cwd.display().to_string())
+                    .unwrap_or_else(|err| format!("<cwd failed: {err}>"))
+            )
+        })?;
         std::process::exit(status.code().unwrap_or(1));
     }
 }
