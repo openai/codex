@@ -402,6 +402,7 @@ fn find_syntax(lang: &str) -> Option<&'static SyntaxReference> {
 
     // Aliases that two-face does not resolve on its own.
     let patched = match lang {
+        "csharp" | "c-sharp" => "c#",
         "golang" => "go",
         "python3" => "python",
         "shell" => "bash",
@@ -805,6 +806,7 @@ mod tests {
             "zig",
             "swift",
             "java",
+            "c#",
             "elixir",
             "haskell",
             "scala",
@@ -828,7 +830,7 @@ mod tests {
         // Common file extensions.
         let extensions = [
             "rs", "py", "js", "ts", "rb", "go", "sh", "md", "yml", "kt", "ex", "hs", "pl", "php",
-            "css", "html",
+            "css", "html", "cs",
         ];
         for ext in extensions {
             assert!(
@@ -837,7 +839,7 @@ mod tests {
             );
         }
         // Patched aliases that two-face cannot resolve on its own.
-        for alias in ["golang", "python3", "shell"] {
+        for alias in ["csharp", "c-sharp", "golang", "python3", "shell"] {
             assert!(
                 find_syntax(alias).is_some(),
                 "find_syntax({alias:?}) returned None — patched alias broken"
