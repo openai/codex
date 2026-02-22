@@ -268,6 +268,44 @@ async fn flush_answer_stream_does_not_stop_animation_while_plan_stream_is_active
 }
 
 #[tokio::test]
+async fn flush_answer_stream_does_not_stop_animation_while_plan_table_stream_is_active() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut plan_controller =
+        crate::streaming::controller::PlanStreamController::new(Some(80), cwd.as_path());
+    assert!(
+        plan_controller.push("| Step | Owner |\n"),
+        "expected table header to enqueue while plan stream is active",
+    );
+    assert!(
+        plan_controller.queued_lines() > 0,
+        "expected queued table header lines for this repro",
+    );
+    chat.plan_stream_controller = Some(plan_controller);
+    chat.stream_controller = Some(crate::streaming::controller::StreamController::new(
+        Some(80),
+        cwd.as_path(),
+    ));
+
+    while rx.try_recv().is_ok() {}
+
+    chat.flush_answer_stream_with_separator();
+
+    let mut saw_stop = false;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(event, AppEvent::StopCommitAnimation) {
+            saw_stop = true;
+        }
+    }
+
+    assert!(
+        !saw_stop,
+        "did not expect StopCommitAnimation while plan table stream is still active",
+    );
+}
+
+#[tokio::test]
 async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);

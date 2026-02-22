@@ -15,8 +15,10 @@
 //! every column's width and reshape all prior rows.  The holdback mechanism
 //! (`table_holdback_state`) detects pipe-table patterns (header + delimiter
 //! pair) in the accumulated source and keeps content from the table header
-//! onward as mutable tail until the stream finalizes.  Lines in `Outside` and `Markdown`
-//! fence contexts are scanned; lines inside non-markdown fences are skipped.
+//! onward as mutable tail until the stream finalizes. Holdback is enabled for
+//! agent streams and disabled for proposed-plan streams so plan output
+//! continues to stream incrementally. Lines in `Outside` and `Markdown` fence
+//! contexts are scanned; lines inside non-markdown fences are skipped.
 //!
 //! ## Resize handling
 //!
@@ -70,6 +72,8 @@ use super::StreamState;
 /// finalize return types.
 struct StreamCore {
     state: StreamState,
+    /// Whether table holdback is active for this stream type.
+    table_holdback_mode: TableHoldbackMode,
     /// Current rendering width (columns available for markdown content).
     width: Option<usize>,
     /// Accumulated raw markdown source for the current stream.
@@ -94,10 +98,17 @@ struct StablePrefixLenCache {
     stable_prefix_len: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TableHoldbackMode {
+    Enabled,
+    Disabled,
+}
+
 impl StreamCore {
-    fn new(width: Option<usize>, cwd: &Path) -> Self {
+    fn new(width: Option<usize>, table_holdback_mode: TableHoldbackMode, cwd: &Path) -> Self {
         Self {
             state: StreamState::new(width, cwd),
+            table_holdback_mode,
             width,
             raw_source: String::with_capacity(1024),
             rendered_lines: Vec::with_capacity(64),
@@ -122,7 +133,9 @@ impl StreamCore {
             && let Some(committed_source) = self.state.collector.commit_complete_source()
         {
             self.raw_source.push_str(&committed_source);
-            self.holdback_scanner.push_source_chunk(&committed_source);
+            if self.table_holdback_mode == TableHoldbackMode::Enabled {
+                self.holdback_scanner.push_source_chunk(&committed_source);
+            }
             self.recompute_streaming_render();
             enqueued = self.sync_stable_queue();
         }
@@ -135,7 +148,9 @@ impl StreamCore {
         let remainder_source = self.state.collector.finalize_and_drain_source();
         if !remainder_source.is_empty() {
             self.raw_source.push_str(&remainder_source);
-            self.holdback_scanner.push_source_chunk(&remainder_source);
+            if self.table_holdback_mode == TableHoldbackMode::Enabled {
+                self.holdback_scanner.push_source_chunk(&remainder_source);
+            }
         }
         let mut rendered = Vec::new();
         append_markdown_agent_with_cwd(
@@ -322,6 +337,9 @@ impl StreamCore {
     /// streaming. When no table is detected, everything flows directly to
     /// stable. This is the core decision point for the holdback mechanism.
     fn active_tail_budget_lines(&mut self) -> usize {
+        if self.table_holdback_mode == TableHoldbackMode::Disabled {
+            return 0;
+        }
         let scan_start = Instant::now();
         let holdback_state = self.holdback_scanner.state();
         let tail_budget = match holdback_state {
@@ -403,7 +421,7 @@ impl StreamController {
     /// render against the same session cwd that was active when streaming started.
     pub(crate) fn new(width: Option<usize>, cwd: &Path) -> Self {
         Self {
-            core: StreamCore::new(width, cwd),
+            core: StreamCore::new(width, TableHoldbackMode::Enabled, cwd),
             header_emitted: false,
         }
     }
@@ -510,7 +528,7 @@ impl PlanStreamController {
     /// render against the same session cwd that was active when streaming started.
     pub(crate) fn new(width: Option<usize>, cwd: &Path) -> Self {
         Self {
-            core: StreamCore::new(width, cwd),
+            core: StreamCore::new(width, TableHoldbackMode::Disabled, cwd),
             header_emitted: false,
             top_padding_emitted: false,
         }
@@ -552,6 +570,11 @@ impl PlanStreamController {
     #[inline]
     pub(crate) fn queued_lines(&self) -> usize {
         self.core.queued_lines()
+    }
+
+    #[inline]
+    pub(crate) fn has_live_tail(&self) -> bool {
+        self.core.has_tail()
     }
 
     pub(crate) fn oldest_queued_age(&self, now: Instant) -> Option<Duration> {
@@ -969,6 +992,19 @@ mod tests {
     }
 
     #[test]
+    fn plan_controller_has_live_tail_reflects_tail_presence() {
+        let mut ctrl = plan_stream_controller(Some(80));
+        assert!(!ctrl.has_live_tail());
+
+        ctrl.core.rendered_lines = vec![Line::from("tail line")];
+        ctrl.core.enqueued_stable_len = 0;
+        assert!(ctrl.has_live_tail());
+
+        ctrl.core.enqueued_stable_len = 1;
+        assert!(!ctrl.has_live_tail());
+    }
+
+    #[test]
     fn controller_set_width_partial_drain_no_lost_lines() {
         let mut ctrl = stream_controller(Some(40));
         ctrl.push("AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ\n");
@@ -1047,7 +1083,7 @@ mod tests {
 
     #[test]
     fn controller_set_width_preserves_table_tail_when_queue_is_empty() {
-        let mut ctrl = StreamController::new(Some(80));
+        let mut ctrl = stream_controller(Some(80));
         ctrl.push("intro line\n");
 
         let (_cell, idle) = ctrl.on_commit_tick();
@@ -1095,6 +1131,19 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Item without newline")),
             "expected finalized plan content after resize, got {rendered:?}",
+        );
+    }
+
+    #[test]
+    fn plan_controller_streams_table_header_incrementally() {
+        let mut ctrl = plan_stream_controller(Some(80));
+        assert!(ctrl.push("Intro\n"));
+        let (_cell, idle) = ctrl.on_commit_tick_batch(usize::MAX);
+        assert!(idle, "intro line should fully drain");
+
+        assert!(
+            ctrl.push("| Step | Owner |\n"),
+            "table header should enqueue incrementally for plan streams",
         );
     }
 
@@ -1573,7 +1622,7 @@ mod tests {
     fn controller_live_view_matches_render_during_interleaved_table_streaming() {
         let source = "Project updates are easier to scan when narrative and structured data alternate.\n\n| Focus Area | Owner | Priority | Status |\n|---|---|---|---|\n| Authentication cleanup | Maya | High | 80% |\n| CLI error messages | Jordan | Medium | 55% |\n| Docs refresh | Lee | Low | 30% |\n\nThe first checkpoint shows progress, but we still have open risks.\n\n| Task | Command / Artifact | Due | State |\n|---|---|---|---|\n| Run unit tests | `cargo test -p codex-core` | Today | ✅ |\n| Snapshot review | `cargo insta pending-snapshots -p codex-tui` | Today | ⏳ |\n| Changelog draft | Release template (https://replacechangelog.com/) | Tomorrow | 📝 |\n\nFinal sign-off criteria are summarized below.\n";
         let width = Some(72usize);
-        let mut ctrl = StreamController::new(width);
+        let mut ctrl = stream_controller(width);
         let mut emitted_lines: Vec<Line<'static>> = Vec::new();
 
         for delta in source.split_inclusive('\n') {
@@ -1639,7 +1688,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_controller_streamed_table_matches_finalize_render() {
+    fn plan_controller_streamed_table_emits_incremental_rows_before_finalize() {
         let deltas = vec![
             "## Build plan\n\n",
             "| Step | Owner |\n",
@@ -1653,21 +1702,23 @@ mod tests {
         let source: String = deltas.iter().copied().collect();
         let baseline = collect_plan_streamed_lines(&[source.as_str()], Some(80));
 
-        assert_eq!(streamed, baseline);
+        assert_ne!(streamed, baseline);
         assert!(
-            streamed.iter().any(|line| line.contains('┌')),
-            "expected unicode table border in plan streamed output: {streamed:?}"
+            streamed
+                .iter()
+                .any(|line| line.contains('│') || line.contains('└') || line.contains('┌')),
+            "expected unicode table box drawing chars in plan streamed output: {streamed:?}"
         );
         assert!(
-            !streamed
+            streamed
                 .iter()
                 .any(|line| line.trim() == "| Step | Owner |"),
-            "did not expect raw table header line in plan output: {streamed:?}"
+            "expected incremental raw table header line in plan output: {streamed:?}"
         );
     }
 
     #[test]
-    fn plan_controller_streamed_markdown_fenced_table_matches_finalize_render() {
+    fn plan_controller_streamed_markdown_fenced_table_emits_incremental_rows_before_finalize() {
         let deltas = vec![
             "## Build plan\n\n",
             "```md\n",
@@ -1683,10 +1734,18 @@ mod tests {
         let source: String = deltas.iter().copied().collect();
         let baseline = collect_plan_streamed_lines(&[source.as_str()], Some(80));
 
-        assert_eq!(streamed, baseline);
+        assert_ne!(streamed, baseline);
         assert!(
-            streamed.iter().any(|line| line.contains('┌')),
-            "expected unicode table border in fenced plan output: {streamed:?}"
+            streamed
+                .iter()
+                .any(|line| line.contains('│') || line.contains('└') || line.contains('┌')),
+            "expected unicode table box drawing chars in fenced plan output: {streamed:?}"
+        );
+        assert!(
+            streamed
+                .iter()
+                .any(|line| line.trim() == "| Step | Owner |"),
+            "expected incremental raw table header line in fenced plan output: {streamed:?}"
         );
     }
 
@@ -1840,7 +1899,7 @@ mod tests {
 
     #[test]
     fn controller_set_width_partial_wrapped_emit_keeps_wrapped_remainder() {
-        let mut ctrl = StreamController::new(Some(18));
+        let mut ctrl = stream_controller(Some(18));
         ctrl.push("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n");
 
         let (first_emit, idle) = ctrl.on_commit_tick();
