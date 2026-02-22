@@ -835,7 +835,7 @@ pub fn new_approval_decision_cell(
         } => {
             let host = Span::from(network_policy_amendment.host).dim();
             match network_policy_amendment.action {
-                codex_core::protocol::NetworkPolicyRuleAction::Allow => (
+                codex_protocol::protocol::NetworkPolicyRuleAction::Allow => (
                     "✔ ".green(),
                     vec![
                         "You ".into(),
@@ -844,7 +844,7 @@ pub fn new_approval_decision_cell(
                         host,
                     ],
                 ),
-                codex_core::protocol::NetworkPolicyRuleAction::Deny => (
+                codex_protocol::protocol::NetworkPolicyRuleAction::Deny => (
                     "✗ ".red(),
                     vec![
                         "You ".into(),
