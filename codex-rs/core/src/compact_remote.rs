@@ -4,7 +4,6 @@ use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::compact::InitialContextInjection;
-use crate::compact::extract_trailing_model_switch_update_for_compaction_request;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
@@ -73,10 +72,6 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let mut history = sess.clone_history().await;
-    // Keep compaction prompts in-distribution: if a model-switch update was injected at the
-    // tail of history (between turns), exclude it from the compaction request payload.
-    let stripped_model_switch_item =
-        extract_trailing_model_switch_update_for_compaction_request(&mut history);
     let base_instructions = sess.get_base_instructions().await;
     let deleted_items = trim_function_call_history_to_fit_context_window(
         &mut history,
@@ -136,11 +131,6 @@ async fn run_remote_compact_task_inner_impl(
         initial_context_injection,
     )
     .await;
-    // Reattach the stripped model-switch update only after successful compaction so the model
-    // still sees the switch instructions on the next real sampling request.
-    if let Some(model_switch_item) = stripped_model_switch_item {
-        new_history.push(model_switch_item);
-    }
 
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
