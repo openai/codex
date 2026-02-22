@@ -1,0 +1,72 @@
+#!/usr/bin/env dotslash
+
+// This is the patched zsh fork built by
+// `.github/workflows/shell-tool-mcp.yml` for the shell-tool-mcp package.
+// Fetching the prebuilt version via DotSlash makes it easier to write
+// integration tests that exercise the zsh fork behavior in exec-server tests.
+//
+// TODO(mbolin): Currently, we use a .tgz artifact that includes binaries for
+// multiple platforms, but we could save a bit of space by making arch-specific
+// artifacts available in the GitHub releases and referencing those here.
+{
+  "name": "codex-zsh",
+  "platforms": {
+    // macOS 13 builds (and therefore x86_64) were dropped in
+    // https://github.com/openai/codex/pull/7295, so we only provide an
+    // Apple Silicon build for now.
+    "macos-aarch64": {
+      "size": 53771483,
+      "hash": "blake3",
+      "digest": "ff664f63f5e1fa62762c9aff0aafa66cf196faf9b157f98ec98f59c152fc7bd3",
+      "format": "tar.gz",
+      "path": "package/vendor/aarch64-apple-darwin/zsh/macos-15/zsh",
+      "providers": [
+        {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.104.0/codex-shell-tool-mcp-npm-0.104.0.tgz"
+        },
+        {
+          "type": "github-release",
+          "repo": "openai/codex",
+          "tag": "rust-v0.104.0",
+          "name": "codex-shell-tool-mcp-npm-0.104.0.tgz"
+        }
+      ]
+    },
+    "linux-x86_64": {
+      "size": 53771483,
+      "hash": "blake3",
+      "digest": "ff664f63f5e1fa62762c9aff0aafa66cf196faf9b157f98ec98f59c152fc7bd3",
+      "format": "tar.gz",
+      "path": "package/vendor/x86_64-unknown-linux-musl/zsh/ubuntu-24.04/zsh",
+      "providers": [
+        {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.104.0/codex-shell-tool-mcp-npm-0.104.0.tgz"
+        },
+        {
+          "type": "github-release",
+          "repo": "openai/codex",
+          "tag": "rust-v0.104.0",
+          "name": "codex-shell-tool-mcp-npm-0.104.0.tgz"
+        }
+      ]
+    },
+    "linux-aarch64": {
+      "size": 53771483,
+      "hash": "blake3",
+      "digest": "ff664f63f5e1fa62762c9aff0aafa66cf196faf9b157f98ec98f59c152fc7bd3",
+      "format": "tar.gz",
+      "path": "package/vendor/aarch64-unknown-linux-musl/zsh/ubuntu-24.04/zsh",
+      "providers": [
+        {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.104.0/codex-shell-tool-mcp-npm-0.104.0.tgz"
+        },
+        {
+          "type": "github-release",
+          "repo": "openai/codex",
+          "tag": "rust-v0.104.0",
+          "name": "codex-shell-tool-mcp-npm-0.104.0.tgz"
+        }
+      ]
+    },
+  }
+}
