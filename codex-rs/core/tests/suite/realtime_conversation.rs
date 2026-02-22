@@ -467,6 +467,7 @@ async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() ->
     server.shutdown().await;
     Ok(())
 }
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_mirrors_assistant_message_text_to_realtime_websocket() -> Result<()> {
     skip_if_no_network!(Ok(()));
