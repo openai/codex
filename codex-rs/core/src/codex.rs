@@ -3496,6 +3496,10 @@ impl Session {
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
+    // Seed with context in case the first op changes settings or injects response items before a
+    // normal user turn starts.
+    let mut previous_context = Some(sess.new_default_turn().await.to_turn_context_item());
+
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
@@ -3567,7 +3571,8 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 .await;
             }
             Op::UserInput { .. } | Op::UserTurn { .. } => {
-                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
+                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
+                    .await;
             }
             Op::InjectResponseItems { items } => {
                 handlers::inject_response_items(
@@ -3653,7 +3658,13 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::set_thread_name(&sess, sub.id.clone(), name).await;
             }
             Op::RunUserShellCommand { command } => {
-                handlers::run_user_shell_command(&sess, sub.id.clone(), command).await;
+                handlers::run_user_shell_command(
+                    &sess,
+                    sub.id.clone(),
+                    command,
+                    &mut previous_context,
+                )
+                .await;
             }
             Op::ResolveElicitation {
                 server_name,
@@ -3681,7 +3692,6 @@ mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::SteerInputError;
-
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
 
@@ -3715,6 +3725,7 @@ mod handlers {
     use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnContextItem;
     use codex_protocol::protocol::WarningEvent;
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
@@ -3761,7 +3772,12 @@ mod handlers {
         }
     }
 
-    pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
+    pub async fn user_input_or_turn(
+        sess: &Arc<Session>,
+        sub_id: String,
+        op: Op,
+        previous_context: &mut Option<TurnContextItem>,
+    ) {
         let (items, updates) = match op {
             Op::UserTurn {
                 cwd,
@@ -3822,11 +3838,23 @@ mod handlers {
 
         // Attempt to inject input into current task.
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
+            let previous_model = sess.previous_model().await;
+            let update_items = sess.build_settings_update_items(
+                previous_context.as_ref(),
+                previous_model.as_deref(),
+                &current_context,
+            );
+            if !update_items.is_empty() {
+                sess.record_conversation_items(&current_context, &update_items)
+                    .await;
+            }
+
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
             sess.spawn_task(Arc::clone(&current_context), items, regular_task)
                 .await;
+            *previous_context = Some(current_context.to_turn_context_item());
         }
     }
 
@@ -3834,7 +3862,7 @@ mod handlers {
         sess: &Arc<Session>,
         sub_id: String,
         items: Vec<ResponseInputItem>,
-        previous_context: &mut Option<Arc<TurnContext>>,
+        previous_context: &mut Option<TurnContextItem>,
     ) {
         const MAX_TURN_RESTART_ATTEMPTS: usize = 3;
 
@@ -3874,7 +3902,6 @@ mod handlers {
             };
             let current_context = sess.new_default_turn_with_sub_id(turn_sub_id).await;
             current_context.otel_manager.user_prompt(&turn_input);
-            sess.seed_initial_context_if_needed(&current_context).await;
             let previous_model = sess.previous_model().await;
             let update_items = sess.build_settings_update_items(
                 previous_context.as_ref(),
@@ -3891,7 +3918,7 @@ mod handlers {
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
             sess.spawn_task(Arc::clone(&current_context), turn_input, regular_task)
                 .await;
-            *previous_context = Some(current_context);
+            *previous_context = Some(current_context.to_turn_context_item());
 
             if pending_items.is_empty() {
                 return;
@@ -3915,7 +3942,7 @@ mod handlers {
         sess: &Arc<Session>,
         sub_id: String,
         command: String,
-        previous_context: &mut Option<Arc<TurnContext>>,
+        previous_context: &mut Option<TurnContextItem>,
     ) {
         if let Some((turn_context, cancellation_token)) =
             sess.active_turn_context_and_cancellation_token().await
@@ -3941,6 +3968,7 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
+        *previous_context = Some(turn_context.to_turn_context_item());
     }
 
     pub async fn resolve_elicitation(
@@ -8522,9 +8550,15 @@ mod tests {
             let mut state = session.state.lock().await;
             state.set_reference_context_item(None);
         }
+        let mut previous_context = None;
 
-        handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
-            .await;
+        handlers::run_user_shell_command(
+            &session,
+            "sub-id".to_string(),
+            "echo shell".to_string(),
+            &mut previous_context,
+        )
+        .await;
 
         let deadline = StdDuration::from_secs(5);
         let start = std::time::Instant::now();

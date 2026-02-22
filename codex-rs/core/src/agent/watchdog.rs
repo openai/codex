@@ -1,6 +1,5 @@
 use super::control::AgentControl;
 use super::guards::Guards;
-use super::guards::MAX_THREAD_SPAWN_DEPTH;
 use super::guards::exceeds_thread_spawn_depth_limit;
 use super::status::is_final;
 use crate::codex::load_watchdog_prompt;
@@ -96,9 +95,13 @@ impl WatchdogManager {
         self: &Arc<Self>,
         registration: WatchdogRegistration,
     ) -> CodexResult<Vec<RemovedWatchdog>> {
-        if exceeds_thread_spawn_depth_limit(registration.child_depth) {
+        if exceeds_thread_spawn_depth_limit(
+            registration.child_depth,
+            registration.config.agent_max_depth,
+        ) {
+            let max_depth = registration.config.agent_max_depth;
             return Err(CodexErr::UnsupportedOperation(format!(
-                "agent depth limit reached: max depth is {MAX_THREAD_SPAWN_DEPTH}"
+                "agent depth limit reached: max depth is {max_depth}"
             )));
         }
         let interval = interval_duration(registration.interval_s)?;
@@ -276,6 +279,8 @@ impl WatchdogManager {
         let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: snapshot.owner_thread_id,
             depth: snapshot.child_depth,
+            agent_nickname: None,
+            agent_role: None,
         });
         let mut helper_config = snapshot.config.clone();
         // Watchdog helpers are short-lived check-ins. Keep their state in-memory and

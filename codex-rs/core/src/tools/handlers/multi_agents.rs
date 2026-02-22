@@ -23,8 +23,8 @@ use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CollabAgentSpawnEndEvent;
-use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::CollabAgentSpawnMode;
+use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::CollabCloseBeginEvent;
 use codex_protocol::protocol::CollabCloseEndEvent;
 use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -100,14 +100,12 @@ mod spawn {
     use super::*;
     use crate::agent::AgentControl;
     use crate::agent::DEFAULT_WATCHDOG_INTERVAL_S;
-    use crate::agent::MAX_THREAD_SPAWN_DEPTH;
     use crate::agent::WatchdogRegistration;
     use crate::agent::exceeds_thread_spawn_depth_limit;
     use crate::agent::next_thread_spawn_depth;
     use crate::agent::role::apply_role_to_config;
     use crate::config::Config;
     use codex_protocol::protocol::SessionSource;
-    use codex_protocol::protocol::SubAgentSource;
     use std::collections::HashSet;
     use std::sync::Arc;
 
@@ -173,9 +171,10 @@ mod spawn {
             ));
         }
         let child_depth = next_thread_spawn_depth(&session_source);
-        if exceeds_thread_spawn_depth_limit(child_depth) {
+        if exceeds_thread_spawn_depth_limit(child_depth, turn.config.agent_max_depth) {
+            let max_depth = turn.config.agent_max_depth;
             return Err(FunctionCallError::RespondToModel(format!(
-                "agent depth limit reached: max depth is {MAX_THREAD_SPAWN_DEPTH}"
+                "agent depth limit reached: max depth is {max_depth}"
             )));
         }
         session
@@ -452,7 +451,6 @@ mod send_input {
 
 mod resume_agent {
     use super::*;
-    use crate::agent::MAX_THREAD_SPAWN_DEPTH;
     use crate::agent::exceeds_thread_spawn_depth_limit;
     use crate::agent::next_thread_spawn_depth;
     use std::sync::Arc;
@@ -482,9 +480,10 @@ mod resume_agent {
             .await
             .unwrap_or((None, None));
         let child_depth = next_thread_spawn_depth(&turn.session_source);
-        if exceeds_thread_spawn_depth_limit(child_depth) {
+        if exceeds_thread_spawn_depth_limit(child_depth, turn.config.agent_max_depth) {
+            let max_depth = turn.config.agent_max_depth;
             return Err(FunctionCallError::RespondToModel(format!(
-                "agent depth limit reached: max depth is {MAX_THREAD_SPAWN_DEPTH}"
+                "agent depth limit reached: max depth is {max_depth}"
             )));
         }
 
@@ -1311,7 +1310,10 @@ fn build_agent_spawn_config(
             config.developer_instructions = base_config.developer_instructions.clone();
             // At max depth, a freshly spawned context-free child cannot spawn further descendants.
             // Hide multi-agent tools to match that capability boundary.
-            if crate::agent::exceeds_thread_spawn_depth_limit(child_depth + 1) {
+            if crate::agent::exceeds_thread_spawn_depth_limit(
+                child_depth + 1,
+                config.agent_max_depth,
+            ) {
                 config.features.disable(Feature::Collab);
             }
         }
@@ -2317,7 +2319,7 @@ mod tests {
             .agent_control
             .spawn_agent_handle(
                 turn.config.as_ref().clone(),
-                Some(thread_spawn_source(owner_thread_id, 1)),
+                Some(thread_spawn_source(owner_thread_id, 1, None)),
             )
             .await
             .expect("spawn helper handle");
@@ -2427,12 +2429,12 @@ mod tests {
         else {
             panic!("expected function output");
         };
-        let result: WaitResult =
+        let result: wait::WaitResult =
             serde_json::from_str(&content).expect("wait result should be json");
         let expected_watchdog_status = session.services.agent_control.get_status(watchdog_id).await;
         assert_eq!(
             result,
-            WaitResult {
+            wait::WaitResult {
                 status: HashMap::from([
                     (watchdog_id, expected_watchdog_status),
                     (worker_id, AgentStatus::Shutdown),
@@ -2734,7 +2736,7 @@ mod tests {
         let config = build_agent_spawn_config(
             &base_instructions,
             &turn,
-            MAX_THREAD_SPAWN_DEPTH,
+            DEFAULT_AGENT_MAX_DEPTH,
             SpawnConfigStrategy::ForkLike,
         )
         .expect("fork-like spawn config");
@@ -2759,7 +2761,7 @@ mod tests {
         let config = build_agent_spawn_config(
             &base_instructions,
             &turn,
-            MAX_THREAD_SPAWN_DEPTH,
+            DEFAULT_AGENT_MAX_DEPTH,
             SpawnConfigStrategy::ContextFreeSpawn,
         )
         .expect("context-free spawn config");

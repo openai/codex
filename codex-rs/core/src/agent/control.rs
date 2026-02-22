@@ -28,7 +28,6 @@ use codex_protocol::user_input::UserInput;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::Mutex;
@@ -641,6 +640,7 @@ impl AgentControl {
                 SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id,
                     depth,
+                    ..
                 }) => (
                     Some(parent_thread_id),
                     usize::try_from(depth).unwrap_or_default(),
@@ -1419,6 +1419,8 @@ mod tests {
                 Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id: root_thread_id,
                     depth: 1,
+                    agent_nickname: None,
+                    agent_role: None,
                 })),
             )
             .await
@@ -1430,6 +1432,8 @@ mod tests {
                 Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id: first_agent_id,
                     depth: 2,
+                    agent_nickname: None,
+                    agent_role: None,
                 })),
             )
             .await
@@ -1481,6 +1485,8 @@ mod tests {
                 Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id: owner_thread_id,
                     depth: 1,
+                    agent_nickname: None,
+                    agent_role: None,
                 })),
             )
             .await
@@ -1504,6 +1510,8 @@ mod tests {
                 Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id: owner_thread_id,
                     depth: 1,
+                    agent_nickname: None,
+                    agent_role: None,
                 })),
             )
             .await
@@ -1557,6 +1565,8 @@ mod tests {
                 Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id: owner_thread_id,
                     depth: 1,
+                    agent_nickname: None,
+                    agent_role: None,
                 })),
             )
             .await
@@ -1579,6 +1589,8 @@ mod tests {
                 Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id: owner_thread_id,
                     depth: 1,
+                    agent_nickname: None,
+                    agent_role: None,
                 })),
             )
             .await
@@ -1683,6 +1695,8 @@ mod tests {
                 SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id: owner_thread_id,
                     depth: 1,
+                    agent_nickname: None,
+                    agent_role: None,
                 }),
             )
             .await

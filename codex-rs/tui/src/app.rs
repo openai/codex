@@ -52,27 +52,6 @@ use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use codex_core::protocol::AgentMessageDeltaEvent;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentStatus;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::CollabAgentSpawnEndEvent;
-use codex_core::protocol::CollabAgentSpawnMode;
-use codex_core::protocol::CollabCloseEndEvent;
-use codex_core::protocol::CollabWaitingEndEvent;
-use codex_core::protocol::ErrorEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::FinalOutput;
-use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::SessionSource;
-use codex_core::protocol::SkillErrorInfo;
-use codex_core::protocol::TokenUsage;
-use codex_core::protocol::TurnAbortedEvent;
-use codex_core::protocol::TurnCompleteEvent;
-use codex_core::protocol::TurnStartedEvent;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
@@ -85,7 +64,15 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::AgentMessageDeltaEvent;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabAgentSpawnMode;
+use codex_protocol::protocol::CollabCloseEndEvent;
+use codex_protocol::protocol::CollabWaitingEndEvent;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
@@ -96,6 +83,9 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -636,7 +626,7 @@ impl SubagentRegistry {
                     truncate_text(info.inflight_message.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET);
                 info.update_preview(preview);
             }
-            EventMsg::AgentMessage(AgentMessageEvent { message }) => {
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
                 info.inflight_message.clear();
                 let preview = truncate_text(message.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET);
                 info.update_preview(preview);
@@ -3662,23 +3652,15 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
-    use codex_core::protocol::AgentReasoningDeltaEvent;
-    use codex_core::protocol::AgentStatus;
-    use codex_core::protocol::AskForApproval;
-    use codex_core::protocol::CollabAgentSpawnEndEvent;
-    use codex_core::protocol::CollabCloseEndEvent;
-    use codex_core::protocol::CollabWaitingBeginEvent;
-    use codex_core::protocol::CollabWaitingEndEvent;
-    use codex_core::protocol::Event;
-    use codex_core::protocol::EventMsg;
-    use codex_core::protocol::SandboxPolicy;
-    use codex_core::protocol::SessionConfiguredEvent;
-    use codex_core::protocol::SessionSource;
-    use codex_core::protocol::ThreadRolledBackEvent;
-    use codex_core::protocol::UserMessageEvent;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::AgentReasoningDeltaEvent;
+    use codex_protocol::protocol::AgentStatus;
     use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+    use codex_protocol::protocol::CollabCloseEndEvent;
+    use codex_protocol::protocol::CollabWaitingBeginEvent;
+    use codex_protocol::protocol::CollabWaitingEndEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::SandboxPolicy;
@@ -4883,6 +4865,8 @@ mod tests {
             call_id: "call-1".to_string(),
             sender_thread_id: root_thread_id,
             new_thread_id: Some(subagent_thread_id),
+            new_agent_nickname: None,
+            new_agent_role: None,
             prompt: "Solve a problem".to_string(),
             spawn_mode: CollabAgentSpawnMode::Spawn,
             status: AgentStatus::PendingInit,
@@ -4923,6 +4907,8 @@ mod tests {
             call_id: "call-1".to_string(),
             sender_thread_id: root_thread_id,
             new_thread_id: Some(subagent_thread_id),
+            new_agent_nickname: None,
+            new_agent_role: None,
             prompt: "Collect data".to_string(),
             spawn_mode: CollabAgentSpawnMode::Spawn,
             status: AgentStatus::PendingInit,
@@ -4937,6 +4923,7 @@ mod tests {
         registry.on_wait_end(&CollabWaitingEndEvent {
             sender_thread_id: root_thread_id,
             call_id: "wait-1".to_string(),
+            agent_statuses: vec![],
             statuses,
         });
 
@@ -4960,6 +4947,8 @@ mod tests {
             call_id: "call-1".to_string(),
             sender_thread_id: root_thread_id,
             new_thread_id: Some(watchdog_a),
+            new_agent_nickname: None,
+            new_agent_role: None,
             prompt: "watchdog A".to_string(),
             spawn_mode: CollabAgentSpawnMode::Watchdog,
             status: AgentStatus::PendingInit,
@@ -4971,6 +4960,8 @@ mod tests {
             call_id: "call-2".to_string(),
             sender_thread_id: root_thread_id,
             new_thread_id: Some(watchdog_b),
+            new_agent_nickname: None,
+            new_agent_role: None,
             prompt: "watchdog B".to_string(),
             spawn_mode: CollabAgentSpawnMode::Watchdog,
             status: AgentStatus::PendingInit,
@@ -5010,6 +5001,8 @@ mod tests {
                     call_id: "call-1".to_string(),
                     sender_thread_id: root_thread_id,
                     new_thread_id: Some(subagent_thread_id),
+                    new_agent_nickname: None,
+                    new_agent_role: None,
                     prompt: "compute pi".to_string(),
                     spawn_mode: CollabAgentSpawnMode::Spawn,
                     status: AgentStatus::PendingInit,
@@ -5029,6 +5022,7 @@ mod tests {
                 msg: EventMsg::CollabWaitingBegin(CollabWaitingBeginEvent {
                     sender_thread_id: root_thread_id,
                     receiver_thread_ids: vec![subagent_thread_id],
+                    receiver_agents: vec![],
                     call_id: "call-2".to_string(),
                 }),
             },
@@ -5051,6 +5045,7 @@ mod tests {
                 msg: EventMsg::CollabWaitingEnd(CollabWaitingEndEvent {
                     sender_thread_id: root_thread_id,
                     call_id: "call-2".to_string(),
+                    agent_statuses: vec![],
                     statuses,
                 }),
             },
@@ -5071,6 +5066,8 @@ mod tests {
                     call_id: "call-3".to_string(),
                     sender_thread_id: root_thread_id,
                     receiver_thread_id: subagent_thread_id,
+                    receiver_agent_nickname: None,
+                    receiver_agent_role: None,
                     status: AgentStatus::Completed(Some("3.1415926535".to_string())),
                 }),
             },
