@@ -61,15 +61,9 @@ prefix_rule(
 /// Verify the same prompt/escalation flow works when the server is launched
 /// with a patched zsh binary.
 ///
-/// Set CODEX_TEST_ZSH_PATH to enable this test locally or in CI.
+/// The suite resolves `tests/suite/zsh` via DotSlash on first use.
 #[tokio::test(flavor = "current_thread")]
 async fn accept_elicitation_for_prompt_rule_with_zsh() -> Result<()> {
-    let Some(zsh_path) = std::env::var_os("CODEX_TEST_ZSH_PATH") else {
-        eprintln!("skipping zsh test: CODEX_TEST_ZSH_PATH is not set");
-        return Ok(());
-    };
-    let zsh_path = PathBuf::from(zsh_path);
-
     let codex_home = TempDir::new()?;
     write_default_execpolicy(
         r#"
@@ -87,6 +81,11 @@ prefix_rule(
     .await?;
     let dotslash_cache_temp_dir = TempDir::new()?;
     let dotslash_cache = dotslash_cache_temp_dir.path();
+    let zsh_path = resolve_test_zsh_path(dotslash_cache).await?;
+    eprintln!(
+        "using zsh path for exec-server test: {}",
+        zsh_path.display()
+    );
     let transport =
         create_transport_with_shell_path(codex_home.as_ref(), dotslash_cache, &zsh_path).await?;
     run_accept_elicitation_for_prompt_rule_with_transport(transport).await
@@ -190,6 +189,38 @@ async fn run_accept_elicitation_for_prompt_rule_with_transport(
     assert_eq!(vec![expected_elicitation_message], elicitation_messages);
 
     Ok(())
+}
+
+async fn resolve_test_zsh_path(dotslash_cache: &std::path::Path) -> Result<PathBuf> {
+    let dotslash_zsh = codex_utils_cargo_bin::find_resource!("tests/suite/zsh")?;
+    let output = Command::new("dotslash")
+        .arg("--")
+        .arg("fetch")
+        .arg(&dotslash_zsh)
+        .env("DOTSLASH_CACHE", dotslash_cache)
+        .output()
+        .await
+        .context("failed to run dotslash to fetch test zsh")?;
+    ensure!(
+        output.status.success(),
+        "dotslash fetch for test zsh failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let zsh_path = String::from_utf8(output.stdout)
+        .context("dotslash fetch output for test zsh was not utf8")?
+        .trim()
+        .to_string();
+    ensure!(
+        !zsh_path.is_empty(),
+        "dotslash fetch output for test zsh was empty"
+    );
+    let zsh_path = PathBuf::from(zsh_path);
+    ensure!(
+        zsh_path.is_file(),
+        "dotslash returned non-file zsh path: {}",
+        zsh_path.display()
+    );
+    Ok(zsh_path)
 }
 
 fn ensure_codex_cli() -> Result<PathBuf> {
