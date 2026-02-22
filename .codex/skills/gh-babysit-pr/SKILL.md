@@ -31,7 +31,8 @@ Accept any of the following:
 6. If `process_review_comment` is present, inspect new review items and decide whether to address them.
 7. If a review item is actionable and correct, patch code locally, commit, and push.
 8. On every loop, verify mergeability / merge-conflict status (for example via `gh pr view`) in addition to CI and review state.
-9. Repeat polling until the PR is green + review-clean + mergeable, `stop_pr_closed` appears, or a user-help-required blocker is reached.
+9. After any push or rerun action, immediately return to step 1 and continue polling on the updated SHA/state.
+10. Repeat polling until the PR is green + review-clean + mergeable, `stop_pr_closed` appears, or a user-help-required blocker is reached.
 
 ## Commands
 
@@ -85,7 +86,7 @@ When you agree with a comment and it is actionable:
 1. Patch code locally.
 2. Commit with `codex: address PR review feedback (#<n>)`.
 3. Push to the PR head branch.
-4. Resume watching on the new SHA.
+4. Resume watching on the new SHA immediately (do not stop after reporting the push).
 
 If you disagree or the comment is non-actionable/already addressed, record it as handled by continuing the watcher loop (the script de-duplicates surfaced items via state).
 
@@ -96,6 +97,7 @@ If you disagree or the comment is non-actionable/already addressed, record it as
 - Do not switch branches unless necessary to recover context.
 - Before editing, check for unrelated uncommitted changes. If present, stop and ask the user.
 - After each successful fix, commit and `git push`, then re-run the watcher.
+- A push is not a terminal outcome; continue the monitoring loop unless a strict stop condition is met.
 
 Commit message defaults:
 
@@ -110,9 +112,10 @@ Use this loop in a live Codex session:
 3. First check whether the PR is now merged or otherwise closed; if so, report that terminal state and stop polling immediately.
 4. Check CI summary, new review items, and mergeability/conflict status.
 5. Diagnose/fix/push or retry failed checks if appropriate.
-6. If everything is passing, mergeable, not blocked on required review approval, and there are no unaddressed review items, report success and stop.
-7. If blocked on a user-help-required issue (infra outage, exhausted flaky retries, unclear reviewer request, permissions), report the blocker and stop.
-8. Otherwise sleep according to the polling cadence below and repeat.
+6. If you pushed a commit or triggered a rerun, report the action briefly and continue polling (do not stop).
+7. If everything is passing, mergeable, not blocked on required review approval, and there are no unaddressed review items, report success and stop.
+8. If blocked on a user-help-required issue (infra outage, exhausted flaky retries, unclear reviewer request, permissions), report the blocker and stop.
+9. Otherwise sleep according to the polling cadence below and repeat.
 
 Use `--watch` when you want JSONL snapshots streamed continuously instead of manual polling.
 Do not stop to ask the user whether to continue polling; continue autonomously until a strict stop condition is met or the user explicitly interrupts.
@@ -146,6 +149,7 @@ Keep polling when:
 Provide concise progress updates while monitoring and a final summary that includes:
 
 - During long unchanged monitoring periods, avoid emitting a full update on every poll; summarize only status changes plus occasional heartbeat updates.
+- Treat push confirmations, intermediate CI snapshots, and review-action updates as progress updates only; do not emit the final summary or end the babysitting session unless a strict stop condition is met.
 
 - Final PR SHA
 - CI status summary

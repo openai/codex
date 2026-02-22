@@ -1,4 +1,4 @@
 interface:
   display_name: "GitHub PR Babysitter"
   short_description: "Watch PR CI, reviews, and merge conflicts"
-  default_prompt: "Babysit the current PR: monitor CI, reviewer comments, and merge-conflict status; fix valid issues, push updates, and rerun flaky failures up to 3 times."
+  default_prompt: "Babysit the current PR: monitor CI, reviewer comments, and merge-conflict status; fix valid issues, push updates, and rerun flaky failures up to 3 times. Continue polling autonomously after any push/rerun until a strict terminal stop condition is reached."
