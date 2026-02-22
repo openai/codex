@@ -312,7 +312,10 @@ starlark = "0.13.0"
 strum = "0.27.2"
 strum_macros = "0.28.0"
 supports-color = "3.0.2"
-syntect = "5"
+# Keep syntect pinned while we carry explicit deny.toml exceptions for
+# RUSTSEC-2024-0320 / RUSTSEC-2025-0141; re-evaluate replacement/upgrade
+# once transitive dependencies are maintained.
+syntect = "=5.3.0"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
 test-log = "0.2.19"
