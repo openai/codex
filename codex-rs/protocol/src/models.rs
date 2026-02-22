@@ -427,6 +427,10 @@ pub fn format_allow_prefixes(prefixes: Vec<Vec<String>>) -> Option<String> {
         output = output[..byte_idx].to_string();
     }
 
+    if output.is_empty() {
+        return None;
+    }
+
     if truncated {
         Some(format!("{output}{TRUNCATED_MARKER}"))
     } else {
