@@ -464,6 +464,26 @@ impl ThreadManagerState {
         .await
     }
 
+    pub(crate) async fn fork_thread_with_source(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        agent_control: AgentControl,
+        session_source: SessionSource,
+        persist_extended_history: bool,
+    ) -> CodexResult<NewThread> {
+        self.spawn_thread_with_source(
+            config,
+            initial_history,
+            Arc::clone(&self.auth_manager),
+            agent_control,
+            session_source,
+            Vec::new(),
+            persist_extended_history,
+        )
+        .await
+    }
+
     /// Spawn a new thread with optional history and register it with the manager.
     pub(crate) async fn spawn_thread(
         &self,

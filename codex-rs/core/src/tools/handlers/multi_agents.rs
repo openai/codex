@@ -94,6 +94,7 @@ impl ToolHandler for MultiAgentHandler {
 mod spawn {
     use super::*;
     use crate::agent::role::apply_role_to_config;
+    use crate::agent::control::SpawnAgentOptions;
 
     use crate::agent::exceeds_thread_spawn_depth_limit;
     use crate::agent::next_thread_spawn_depth;
@@ -104,6 +105,8 @@ mod spawn {
         message: Option<String>,
         items: Option<Vec<UserInput>>,
         agent_type: Option<String>,
+        #[serde(default)]
+        fork_current_thread: bool,
     }
 
     #[derive(Debug, Serialize)]
@@ -156,7 +159,7 @@ mod spawn {
         let result = session
             .services
             .agent_control
-            .spawn_agent(
+            .spawn_agent_with_options(
                 config,
                 input_items,
                 Some(thread_spawn_source(
@@ -164,6 +167,9 @@ mod spawn {
                     child_depth,
                     role_name,
                 )),
+                SpawnAgentOptions {
+                    fork_parent_thread: args.fork_current_thread,
+                },
             )
             .await
             .map_err(collab_spawn_error);

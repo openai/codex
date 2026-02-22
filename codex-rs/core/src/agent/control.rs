@@ -4,6 +4,7 @@ use crate::agent::status::is_final;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_thread_path_by_id_str;
+use crate::rollout::RolloutRecorder;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
@@ -18,6 +19,11 @@ use std::sync::Weak;
 use tokio::sync::watch;
 
 const AGENT_NAMES: &str = include_str!("agent_names.txt");
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SpawnAgentOptions {
+    pub(crate) fork_parent_thread: bool,
+}
 
 fn agent_nickname_list() -> Vec<&'static str> {
     AGENT_NAMES
@@ -58,6 +64,17 @@ impl AgentControl {
         items: Vec<UserInput>,
         session_source: Option<SessionSource>,
     ) -> CodexResult<ThreadId> {
+        self.spawn_agent_with_options(config, items, session_source, SpawnAgentOptions::default())
+            .await
+    }
+
+    pub(crate) async fn spawn_agent_with_options(
+        &self,
+        config: crate::config::Config,
+        items: Vec<UserInput>,
+        session_source: Option<SessionSource>,
+        options: SpawnAgentOptions,
+    ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let session_source = match session_source {
@@ -82,9 +99,47 @@ impl AgentControl {
         // The same `AgentControl` is sent to spawn the thread.
         let new_thread = match session_source {
             Some(session_source) => {
-                state
-                    .spawn_new_thread_with_source(config, self.clone(), session_source, false)
-                    .await?
+                if options.fork_parent_thread {
+                    let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                        parent_thread_id,
+                        ..
+                    }) = session_source.clone()
+                    else {
+                        return Err(CodexErr::Fatal(
+                            "spawn_agent fork requires a thread-spawn session source".to_string(),
+                        ));
+                    };
+                    let rollout_path = match state.get_thread(parent_thread_id).await {
+                        Ok(parent_thread) => parent_thread.rollout_path(),
+                        Err(_) => None,
+                    }
+                    .or(
+                        find_thread_path_by_id_str(
+                            config.codex_home.as_path(),
+                            &parent_thread_id.to_string(),
+                        )
+                        .await?,
+                    )
+                    .ok_or_else(|| {
+                        CodexErr::Fatal(format!(
+                            "parent thread rollout unavailable for fork: {parent_thread_id}"
+                        ))
+                    })?;
+                    let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+                    state
+                        .fork_thread_with_source(
+                            config,
+                            initial_history,
+                            self.clone(),
+                            session_source,
+                            false,
+                        )
+                        .await?
+                } else {
+                    state
+                        .spawn_new_thread_with_source(config, self.clone(), session_source, false)
+                        .await?
+                }
             }
             None => state.spawn_new_thread(config, self.clone()).await?,
         };

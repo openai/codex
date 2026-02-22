@@ -552,6 +552,15 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
                 )),
             },
         ),
+        (
+            "fork_current_thread".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, fork the current thread history into the new agent before sending the initial prompt."
+                        .to_string(),
+                ),
+            },
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
