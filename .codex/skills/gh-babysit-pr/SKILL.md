@@ -75,11 +75,13 @@ If classification is ambiguous, perform one manual diagnosis attempt before choo
 Read `.codex/skills/gh-babysit-pr/references/heuristics.md` for a concise checklist.
 
 ## Review Comment Handling
-The watcher surfaces new human review items from:
+The watcher surfaces new review items from:
 
 - PR issue comments
 - Inline review comments
 - Review submissions (COMMENT / APPROVED / CHANGES_REQUESTED)
+
+It intentionally surfaces Codex reviewer bot feedback (for example comments/reviews from `chatgpt-codex-connector[bot]`) in addition to human reviewer feedback. Most unrelated bot noise should still be ignored.
 
 When you agree with a comment and it is actionable:
 
@@ -89,6 +91,7 @@ When you agree with a comment and it is actionable:
 4. Resume watching on the new SHA immediately (do not stop after reporting the push).
 
 If you disagree or the comment is non-actionable/already addressed, record it as handled by continuing the watcher loop (the script de-duplicates surfaced items via state).
+If a code review comment/thread is already marked as resolved in GitHub, treat it as non-actionable and safely ignore it unless new unresolved follow-up feedback appears.
 
 ## Git Safety Rules
 

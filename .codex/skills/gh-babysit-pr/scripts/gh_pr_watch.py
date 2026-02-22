@@ -25,6 +25,9 @@ PENDING_CHECK_STATES = {
     "WAITING",
     "REQUESTED",
 }
+REVIEW_BOT_LOGIN_KEYWORDS = {
+    "codex",
+}
 
 
 class GhCommandError(RuntimeError):
@@ -144,7 +147,11 @@ def resolve_pr(pr_spec, repo_override=None):
         raise GhCommandError("Unexpected PR payload from `gh pr view`")
 
     pr_url = str(data.get("url") or "")
-    repo = repo_override or extract_repo_from_pr_view(data) or extract_repo_from_pr_url(pr_url)
+    repo = (
+        repo_override
+        or extract_repo_from_pr_url(pr_url)
+        or extract_repo_from_pr_view(data)
+    )
     if not repo:
         raise GhCommandError("Unable to determine OWNER/REPO for the PR")
 
@@ -183,8 +190,6 @@ def extract_repo_from_pr_view(data):
     if owner and name:
         return f"{owner}/{name}"
     return None
-
-
 def extract_repo_from_pr_url(pr_url):
     parsed = urlparse(pr_url)
     parts = [p for p in parsed.path.split("/") if p]
@@ -312,10 +317,28 @@ def get_authenticated_login():
 
 def comment_endpoints(repo, pr_number):
     return {
-        "issue_comment": f"repos/{repo}/issues/{pr_number}/comments?per_page=100",
-        "review_comment": f"repos/{repo}/pulls/{pr_number}/comments?per_page=100",
-        "review": f"repos/{repo}/pulls/{pr_number}/reviews?per_page=100",
+        "issue_comment": f"repos/{repo}/issues/{pr_number}/comments",
+        "review_comment": f"repos/{repo}/pulls/{pr_number}/comments",
+        "review": f"repos/{repo}/pulls/{pr_number}/reviews",
     }
+
+
+def gh_api_list_paginated(endpoint, repo=None, per_page=100):
+    items = []
+    page = 1
+    while True:
+        sep = "&" if "?" in endpoint else "?"
+        page_endpoint = f"{endpoint}{sep}per_page={per_page}&page={page}"
+        payload = gh_json(["api", page_endpoint], repo=repo)
+        if payload is None:
+            break
+        if not isinstance(payload, list):
+            raise GhCommandError(f"Unexpected paginated payload from gh api {endpoint}")
+        items.extend(payload)
+        if len(payload) < per_page:
+            break
+        page += 1
+    return items
 
 
 def normalize_issue_comments(items):
@@ -391,14 +414,21 @@ def is_bot_login(login):
     return bool(login) and login.endswith("[bot]")
 
 
+def is_actionable_review_bot_login(login):
+    if not is_bot_login(login):
+        return False
+    lower_login = login.lower()
+    return any(keyword in lower_login for keyword in REVIEW_BOT_LOGIN_KEYWORDS)
+
+
 def fetch_new_review_items(pr, state, fresh_state):
     repo = pr["repo"]
     pr_number = pr["number"]
     endpoints = comment_endpoints(repo, pr_number)
 
-    issue_payload = gh_json(["api", endpoints["issue_comment"]], repo=repo) or []
-    review_comment_payload = gh_json(["api", endpoints["review_comment"]], repo=repo) or []
-    review_payload = gh_json(["api", endpoints["review"]], repo=repo) or []
+    issue_payload = gh_api_list_paginated(endpoints["issue_comment"], repo=repo)
+    review_comment_payload = gh_api_list_paginated(endpoints["review_comment"], repo=repo)
+    review_payload = gh_api_list_paginated(endpoints["review"], repo=repo)
 
     issue_items = normalize_issue_comments(issue_payload)
     review_comment_items = normalize_review_comments(review_comment_payload)
@@ -430,7 +460,7 @@ def fetch_new_review_items(pr, state, fresh_state):
         author = item.get("author") or ""
         if not author:
             continue
-        if is_bot_login(author):
+        if is_bot_login(author) and not is_actionable_review_bot_login(author):
             continue
 
         kind = item["kind"]
