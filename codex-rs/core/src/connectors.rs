@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -10,14 +11,21 @@ use async_channel::unbounded;
 pub use codex_app_server_protocol::AppBranding;
 pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SandboxPolicy;
+use rmcp::model::Meta;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
+use serde::Serialize;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::SandboxState;
+use crate::codex::Session;
 use crate::config::Config;
 use crate::config::types::AppToolApproval;
 use crate::config::types::AppsConfigToml;
@@ -406,6 +414,199 @@ pub(crate) fn filter_codex_apps_tools_by_policy(
     mcp_tools
 }
 
+const CODEX_APPS_META_KEY: &str = "_codex_apps";
+const CODEX_APPS_CALL_TOOL_CLASSIFY_CONTEXT_META_KEY: &str = "classify_context";
+const CODEX_APPS_CALL_TOOL_CONVO_META_KEY: &str = "convo";
+const CODEX_APPS_THREAD_TOOL_RECIPIENT_PREFIX: &str = "functions.apps.";
+const CODEX_APPS_THREAD_TOOL_OUTPUT_NAME: &str = "api_tool.call_tool";
+const CODEX_APPS_THREAD_TOOL_CALL_CHANNEL: &str = "commentary";
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct CodexAppsThread {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    messages: Vec<CodexAppsThreadMessage>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct CodexAppsThreadMessage {
+    author: CodexAppsThreadAuthor,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recipient: Option<String>,
+    content: CodexAppsTextContent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct CodexAppsThreadAuthor {
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct CodexAppsTextContent {
+    content_type: &'static str,
+    parts: Vec<String>,
+}
+
+pub(crate) async fn codex_apps_tool_call_meta(sess: &Session) -> Option<Meta> {
+    let history = sess.clone_history().await;
+    codex_apps_tool_call_meta_from_history_items(
+        Some(sess.conversation_id.to_string()),
+        history.raw_items(),
+    )
+}
+
+fn codex_apps_tool_call_meta_from_history_items(
+    thread_id: Option<String>,
+    history_items: &[ResponseItem],
+) -> Option<Meta> {
+    let thread = codex_apps_thread_from_history_items(thread_id, history_items);
+    let thread = serde_json::to_value(thread).ok()?;
+    let serde_json::Value::Object(thread) = thread else {
+        return None;
+    };
+
+    let mut meta = Meta::new();
+    meta.insert(
+        CODEX_APPS_META_KEY.to_string(),
+        serde_json::json!({
+            CODEX_APPS_CALL_TOOL_CLASSIFY_CONTEXT_META_KEY: {
+                CODEX_APPS_CALL_TOOL_CONVO_META_KEY: serde_json::Value::Object(thread),
+            },
+        }),
+    );
+    Some(meta)
+}
+
+fn codex_apps_thread_from_history_items(
+    thread_id: Option<String>,
+    history_items: &[ResponseItem],
+) -> CodexAppsThread {
+    let mut messages = Vec::new();
+    let mut included_tool_call_ids: HashSet<&str> = HashSet::new();
+    let text_content = |text: String| CodexAppsTextContent {
+        content_type: "text",
+        parts: vec![text],
+    };
+    let flatten_message_content = |content: &[ContentItem]| {
+        let text = content
+            .iter()
+            .filter_map(|item| match item {
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    Some(text.as_str())
+                }
+                ContentItem::InputImage { .. } => None,
+            })
+            .collect::<String>();
+        (!text.is_empty()).then_some(text)
+    };
+    let serialize_tool_output = |output: &FunctionCallOutputPayload| {
+        if let Some(text) = output.text_content() {
+            return text.to_string();
+        }
+
+        serde_json::to_string(output).unwrap_or_else(|err| {
+            serde_json::json!({
+                "error": format!("failed to serialize tool output: {err}"),
+            })
+            .to_string()
+        })
+    };
+
+    for item in history_items {
+        match item {
+            ResponseItem::Message { role, content, .. } => {
+                if (role == "user" || role == "assistant")
+                    && let Some(text) = flatten_message_content(content)
+                {
+                    messages.push(CodexAppsThreadMessage {
+                        author: CodexAppsThreadAuthor {
+                            role: role.clone(),
+                            name: None,
+                        },
+                        recipient: None,
+                        content: text_content(text),
+                        channel: None,
+                    });
+                }
+            }
+            ResponseItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+                ..
+            } => {
+                if let Some((_server, tool_name)) = crate::mcp::split_qualified_tool_name(name) {
+                    included_tool_call_ids.insert(call_id.as_str());
+                    messages.push(CodexAppsThreadMessage {
+                        author: CodexAppsThreadAuthor {
+                            role: "assistant".to_string(),
+                            name: None,
+                        },
+                        recipient: Some(format!(
+                            "{CODEX_APPS_THREAD_TOOL_RECIPIENT_PREFIX}{tool_name}"
+                        )),
+                        content: text_content(arguments.clone()),
+                        channel: Some(CODEX_APPS_THREAD_TOOL_CALL_CHANNEL.to_string()),
+                    });
+                }
+            }
+            ResponseItem::CustomToolCall {
+                name,
+                input,
+                call_id,
+                ..
+            } if name.starts_with(CODEX_APPS_THREAD_TOOL_RECIPIENT_PREFIX) => {
+                included_tool_call_ids.insert(call_id.as_str());
+                messages.push(CodexAppsThreadMessage {
+                    author: CodexAppsThreadAuthor {
+                        role: "assistant".to_string(),
+                        name: None,
+                    },
+                    recipient: Some(name.clone()),
+                    content: text_content(input.clone()),
+                    channel: Some(CODEX_APPS_THREAD_TOOL_CALL_CHANNEL.to_string()),
+                });
+            }
+            ResponseItem::FunctionCallOutput { call_id, output }
+                if included_tool_call_ids.contains(call_id.as_str()) =>
+            {
+                messages.push(CodexAppsThreadMessage {
+                    author: CodexAppsThreadAuthor {
+                        role: "tool".to_string(),
+                        name: Some(CODEX_APPS_THREAD_TOOL_OUTPUT_NAME.to_string()),
+                    },
+                    recipient: None,
+                    content: text_content(serialize_tool_output(output)),
+                    channel: None,
+                });
+            }
+            ResponseItem::CustomToolCallOutput { call_id, output }
+                if included_tool_call_ids.contains(call_id.as_str()) =>
+            {
+                messages.push(CodexAppsThreadMessage {
+                    author: CodexAppsThreadAuthor {
+                        role: "tool".to_string(),
+                        name: Some(CODEX_APPS_THREAD_TOOL_OUTPUT_NAME.to_string()),
+                    },
+                    recipient: None,
+                    content: text_content(output.clone()),
+                    channel: None,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    CodexAppsThread {
+        id: thread_id.filter(|id| Uuid::parse_str(id).is_ok()),
+        messages,
+    }
+}
+
 const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
     "asdk_app_6938a94a61d881918ef32cb999ff937c",
     "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
@@ -615,6 +816,9 @@ mod tests {
     use crate::config::types::AppToolConfig;
     use crate::config::types::AppToolsConfig;
     use crate::config::types::AppsDefaultConfig;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
 
     fn annotations(
@@ -1007,6 +1211,194 @@ mod tests {
         assert_eq!(
             filtered,
             vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c")]
+        );
+    }
+
+    #[test]
+    fn codex_apps_tool_call_meta_serializes_minimal_thread_shape() {
+        let conversation_id = "0194f5a6-89ab-7cde-8123-456789abcdef".to_string();
+        let history_items = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "Find my docs".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "Checking the app.".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "mcp__codex_apps__drive_search".to_string(),
+                arguments: r#"{"query":"docs"}"#.to_string(),
+                call_id: "call-app-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-app-1".to_string(),
+                output: FunctionCallOutputPayload::from_text("done".to_string()),
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "shell".to_string(),
+                arguments: r#"{"cmd":"pwd"}"#.to_string(),
+                call_id: "call-shell-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-shell-1".to_string(),
+                output: FunctionCallOutputPayload::from_text("/tmp".to_string()),
+            },
+        ];
+
+        let meta = codex_apps_tool_call_meta_from_history_items(
+            Some(conversation_id.clone()),
+            &history_items,
+        )
+        .expect("meta should serialize");
+
+        assert_eq!(
+            serde_json::to_value(meta).expect("serialize meta"),
+            serde_json::json!({
+                "_codex_apps": {
+                    "classify_context": {
+                        "convo": {
+                            "id": conversation_id,
+                            "messages": [
+                                {
+                                    "author": { "role": "user" },
+                                    "content": {
+                                        "content_type": "text",
+                                        "parts": ["Find my docs"],
+                                    },
+                                },
+                                {
+                                    "author": { "role": "assistant" },
+                                    "content": {
+                                        "content_type": "text",
+                                        "parts": ["Checking the app."],
+                                    },
+                                },
+                                {
+                                    "author": { "role": "assistant" },
+                                    "recipient": "functions.apps.drive_search",
+                                    "content": {
+                                        "content_type": "text",
+                                        "parts": ["{\"query\":\"docs\"}"],
+                                    },
+                                    "channel": "commentary",
+                                },
+                                {
+                                    "author": { "role": "tool", "name": "api_tool.call_tool" },
+                                    "content": {
+                                        "content_type": "text",
+                                        "parts": ["done"],
+                                    },
+                                },
+                            ],
+                        }
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn codex_apps_tool_call_meta_includes_non_codex_apps_mcp_tool_calls() {
+        let conversation_id = "0194f5a6-89ab-7cde-8123-456789abcdef".to_string();
+        let history_items = vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "mcp__alpha__do_thing".to_string(),
+                arguments: r#"{"x":1}"#.to_string(),
+                call_id: "call-alpha-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-alpha-1".to_string(),
+                output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            },
+        ];
+
+        let meta = codex_apps_tool_call_meta_from_history_items(
+            Some(conversation_id.clone()),
+            &history_items,
+        )
+        .expect("meta should serialize");
+
+        assert_eq!(
+            serde_json::to_value(meta).expect("serialize meta"),
+            serde_json::json!({
+                "_codex_apps": {
+                    "classify_context": {
+                        "convo": {
+                            "id": conversation_id,
+                            "messages": [
+                                {
+                                    "author": { "role": "assistant" },
+                                    "recipient": "functions.apps.do_thing",
+                                    "content": {
+                                        "content_type": "text",
+                                        "parts": ["{\"x\":1}"],
+                                    },
+                                    "channel": "commentary",
+                                },
+                                {
+                                    "author": { "role": "tool", "name": "api_tool.call_tool" },
+                                    "content": {
+                                        "content_type": "text",
+                                        "parts": ["ok"],
+                                    },
+                                },
+                            ],
+                        }
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn codex_apps_tool_call_meta_omits_invalid_conversation_id() {
+        let meta = codex_apps_tool_call_meta_from_history_items(
+            Some("not-a-uuid".to_string()),
+            &[ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "hello".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            }],
+        )
+        .expect("meta should serialize");
+
+        assert_eq!(
+            serde_json::to_value(meta).expect("serialize meta"),
+            serde_json::json!({
+                "_codex_apps": {
+                    "classify_context": {
+                        "convo": {
+                            "messages": [
+                                {
+                                    "author": { "role": "user" },
+                                    "content": {
+                                        "content_type": "text",
+                                        "parts": ["hello"],
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                }
+            })
         );
     }
 }

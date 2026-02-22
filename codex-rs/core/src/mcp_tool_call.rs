@@ -26,6 +26,10 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use rmcp::model::CreateElicitationRequestParams;
+use rmcp::model::CreateElicitationResult;
+use rmcp::model::ElicitationAction;
+use rmcp::model::Meta;
 use rmcp::model::ToolAnnotations;
 use serde::Serialize;
 use std::sync::Arc;
@@ -101,6 +105,12 @@ pub(crate) async fn handle_mcp_tool_call(
         return ResponseInputItem::McpToolCallOutput { call_id, result };
     }
 
+    let tool_call_meta = if server == CODEX_APPS_MCP_SERVER_NAME {
+        connectors::codex_apps_tool_call_meta(sess.as_ref()).await
+    } else {
+        None
+    };
+
     if let Some(decision) = maybe_request_mcp_tool_approval(
         sess.as_ref(),
         turn_context,
@@ -122,10 +132,16 @@ pub(crate) async fn handle_mcp_tool_call(
                     .await;
 
                 let start = Instant::now();
-                let result = sess
-                    .call_tool(&server, &tool_name, arguments_value.clone())
-                    .await
-                    .map_err(|e| format!("tool call error: {e:?}"));
+                let result = call_mcp_tool_with_elicitation(
+                    sess.as_ref(),
+                    turn_context,
+                    &call_id,
+                    &server,
+                    &tool_name,
+                    arguments_value.clone(),
+                    tool_call_meta.clone(),
+                )
+                .await;
                 let result = sanitize_mcp_tool_result_for_model(
                     turn_context
                         .model_info
@@ -191,10 +207,16 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let start = Instant::now();
     // Perform the tool call.
-    let result = sess
-        .call_tool(&server, &tool_name, arguments_value.clone())
-        .await
-        .map_err(|e| format!("tool call error: {e:?}"));
+    let result = call_mcp_tool_with_elicitation(
+        sess.as_ref(),
+        turn_context,
+        &call_id,
+        &server,
+        &tool_name,
+        arguments_value.clone(),
+        tool_call_meta,
+    )
+    .await;
     let result = sanitize_mcp_tool_result_for_model(
         turn_context
             .model_info
@@ -221,6 +243,220 @@ pub(crate) async fn handle_mcp_tool_call(
         .counter("codex.mcp.call", 1, &[("status", status)]);
 
     ResponseInputItem::McpToolCallOutput { call_id, result }
+}
+
+const MCP_TOOL_ELICITATION_QUESTION_ID_PREFIX: &str = "mcp_tool_call_elicitation";
+const MCP_TOOL_ELICITATION_CODEX_APPS_META_KEY: &str = "_codex_apps";
+const MCP_TOOL_ELICITATION_REQUEST_META_KEY: &str = "elicit_request_params";
+const MCP_TOOL_ELICITATION_RESPONSE_META_KEY: &str = "elicit_result";
+
+async fn call_mcp_tool_with_elicitation(
+    sess: &Session,
+    turn_context: &TurnContext,
+    call_id: &str,
+    server: &str,
+    tool_name: &str,
+    arguments_value: Option<serde_json::Value>,
+    tool_call_meta: Option<Meta>,
+) -> Result<CallToolResult, String> {
+    let mut request_meta = tool_call_meta.clone();
+    let mut elicitation_attempt = 0_u32;
+    loop {
+        let result = sess
+            .call_tool_with_meta(
+                server,
+                tool_name,
+                arguments_value.clone(),
+                request_meta.clone(),
+            )
+            .await
+            .map_err(|e| format!("tool call error: {e:?}"))?;
+
+        match classify_mcp_tool_result_meta(&result) {
+            McpToolResultMetaStatus::ElicitationRequired { request_params } => {
+                let Some(user_response) = request_mcp_tool_elicitation(
+                    sess,
+                    turn_context,
+                    call_id,
+                    &request_params,
+                    elicitation_attempt,
+                )
+                .await
+                else {
+                    return Err("user cancelled MCP tool elicitation".to_string());
+                };
+                request_meta = Some(build_mcp_tool_elicitation_retry_meta(
+                    tool_call_meta.as_ref(),
+                    result.meta.as_ref(),
+                    user_response,
+                ));
+                elicitation_attempt = elicitation_attempt.saturating_add(1);
+            }
+            McpToolResultMetaStatus::BlockedBySafetyMonitor | McpToolResultMetaStatus::Normal => {
+                return Ok(result);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum McpToolResultMetaStatus {
+    ElicitationRequired {
+        request_params: CreateElicitationRequestParams,
+    },
+    BlockedBySafetyMonitor,
+    Normal,
+}
+
+fn classify_mcp_tool_result_meta(result: &CallToolResult) -> McpToolResultMetaStatus {
+    let Some(meta) = result.meta.as_ref().and_then(serde_json::Value::as_object) else {
+        return McpToolResultMetaStatus::Normal;
+    };
+
+    if let Some(elicitation_request_params) = meta
+        .get(MCP_TOOL_ELICITATION_CODEX_APPS_META_KEY)
+        .and_then(serde_json::Value::as_object)
+        .and_then(|codex_apps_meta| codex_apps_meta.get(MCP_TOOL_ELICITATION_REQUEST_META_KEY))
+        .and_then(parse_mcp_tool_elicitation_request_params)
+    {
+        return McpToolResultMetaStatus::ElicitationRequired {
+            request_params: elicitation_request_params,
+        };
+    }
+
+    let Some(status) = meta.get("status").and_then(serde_json::Value::as_str) else {
+        return McpToolResultMetaStatus::Normal;
+    };
+
+    match status {
+        "blocked_by_safety_monitor" => McpToolResultMetaStatus::BlockedBySafetyMonitor,
+        _ => McpToolResultMetaStatus::Normal,
+    }
+}
+
+fn parse_mcp_tool_elicitation_request_params(
+    request_params: &serde_json::Value,
+) -> Option<CreateElicitationRequestParams> {
+    serde_json::from_value::<CreateElicitationRequestParams>(request_params.clone()).ok()
+}
+
+async fn request_mcp_tool_elicitation(
+    sess: &Session,
+    turn_context: &TurnContext,
+    call_id: &str,
+    elicitation_request_params: &CreateElicitationRequestParams,
+    elicitation_attempt: u32,
+) -> Option<McpToolApprovalDecision> {
+    let question_id =
+        format!("{MCP_TOOL_ELICITATION_QUESTION_ID_PREFIX}_{call_id}_{elicitation_attempt}");
+    let args = RequestUserInputArgs {
+        questions: vec![build_mcp_tool_elicitation_question(
+            question_id.clone(),
+            mcp_tool_elicitation_message(elicitation_request_params),
+        )],
+    };
+    let response = sess
+        .request_user_input(turn_context, call_id.to_string(), args)
+        .await;
+    Some(parse_mcp_tool_approval_response(response, &question_id))
+}
+
+fn mcp_tool_elicitation_message(
+    elicitation_request_params: &CreateElicitationRequestParams,
+) -> String {
+    match elicitation_request_params {
+        CreateElicitationRequestParams::FormElicitationParams { message, .. } => message.clone(),
+        CreateElicitationRequestParams::UrlElicitationParams { message, url, .. } => {
+            format!("{message}\n\nURL: {url}")
+        }
+    }
+}
+
+fn build_mcp_tool_elicitation_question(
+    question_id: String,
+    message: String,
+) -> RequestUserInputQuestion {
+    RequestUserInputQuestion {
+        id: question_id,
+        header: "Approve app tool request?".to_string(),
+        question: message,
+        is_other: false,
+        is_secret: false,
+        options: Some(vec![
+            RequestUserInputQuestionOption {
+                label: MCP_TOOL_APPROVAL_ACCEPT.to_string(),
+                description: "Approve and continue.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: MCP_TOOL_APPROVAL_DECLINE.to_string(),
+                description: "Decline and continue.".to_string(),
+            },
+            RequestUserInputQuestionOption {
+                label: MCP_TOOL_APPROVAL_CANCEL.to_string(),
+                description: "Cancel".to_string(),
+            },
+        ]),
+    }
+}
+
+fn build_mcp_tool_elicitation_retry_meta(
+    base_meta: Option<&Meta>,
+    result_meta: Option<&serde_json::Value>,
+    user_response: McpToolApprovalDecision,
+) -> Meta {
+    let mut meta = base_meta.cloned().unwrap_or_default();
+
+    let mut codex_apps_meta = match meta.remove(MCP_TOOL_ELICITATION_CODEX_APPS_META_KEY) {
+        Some(serde_json::Value::Object(object)) => object,
+        _ => serde_json::Map::new(),
+    };
+
+    if let Some(result_codex_apps_meta) = result_meta
+        .and_then(serde_json::Value::as_object)
+        .and_then(|meta| meta.get(MCP_TOOL_ELICITATION_CODEX_APPS_META_KEY))
+        .and_then(serde_json::Value::as_object)
+    {
+        for (key, value) in result_codex_apps_meta {
+            codex_apps_meta.insert(key.clone(), value.clone());
+        }
+    }
+
+    match serde_json::to_value(mcp_tool_approval_decision_to_elicitation_result(
+        user_response,
+    )) {
+        Ok(elicitation_response) => {
+            codex_apps_meta.insert(
+                MCP_TOOL_ELICITATION_RESPONSE_META_KEY.to_string(),
+                elicitation_response,
+            );
+        }
+        Err(e) => {
+            error!("failed to serialize elicitation response metadata: {e}");
+        }
+    }
+    meta.insert(
+        MCP_TOOL_ELICITATION_CODEX_APPS_META_KEY.to_string(),
+        serde_json::Value::Object(codex_apps_meta),
+    );
+
+    meta
+}
+
+fn mcp_tool_approval_decision_to_elicitation_result(
+    user_response: McpToolApprovalDecision,
+) -> CreateElicitationResult {
+    let action = match user_response {
+        McpToolApprovalDecision::Accept | McpToolApprovalDecision::AcceptAndRemember => {
+            ElicitationAction::Accept
+        }
+        McpToolApprovalDecision::Decline => ElicitationAction::Decline,
+        McpToolApprovalDecision::Cancel => ElicitationAction::Cancel,
+    };
+
+    CreateElicitationResult {
+        action,
+        content: None,
+    }
 }
 
 fn sanitize_mcp_tool_result_for_model(
@@ -616,6 +852,7 @@ async fn notify_mcp_tool_call_skip(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use rmcp::model::ElicitationSchema;
 
     fn annotations(
         read_only: Option<bool>,
@@ -703,6 +940,164 @@ mod tests {
             question
                 .question
                 .starts_with("This app wants to run the tool \"Run Action\"")
+        );
+    }
+
+    #[test]
+    fn classify_mcp_tool_result_meta_detects_elicitation_required() {
+        let elicitation_request_params = CreateElicitationRequestParams::FormElicitationParams {
+            meta: None,
+            message: "Need confirmation from the user".to_string(),
+            requested_schema: ElicitationSchema::builder()
+                .required_string("approval")
+                .build()
+                .expect("valid schema"),
+        };
+        let result = CallToolResult {
+            content: vec![],
+            structured_content: None,
+            is_error: Some(false),
+            meta: Some(serde_json::json!({
+                "_codex_apps": {
+                    "elicit_request_params": serde_json::to_value(&elicitation_request_params)
+                        .expect("elicitation request serializes"),
+                },
+            })),
+        };
+
+        assert_eq!(
+            classify_mcp_tool_result_meta(&result),
+            McpToolResultMetaStatus::ElicitationRequired {
+                request_params: elicitation_request_params,
+            }
+        );
+    }
+
+    #[test]
+    fn classify_mcp_tool_result_meta_ignores_wrapped_elicitation_request() {
+        let elicitation_request_params = CreateElicitationRequestParams::FormElicitationParams {
+            meta: None,
+            message: "Need confirmation from the user".to_string(),
+            requested_schema: ElicitationSchema::builder()
+                .required_string("approval")
+                .build()
+                .expect("valid schema"),
+        };
+        let result = CallToolResult {
+            content: vec![],
+            structured_content: None,
+            is_error: Some(false),
+            meta: Some(serde_json::json!({
+                "_codex_apps": {
+                    "elicit_request_params": {
+                        "method": "elicitation/create",
+                        "params": serde_json::to_value(&elicitation_request_params)
+                            .expect("elicitation request params serialize"),
+                    },
+                },
+            })),
+        };
+
+        assert_eq!(
+            classify_mcp_tool_result_meta(&result),
+            McpToolResultMetaStatus::Normal
+        );
+    }
+
+    #[test]
+    fn classify_mcp_tool_result_meta_detects_blocked_status_without_prompt() {
+        let result = CallToolResult {
+            content: vec![],
+            structured_content: None,
+            is_error: Some(true),
+            meta: Some(serde_json::json!({
+                "status": "blocked_by_safety_monitor",
+                "elicitation_message": "ignored",
+            })),
+        };
+
+        assert_eq!(
+            classify_mcp_tool_result_meta(&result),
+            McpToolResultMetaStatus::BlockedBySafetyMonitor
+        );
+    }
+
+    #[test]
+    fn build_mcp_tool_elicitation_question_uses_approval_options() {
+        let question = build_mcp_tool_elicitation_question(
+            "q".to_string(),
+            "Need approval from user".to_string(),
+        );
+
+        assert_eq!(question.header, "Approve app tool request?");
+        assert_eq!(question.question, "Need approval from user");
+        assert_eq!(
+            question.options.expect("options"),
+            vec![
+                RequestUserInputQuestionOption {
+                    label: MCP_TOOL_APPROVAL_ACCEPT.to_string(),
+                    description: "Approve and continue.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: MCP_TOOL_APPROVAL_DECLINE.to_string(),
+                    description: "Decline and continue.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: MCP_TOOL_APPROVAL_CANCEL.to_string(),
+                    description: "Cancel".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn build_mcp_tool_elicitation_retry_meta_merges_base_and_result_elicitation_meta() {
+        let mut base_meta = Meta::new();
+        base_meta.insert("base".to_string(), serde_json::json!({"kept": true}));
+        base_meta.insert(
+            MCP_TOOL_ELICITATION_CODEX_APPS_META_KEY.to_string(),
+            serde_json::json!({
+                "base_only": 1,
+                "override_me": "base",
+            }),
+        );
+
+        let result_meta = serde_json::json!({
+            "_codex_apps": {
+                "elicit_request_params": {
+                    "mode": "url",
+                    "message": "Need more details",
+                    "url": "https://example.com",
+                    "elicitationId": "abc123",
+                },
+                "request_id": "abc123",
+                "override_me": "result",
+            }
+        });
+
+        let got = build_mcp_tool_elicitation_retry_meta(
+            Some(&base_meta),
+            Some(&result_meta),
+            McpToolApprovalDecision::Accept,
+        );
+
+        assert_eq!(got.get("base"), Some(&serde_json::json!({"kept": true})));
+        assert_eq!(
+            got.get(MCP_TOOL_ELICITATION_CODEX_APPS_META_KEY),
+            Some(&serde_json::json!({
+                "base_only": 1,
+                "override_me": "result",
+                "elicit_request_params": {
+                    "mode": "url",
+                    "message": "Need more details",
+                    "url": "https://example.com",
+                    "elicitationId": "abc123",
+                },
+                "request_id": "abc123",
+                "elicit_result": {
+                    "action": "accept",
+                },
+            }))
         );
     }
 

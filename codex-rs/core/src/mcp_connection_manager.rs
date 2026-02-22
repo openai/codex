@@ -54,6 +54,7 @@ use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
+use rmcp::model::Meta;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::ReadResourceRequestParams;
@@ -912,12 +913,12 @@ impl McpConnectionManager {
         aggregated
     }
 
-    /// Invoke the tool indicated by the (server, tool) pair.
-    pub async fn call_tool(
+    pub async fn call_tool_with_meta(
         &self,
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
+        meta: Option<Meta>,
     ) -> Result<CallToolResult> {
         let client = self.client_by_name(server).await?;
         if !client.tool_filter.allows(tool) {
@@ -928,7 +929,7 @@ impl McpConnectionManager {
 
         let result: rmcp::model::CallToolResult = client
             .client
-            .call_tool(tool.to_string(), arguments, client.tool_timeout)
+            .call_tool_with_meta(tool.to_string(), arguments, meta, client.tool_timeout)
             .await
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
 
