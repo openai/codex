@@ -326,6 +326,57 @@ async fn replayed_user_message_preserves_remote_image_urls() {
 }
 
 #[tokio::test]
+async fn session_configured_syncs_widget_config_permissions_and_cwd() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
+    chat.config.cwd = PathBuf::from("/home/user/main");
+
+    let expected_sandbox = SandboxPolicy::new_read_only_policy();
+    let expected_cwd = PathBuf::from("/home/user/sub-agent");
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: expected_sandbox.clone(),
+        cwd: expected_cwd.clone(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+
+    chat.handle_codex_event(Event {
+        id: "session-configured".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    assert_eq!(
+        chat.config_ref().permissions.approval_policy.value(),
+        AskForApproval::Never
+    );
+    assert_eq!(
+        chat.config_ref().permissions.sandbox_policy.get(),
+        &expected_sandbox
+    );
+    assert_eq!(&chat.config_ref().cwd, &expected_cwd);
+}
+
+#[tokio::test]
 async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 
@@ -1577,7 +1628,7 @@ async fn make_chatwidget_manual(
         skills: None,
     });
     bottom.set_steer_enabled(true);
-    bottom.set_collaboration_modes_enabled(cfg.features.enabled(Feature::CollaborationModes));
+    bottom.set_collaboration_modes_enabled(true);
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
@@ -1592,6 +1643,7 @@ async fn make_chatwidget_manual(
         },
     };
     let current_collaboration_mode = base_mode;
+    let active_collaboration_mask = collaboration_modes::default_mask(models_manager.as_ref());
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
@@ -1600,7 +1652,7 @@ async fn make_chatwidget_manual(
         active_cell_revision: 0,
         config: cfg,
         current_collaboration_mode,
-        active_collaboration_mask: None,
+        active_collaboration_mask,
         auth_manager,
         models_manager,
         otel_manager,
@@ -3532,6 +3584,114 @@ async fn exec_end_without_begin_uses_event_command() {
 }
 
 #[tokio::test]
+async fn exec_end_without_begin_does_not_flush_unrelated_running_exploring_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    begin_exec(&mut chat, "call-exploring", "cat /dev/null");
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(active_blob(&chat).contains("Read null"));
+
+    let orphan =
+        begin_unified_exec_startup(&mut chat, "call-orphan", "proc-1", "echo repro-marker");
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    end_exec(&mut chat, orphan, "repro-marker\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "only the orphan end should be inserted");
+    let orphan_blob = lines_to_single_string(&cells[0]);
+    assert!(
+        orphan_blob.contains("• Ran echo repro-marker"),
+        "expected orphan end to render a standalone entry: {orphan_blob:?}"
+    );
+    let active = active_blob(&chat);
+    assert!(
+        active.contains("• Exploring"),
+        "expected unrelated exploring call to remain active: {active:?}"
+    );
+    assert!(
+        active.contains("Read null"),
+        "expected active exploring command to remain visible: {active:?}"
+    );
+    assert!(
+        !active.contains("echo repro-marker"),
+        "orphaned end should not replace the active exploring cell: {active:?}"
+    );
+}
+
+#[tokio::test]
+async fn exec_end_without_begin_flushes_completed_unrelated_exploring_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin_ls = begin_exec(&mut chat, "call-ls", "ls -la");
+    end_exec(&mut chat, begin_ls, "", "", 0);
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(active_blob(&chat).contains("ls -la"));
+
+    let orphan = begin_unified_exec_startup(&mut chat, "call-after", "proc-1", "echo after");
+    end_exec(&mut chat, orphan, "after\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        2,
+        "completed exploring cell should flush before the orphan entry"
+    );
+    let first = lines_to_single_string(&cells[0]);
+    let second = lines_to_single_string(&cells[1]);
+    assert!(
+        first.contains("• Explored"),
+        "expected flushed exploring cell: {first:?}"
+    );
+    assert!(
+        first.contains("List ls -la"),
+        "expected flushed exploring cell: {first:?}"
+    );
+    assert!(
+        second.contains("• Ran echo after"),
+        "expected orphan end entry after flush: {second:?}"
+    );
+    assert!(
+        chat.active_cell.is_none(),
+        "both entries should be finalized"
+    );
+}
+
+#[tokio::test]
+async fn overlapping_exploring_exec_end_is_not_misclassified_as_orphan() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let begin_ls = begin_exec(&mut chat, "call-ls", "ls -la");
+    let begin_cat = begin_exec(&mut chat, "call-cat", "cat foo.txt");
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    end_exec(&mut chat, begin_ls, "foo.txt\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "tracked end inside an exploring cell should not render as an orphan"
+    );
+    let active = active_blob(&chat);
+    assert!(
+        active.contains("List ls -la"),
+        "expected first command still grouped: {active:?}"
+    );
+    assert!(
+        active.contains("Read foo.txt"),
+        "expected second running command to stay in the same active cell: {active:?}"
+    );
+    assert!(
+        active.contains("• Exploring"),
+        "expected grouped exploring header to remain active: {active:?}"
+    );
+
+    end_exec(&mut chat, begin_cat, "hello\n", "", 0);
+}
+
+#[tokio::test]
 async fn exec_history_shows_unified_exec_startup_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
@@ -3573,6 +3733,29 @@ async fn exec_history_shows_unified_exec_tool_calls() {
 
     let blob = active_blob(&chat);
     assert_eq!(blob, "• Explored\n  └ List ls\n");
+}
+
+#[tokio::test]
+async fn unified_exec_unknown_end_with_active_exploring_cell_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    begin_exec(&mut chat, "call-exploring", "cat /dev/null");
+    let orphan =
+        begin_unified_exec_startup(&mut chat, "call-orphan", "proc-1", "echo repro-marker");
+    end_exec(&mut chat, orphan, "repro-marker\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    let history = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let active = active_blob(&chat);
+    let snapshot = format!("History:\n{history}\nActive:\n{active}");
+    assert_snapshot!(
+        "unified_exec_unknown_end_with_active_exploring_cell",
+        snapshot
+    );
 }
 
 #[tokio::test]
@@ -3873,17 +4056,10 @@ async fn slash_init_skips_when_project_doc_exists() {
 }
 
 #[tokio::test]
-async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
+async fn collab_mode_shift_tab_cycles_only_when_idle() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, false);
 
     let initial = chat.current_collaboration_mode().clone();
-    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert_eq!(chat.current_collaboration_mode(), &initial);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
-
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
-
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_collaboration_mode(), &initial);
@@ -4248,26 +4424,12 @@ async fn collab_mode_is_sent_after_enabling() {
 }
 
 #[tokio::test]
-async fn collab_mode_toggle_on_applies_default_preset() {
+async fn collab_mode_applies_default_preset() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
 
     chat.bottom_pane
-        .set_composer_text("before toggle".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            collaboration_mode: None,
-            personality: Some(Personality::Pragmatic),
-            ..
-        } => {}
-        other => panic!("expected Op::UserTurn without collaboration_mode, got {other:?}"),
-    }
-
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
-
-    chat.bottom_pane
-        .set_composer_text("after toggle".to_string(), Vec::new(), Vec::new());
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {

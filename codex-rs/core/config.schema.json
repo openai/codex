@@ -349,6 +349,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "memories": {
+              "type": "boolean"
+            },
             "memory_tool": {
               "type": "boolean"
             },
@@ -1514,7 +1517,7 @@
       "default": null,
       "description": "Settings for app-specific controls."
     },
-    "background_terminal_timeout": {
+    "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
       "format": "uint64",
       "minimum": 0.0,
@@ -1625,6 +1628,9 @@
           "type": "boolean"
         },
         "js_repl_tools_only": {
+          "type": "boolean"
+        },
+        "memories": {
           "type": "boolean"
         },
         "memory_tool": {

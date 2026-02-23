@@ -49,6 +49,7 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
+use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
 use codex_core::config::types::WindowsSandboxModeToml;
@@ -1076,6 +1077,27 @@ impl ChatWidget {
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.clone());
+        self.config.cwd = event.cwd.clone();
+        if let Err(err) = self
+            .config
+            .permissions
+            .approval_policy
+            .set(event.approval_policy)
+        {
+            tracing::warn!(%err, "failed to sync approval_policy from SessionConfigured");
+            self.config.permissions.approval_policy =
+                Constrained::allow_only(event.approval_policy);
+        }
+        if let Err(err) = self
+            .config
+            .permissions
+            .sandbox_policy
+            .set(event.sandbox_policy.clone())
+        {
+            tracing::warn!(%err, "failed to sync sandbox_policy from SessionConfigured");
+            self.config.permissions.sandbox_policy =
+                Constrained::allow_only(event.sandbox_policy.clone());
+        }
         let initial_messages = event.initial_messages.clone();
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
@@ -2357,7 +2379,25 @@ impl ChatWidget {
         elapsed
     }
 
+    /// Finalizes an exec call while preserving the active exec cell grouping contract.
+    ///
+    /// Exec begin/end events usually pair through `running_commands`, but unified exec can emit an
+    /// end event for a call that was never materialized as the current active `ExecCell` (for
+    /// example, when another exploring group is still active). In that case we render the end as a
+    /// standalone history entry instead of replacing or flushing the unrelated active exploring
+    /// cell. If this method treated every unknown end as "complete the active cell", the UI could
+    /// merge unrelated commands and hide still-running exploring work.
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
+        enum ExecEndTarget {
+            // Normal case: the active exec cell already tracks this call id.
+            ActiveTracked,
+            // We have an active exec group, but it does not contain this call id. Render the end
+            // as a standalone finalized history cell so the active group remains intact.
+            OrphanHistoryWhileActiveExec,
+            // No active exec cell can safely own this end; build a new cell from the end payload.
+            NewCell,
+        }
+
         let running = self.running_commands.remove(&ev.call_id);
         if self.suppressed_exec_calls.remove(&ev.call_id) {
             return;
@@ -2368,48 +2408,95 @@ impl ChatWidget {
         };
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
-
-        let needs_new = self
-            .active_cell
-            .as_ref()
-            .map(|cell| cell.as_any().downcast_ref::<ExecCell>().is_none())
-            .unwrap_or(true);
-        if needs_new {
-            self.flush_active_cell();
-            self.active_cell = Some(Box::new(new_active_exec_command(
-                ev.call_id.clone(),
-                command,
-                parsed,
-                source,
-                ev.interaction_input.clone(),
-                self.config.animations,
-            )));
-        }
-
-        if let Some(cell) = self
-            .active_cell
-            .as_mut()
-            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
-        {
-            let output = if is_unified_exec_interaction {
-                CommandOutput {
-                    exit_code: ev.exit_code,
-                    formatted_output: String::new(),
-                    aggregated_output: String::new(),
+        let end_target = match self.active_cell.as_ref() {
+            Some(cell) => match cell.as_any().downcast_ref::<ExecCell>() {
+                Some(exec_cell)
+                    if exec_cell
+                        .iter_calls()
+                        .any(|call| call.call_id == ev.call_id) =>
+                {
+                    ExecEndTarget::ActiveTracked
                 }
-            } else {
-                CommandOutput {
-                    exit_code: ev.exit_code,
-                    formatted_output: ev.formatted_output.clone(),
-                    aggregated_output: ev.aggregated_output.clone(),
+                Some(exec_cell) if exec_cell.is_active() => {
+                    ExecEndTarget::OrphanHistoryWhileActiveExec
                 }
-            };
-            cell.complete_call(&ev.call_id, output, ev.duration);
-            if cell.should_flush() {
-                self.flush_active_cell();
-            } else {
-                self.bump_active_cell_revision();
+                Some(_) | None => ExecEndTarget::NewCell,
+            },
+            None => ExecEndTarget::NewCell,
+        };
+
+        // Unified exec interaction rows intentionally hide command output text in the exec cell and
+        // instead render the interaction-specific content elsewhere in the UI.
+        let output = if is_unified_exec_interaction {
+            CommandOutput {
+                exit_code: ev.exit_code,
+                formatted_output: String::new(),
+                aggregated_output: String::new(),
+            }
+        } else {
+            CommandOutput {
+                exit_code: ev.exit_code,
+                formatted_output: ev.formatted_output.clone(),
+                aggregated_output: ev.aggregated_output.clone(),
+            }
+        };
+
+        match end_target {
+            ExecEndTarget::ActiveTracked => {
+                if let Some(cell) = self
+                    .active_cell
+                    .as_mut()
+                    .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+                {
+                    let completed = cell.complete_call(&ev.call_id, output, ev.duration);
+                    debug_assert!(completed, "active exec cell should contain {}", ev.call_id);
+                    if cell.should_flush() {
+                        self.flush_active_cell();
+                    } else {
+                        self.bump_active_cell_revision();
+                        self.request_redraw();
+                    }
+                }
+            }
+            ExecEndTarget::OrphanHistoryWhileActiveExec => {
+                let mut orphan = new_active_exec_command(
+                    ev.call_id.clone(),
+                    command,
+                    parsed,
+                    source,
+                    ev.interaction_input.clone(),
+                    self.config.animations,
+                );
+                let completed = orphan.complete_call(&ev.call_id, output, ev.duration);
+                debug_assert!(
+                    completed,
+                    "new orphan exec cell should contain {}",
+                    ev.call_id
+                );
+                self.needs_final_message_separator = true;
+                self.app_event_tx
+                    .send(AppEvent::InsertHistoryCell(Box::new(orphan)));
                 self.request_redraw();
+            }
+            ExecEndTarget::NewCell => {
+                self.flush_active_cell();
+                let mut cell = new_active_exec_command(
+                    ev.call_id.clone(),
+                    command,
+                    parsed,
+                    source,
+                    ev.interaction_input.clone(),
+                    self.config.animations,
+                );
+                let completed = cell.complete_call(&ev.call_id, output, ev.duration);
+                debug_assert!(completed, "new exec cell should contain {}", ev.call_id);
+                if cell.should_flush() {
+                    self.add_to_history(cell);
+                } else {
+                    self.active_cell = Some(Box::new(cell));
+                    self.bump_active_cell_revision();
+                    self.request_redraw();
+                }
             }
         }
         // Mark that actual work was done (command executed)
@@ -2744,9 +2831,7 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
-        widget.bottom_pane.set_collaboration_modes_enabled(
-            widget.config.features.enabled(Feature::CollaborationModes),
-        );
+        widget.bottom_pane.set_collaboration_modes_enabled(true);
         widget.sync_personality_command_enabled();
         widget
             .bottom_pane
@@ -2914,9 +2999,7 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
-        widget.bottom_pane.set_collaboration_modes_enabled(
-            widget.config.features.enabled(Feature::CollaborationModes),
-        );
+        widget.bottom_pane.set_collaboration_modes_enabled(true);
         widget.sync_personality_command_enabled();
         widget
             .bottom_pane
@@ -3073,9 +3156,7 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
-        widget.bottom_pane.set_collaboration_modes_enabled(
-            widget.config.features.enabled(Feature::CollaborationModes),
-        );
+        widget.bottom_pane.set_collaboration_modes_enabled(true);
         widget.sync_personality_command_enabled();
         widget
             .bottom_pane
@@ -6260,22 +6341,6 @@ impl ChatWidget {
         if feature == Feature::Steer {
             self.bottom_pane.set_steer_enabled(enabled);
         }
-        if feature == Feature::CollaborationModes {
-            self.bottom_pane.set_collaboration_modes_enabled(enabled);
-            let settings = self.current_collaboration_mode.settings.clone();
-            self.current_collaboration_mode = CollaborationMode {
-                mode: ModeKind::Default,
-                settings,
-            };
-            self.active_collaboration_mask = if enabled {
-                collaboration_modes::default_mask(self.models_manager.as_ref())
-            } else {
-                None
-            };
-            self.update_collaboration_mode_indicator();
-            self.refresh_model_display();
-            self.request_redraw();
-        }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
@@ -6454,17 +6519,14 @@ impl ChatWidget {
     }
 
     fn collaboration_modes_enabled(&self) -> bool {
-        self.config.features.enabled(Feature::CollaborationModes)
+        true
     }
 
     fn initial_collaboration_mask(
-        config: &Config,
+        _config: &Config,
         models_manager: &ModelsManager,
         model_override: Option<&str>,
     ) -> Option<CollaborationModeMask> {
-        if !config.features.enabled(Feature::CollaborationModes) {
-            return None;
-        }
         let mut mask = collaboration_modes::default_mask(models_manager)?;
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());

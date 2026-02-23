@@ -25,6 +25,7 @@ use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use http::HeaderMap;
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -209,9 +210,20 @@ pub(crate) async fn handle_start(
             msg,
         };
         while let Ok(event) = events_rx.recv().await {
+            let maybe_routed_text = match &event {
+                RealtimeEvent::ConversationItemAdded(item) => {
+                    realtime_text_from_conversation_item(item)
+                }
+                _ => None,
+            };
+            if let Some(text) = maybe_routed_text {
+                sess_clone.route_realtime_text_input(text).await;
+            }
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
-                    RealtimeConversationRealtimeEvent { payload: event },
+                    RealtimeConversationRealtimeEvent {
+                        payload: event.clone(),
+                    },
                 )))
                 .await;
         }
@@ -237,6 +249,19 @@ pub(crate) async fn handle_audio(
     if let Err(err) = sess.conversation.audio_in(params.frame).await {
         send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
     }
+}
+
+fn realtime_text_from_conversation_item(item: &Value) -> Option<String> {
+    if item.get("type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
+    let content = item.get("content")?.as_array()?;
+    let text = content
+        .iter()
+        .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|entry| entry.get("text").and_then(Value::as_str))
+        .collect::<String>();
+    if text.is_empty() { None } else { Some(text) }
 }
 
 pub(crate) async fn handle_text(
@@ -354,4 +379,65 @@ async fn send_conversation_error(
         }),
     })
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::realtime_text_from_conversation_item;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn extracts_text_from_message_items_ignoring_role() {
+        let assistant = json!({
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hello"}],
+        });
+        assert_eq!(
+            realtime_text_from_conversation_item(&assistant),
+            Some("hello".to_string())
+        );
+
+        let user = json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "text", "text": "world"}],
+        });
+        assert_eq!(
+            realtime_text_from_conversation_item(&user),
+            Some("world".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_and_concatenates_text_entries_only() {
+        let item = json!({
+            "type": "message",
+            "content": [
+                {"type": "text", "text": "a"},
+                {"type": "ignored", "text": "x"},
+                {"type": "text", "text": "b"}
+            ],
+        });
+        assert_eq!(
+            realtime_text_from_conversation_item(&item),
+            Some("ab".to_string())
+        );
+    }
+
+    #[test]
+    fn ignores_non_message_or_missing_text() {
+        let non_message = json!({
+            "type": "tool_call",
+            "content": [{"type": "text", "text": "nope"}],
+        });
+        assert_eq!(realtime_text_from_conversation_item(&non_message), None);
+
+        let no_text = json!({
+            "type": "message",
+            "content": [{"type": "other", "value": 1}],
+        });
+        assert_eq!(realtime_text_from_conversation_item(&no_text), None);
+    }
 }

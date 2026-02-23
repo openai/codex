@@ -1,0 +1,30 @@
+[package]
+name = "codex-shell-escalation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+codex-core = { workspace = true }
+codex-execpolicy = { workspace = true }
+codex-protocol = { workspace = true }
+libc = { workspace = true }
+serde_json = { workspace = true }
+path-absolutize = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+socket2 = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
