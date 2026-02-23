@@ -42,3 +42,19 @@ override), not "inherit the global default". There is currently no separate
 config value for "follow the global default in Plan mode".
 
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).
+
+## Multi-agent thread limit
+
+Codex supports limiting how many child agent threads can run concurrently via
+`agents.max_threads` in `config.toml`.
+
+- Default: `6`
+- Minimum valid value: `1`
+- To use the built-in default, omit the setting.
+
+Example:
+
+```toml
+[agents]
+max_threads = 4
+```
