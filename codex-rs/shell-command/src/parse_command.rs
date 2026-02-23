@@ -1307,6 +1307,32 @@ mod tests {
     }
 
     #[test]
+    fn find_defaults_to_dot_path() {
+        assert_parsed(
+            &shlex_split_safe("find -name '*.rs'"),
+            vec![ParsedCommand::Search {
+                cmd: "find -name '*.rs'".to_string(),
+                query: Some("*.rs".to_string()),
+                path: Some(".".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("find -type f"),
+            vec![ParsedCommand::ListFiles {
+                cmd: "find -type f".to_string(),
+                path: Some(".".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("find"),
+            vec![ParsedCommand::ListFiles {
+                cmd: "find".to_string(),
+                path: Some(".".to_string()),
+            }],
+        );
+    }
+
+    #[test]
     fn find_type_only_path() {
         assert_parsed(
             &shlex_split_safe("find src -type f"),
@@ -1996,6 +2022,9 @@ fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>
             path = Some(short_display_path(a));
             break;
         }
+    }
+    if path.is_none() {
+        path = Some(".".to_string());
     }
     // Extract a common name/path/regex pattern if present
     let mut query: Option<String> = None;
