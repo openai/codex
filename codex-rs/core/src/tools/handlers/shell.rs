@@ -343,8 +343,8 @@ impl ShellHandler {
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = ShellRuntime::new();
         let tool_ctx = ToolCtx {
-            session: session.as_ref(),
-            turn: turn.as_ref(),
+            session,
+            turn,
             call_id: call_id.clone(),
             tool_name,
         };
