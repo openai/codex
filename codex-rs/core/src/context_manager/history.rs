@@ -128,8 +128,11 @@ impl ContextManager {
         let frames_to_pop = usize::try_from(num_turns).unwrap_or(usize::MAX);
         let new_len = self.user_turn_baselines.len().saturating_sub(frames_to_pop);
         self.user_turn_baselines.truncate(new_len);
-        self.reference_context_item =
-            self.effective_reference_context_item_from_user_turn_baselines();
+        self.reference_context_item = self
+            .user_turn_baselines
+            .last()
+            .filter(|frame| !frame.invalidated_by_following_compaction)
+            .map(|frame| frame.turn_context_item.clone());
     }
 
     pub(crate) fn sync_reference_context_after_history_replacement(
@@ -159,15 +162,6 @@ impl ContextManager {
         self.user_turn_baselines
             .last()
             .map(|frame| frame.turn_context_item.model.clone())
-    }
-
-    pub(crate) fn effective_reference_context_item_from_user_turn_baselines(
-        &self,
-    ) -> Option<TurnContextItem> {
-        self.user_turn_baselines
-            .last()
-            .filter(|frame| !frame.invalidated_by_following_compaction)
-            .map(|frame| frame.turn_context_item.clone())
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
