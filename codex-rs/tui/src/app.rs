@@ -1017,8 +1017,10 @@ impl App {
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot);
         if is_replay_only {
-            self.chat_widget
-                .show_closed_thread_transcript_only_mode(thread_id);
+            self.chat_widget.add_info_message(
+                format!("Agent thread {thread_id} is closed. Replaying saved transcript."),
+                None,
+            );
         }
         self.drain_active_thread_events(tui).await?;
 

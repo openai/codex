@@ -6743,17 +6743,6 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn show_closed_thread_transcript_only_mode(&mut self, thread_id: ThreadId) {
-        self.bottom_pane.set_composer_input_enabled(
-            false,
-            Some("Closed agent transcript is read-only.".to_string()),
-        );
-        self.add_info_message(
-            format!("Agent thread {thread_id} is closed. Showing saved transcript only."),
-            None,
-        );
-    }
-
     pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {
         self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
         self.request_redraw();
