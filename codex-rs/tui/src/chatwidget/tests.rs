@@ -4518,6 +4518,66 @@ async fn slash_copy_reports_clipboard_write_error() {
 }
 
 #[tokio::test]
+async fn slash_copy_uses_legacy_agent_message_when_turn_complete_last_message_is_missing() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let copied = install_clipboard_spy(&mut chat);
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Legacy final message".into(),
+            phase: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.dispatch_command(SlashCommand::Copy);
+
+    assert_eq!(
+        copied
+            .lock()
+            .expect("clipboard spy mutex poisoned")
+            .as_slice(),
+        ["Legacy final message"]
+    );
+}
+
+#[tokio::test]
+async fn slash_copy_uses_legacy_agent_message_item_when_turn_complete_last_message_is_missing() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let copied = install_clipboard_spy(&mut chat);
+
+    complete_assistant_message(&mut chat, "msg-1", "Legacy item final message", None);
+    let _ = drain_insert_history(&mut rx);
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.dispatch_command(SlashCommand::Copy);
+
+    assert_eq!(
+        copied
+            .lock()
+            .expect("clipboard spy mutex poisoned")
+            .as_slice(),
+        ["Legacy item final message"]
+    );
+}
+
+#[tokio::test]
 async fn slash_exit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
