@@ -12,5 +12,7 @@ Scenario: After a prior manual /compact produced an older remote compaction item
 00:message/user:USER_ONE
 01:compaction:encrypted=true
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user[2]:<AGENTS_MD> | <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 04:message/user:USER_TWO

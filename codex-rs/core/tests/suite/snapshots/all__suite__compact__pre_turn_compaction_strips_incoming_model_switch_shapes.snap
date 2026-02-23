@@ -6,13 +6,17 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 
 ## Initial Request (Previous Model)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user[2]:<AGENTS_MD> | <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>
 03:message/user:BEFORE_SWITCH_USER
 
 ## Local Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user[2]:<AGENTS_MD> | <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>
 03:message/user:BEFORE_SWITCH_USER
 04:message/assistant:BEFORE_SWITCH_REPLY
@@ -22,6 +26,10 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 00:message/user:BEFORE_SWITCH_USER
 01:message/user:<COMPACTION_SUMMARY>\nPRETURN_SWITCH_SUMMARY
 02:message/developer:<model_switch>\nThe user was previously using a different model....
-03:message/developer[2]:<PERMISSIONS_INSTRUCTIONS> | <personality_spec> The user has requested a new communication st...
-04:message/user[2]:<AGENTS_MD> | <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <personality_spec> The user has requested a new communication st...
+04:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
 05:message/user:AFTER_SWITCH_USER

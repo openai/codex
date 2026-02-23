@@ -100,12 +100,20 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                     } else {
                         role.to_string()
                     };
-                    let text = if rendered_parts.is_empty() {
-                        "<NO_TEXT>".to_string()
-                    } else {
-                        rendered_parts.join(" | ")
-                    };
-                    format!("{idx:02}:message/{role}:{text}")
+                    if rendered_parts.is_empty() {
+                        return format!("{idx:02}:message/{role}:<NO_TEXT>");
+                    }
+                    if rendered_parts.len() == 1 {
+                        return format!("{idx:02}:message/{role}:{}", rendered_parts[0]);
+                    }
+
+                    let parts = rendered_parts
+                        .iter()
+                        .enumerate()
+                        .map(|(part_idx, part)| format!("    [{:02}] {part}", part_idx + 1))
+                        .collect::<Vec<String>>()
+                        .join("\n");
+                    format!("{idx:02}:message/{role}:\n{parts}")
                 }
                 "function_call" => {
                     let name = item.get("name").and_then(Value::as_str).unwrap_or("unknown");
@@ -341,7 +349,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "00:message/user[3]:<image> | <input_image:image_url> | </image>"
+            "00:message/user[3]:\n    [01] <image>\n    [02] <input_image:image_url>\n    [03] </image>"
         );
     }
 }
