@@ -2,6 +2,9 @@ use std::path::Path;
 
 use codex_core::sandboxing::SandboxPermissions;
 use codex_execpolicy::Policy;
+use codex_shell_escalation::EscalateAction;
+use codex_shell_escalation::EscalationPolicy;
+use codex_shell_escalation::Stopwatch;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::model::CreateElicitationRequestParams;
@@ -9,10 +12,7 @@ use rmcp::model::CreateElicitationResult;
 use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationSchema;
 use rmcp::service::RequestContext;
-
-use crate::posix::escalate_protocol::EscalateAction;
-use crate::posix::escalation_policy::EscalationPolicy;
-use crate::posix::stopwatch::Stopwatch;
+use shlex::try_join;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -59,7 +59,7 @@ impl McpEscalationPolicy {
         workdir: &Path,
         context: RequestContext<RoleServer>,
     ) -> Result<CreateElicitationResult, McpError> {
-        let args = shlex::try_join(argv.iter().skip(1).map(String::as_str)).unwrap_or_default();
+        let args = try_join(argv.iter().skip(1).map(String::as_str)).unwrap_or_default();
         let command = if args.is_empty() {
             file.display().to_string()
         } else {
@@ -104,10 +104,10 @@ impl EscalationPolicy for McpEscalationPolicy {
         file: &Path,
         argv: &[String],
         workdir: &Path,
-    ) -> Result<EscalateAction, rmcp::ErrorData> {
+    ) -> anyhow::Result<EscalateAction> {
         let policy = self.policy.read().await;
         let outcome =
-            crate::posix::evaluate_exec_policy(&policy, file, argv, self.preserve_program_paths)?;
+            crate::unix::evaluate_exec_policy(&policy, file, argv, self.preserve_program_paths)?;
         let action = match outcome {
             ExecPolicyOutcome::Allow {
                 sandbox_permissions,
