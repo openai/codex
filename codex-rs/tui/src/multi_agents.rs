@@ -301,7 +301,9 @@ fn wait_complete_lines(
     agent_statuses: &[CollabAgentStatusEntry],
 ) -> Vec<Line<'static>> {
     if statuses.is_empty() && agent_statuses.is_empty() {
-        return vec![Line::from(Span::from("No agents completed yet").dim())];
+        return vec![Line::from(
+            Span::from("No agent statuses reported").red().bold(),
+        )];
     }
 
     let entries = if agent_statuses.is_empty() {
@@ -512,6 +514,25 @@ mod tests {
         assert!(title.spans[2].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(title.spans[4].content.as_ref(), "[explorer]");
         assert!(title.spans[4].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn waiting_end_with_empty_statuses_surfaces_warning_message() {
+        let sender_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000001")
+            .expect("valid sender thread id");
+        let cell = waiting_end(CollabWaitingEndEvent {
+            sender_thread_id,
+            call_id: "call-wait".to_string(),
+            agent_statuses: Vec::new(),
+            statuses: HashMap::new(),
+        });
+
+        let lines = cell.display_lines(200);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(line_to_text(&lines[1]), "  └ No agent statuses reported");
+        let warning_span = &lines[1].spans[1];
+        assert_eq!(warning_span.style.fg, Some(Color::Red));
+        assert!(warning_span.style.add_modifier.contains(Modifier::BOLD));
     }
 
     fn cell_to_text(cell: &PlainHistoryCell) -> String {
