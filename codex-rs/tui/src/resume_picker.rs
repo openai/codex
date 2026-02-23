@@ -159,6 +159,7 @@ async fn run_session_picker(
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
+                None,
             )
             .await;
             let _ = tx.send(BackgroundEvent::PageLoaded {
