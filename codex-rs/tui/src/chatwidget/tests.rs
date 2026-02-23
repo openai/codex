@@ -8123,6 +8123,13 @@ async fn terminal_title_status_uses_ellipses_for_other_transient_states() {
     assert_eq!(chat.terminal_title_status_text(), "Thinking...");
 }
 
+#[test]
+fn terminal_title_part_truncation_preserves_grapheme_clusters() {
+    let value = "ab👩‍💻cdefg".to_string();
+    let truncated = ChatWidget::truncate_terminal_title_part(value, 7);
+    assert_eq!(truncated, "ab👩‍💻c...");
+}
+
 #[tokio::test]
 async fn status_line_branch_state_resets_when_git_branch_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;

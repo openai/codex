@@ -157,6 +157,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
 use tracing::warn;
+use unicode_segmentation::UnicodeSegmentation;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
@@ -5186,13 +5187,13 @@ impl ChatWidget {
             return String::new();
         }
 
-        let mut chars = value.chars();
-        let head: String = chars.by_ref().take(max_chars).collect();
-        if chars.next().is_none() || max_chars <= 3 {
+        let mut graphemes = value.graphemes(true);
+        let head: String = graphemes.by_ref().take(max_chars).collect();
+        if graphemes.next().is_none() || max_chars <= 3 {
             return head;
         }
 
-        let mut truncated = head.chars().take(max_chars - 3).collect::<String>();
+        let mut truncated = head.graphemes(true).take(max_chars - 3).collect::<String>();
         truncated.push_str("...");
         truncated
     }
