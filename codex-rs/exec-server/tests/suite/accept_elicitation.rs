@@ -94,13 +94,13 @@ prefix_rule(
 async fn run_accept_elicitation_for_prompt_rule_with_transport(
     transport: rmcp::transport::TokioChildProcess,
 ) -> Result<()> {
-    // Create an MCP client that approves expected elicitation messages.
+    // Create an MCP client that approves the expected elicitation message.
     let project_root = TempDir::new()?;
     let project_root_path = project_root.path().canonicalize().unwrap();
     let git_path = resolve_git_path(USE_LOGIN_SHELL).await?;
+    let git_init_command = format!("{git_path} init --quiet .");
     let expected_elicitation_message = format!(
-        "Allow agent to run `{} init .` in `{}`?",
-        git_path,
+        "Allow agent to run `{git_path} init --quiet .` in `{}`?",
         project_root_path.display()
     );
     let elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParams>>> = Default::default();
@@ -141,7 +141,7 @@ async fn run_accept_elicitation_for_prompt_rule_with_transport(
             arguments: Some(object(json!(
                 {
                     "login": USE_LOGIN_SHELL,
-                    "command": "git init .",
+                    "command": git_init_command,
                     "workdir": project_root_path.to_string_lossy(),
                 }
             ))),
@@ -156,15 +156,11 @@ async fn run_accept_elicitation_for_prompt_rule_with_transport(
     let ExecResult {
         exit_code, output, ..
     } = serde_json::from_str::<ExecResult>(&tool_call_content.text)?;
-    let git_init_succeeded = format!(
-        "Initialized empty Git repository in {}/.git/\n",
-        project_root_path.display()
-    );
-    // Normally, this would be an exact match, but it might include extra output
-    // if `git config set advice.defaultBranchName false` has not been set.
+    // `git init --quiet` is expected to suppress the usual initialization
+    // banner, so assert on success and filesystem effects instead of output.
     assert!(
-        output.contains(&git_init_succeeded),
-        "expected output `{output}` to contain `{git_init_succeeded}`"
+        output.is_empty(),
+        "expected no output from `git init --quiet .`, got `{output}`"
     );
     assert_eq!(exit_code, 0, "command should succeed");
     assert_eq!(is_error, Some(false), "command should succeed");
@@ -266,5 +262,13 @@ async fn resolve_git_path(use_login_shell: bool) -> Result<String> {
         .trim()
         .to_string();
     ensure!(!git_path.is_empty(), "git path should not be empty");
-    Ok(git_path)
+    let git_path = PathBuf::from(git_path);
+    let git_path = if git_path.is_absolute() {
+        git_path
+    } else {
+        std::env::current_dir()
+            .context("failed to resolve cwd while normalizing git path")?
+            .join(git_path)
+    };
+    Ok(git_path.display().to_string())
 }
