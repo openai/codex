@@ -64,44 +64,15 @@ pub fn sanitize_metric_tag_value(value: &str) -> String {
 
 /// Find all UUIDs in a string.
 pub fn find_uuids(s: &str) -> Vec<String> {
-    let mut uuids = Vec::new();
-    let bytes = s.as_bytes();
-    let mut i = 0;
+    static RE: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex_lite::Regex::new(
+            r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}",
+        )
+        .unwrap()
+    });
 
-    let is_hex = |b: u8| b.is_ascii_hexdigit();
-    let is_uuid = |start: usize, bytes: &[u8]| -> bool {
-        let mut i = start;
-        let groups = [8, 4, 4, 4, 12];
-
-        for (group_idx, group_len) in groups.iter().enumerate() {
-            for offset in 0..*group_len {
-                if i + offset >= bytes.len() || !is_hex(bytes[i + offset]) {
-                    return false;
-                }
-            }
-            i += group_len;
-
-            if group_idx < groups.len() - 1 {
-                if i >= bytes.len() || bytes[i] != b'-' {
-                    return false;
-                }
-                i += 1;
-            }
-        }
-
-        true
-    };
-
-    while i + 36 <= bytes.len() {
-        if is_uuid(i, bytes) {
-            uuids.push(s[i..i + 36].to_string());
-            i += 36;
-            continue;
-        }
-        i += 1;
-    }
-
-    uuids
+    re.find_iter(s).map(|m| m.as_str().to_string()).collect()
 }
 
 #[cfg(test)]
