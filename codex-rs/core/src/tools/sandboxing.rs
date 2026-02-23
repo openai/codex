@@ -18,14 +18,14 @@ use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
+use futures::Future;
+use futures::future::BoxFuture;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::path::Path;
-
-use futures::Future;
-use futures::future::BoxFuture;
-use serde::Serialize;
+use std::sync::Arc;
 
 #[derive(Clone, Default, Debug)]
 pub(crate) struct ApprovalStore {
@@ -267,9 +267,9 @@ pub(crate) trait Sandboxable {
     }
 }
 
-pub(crate) struct ToolCtx<'a> {
-    pub session: &'a Session,
-    pub turn: &'a TurnContext,
+pub(crate) struct ToolCtx {
+    pub session: Arc<Session>,
+    pub turn: Arc<TurnContext>,
     pub call_id: String,
     pub tool_name: String,
 }
@@ -281,7 +281,7 @@ pub(crate) enum ToolError {
 }
 
 pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
-    fn network_approval_spec(&self, _req: &Req, _ctx: &ToolCtx<'_>) -> Option<NetworkApprovalSpec> {
+    fn network_approval_spec(&self, _req: &Req, _ctx: &ToolCtx) -> Option<NetworkApprovalSpec> {
         None
     }
 
