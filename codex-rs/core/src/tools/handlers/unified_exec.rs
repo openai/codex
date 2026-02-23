@@ -187,7 +187,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let normalized_additional_permissions =
                     match normalize_and_validate_additional_permissions(
                         request_permission_enabled,
-                        context.turn.approval_policy,
+                        context.turn.approval_policy.value(),
                         sandbox_permissions,
                         additional_permissions,
                         &cwd,
