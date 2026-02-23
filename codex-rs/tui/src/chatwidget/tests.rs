@@ -1691,6 +1691,7 @@ async fn make_chatwidget_manual(
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
+        terminal_title_status_kind: TerminalTitleStatusKind::Working,
         retry_status_header: None,
         pending_status_indicator_restore: false,
         thread_id: None,
@@ -1725,6 +1726,7 @@ async fn make_chatwidget_manual(
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         last_terminal_title: None,
         terminal_title_setup_original_items: None,
+        status_line_project_root_name_cache: None,
         status_line_branch: None,
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
@@ -8097,8 +8099,8 @@ async fn terminal_title_setup_cancel_reverts_live_preview() {
 #[tokio::test]
 async fn terminal_title_status_uses_waiting_ellipsis_for_background_terminal() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.bottom_pane.set_task_running(true);
-    chat.current_status_header = "Waiting for background terminal · just fix".to_string();
+    chat.on_task_started();
+    terminal_interaction(&mut chat, "call-1", "proc-1", "");
 
     assert_eq!(chat.terminal_title_status_text(), "Waiting...");
 }
@@ -8111,16 +8113,30 @@ async fn terminal_title_status_uses_ellipses_for_other_transient_states() {
     assert_eq!(chat.terminal_title_status_text(), "Starting...");
 
     chat.mcp_startup_status = None;
-    chat.bottom_pane.set_task_running(true);
-
-    chat.current_status_header = "Working".to_string();
+    chat.on_task_started();
     assert_eq!(chat.terminal_title_status_text(), "Working...");
 
-    chat.current_status_header = "Undoing changes".to_string();
+    chat.handle_codex_event(Event {
+        id: "undo-1".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent {
+            message: Some("Undoing changes".to_string()),
+        }),
+    });
     assert_eq!(chat.terminal_title_status_text(), "Undoing...");
 
-    chat.current_status_header = "Some other active header".to_string();
+    chat.on_agent_reasoning_delta("**Planning**\nmore".to_string());
     assert_eq!(chat.terminal_title_status_text(), "Thinking...");
+}
+
+#[tokio::test]
+async fn on_task_started_resets_terminal_title_task_progress() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.last_plan_progress = Some((2, 5));
+
+    chat.on_task_started();
+
+    assert_eq!(chat.last_plan_progress, None);
+    assert_eq!(chat.terminal_title_task_progress(), None);
 }
 
 #[test]
