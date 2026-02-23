@@ -73,6 +73,7 @@ echo -n "${@: -1}" > $(dirname "${0}")/notify.txt"#,
     let payload: Value = serde_json::from_str(&notify_payload_raw)?;
 
     assert_eq!(payload["type"], json!("agent-turn-complete"));
+    assert_eq!(payload["subagent"], json!(false));
     assert_eq!(payload["input-messages"], json!(["hello world"]));
     assert_eq!(payload["last-assistant-message"], json!("Done"));
 

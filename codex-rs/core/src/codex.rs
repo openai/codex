@@ -4783,6 +4783,10 @@ pub(crate) async fn run_turn(
                                 event: HookEventAfterAgent {
                                     thread_id: sess.conversation_id,
                                     turn_id: turn_context.sub_id.clone(),
+                                    subagent: matches!(
+                                        &turn_context.session_source,
+                                        SessionSource::SubAgent(_)
+                                    ),
                                     input_messages: sampling_request_input_messages,
                                     last_assistant_message: last_agent_message.clone(),
                                 },
