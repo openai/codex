@@ -295,11 +295,13 @@ impl PlaybackState {
         }
 
         let mono = interleaved_i16_to_mono_f32(&pcm, frame.num_channels);
-        let resampled = resample_linear_mono(
-            &mono,
-            frame.sample_rate.max(1),
-            self.output_sample_rate.max(1),
-        );
+        if frame.sample_rate == 0 {
+            warn!("dropping realtime audio frame with zero sample rate");
+            return Ok(());
+        }
+
+        let resampled =
+            resample_linear_mono(&mono, frame.sample_rate, self.output_sample_rate.max(1));
         for sample in resampled {
             for _ in 0..self.output_channels {
                 self.queue.push_back(sample);
