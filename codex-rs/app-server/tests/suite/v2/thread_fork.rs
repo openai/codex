@@ -220,20 +220,21 @@ async fn thread_fork_can_fork_after_selected_turn() -> Result<()> {
         &[
             ExplicitTurnFixture {
                 turn_id: "turn-1",
-                user_text: "u1",
+                user_text: Some("u1"),
                 agent_text: Some("a1"),
                 state: FixtureTurnState::Completed,
             },
             ExplicitTurnFixture {
                 turn_id: "turn-2",
-                user_text: "u2",
+                user_text: Some("u2"),
                 agent_text: Some("a2"),
                 state: FixtureTurnState::Completed,
             },
             ExplicitTurnFixture {
-                turn_id: "turn-3",
-                user_text: "u3",
-                agent_text: Some("a3"),
+                // Explicit turn with no user message exercises the exact cut-after-turn logic.
+                turn_id: "turn-3-empty",
+                user_text: None,
+                agent_text: None,
                 state: FixtureTurnState::Completed,
             },
         ],
@@ -282,7 +283,7 @@ async fn thread_fork_rejects_unknown_turn_anchor() -> Result<()> {
         "2025-01-05T12:00:02Z",
         &[ExplicitTurnFixture {
             turn_id: "turn-1",
-            user_text: "u1",
+            user_text: Some("u1"),
             agent_text: Some("a1"),
             state: FixtureTurnState::Completed,
         }],
@@ -363,7 +364,7 @@ async fn thread_fork_rejects_in_progress_turn_anchor() -> Result<()> {
         "2025-01-05T12:00:04Z",
         &[ExplicitTurnFixture {
             turn_id: "turn-in-progress",
-            user_text: "u1",
+            user_text: Some("u1"),
             agent_text: Some("a1"),
             state: FixtureTurnState::InProgress,
         }],
@@ -405,7 +406,7 @@ async fn thread_fork_rejects_turn_anchor_without_agent_message() -> Result<()> {
         "2025-01-05T12:00:05Z",
         &[ExplicitTurnFixture {
             turn_id: "turn-no-agent",
-            user_text: "u1",
+            user_text: Some("u1"),
             agent_text: None,
             state: FixtureTurnState::Completed,
         }],
@@ -468,7 +469,7 @@ enum FixtureTurnState {
 #[derive(Clone, Copy)]
 struct ExplicitTurnFixture<'a> {
     turn_id: &'a str,
-    user_text: &'a str,
+    user_text: Option<&'a str>,
     agent_text: Option<&'a str>,
     state: FixtureTurnState,
 }
@@ -521,18 +522,20 @@ fn create_fake_rollout_with_explicit_turns(
     )?];
 
     for (idx, turn) in turns.iter().enumerate() {
-        lines.push(
-            json!({
-                "timestamp": meta_rfc3339,
-                "type":"response_item",
-                "payload": {
-                    "type":"message",
-                    "role":"user",
-                    "content":[{"type":"input_text","text": turn.user_text}]
-                }
-            })
-            .to_string(),
-        );
+        if let Some(user_text) = turn.user_text {
+            lines.push(
+                json!({
+                    "timestamp": meta_rfc3339,
+                    "type":"response_item",
+                    "payload": {
+                        "type":"message",
+                        "role":"user",
+                        "content":[{"type":"input_text","text": user_text}]
+                    }
+                })
+                .to_string(),
+            );
+        }
 
         lines.push(rollout_line(
             meta_rfc3339,
@@ -542,15 +545,17 @@ fn create_fake_rollout_with_explicit_turns(
                 collaboration_mode_kind: Default::default(),
             })),
         )?);
-        lines.push(rollout_line(
-            meta_rfc3339,
-            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
-                message: turn.user_text.to_string(),
-                images: None,
-                local_images: Vec::new(),
-                text_elements: Vec::new(),
-            })),
-        )?);
+        if let Some(user_text) = turn.user_text {
+            lines.push(rollout_line(
+                meta_rfc3339,
+                RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                    message: user_text.to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                })),
+            )?);
+        }
         if let Some(agent_text) = turn.agent_text {
             lines.push(rollout_line(
                 meta_rfc3339,
@@ -571,7 +576,7 @@ fn create_fake_rollout_with_explicit_turns(
             )?);
         }
 
-        if idx == 0 {
+        if idx == 0 && turn.agent_text.is_some() {
             lines.push(
                 json!({
                     "timestamp": meta_rfc3339,
