@@ -1408,6 +1408,7 @@ dependencies = [
  "anyhow",
  "codex-apply-patch",
  "codex-linux-sandbox",
+ "codex-shell-escalation",
  "codex-utils-home-dir",
  "dotenvy",
  "tempfile",
@@ -1653,6 +1654,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-secrets",
  "codex-shell-command",
+ "codex-shell-escalation",
  "codex-skills",
  "codex-state",
  "codex-utils-absolute-path",
@@ -1799,6 +1801,7 @@ dependencies = [
  "shlex",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2205,7 +2208,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "codex-core",
  "codex-execpolicy",
  "codex-protocol",
  "libc",
