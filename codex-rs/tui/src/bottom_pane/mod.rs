@@ -44,6 +44,7 @@ mod multi_select_picker;
 mod request_user_input;
 mod status_line_setup;
 pub(crate) use app_link_view::AppLinkView;
+pub(crate) use app_link_view::AppLinkViewParams;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use request_user_input::RequestUserInputOverlay;
@@ -77,6 +78,9 @@ mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::ColumnWidthMode;
 pub(crate) use list_selection_view::SelectionViewParams;
+pub(crate) use list_selection_view::SideContentWidth;
+pub(crate) use list_selection_view::popup_content_width;
+pub(crate) use list_selection_view::side_by_side_layout_widths;
 mod feedback_view;
 pub(crate) use feedback_view::FeedbackAudience;
 pub(crate) use feedback_view::feedback_disabled_params;
@@ -249,6 +253,7 @@ impl BottomPane {
     /// Clear pending attachments and mention bindings e.g. when a slash command doesn't submit text.
     pub(crate) fn drain_pending_submission_state(&mut self) {
         let _ = self.take_recent_submission_images_with_placeholders();
+        let _ = self.take_remote_image_urls();
         let _ = self.take_recent_submission_mention_bindings();
         let _ = self.take_mention_bindings();
     }
@@ -282,6 +287,13 @@ impl BottomPane {
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.composer.set_personality_command_enabled(enabled);
+        self.request_redraw();
+    }
+
+    /// Update the key hint shown next to queued messages so it matches the
+    /// binding that `ChatWidget` actually listens for.
+    pub(crate) fn set_queued_message_edit_binding(&mut self, binding: KeyBinding) {
+        self.queued_user_messages.set_edit_binding(binding);
         self.request_redraw();
     }
 
@@ -517,6 +529,21 @@ impl BottomPane {
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.composer.set_footer_hint_override(items);
         self.request_redraw();
+    }
+
+    pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
+        self.composer.set_remote_image_urls(urls);
+        self.request_redraw();
+    }
+
+    pub(crate) fn remote_image_urls(&self) -> Vec<String> {
+        self.composer.remote_image_urls()
+    }
+
+    pub(crate) fn take_remote_image_urls(&mut self) -> Vec<String> {
+        let urls = self.composer.take_remote_image_urls();
+        self.request_redraw();
+        urls
     }
 
     /// Update the status indicator header (defaults to "Working") and details below it.
@@ -955,7 +982,7 @@ impl Renderable for BottomPane {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use codex_core::protocol::Op;
+    use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
@@ -989,6 +1016,7 @@ mod tests {
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,
+            network_approval_context: None,
             proposed_execpolicy_amendment: None,
         }
     }
@@ -1315,6 +1343,58 @@ mod tests {
     }
 
     #[test]
+    fn remote_images_render_above_composer_text() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_remote_image_urls(vec![
+            "https://example.com/one.png".to_string(),
+            "data:image/png;base64,aGVsbG8=".to_string(),
+        ]);
+
+        assert_eq!(pane.composer_text(), "");
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let snapshot = render_snapshot(&pane, area);
+        assert!(snapshot.contains("[Image #1]"));
+        assert!(snapshot.contains("[Image #2]"));
+    }
+
+    #[test]
+    fn drain_pending_submission_state_clears_remote_image_urls() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_remote_image_urls(vec!["https://example.com/one.png".to_string()]);
+        assert_eq!(pane.remote_image_urls().len(), 1);
+
+        pane.drain_pending_submission_state();
+
+        assert!(pane.remote_image_urls().is_empty());
+    }
+
+    #[test]
     fn esc_with_skill_popup_does_not_interrupt_task() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -1333,6 +1413,7 @@ mod tests {
                 interface: None,
                 dependencies: None,
                 policy: None,
+                permissions: None,
                 path: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),

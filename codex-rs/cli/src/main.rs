@@ -93,10 +93,10 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// [experimental] Run Codex as an MCP server and manage MCP servers.
+    /// Manage external MCP servers for Codex.
     Mcp(McpCli),
 
-    /// [experimental] Run the Codex MCP server (stdio transport).
+    /// Start Codex as an MCP server (stdio).
     McpServer,
 
     /// [experimental] Run the app server or related tooling.
@@ -306,6 +306,15 @@ struct AppServerCommand {
     #[command(subcommand)]
     subcommand: Option<AppServerSubcommand>,
 
+    /// Transport endpoint URL. Supported values: `stdio://` (default),
+    /// `ws://IP:PORT`.
+    #[arg(
+        long = "listen",
+        value_name = "URL",
+        default_value = codex_app_server::AppServerTransport::DEFAULT_LISTEN_URL
+    )]
+    listen: codex_app_server::AppServerTransport,
+
     /// Controls whether analytics are enabled by default.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
@@ -381,7 +390,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 
     let mut lines = vec![format!(
         "{}",
-        codex_core::protocol::FinalOutput::from(token_usage)
+        codex_protocol::protocol::FinalOutput::from(token_usage)
     )];
 
     if let Some(resume_cmd) =
@@ -535,6 +544,11 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
 
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
+        // Run wrapper mode only after arg0 dispatch so `codex-linux-sandbox`
+        // invocations don't get misclassified as zsh exec-wrapper calls.
+        if codex_core::maybe_run_zsh_exec_wrapper_mode()? {
+            return Ok(());
+        }
         cli_main(codex_linux_sandbox_exe).await?;
         Ok(())
     })
@@ -587,11 +601,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {
-                codex_app_server::run_main(
+                let transport = app_server_cli.listen;
+                codex_app_server::run_main_with_transport(
                     codex_linux_sandbox_exe,
                     root_config_overrides,
                     codex_core::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
+                    transport,
                 )
                 .await?;
             }
@@ -856,7 +872,7 @@ fn maybe_print_under_development_feature_warning(
         return;
     }
 
-    let config_path = codex_home.join(codex_core::config::CONFIG_TOML_FILE);
+    let config_path = codex_home.join(codex_config::CONFIG_TOML_FILE);
     eprintln!(
         "Under-development features enabled: {feature}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {}.",
         config_path.display()
@@ -1023,8 +1039,8 @@ fn print_completion(cmd: CompletionCommand) {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
-    use codex_core::protocol::TokenUsage;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::TokenUsage;
     use pretty_assertions::assert_eq;
 
     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
@@ -1328,6 +1344,10 @@ mod tests {
     fn app_server_analytics_default_disabled_without_flag() {
         let app_server = app_server_from_args(["codex", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
+        assert_eq!(
+            app_server.listen,
+            codex_app_server::AppServerTransport::Stdio
+        );
     }
 
     #[test]
@@ -1335,6 +1355,36 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn app_server_listen_websocket_url_parses() {
+        let app_server = app_server_from_args(
+            ["codex", "app-server", "--listen", "ws://127.0.0.1:4500"].as_ref(),
+        );
+        assert_eq!(
+            app_server.listen,
+            codex_app_server::AppServerTransport::WebSocket {
+                bind_address: "127.0.0.1:4500".parse().expect("valid socket address"),
+            }
+        );
+    }
+
+    #[test]
+    fn app_server_listen_stdio_url_parses() {
+        let app_server =
+            app_server_from_args(["codex", "app-server", "--listen", "stdio://"].as_ref());
+        assert_eq!(
+            app_server.listen,
+            codex_app_server::AppServerTransport::Stdio
+        );
+    }
+
+    #[test]
+    fn app_server_listen_invalid_url_fails_to_parse() {
+        let parse_result =
+            MultitoolCli::try_parse_from(["codex", "app-server", "--listen", "http://foo"]);
+        assert!(parse_result.is_err());
     }
 
     #[test]

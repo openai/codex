@@ -45,12 +45,15 @@ pub(crate) struct CommandPopupFlags {
 impl CommandPopup {
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>, flags: CommandPopupFlags) -> Self {
         // Keep built-in availability in sync with the composer.
-        let builtins = slash_commands::builtins_for_input(
+        let builtins: Vec<(&'static str, SlashCommand)> = slash_commands::builtins_for_input(
             flags.collaboration_modes_enabled,
             flags.connectors_enabled,
             flags.personality_command_enabled,
             flags.windows_degraded_sandbox_active,
-        );
+        )
+        .into_iter()
+        .filter(|(name, _)| !name.starts_with("debug"))
+        .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
         prompts.retain(|p| !exclude.contains(&p.name));
@@ -565,5 +568,23 @@ mod tests {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "personality"),
             other => panic!("expected personality to be selected for exact match, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn debug_commands_are_hidden_from_popup() {
+        let popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+
+        assert!(
+            !cmds.iter().any(|name| name.starts_with("debug")),
+            "expected no /debug* command in popup menu, got {cmds:?}"
+        );
     }
 }

@@ -11,6 +11,7 @@ use anyhow::anyhow;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use oauth2::TokenResponse;
+use reqwest::header::AUTHORIZATION;
 use reqwest::header::HeaderMap;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
@@ -244,16 +245,18 @@ impl RmcpClient {
     ) -> Result<Self> {
         let default_headers = build_default_headers(http_headers, env_http_headers)?;
 
-        let initial_oauth_tokens = match bearer_token {
-            Some(_) => None,
-            None => match load_oauth_tokens(server_name, url, store_mode) {
-                Ok(tokens) => tokens,
-                Err(err) => {
-                    warn!("failed to read tokens for server `{server_name}`: {err}");
-                    None
+        let initial_oauth_tokens =
+            if bearer_token.is_none() && !default_headers.contains_key(AUTHORIZATION) {
+                match load_oauth_tokens(server_name, url, store_mode) {
+                    Ok(tokens) => tokens,
+                    Err(err) => {
+                        warn!("failed to read tokens for server `{server_name}`: {err}");
+                        None
+                    }
                 }
-            },
-        };
+            } else {
+                None
+            };
 
         let transport = if let Some(initial_tokens) = initial_oauth_tokens.clone() {
             match create_oauth_transport_and_runtime(

@@ -4,15 +4,16 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use chrono::Utc;
+use codex_core::EventPersistenceMode;
 use codex_core::RolloutRecorder;
 use codex_core::RolloutRecorderParams;
 use codex_core::config::ConfigBuilder;
 use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
-use codex_core::protocol::SessionSource;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::protocol::SessionSource;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
 use pretty_assertions::assert_eq;
@@ -171,6 +172,7 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
+            EventPersistenceMode::Limited,
         ),
         None,
         None,

@@ -19,6 +19,8 @@ use crate::sandboxing::ExecRequest;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
+use crate::tools::network_approval::DeferredNetworkApproval;
+use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
@@ -30,6 +32,7 @@ use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
+use crate::unified_exec::MIN_YIELD_TIME_MS;
 use crate::unified_exec::ProcessEntry;
 use crate::unified_exec::ProcessStore;
 use crate::unified_exec::UnifiedExecContext;
@@ -130,8 +133,25 @@ impl UnifiedExecProcessManager {
     }
 
     pub(crate) async fn release_process_id(&self, process_id: &str) {
-        let mut store = self.process_store.lock().await;
-        store.remove(process_id);
+        let removed = {
+            let mut store = self.process_store.lock().await;
+            store.remove(process_id)
+        };
+        if let Some(entry) = removed {
+            Self::unregister_network_approval_for_entry(&entry).await;
+        }
+    }
+
+    async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
+        if let Some(network_approval_id) = entry.network_approval_id.as_deref()
+            && let Some(session) = entry.session.upgrade()
+        {
+            session
+                .services
+                .network_approval
+                .unregister_call(network_approval_id)
+                .await;
+        }
     }
 
     pub(crate) async fn exec_command(
@@ -143,13 +163,14 @@ impl UnifiedExecProcessManager {
             .workdir
             .clone()
             .unwrap_or_else(|| context.turn.cwd.clone());
-
         let process = self
             .open_session_with_sandbox(&request, cwd.clone(), context)
             .await;
 
-        let process = match process {
-            Ok(process) => Arc::new(process),
+        let (process, mut deferred_network_approval) = match process {
+            Ok((process, deferred_network_approval)) => {
+                (Arc::new(process), deferred_network_approval)
+            }
             Err(err) => {
                 self.release_process_id(&request.process_id).await;
                 return Err(err);
@@ -172,7 +193,6 @@ impl UnifiedExecProcessManager {
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
         start_streaming_output(&process, context, Arc::clone(&transcript));
-
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
@@ -205,6 +225,7 @@ impl UnifiedExecProcessManager {
         let has_exited = process.has_exited() || exit_code.is_some();
         let chunk_id = generate_chunk_id();
         let process_id = request.process_id.clone();
+
         if has_exited {
             // Short‑lived command: emit ExecCommandEnd immediately using the
             // same helper as the background watcher, so all end events share
@@ -215,7 +236,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&context.turn),
                 context.call_id.clone(),
                 request.command.clone(),
-                cwd,
+                cwd.clone(),
                 Some(process_id),
                 Arc::clone(&transcript),
                 output.clone(),
@@ -225,12 +246,20 @@ impl UnifiedExecProcessManager {
             .await;
 
             self.release_process_id(&request.process_id).await;
+            finish_deferred_network_approval(
+                context.session.as_ref(),
+                deferred_network_approval.take(),
+            )
+            .await;
             process.check_for_sandbox_denial_with_text(&text).await?;
         } else {
             // Long‑lived command: persist the process so write_stdin can reuse
             // it, and register a background watcher that will emit
             // ExecCommandEnd when the PTY eventually exits (even if no further
             // tool calls are made).
+            let network_approval_id = deferred_network_approval
+                .as_ref()
+                .map(|deferred| deferred.registration_id().to_string());
             self.store_process(
                 Arc::clone(&process),
                 context,
@@ -239,6 +268,7 @@ impl UnifiedExecProcessManager {
                 start,
                 process_id,
                 request.tty,
+                network_approval_id,
                 Arc::clone(&transcript),
             )
             .await;
@@ -295,11 +325,13 @@ impl UnifiedExecProcessManager {
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = {
-            let time_ms = clamp_yield_time(request.yield_time_ms);
+            // Empty polls use configurable background timeout bounds. Non-empty
+            // writes keep a fixed max cap so interactive stdin remains responsive.
+            let time_ms = request.yield_time_ms.max(MIN_YIELD_TIME_MS);
             if request.input.is_empty() {
-                time_ms.clamp(MIN_EMPTY_YIELD_TIME_MS, MAX_YIELD_TIME_MS)
+                time_ms.clamp(MIN_EMPTY_YIELD_TIME_MS, self.max_write_stdin_yield_time_ms)
             } else {
-                time_ms
+                time_ms.min(MAX_YIELD_TIME_MS)
             }
         };
         let start = Instant::now();
@@ -358,29 +390,35 @@ impl UnifiedExecProcessManager {
     }
 
     async fn refresh_process_state(&self, process_id: &str) -> ProcessStatus {
-        let mut store = self.process_store.lock().await;
-        let Some(entry) = store.processes.get(process_id) else {
-            return ProcessStatus::Unknown;
-        };
-
-        let exit_code = entry.process.exit_code();
-        let process_id = entry.process_id.clone();
-
-        if entry.process.has_exited() {
-            let Some(entry) = store.remove(&process_id) else {
+        let status = {
+            let mut store = self.process_store.lock().await;
+            let Some(entry) = store.processes.get(process_id) else {
                 return ProcessStatus::Unknown;
             };
-            ProcessStatus::Exited {
-                exit_code,
-                entry: Box::new(entry),
+
+            let exit_code = entry.process.exit_code();
+            let process_id = entry.process_id.clone();
+
+            if entry.process.has_exited() {
+                let Some(entry) = store.remove(&process_id) else {
+                    return ProcessStatus::Unknown;
+                };
+                ProcessStatus::Exited {
+                    exit_code,
+                    entry: Box::new(entry),
+                }
+            } else {
+                ProcessStatus::Alive {
+                    exit_code,
+                    call_id: entry.call_id.clone(),
+                    process_id,
+                }
             }
-        } else {
-            ProcessStatus::Alive {
-                exit_code,
-                call_id: entry.call_id.clone(),
-                process_id,
-            }
+        };
+        if let ProcessStatus::Exited { entry, .. } = &status {
+            Self::unregister_network_approval_for_entry(entry).await;
         }
+        status
     }
 
     async fn prepare_process_handles(
@@ -437,6 +475,7 @@ impl UnifiedExecProcessManager {
         started_at: Instant,
         process_id: String,
         tty: bool,
+        network_approval_id: Option<String>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     ) {
         let entry = ProcessEntry {
@@ -445,14 +484,22 @@ impl UnifiedExecProcessManager {
             process_id: process_id.clone(),
             command: command.to_vec(),
             tty,
+            network_approval_id,
+            session: Arc::downgrade(&context.session),
             last_used: started_at,
         };
-        let number_processes = {
+        let (number_processes, pruned_entry) = {
             let mut store = self.process_store.lock().await;
-            Self::prune_processes_if_needed(&mut store);
+            let pruned_entry = Self::prune_processes_if_needed(&mut store);
             store.processes.insert(process_id.clone(), entry);
-            store.processes.len()
+            (store.processes.len(), pruned_entry)
         };
+        // prune_processes_if_needed runs while holding process_store; do async
+        // network-approval cleanup only after dropping that lock.
+        if let Some(pruned_entry) = pruned_entry {
+            Self::unregister_network_approval_for_entry(&pruned_entry).await;
+            pruned_entry.process.terminate();
+        }
 
         if number_processes >= WARNING_UNIFIED_EXEC_PROCESSES {
             context
@@ -471,7 +518,7 @@ impl UnifiedExecProcessManager {
             context.call_id.clone(),
             command.to_vec(),
             cwd,
-            process_id,
+            process_id.clone(),
             transcript,
             started_at,
         );
@@ -516,7 +563,7 @@ impl UnifiedExecProcessManager {
         request: &ExecCommandRequest,
         cwd: PathBuf,
         context: &UnifiedExecContext,
-    ) -> Result<UnifiedExecProcess, UnifiedExecError> {
+    ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(
             &context.turn.shell_environment_policy,
             Some(context.session.conversation_id),
@@ -529,8 +576,8 @@ impl UnifiedExecProcessManager {
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &request.command,
-                approval_policy: context.turn.approval_policy,
-                sandbox_policy: &context.turn.sandbox_policy,
+                approval_policy: context.turn.approval_policy.value(),
+                sandbox_policy: context.turn.sandbox_policy.get(),
                 sandbox_permissions: request.sandbox_permissions,
                 prefix_rule: request.prefix_rule.clone(),
             })
@@ -539,6 +586,7 @@ impl UnifiedExecProcessManager {
             command: request.command.clone(),
             cwd,
             env,
+            explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
@@ -557,9 +605,10 @@ impl UnifiedExecProcessManager {
                 &req,
                 &tool_ctx,
                 context.turn.as_ref(),
-                context.turn.approval_policy,
+                context.turn.approval_policy.value(),
             )
             .await
+            .map(|result| (result.output, result.deferred_network_approval))
             .map_err(|e| UnifiedExecError::create_process(format!("{e:?}")))
     }
 
@@ -643,9 +692,9 @@ impl UnifiedExecProcessManager {
         collected
     }
 
-    fn prune_processes_if_needed(store: &mut ProcessStore) -> bool {
+    fn prune_processes_if_needed(store: &mut ProcessStore) -> Option<ProcessEntry> {
         if store.processes.len() < MAX_UNIFIED_EXEC_PROCESSES {
-            return false;
+            return None;
         }
 
         let meta: Vec<(String, Instant, bool)> = store
@@ -655,13 +704,10 @@ impl UnifiedExecProcessManager {
             .collect();
 
         if let Some(process_id) = Self::process_id_to_prune_from_meta(&meta) {
-            if let Some(entry) = store.remove(&process_id) {
-                entry.process.terminate();
-            }
-            return true;
+            return store.remove(&process_id);
         }
 
-        false
+        None
     }
 
     // Centralized pruning policy so we can easily swap strategies later.
@@ -706,6 +752,7 @@ impl UnifiedExecProcessManager {
         };
 
         for entry in entries {
+            Self::unregister_network_approval_for_entry(&entry).await;
             entry.process.terminate();
         }
     }

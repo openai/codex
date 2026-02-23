@@ -67,6 +67,7 @@ async fn list_tools() -> Result<()> {
                 "type": "object",
             }))),
             output_schema: None,
+            execution: None,
             annotations: None,
             icons: None,
             meta: None

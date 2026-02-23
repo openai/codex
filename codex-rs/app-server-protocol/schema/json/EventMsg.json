@@ -104,7 +104,7 @@
           "type": "string"
         },
         {
-          "description": "*All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox.",
+          "description": "DEPRECATED: *All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox. Prefer `OnRequest` for interactive runs or `Never` for non-interactive runs.",
           "enum": [
             "on-failure"
           ],
@@ -116,6 +116,20 @@
             "on-request"
           ],
           "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Fine-grained rejection controls for approval prompts.\n\nWhen a field is `true`, prompts of that category are automatically rejected instead of shown to the user.",
+          "properties": {
+            "reject": {
+              "$ref": "#/definitions/RejectConfig"
+            }
+          },
+          "required": [
+            "reject"
+          ],
+          "title": "RejectAskForApproval",
+          "type": "object"
         },
         {
           "description": "Never ask the user to approve commands. Failures are immediately returned to the model, and never escalated to the user for approval.",
@@ -175,6 +189,7 @@
           "enum": [
             "context_window_exceeded",
             "usage_limit_exceeded",
+            "server_overloaded",
             "internal_server_error",
             "unauthorized",
             "bad_request",
@@ -183,35 +198,6 @@
             "other"
           ],
           "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "model_cap": {
-              "properties": {
-                "model": {
-                  "type": "string"
-                },
-                "reset_after_seconds": {
-                  "format": "uint64",
-                  "minimum": 0.0,
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "model"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "model_cap"
-          ],
-          "title": "ModelCapCodexErrorInfo",
-          "type": "object"
         },
         {
           "additionalProperties": false,
@@ -309,6 +295,75 @@
           "type": "object"
         }
       ]
+    },
+    "CollabAgentRef": {
+      "properties": {
+        "agent_nickname": {
+          "description": "Optional nickname assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_role": {
+          "description": "Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadId"
+            }
+          ],
+          "description": "Thread ID of the receiver/new agent."
+        }
+      },
+      "required": [
+        "thread_id"
+      ],
+      "type": "object"
+    },
+    "CollabAgentStatusEntry": {
+      "properties": {
+        "agent_nickname": {
+          "description": "Optional nickname assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_role": {
+          "description": "Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentStatus"
+            }
+          ],
+          "description": "Last known status of the agent."
+        },
+        "thread_id": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadId"
+            }
+          ],
+          "description": "Thread ID of the receiver/new agent."
+        }
+      },
+      "required": [
+        "status",
+        "thread_id"
+      ],
+      "type": "object"
     },
     "ContentItem": {
       "oneOf": [
@@ -502,6 +557,102 @@
           "type": "object"
         },
         {
+          "description": "Realtime conversation lifecycle start event.",
+          "properties": {
+            "session_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "realtime_conversation_started"
+              ],
+              "title": "RealtimeConversationStartedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RealtimeConversationStartedEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Realtime conversation streaming payload event.",
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/RealtimeEvent"
+            },
+            "type": {
+              "enum": [
+                "realtime_conversation_realtime"
+              ],
+              "title": "RealtimeConversationRealtimeEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "payload",
+            "type"
+          ],
+          "title": "RealtimeConversationRealtimeEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Realtime conversation lifecycle close event.",
+          "properties": {
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "realtime_conversation_closed"
+              ],
+              "title": "RealtimeConversationClosedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RealtimeConversationClosedEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Model routing changed from the requested model to a different model.",
+          "properties": {
+            "from_model": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/definitions/ModelRerouteReason"
+            },
+            "to_model": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "model_reroute"
+              ],
+              "title": "ModelRerouteEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from_model",
+            "reason",
+            "to_model",
+            "type"
+          ],
+          "title": "ModelRerouteEventMsg",
+          "type": "object"
+        },
+        {
           "description": "Conversation history was compacted (either automatically or manually).",
           "properties": {
             "type": {
@@ -647,6 +798,17 @@
           "properties": {
             "message": {
               "type": "string"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "type": {
               "enum": [
@@ -1377,6 +1539,14 @@
               "default": "agent",
               "description": "Where the command originated. Defaults to Agent for backward compatibility."
             },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ExecCommandStatus"
+                }
+              ],
+              "description": "Completion status for this command execution."
+            },
             "stderr": {
               "description": "Captured stderr",
               "type": "string"
@@ -1405,6 +1575,7 @@
             "exit_code",
             "formatted_output",
             "parsed_cmd",
+            "status",
             "stderr",
             "stdout",
             "turn_id",
@@ -1442,8 +1613,15 @@
         },
         {
           "properties": {
+            "approval_id": {
+              "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "call_id": {
-              "description": "Identifier for the associated exec call, if available.",
+              "description": "Identifier for the associated command execution item.",
               "type": "string"
             },
             "command": {
@@ -1456,6 +1634,17 @@
             "cwd": {
               "description": "The command's working directory.",
               "type": "string"
+            },
+            "network_approval_context": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NetworkApprovalContext"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional network context for a blocked request that can be approved."
             },
             "parsed_cmd": {
               "items": {
@@ -1833,6 +2022,14 @@
               "description": "The changes that were applied (mirrors PatchApplyBeginEvent::changes).",
               "type": "object"
             },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/PatchApplyStatus"
+                }
+              ],
+              "description": "Completion status for this patch application."
+            },
             "stderr": {
               "description": "Captured stderr (parser errors, IO failures, etc.).",
               "type": "string"
@@ -1860,6 +2057,7 @@
           },
           "required": [
             "call_id",
+            "status",
             "stderr",
             "stdout",
             "success",
@@ -2486,6 +2684,20 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "new_agent_nickname": {
+              "description": "Optional nickname assigned to the new agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "new_agent_role": {
+              "description": "Optional role assigned to the new agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "new_thread_id": {
               "anyOf": [
                 {
@@ -2591,6 +2803,20 @@
               "description": "Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.",
               "type": "string"
             },
+            "receiver_agent_nickname": {
+              "description": "Optional nickname assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_agent_role": {
+              "description": "Optional role assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "receiver_thread_id": {
               "allOf": [
                 {
@@ -2641,6 +2867,13 @@
               "description": "ID of the waiting call.",
               "type": "string"
             },
+            "receiver_agents": {
+              "description": "Optional nicknames/roles for receivers.",
+              "items": {
+                "$ref": "#/definitions/CollabAgentRef"
+              },
+              "type": "array"
+            },
             "receiver_thread_ids": {
               "description": "Thread ID of the receivers.",
               "items": {
@@ -2676,6 +2909,13 @@
         {
           "description": "Collab interaction: waiting end.",
           "properties": {
+            "agent_statuses": {
+              "description": "Optional receiver metadata paired with final statuses.",
+              "items": {
+                "$ref": "#/definitions/CollabAgentStatusEntry"
+              },
+              "type": "array"
+            },
             "call_id": {
               "description": "ID of the waiting call.",
               "type": "string"
@@ -2759,6 +2999,20 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "receiver_agent_nickname": {
+              "description": "Optional nickname assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_agent_role": {
+              "description": "Optional role assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "receiver_thread_id": {
               "allOf": [
                 {
@@ -2808,6 +3062,20 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "receiver_agent_nickname": {
+              "description": "Optional nickname assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_agent_role": {
+              "description": "Optional role assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "receiver_thread_id": {
               "allOf": [
                 {
@@ -2847,6 +3115,20 @@
             "call_id": {
               "description": "Identifier for the collab tool call.",
               "type": "string"
+            },
+            "receiver_agent_nickname": {
+              "description": "Optional nickname assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_agent_role": {
+              "description": "Optional role assigned to the receiver agent.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "receiver_thread_id": {
               "allOf": [
@@ -2898,6 +3180,14 @@
         "user_shell",
         "unified_exec_startup",
         "unified_exec_interaction"
+      ],
+      "type": "string"
+    },
+    "ExecCommandStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "declined"
       ],
       "type": "string"
     },
@@ -3229,7 +3519,7 @@
           "required": [
             "state"
           ],
-          "title": "StateMcpStartupStatus",
+          "title": "StartingMcpStartupStatus",
           "type": "object"
         },
         {
@@ -3244,7 +3534,7 @@
           "required": [
             "state"
           ],
-          "title": "StateMcpStartupStatus2",
+          "title": "ReadyMcpStartupStatus",
           "type": "object"
         },
         {
@@ -3277,7 +3567,7 @@
           "required": [
             "state"
           ],
-          "title": "StateMcpStartupStatus3",
+          "title": "CancelledMcpStartupStatus",
           "type": "object"
         }
       ]
@@ -3309,11 +3599,41 @@
       ],
       "type": "string"
     },
+    "ModelRerouteReason": {
+      "enum": [
+        "high_risk_cyber_activity"
+      ],
+      "type": "string"
+    },
     "NetworkAccess": {
       "description": "Represents whether outbound network access is available to the agent.",
       "enum": [
         "restricted",
         "enabled"
+      ],
+      "type": "string"
+    },
+    "NetworkApprovalContext": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/NetworkApprovalProtocol"
+        }
+      },
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "NetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https",
+        "socks5_tcp",
+        "socks5_udp"
       ],
       "type": "string"
     },
@@ -3427,6 +3747,14 @@
           "type": "object"
         }
       ]
+    },
+    "PatchApplyStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "declined"
+      ],
+      "type": "string"
     },
     "PlanItemArg": {
       "additionalProperties": false,
@@ -3544,6 +3872,171 @@
       ],
       "type": "object"
     },
+    "ReadOnlyAccess": {
+      "description": "Determines how read-only file access is granted inside a restricted sandbox.",
+      "oneOf": [
+        {
+          "description": "Restrict reads to an explicit set of roots.\n\nWhen `include_platform_defaults` is `true`, platform defaults required for basic execution are included in addition to `readable_roots`.",
+          "properties": {
+            "include_platform_defaults": {
+              "default": true,
+              "description": "Include built-in platform read roots required for basic process execution.",
+              "type": "boolean"
+            },
+            "readable_roots": {
+              "description": "Additional absolute roots that should be readable.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restricted"
+              ],
+              "title": "RestrictedReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadOnlyAccess",
+          "type": "object"
+        },
+        {
+          "description": "Allow unrestricted file reads.",
+          "properties": {
+            "type": {
+              "enum": [
+                "full-access"
+              ],
+              "title": "FullAccessReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullAccessReadOnlyAccess",
+          "type": "object"
+        }
+      ]
+    },
+    "RealtimeAudioFrame": {
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "num_channels": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "sample_rate": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "samples_per_channel": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data",
+        "num_channels",
+        "sample_rate"
+      ],
+      "type": "object"
+    },
+    "RealtimeEvent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SessionCreated": {
+              "properties": {
+                "session_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "session_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "SessionCreated"
+          ],
+          "title": "SessionCreatedRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SessionUpdated": {
+              "properties": {
+                "backend_prompt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "SessionUpdated"
+          ],
+          "title": "SessionUpdatedRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "AudioOut": {
+              "$ref": "#/definitions/RealtimeAudioFrame"
+            }
+          },
+          "required": [
+            "AudioOut"
+          ],
+          "title": "AudioOutRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ConversationItemAdded": true
+          },
+          "required": [
+            "ConversationItemAdded"
+          ],
+          "title": "ConversationItemAddedRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Error"
+          ],
+          "title": "ErrorRealtimeEvent",
+          "type": "object"
+        }
+      ]
+    },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
       "enum": [
@@ -3623,6 +4116,28 @@
           "type": "object"
         }
       ]
+    },
+    "RejectConfig": {
+      "properties": {
+        "mcp_elicitations": {
+          "description": "Reject MCP elicitation prompts.",
+          "type": "boolean"
+        },
+        "rules": {
+          "description": "Reject prompts triggered by execpolicy `prompt` rules.",
+          "type": "boolean"
+        },
+        "sandbox_approval": {
+          "description": "Reject approval prompts related to sandbox escalation.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mcp_elicitations",
+        "rules",
+        "sandbox_approval"
+      ],
+      "type": "object"
     },
     "RemoteSkillSummary": {
       "properties": {
@@ -4381,8 +4896,16 @@
           "type": "object"
         },
         {
-          "description": "Read-only access to the entire file-system.",
+          "description": "Read-only access configuration.",
           "properties": {
+            "access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
+            },
             "type": {
               "enum": [
                 "read-only"
@@ -4440,6 +4963,14 @@
               "default": false,
               "description": "When set to `true`, outbound network access is allowed. `false` by default.",
               "type": "boolean"
+            },
+            "read_only_access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
             },
             "type": {
               "enum": [
@@ -5271,6 +5802,102 @@
       "type": "object"
     },
     {
+      "description": "Realtime conversation lifecycle start event.",
+      "properties": {
+        "session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "enum": [
+            "realtime_conversation_started"
+          ],
+          "title": "RealtimeConversationStartedEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "RealtimeConversationStartedEventMsg",
+      "type": "object"
+    },
+    {
+      "description": "Realtime conversation streaming payload event.",
+      "properties": {
+        "payload": {
+          "$ref": "#/definitions/RealtimeEvent"
+        },
+        "type": {
+          "enum": [
+            "realtime_conversation_realtime"
+          ],
+          "title": "RealtimeConversationRealtimeEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "payload",
+        "type"
+      ],
+      "title": "RealtimeConversationRealtimeEventMsg",
+      "type": "object"
+    },
+    {
+      "description": "Realtime conversation lifecycle close event.",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "enum": [
+            "realtime_conversation_closed"
+          ],
+          "title": "RealtimeConversationClosedEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "RealtimeConversationClosedEventMsg",
+      "type": "object"
+    },
+    {
+      "description": "Model routing changed from the requested model to a different model.",
+      "properties": {
+        "from_model": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/definitions/ModelRerouteReason"
+        },
+        "to_model": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "model_reroute"
+          ],
+          "title": "ModelRerouteEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_model",
+        "reason",
+        "to_model",
+        "type"
+      ],
+      "title": "ModelRerouteEventMsg",
+      "type": "object"
+    },
+    {
       "description": "Conversation history was compacted (either automatically or manually).",
       "properties": {
         "type": {
@@ -5416,6 +6043,17 @@
       "properties": {
         "message": {
           "type": "string"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MessagePhase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "type": {
           "enum": [
@@ -6146,6 +6784,14 @@
           "default": "agent",
           "description": "Where the command originated. Defaults to Agent for backward compatibility."
         },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecCommandStatus"
+            }
+          ],
+          "description": "Completion status for this command execution."
+        },
         "stderr": {
           "description": "Captured stderr",
           "type": "string"
@@ -6174,6 +6820,7 @@
         "exit_code",
         "formatted_output",
         "parsed_cmd",
+        "status",
         "stderr",
         "stdout",
         "turn_id",
@@ -6211,8 +6858,15 @@
     },
     {
       "properties": {
+        "approval_id": {
+          "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "call_id": {
-          "description": "Identifier for the associated exec call, if available.",
+          "description": "Identifier for the associated command execution item.",
           "type": "string"
         },
         "command": {
@@ -6225,6 +6879,17 @@
         "cwd": {
           "description": "The command's working directory.",
           "type": "string"
+        },
+        "network_approval_context": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkApprovalContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional network context for a blocked request that can be approved."
         },
         "parsed_cmd": {
           "items": {
@@ -6602,6 +7267,14 @@
           "description": "The changes that were applied (mirrors PatchApplyBeginEvent::changes).",
           "type": "object"
         },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PatchApplyStatus"
+            }
+          ],
+          "description": "Completion status for this patch application."
+        },
         "stderr": {
           "description": "Captured stderr (parser errors, IO failures, etc.).",
           "type": "string"
@@ -6629,6 +7302,7 @@
       },
       "required": [
         "call_id",
+        "status",
         "stderr",
         "stdout",
         "success",
@@ -7255,6 +7929,20 @@
           "description": "Identifier for the collab tool call.",
           "type": "string"
         },
+        "new_agent_nickname": {
+          "description": "Optional nickname assigned to the new agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "new_agent_role": {
+          "description": "Optional role assigned to the new agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "new_thread_id": {
           "anyOf": [
             {
@@ -7360,6 +8048,20 @@
           "description": "Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.",
           "type": "string"
         },
+        "receiver_agent_nickname": {
+          "description": "Optional nickname assigned to the receiver agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "receiver_agent_role": {
+          "description": "Optional role assigned to the receiver agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "receiver_thread_id": {
           "allOf": [
             {
@@ -7410,6 +8112,13 @@
           "description": "ID of the waiting call.",
           "type": "string"
         },
+        "receiver_agents": {
+          "description": "Optional nicknames/roles for receivers.",
+          "items": {
+            "$ref": "#/definitions/CollabAgentRef"
+          },
+          "type": "array"
+        },
         "receiver_thread_ids": {
           "description": "Thread ID of the receivers.",
           "items": {
@@ -7445,6 +8154,13 @@
     {
       "description": "Collab interaction: waiting end.",
       "properties": {
+        "agent_statuses": {
+          "description": "Optional receiver metadata paired with final statuses.",
+          "items": {
+            "$ref": "#/definitions/CollabAgentStatusEntry"
+          },
+          "type": "array"
+        },
         "call_id": {
           "description": "ID of the waiting call.",
           "type": "string"
@@ -7528,6 +8244,20 @@
           "description": "Identifier for the collab tool call.",
           "type": "string"
         },
+        "receiver_agent_nickname": {
+          "description": "Optional nickname assigned to the receiver agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "receiver_agent_role": {
+          "description": "Optional role assigned to the receiver agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "receiver_thread_id": {
           "allOf": [
             {
@@ -7577,6 +8307,20 @@
           "description": "Identifier for the collab tool call.",
           "type": "string"
         },
+        "receiver_agent_nickname": {
+          "description": "Optional nickname assigned to the receiver agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "receiver_agent_role": {
+          "description": "Optional role assigned to the receiver agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "receiver_thread_id": {
           "allOf": [
             {
@@ -7616,6 +8360,20 @@
         "call_id": {
           "description": "Identifier for the collab tool call.",
           "type": "string"
+        },
+        "receiver_agent_nickname": {
+          "description": "Optional nickname assigned to the receiver agent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "receiver_agent_role": {
+          "description": "Optional role assigned to the receiver agent.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "receiver_thread_id": {
           "allOf": [

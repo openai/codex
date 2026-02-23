@@ -1,27 +1,3 @@
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningEvent;
-use codex_core::protocol::AgentStatus;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::CollabAgentSpawnBeginEvent;
-use codex_core::protocol::CollabAgentSpawnEndEvent;
-use codex_core::protocol::CollabWaitingEndEvent;
-use codex_core::protocol::ErrorEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::McpInvocation;
-use codex_core::protocol::McpToolCallBeginEvent;
-use codex_core::protocol::McpToolCallEndEvent;
-use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::PatchApplyEndEvent;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::protocol::WarningEvent;
-use codex_core::protocol::WebSearchBeginEvent;
-use codex_core::protocol::WebSearchEndEvent;
 use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use codex_exec::exec_events::AgentMessageItem;
 use codex_exec::exec_events::CollabAgentState;
@@ -61,9 +37,35 @@ use codex_protocol::models::WebSearchAction;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::AgentReasoningEvent;
+use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
+use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabWaitingEndEvent;
+use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandBeginEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 use codex_protocol::protocol::ExecOutputStream;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpToolCallBeginEvent;
+use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::PatchApplyBeginEvent;
+use codex_protocol::protocol::PatchApplyEndEvent;
+use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_protocol::protocol::WarningEvent;
+use codex_protocol::protocol::WebSearchBeginEvent;
+use codex_protocol::protocol::WebSearchEndEvent;
 use pretty_assertions::assert_eq;
 use rmcp::model::Content;
 use serde_json::json;
@@ -92,7 +94,7 @@ fn session_configured_produces_thread_started_event() {
             model: "codex-mini-latest".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,
             history_log_id: 0,
@@ -116,7 +118,7 @@ fn task_started_produces_turn_started_event() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
         "t1",
-        EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+        EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
             turn_id: "turn-1".to_string(),
             model_context_window: Some(32_000),
             collaboration_mode_kind: ModeKind::Default,
@@ -310,7 +312,7 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
     // Task completes => item.completed (same id, latest state)
     let complete = event(
         "p3",
-        EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+        EventMsg::TurnComplete(codex_protocol::protocol::TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
@@ -570,6 +572,8 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             call_id: "call-10".to_string(),
             sender_thread_id,
             new_thread_id: Some(new_thread_id),
+            new_agent_nickname: None,
+            new_agent_role: None,
             prompt: prompt.clone(),
             status: AgentStatus::Running,
         }),
@@ -621,6 +625,7 @@ fn collab_wait_end_without_begin_synthesizes_failed_item() {
         EventMsg::CollabWaitingEnd(CollabWaitingEndEvent {
             sender_thread_id,
             call_id: "call-11".to_string(),
+            agent_statuses: Vec::new(),
             statuses: statuses.clone(),
         }),
     );
@@ -678,7 +683,7 @@ fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
     let _ = ep.collect_thread_events(&start);
     let complete = event(
         "t2",
-        EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+        EventMsg::TurnComplete(codex_protocol::protocol::TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
@@ -736,6 +741,7 @@ fn agent_message_produces_item_completed_agent_message() {
         "e1",
         EventMsg::AgentMessage(AgentMessageEvent {
             message: "hello".to_string(),
+            phase: None,
         }),
     );
     let out = ep.collect_thread_events(&ev);
@@ -757,7 +763,7 @@ fn error_event_produces_error() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
         "e1",
-        EventMsg::Error(codex_core::protocol::ErrorEvent {
+        EventMsg::Error(codex_protocol::protocol::ErrorEvent {
             message: "boom".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
         }),
@@ -797,7 +803,7 @@ fn stream_error_event_produces_error() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
         "e1",
-        EventMsg::StreamError(codex_core::protocol::StreamErrorEvent {
+        EventMsg::StreamError(codex_protocol::protocol::StreamErrorEvent {
             message: "retrying".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
             additional_details: None,
@@ -831,7 +837,7 @@ fn error_followed_by_task_complete_produces_turn_failed() {
 
     let complete_event = event(
         "e2",
-        EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+        EventMsg::TurnComplete(codex_protocol::protocol::TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
@@ -901,6 +907,7 @@ fn exec_command_end_success_produces_completed_command_item() {
             exit_code: 0,
             duration: Duration::from_millis(5),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
         }),
     );
     let out_ok = ep.collect_thread_events(&end_ok);
@@ -988,6 +995,7 @@ fn command_execution_output_delta_updates_item_progress() {
             exit_code: 0,
             duration: Duration::from_millis(3),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
         }),
     );
     let out_end = ep.collect_thread_events(&end);
@@ -1061,6 +1069,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
             exit_code: 1,
             duration: Duration::from_millis(2),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Failed,
         }),
     );
     let out_fail = ep.collect_thread_events(&end_fail);
@@ -1102,6 +1111,7 @@ fn exec_command_end_without_begin_is_ignored() {
             exit_code: 0,
             duration: Duration::from_millis(1),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
         }),
     );
     let out = ep.collect_thread_events(&end_only);
@@ -1157,6 +1167,7 @@ fn patch_apply_success_produces_item_completed_patchapply() {
             stderr: String::new(),
             success: true,
             changes: changes.clone(),
+            status: CorePatchApplyStatus::Completed,
         }),
     );
     let out_end = ep.collect_thread_events(&end);
@@ -1228,6 +1239,7 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
             stderr: "failed to apply".to_string(),
             success: false,
             changes: changes.clone(),
+            status: CorePatchApplyStatus::Failed,
         }),
     );
     let out_end = ep.collect_thread_events(&end);
@@ -1255,21 +1267,21 @@ fn task_complete_produces_turn_completed_with_usage() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
 
     // First, feed a TokenCount event with known totals.
-    let usage = codex_core::protocol::TokenUsage {
+    let usage = codex_protocol::protocol::TokenUsage {
         input_tokens: 1200,
         cached_input_tokens: 200,
         output_tokens: 345,
         reasoning_output_tokens: 0,
         total_tokens: 0,
     };
-    let info = codex_core::protocol::TokenUsageInfo {
+    let info = codex_protocol::protocol::TokenUsageInfo {
         total_token_usage: usage.clone(),
         last_token_usage: usage,
         model_context_window: None,
     };
     let token_count_event = event(
         "e1",
-        EventMsg::TokenCount(codex_core::protocol::TokenCountEvent {
+        EventMsg::TokenCount(codex_protocol::protocol::TokenCountEvent {
             info: Some(info),
             rate_limits: None,
         }),
@@ -1279,7 +1291,7 @@ fn task_complete_produces_turn_completed_with_usage() {
     // Then TurnComplete should produce turn.completed with the captured usage.
     let complete_event = event(
         "e2",
-        EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+        EventMsg::TurnComplete(codex_protocol::protocol::TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
             last_agent_message: Some("done".to_string()),
         }),

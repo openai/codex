@@ -7,7 +7,7 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_core::protocol::Op;
+use codex_protocol::protocol::Op;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -218,9 +218,11 @@ impl Renderable for StatusIndicatorWidget {
             return;
         }
 
-        // Schedule next animation frame.
-        self.frame_requester
-            .schedule_frame_in(Duration::from_millis(32));
+        if self.animations_enabled {
+            // Schedule next animation frame.
+            self.frame_requester
+                .schedule_frame_in(Duration::from_millis(32));
+        }
         let now = Instant::now();
         let elapsed_duration = self.elapsed_duration_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());

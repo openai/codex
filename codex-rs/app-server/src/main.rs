@@ -1,4 +1,6 @@
-use codex_app_server::run_main;
+use clap::Parser;
+use codex_app_server::AppServerTransport;
+use codex_app_server::run_main_with_transport;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_core::config_loader::LoaderOverrides;
 use codex_utils_cli::CliConfigOverrides;
@@ -8,19 +10,39 @@ use std::path::PathBuf;
 // managed config file without writing to /etc.
 const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH";
 
+#[derive(Debug, Parser)]
+struct AppServerArgs {
+    /// Transport endpoint URL. Supported values: `stdio://` (default),
+    /// `ws://IP:PORT`.
+    #[arg(
+        long = "listen",
+        value_name = "URL",
+        default_value = AppServerTransport::DEFAULT_LISTEN_URL
+    )]
+    listen: AppServerTransport,
+}
+
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
+        // Run wrapper mode only after arg0 dispatch so `codex-linux-sandbox`
+        // invocations don't get misclassified as zsh exec-wrapper calls.
+        if codex_core::maybe_run_zsh_exec_wrapper_mode()? {
+            return Ok(());
+        }
+        let args = AppServerArgs::parse();
         let managed_config_path = managed_config_path_from_debug_env();
         let loader_overrides = LoaderOverrides {
             managed_config_path,
             ..Default::default()
         };
+        let transport = args.listen;
 
-        run_main(
+        run_main_with_transport(
             codex_linux_sandbox_exe,
             CliConfigOverrides::default(),
             loader_overrides,
             false,
+            transport,
         )
         .await?;
         Ok(())

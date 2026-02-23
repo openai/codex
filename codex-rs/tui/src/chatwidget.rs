@@ -51,6 +51,7 @@ use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
+use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
@@ -60,55 +61,9 @@ use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
-use codex_core::protocol::AgentMessageDeltaEvent;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningDeltaEvent;
-use codex_core::protocol::AgentReasoningEvent;
-use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
-use codex_core::protocol::AgentReasoningRawContentEvent;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::BackgroundEventEvent;
-use codex_core::protocol::CodexErrorInfo;
-use codex_core::protocol::CreditsSnapshot;
-use codex_core::protocol::DeprecationNoticeEvent;
-use codex_core::protocol::ErrorEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::ExecCommandOutputDeltaEvent;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::ListCustomPromptsResponseEvent;
-use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::McpListToolsResponseEvent;
-use codex_core::protocol::McpStartupCompleteEvent;
-use codex_core::protocol::McpStartupStatus;
-use codex_core::protocol::McpStartupUpdateEvent;
-use codex_core::protocol::McpToolCallBeginEvent;
-use codex_core::protocol::McpToolCallEndEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::RateLimitSnapshot;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TerminalInteractionEvent;
-use codex_core::protocol::TokenUsage;
-use codex_core::protocol::TokenUsageInfo;
-use codex_core::protocol::TurnAbortReason;
-use codex_core::protocol::TurnCompleteEvent;
-use codex_core::protocol::TurnDiffEvent;
-use codex_core::protocol::UndoCompletedEvent;
-use codex_core::protocol::UndoStartedEvent;
-use codex_core::protocol::UserMessageEvent;
-use codex_core::protocol::ViewImageToolCallEvent;
-use codex_core::protocol::WarningEvent;
-use codex_core::protocol::WebSearchBeginEvent;
-use codex_core::protocol::WebSearchEndEvent;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::terminal::TerminalName;
+use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
@@ -127,9 +82,58 @@ use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::protocol::AgentMessageDeltaEvent;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::AgentReasoningDeltaEvent;
+use codex_protocol::protocol::AgentReasoningEvent;
+use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
+use codex_protocol::protocol::AgentReasoningRawContentEvent;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::BackgroundEventEvent;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::DeprecationNoticeEvent;
+use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecCommandBeginEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::ListCustomPromptsResponseEvent;
+use codex_protocol::protocol::ListSkillsResponseEvent;
+use codex_protocol::protocol::McpListToolsResponseEvent;
+use codex_protocol::protocol::McpStartupCompleteEvent;
+use codex_protocol::protocol::McpStartupStatus;
+use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_protocol::protocol::McpToolCallBeginEvent;
+use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PatchApplyBeginEvent;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
+use codex_protocol::protocol::StreamErrorEvent;
+use codex_protocol::protocol::TerminalInteractionEvent;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::protocol::UndoCompletedEvent;
+use codex_protocol::protocol::UndoStartedEvent;
+use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::protocol::ViewImageToolCallEvent;
+use codex_protocol::protocol::WarningEvent;
+use codex_protocol::protocol::WebSearchBeginEvent;
+use codex_protocol::protocol::WebSearchEndEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
+use codex_utils_sleep_inhibitor::SleepInhibitor;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -154,14 +158,44 @@ const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
+const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
+const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
+const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
+
+/// Choose the keybinding used to edit the most-recently queued message.
+///
+/// Apple Terminal, Warp, and VSCode integrated terminals intercept or silently
+/// swallow Alt+Up, so users in those environments would never be able to trigger
+/// the edit action.  We fall back to Shift+Left for those terminals while
+/// keeping the more discoverable Alt+Up everywhere else.
+///
+/// The match is exhaustive so that adding a new `TerminalName` variant forces
+/// an explicit decision about which binding that terminal should use.
+fn queued_message_edit_binding_for_terminal(terminal_name: TerminalName) -> KeyBinding {
+    match terminal_name {
+        TerminalName::AppleTerminal | TerminalName::WarpTerminal | TerminalName::VsCode => {
+            key_hint::shift(KeyCode::Left)
+        }
+        TerminalName::Ghostty
+        | TerminalName::Iterm2
+        | TerminalName::WezTerm
+        | TerminalName::Kitty
+        | TerminalName::Alacritty
+        | TerminalName::Konsole
+        | TerminalName::GnomeTerminal
+        | TerminalName::Vte
+        | TerminalName::WindowsTerminal
+        | TerminalName::Dumb
+        | TerminalName::Unknown => key_hint::alt(KeyCode::Up),
+    }
+}
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
-use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
@@ -183,7 +217,6 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
-use crate::collab;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -200,6 +233,7 @@ use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
+use crate::multi_agents;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -234,13 +268,13 @@ use chrono::Local;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_approval_presets::ApprovalPreset;
 use codex_utils_approval_presets::builtin_approval_presets;
 use strum::IntoEnumIterator;
@@ -248,6 +282,8 @@ use strum::IntoEnumIterator;
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
+    ["model-with-reasoning", "context-remaining", "current-dir"];
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -440,23 +476,14 @@ enum ConnectorsCacheState {
 
 #[derive(Debug)]
 enum RateLimitErrorKind {
-    ModelCap {
-        model: String,
-        reset_after_seconds: Option<u64>,
-    },
+    ServerOverloaded,
     UsageLimit,
     Generic,
 }
 
 fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
     match info {
-        CodexErrorInfo::ModelCap {
-            model,
-            reset_after_seconds,
-        } => Some(RateLimitErrorKind::ModelCap {
-            model: model.clone(),
-            reset_after_seconds: *reset_after_seconds,
-        }),
+        CodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
         CodexErrorInfo::UsageLimitExceeded => Some(RateLimitErrorKind::UsageLimit),
         CodexErrorInfo::ResponseTooManyFailedAttempts {
             http_status_code: Some(429),
@@ -529,6 +556,7 @@ pub(crate) struct ChatWidget {
     skills_initial_state: Option<HashMap<PathBuf, bool>>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
+    turn_sleep_inhibitor: SleepInhibitor,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
@@ -544,6 +572,7 @@ pub(crate) struct ChatWidget {
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     connectors_cache: ConnectorsCacheState,
     connectors_prefetch_in_flight: bool,
+    connectors_force_refetch_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -567,6 +596,11 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    /// Terminal-appropriate keybinding for popping the most-recently queued
+    /// message back into the composer.  Determined once at construction time via
+    /// [`queued_message_edit_binding_for_terminal`] and propagated to
+    /// `BottomPane` so the hint text matches the actual shortcut.
+    queued_message_edit_binding: KeyBinding,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
@@ -616,7 +650,7 @@ pub(crate) struct ChatWidget {
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
     // Runtime network proxy bind addresses from SessionConfigured.
-    session_network_proxy: Option<codex_core::protocol::SessionNetworkProxyRuntime>,
+    session_network_proxy: Option<codex_protocol::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     status_line_invalid_items_warned: Arc<AtomicBool>,
     // Cached git branch name for the status line (None if unknown).
@@ -657,6 +691,12 @@ pub(crate) struct ActiveCellTranscriptKey {
 pub(crate) struct UserMessage {
     text: String,
     local_images: Vec<LocalImageAttachment>,
+    /// Remote image attachments represented as URLs (for example data URLs)
+    /// provided by app-server clients.
+    ///
+    /// Unlike `local_images`, these are not created by TUI image attach/paste
+    /// flows. The TUI can restore and remove them while editing/backtracking.
+    remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
 }
@@ -666,6 +706,7 @@ impl From<String> for UserMessage {
         Self {
             text,
             local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
@@ -678,6 +719,7 @@ impl From<&str> for UserMessage {
         Self {
             text: text.to_string(),
             local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
@@ -705,6 +747,7 @@ pub(crate) fn create_initial_user_message(
         Some(UserMessage {
             text,
             local_images,
+            remote_image_urls: Vec::new(),
             text_elements,
             mention_bindings: Vec::new(),
         })
@@ -720,6 +763,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         text,
         text_elements,
         local_images,
+        remote_image_urls,
         mention_bindings,
     } = message;
     if local_images.is_empty() {
@@ -727,6 +771,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
             text,
             text_elements,
             local_images,
+            remote_image_urls,
             mention_bindings,
         };
     }
@@ -781,9 +826,16 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
     UserMessage {
         text: rebuilt,
         local_images: remapped_images,
+        remote_image_urls,
         text_elements: rebuilt_elements,
         mention_bindings,
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReplayKind {
+    ResumeInitialMessages,
+    ThreadSnapshot,
 }
 
 impl ChatWidget {
@@ -948,12 +1000,11 @@ impl ChatWidget {
 
     /// Applies status-line item selection from the setup view to in-memory config.
     ///
-    /// An empty selection is normalized to `None` so the status line is fully disabled and the
-    /// behavior matches an unset `tui.status_line` config value.
+    /// An empty selection persists as an explicit empty list.
     pub(crate) fn setup_status_line(&mut self, items: Vec<StatusLineItem>) {
         tracing::info!("status line setup confirmed with items: {items:#?}");
         let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
-        self.config.tui_status_line = if ids.is_empty() { None } else { Some(ids) };
+        self.config.tui_status_line = Some(ids);
         self.refresh_status_line();
     }
 
@@ -1015,7 +1066,7 @@ impl ChatWidget {
     }
 
     // --- Small event handlers ---
-    fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
+    fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
@@ -1114,7 +1165,7 @@ impl ChatWidget {
         });
     }
 
-    fn on_thread_name_updated(&mut self, event: codex_core::protocol::ThreadNameUpdatedEvent) {
+    fn on_thread_name_updated(&mut self, event: codex_protocol::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
             self.thread_name = event.thread_name;
             self.request_redraw();
@@ -1149,22 +1200,8 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn open_app_link_view(
-        &mut self,
-        title: String,
-        description: Option<String>,
-        instructions: String,
-        url: String,
-        is_installed: bool,
-    ) {
-        let view = crate::bottom_pane::AppLinkView::new(
-            title,
-            description,
-            instructions,
-            url,
-            is_installed,
-            self.app_event_tx.clone(),
-        );
+    pub(crate) fn open_app_link_view(&mut self, params: crate::bottom_pane::AppLinkViewParams) {
+        let view = crate::bottom_pane::AppLinkView::new(params, self.app_event_tx.clone());
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
     }
@@ -1298,6 +1335,7 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
+        self.turn_sleep_inhibitor.set_turn_running(true);
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.plan_delta_buffer.clear();
@@ -1355,6 +1393,7 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
         self.agent_turn_running = false;
+        self.turn_sleep_inhibitor.set_turn_running(false);
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -1422,7 +1461,6 @@ impl ChatWidget {
             }
             None => (Vec::new(), Some("Default mode unavailable".to_string())),
         };
-
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
@@ -1591,6 +1629,7 @@ impl ChatWidget {
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
         self.agent_turn_running = false;
+        self.turn_sleep_inhibitor.set_turn_running(false);
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -1604,18 +1643,14 @@ impl ChatWidget {
         self.maybe_show_pending_rate_limit_prompt();
     }
 
-    fn on_model_cap_error(&mut self, model: String, reset_after_seconds: Option<u64>) {
+    fn on_server_overloaded_error(&mut self, message: String) {
         self.finalize_turn();
 
-        let mut message = format!("Model {model} is at capacity. Please try a different model.");
-        if let Some(seconds) = reset_after_seconds {
-            message.push_str(&format!(
-                " Try again in {}.",
-                format_duration_short(seconds)
-            ));
+        let message = if message.trim().is_empty() {
+            "Codex is currently experiencing high load.".to_string()
         } else {
-            message.push_str(" Try again later.");
-        }
+            message
+        };
 
         self.add_to_history(history_cell::new_warning_event(message));
         self.request_redraw();
@@ -1744,11 +1779,15 @@ impl ChatWidget {
             text: self.bottom_pane.composer_text(),
             text_elements: self.bottom_pane.composer_text_elements(),
             local_images: self.bottom_pane.composer_local_images(),
+            remote_image_urls: self.bottom_pane.remote_image_urls(),
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
         };
 
         let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
-        if !existing_message.text.is_empty() || !existing_message.local_images.is_empty() {
+        if !existing_message.text.is_empty()
+            || !existing_message.local_images.is_empty()
+            || !existing_message.remote_image_urls.is_empty()
+        {
             to_merge.push(existing_message);
         }
 
@@ -1756,10 +1795,15 @@ impl ChatWidget {
             text: String::new(),
             text_elements: Vec::new(),
             local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
             mention_bindings: Vec::new(),
         };
         let mut combined_offset = 0usize;
-        let mut next_image_label = 1usize;
+        let total_remote_images = to_merge
+            .iter()
+            .map(|message| message.remote_image_urls.len())
+            .sum::<usize>();
+        let mut next_image_label = total_remote_images + 1;
 
         for (idx, message) in to_merge.into_iter().enumerate() {
             if idx > 0 {
@@ -1778,6 +1822,7 @@ impl ChatWidget {
                     elem
                 }));
             combined.local_images.extend(message.local_images);
+            combined.remote_image_urls.extend(message.remote_image_urls);
             combined.mention_bindings.extend(message.mention_bindings);
         }
 
@@ -1788,10 +1833,12 @@ impl ChatWidget {
         let UserMessage {
             text,
             local_images,
+            remote_image_urls,
             text_elements,
             mention_bindings,
         } = user_message;
         let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
+        self.set_remote_image_urls(remote_image_urls);
         self.bottom_pane.set_composer_text_with_mention_bindings(
             text,
             text_elements,
@@ -1941,7 +1988,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_patch_apply_end(&mut self, event: codex_core::protocol::PatchApplyEndEvent) {
+    fn on_patch_apply_end(&mut self, event: codex_protocol::protocol::PatchApplyEndEvent) {
         let ev2 = event.clone();
         self.defer_or_handle(
             |q| q.push_patch_end(event),
@@ -2103,9 +2150,9 @@ impl ChatWidget {
 
     fn on_get_history_entry_response(
         &mut self,
-        event: codex_core::protocol::GetHistoryEntryResponseEvent,
+        event: codex_protocol::protocol::GetHistoryEntryResponseEvent,
     ) {
-        let codex_core::protocol::GetHistoryEntryResponseEvent {
+        let codex_protocol::protocol::GetHistoryEntryResponseEvent {
             offset,
             log_id,
             entry,
@@ -2310,7 +2357,25 @@ impl ChatWidget {
         elapsed
     }
 
+    /// Finalizes an exec call while preserving the active exec cell grouping contract.
+    ///
+    /// Exec begin/end events usually pair through `running_commands`, but unified exec can emit an
+    /// end event for a call that was never materialized as the current active `ExecCell` (for
+    /// example, when another exploring group is still active). In that case we render the end as a
+    /// standalone history entry instead of replacing or flushing the unrelated active exploring
+    /// cell. If this method treated every unknown end as "complete the active cell", the UI could
+    /// merge unrelated commands and hide still-running exploring work.
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
+        enum ExecEndTarget {
+            // Normal case: the active exec cell already tracks this call id.
+            ActiveTracked,
+            // We have an active exec group, but it does not contain this call id. Render the end
+            // as a standalone finalized history cell so the active group remains intact.
+            OrphanHistoryWhileActiveExec,
+            // No active exec cell can safely own this end; build a new cell from the end payload.
+            NewCell,
+        }
+
         let running = self.running_commands.remove(&ev.call_id);
         if self.suppressed_exec_calls.remove(&ev.call_id) {
             return;
@@ -2321,48 +2386,95 @@ impl ChatWidget {
         };
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
-
-        let needs_new = self
-            .active_cell
-            .as_ref()
-            .map(|cell| cell.as_any().downcast_ref::<ExecCell>().is_none())
-            .unwrap_or(true);
-        if needs_new {
-            self.flush_active_cell();
-            self.active_cell = Some(Box::new(new_active_exec_command(
-                ev.call_id.clone(),
-                command,
-                parsed,
-                source,
-                ev.interaction_input.clone(),
-                self.config.animations,
-            )));
-        }
-
-        if let Some(cell) = self
-            .active_cell
-            .as_mut()
-            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
-        {
-            let output = if is_unified_exec_interaction {
-                CommandOutput {
-                    exit_code: ev.exit_code,
-                    formatted_output: String::new(),
-                    aggregated_output: String::new(),
+        let end_target = match self.active_cell.as_ref() {
+            Some(cell) => match cell.as_any().downcast_ref::<ExecCell>() {
+                Some(exec_cell)
+                    if exec_cell
+                        .iter_calls()
+                        .any(|call| call.call_id == ev.call_id) =>
+                {
+                    ExecEndTarget::ActiveTracked
                 }
-            } else {
-                CommandOutput {
-                    exit_code: ev.exit_code,
-                    formatted_output: ev.formatted_output.clone(),
-                    aggregated_output: ev.aggregated_output.clone(),
+                Some(exec_cell) if exec_cell.is_active() => {
+                    ExecEndTarget::OrphanHistoryWhileActiveExec
                 }
-            };
-            cell.complete_call(&ev.call_id, output, ev.duration);
-            if cell.should_flush() {
-                self.flush_active_cell();
-            } else {
-                self.bump_active_cell_revision();
+                Some(_) | None => ExecEndTarget::NewCell,
+            },
+            None => ExecEndTarget::NewCell,
+        };
+
+        // Unified exec interaction rows intentionally hide command output text in the exec cell and
+        // instead render the interaction-specific content elsewhere in the UI.
+        let output = if is_unified_exec_interaction {
+            CommandOutput {
+                exit_code: ev.exit_code,
+                formatted_output: String::new(),
+                aggregated_output: String::new(),
+            }
+        } else {
+            CommandOutput {
+                exit_code: ev.exit_code,
+                formatted_output: ev.formatted_output.clone(),
+                aggregated_output: ev.aggregated_output.clone(),
+            }
+        };
+
+        match end_target {
+            ExecEndTarget::ActiveTracked => {
+                if let Some(cell) = self
+                    .active_cell
+                    .as_mut()
+                    .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+                {
+                    let completed = cell.complete_call(&ev.call_id, output, ev.duration);
+                    debug_assert!(completed, "active exec cell should contain {}", ev.call_id);
+                    if cell.should_flush() {
+                        self.flush_active_cell();
+                    } else {
+                        self.bump_active_cell_revision();
+                        self.request_redraw();
+                    }
+                }
+            }
+            ExecEndTarget::OrphanHistoryWhileActiveExec => {
+                let mut orphan = new_active_exec_command(
+                    ev.call_id.clone(),
+                    command,
+                    parsed,
+                    source,
+                    ev.interaction_input.clone(),
+                    self.config.animations,
+                );
+                let completed = orphan.complete_call(&ev.call_id, output, ev.duration);
+                debug_assert!(
+                    completed,
+                    "new orphan exec cell should contain {}",
+                    ev.call_id
+                );
+                self.needs_final_message_separator = true;
+                self.app_event_tx
+                    .send(AppEvent::InsertHistoryCell(Box::new(orphan)));
                 self.request_redraw();
+            }
+            ExecEndTarget::NewCell => {
+                self.flush_active_cell();
+                let mut cell = new_active_exec_command(
+                    ev.call_id.clone(),
+                    command,
+                    parsed,
+                    source,
+                    ev.interaction_input.clone(),
+                    self.config.animations,
+                );
+                let completed = cell.complete_call(&ev.call_id, output, ev.duration);
+                debug_assert!(completed, "new exec cell should contain {}", ev.call_id);
+                if cell.should_flush() {
+                    self.add_to_history(cell);
+                } else {
+                    self.active_cell = Some(Box::new(cell));
+                    self.bump_active_cell_revision();
+                    self.request_redraw();
+                }
             }
         }
         // Mark that actual work was done (command executed)
@@ -2371,7 +2483,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_patch_apply_end_now(
         &mut self,
-        event: codex_core::protocol::PatchApplyEndEvent,
+        event: codex_protocol::protocol::PatchApplyEndEvent,
     ) {
         // If the patch was successful, just let the "Edited" block stand.
         // Otherwise, add a failure block.
@@ -2392,6 +2504,7 @@ impl ChatWidget {
             id: ev.call_id,
             command: ev.command,
             reason: ev.reason,
+            network_approval_context: ev.network_approval_context,
             proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
         };
         self.bottom_pane
@@ -2571,6 +2684,7 @@ impl ChatWidget {
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
+        let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
@@ -2599,6 +2713,8 @@ impl ChatWidget {
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
         let current_cwd = Some(config.cwd.clone());
+        let queued_message_edit_binding =
+            queued_message_edit_binding_for_terminal(terminal_info().name);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -2638,12 +2754,14 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             unified_exec_wait_streak: None,
+            turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
+            connectors_force_refetch_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2654,6 +2772,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2687,17 +2806,16 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget.bottom_pane.set_status_line_enabled(
-            widget
-                .config
-                .tui_status_line
-                .as_ref()
-                .is_some_and(|items| !items.is_empty()),
-        );
+        widget
+            .bottom_pane
+            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.sync_personality_command_enabled();
+        widget
+            .bottom_pane
+            .set_queued_message_edit_binding(widget.queued_message_edit_binding);
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -2737,6 +2855,7 @@ impl ChatWidget {
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
+        let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
@@ -2764,6 +2883,8 @@ impl ChatWidget {
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
         let current_cwd = Some(config.cwd.clone());
 
+        let queued_message_edit_binding =
+            queued_message_edit_binding_for_terminal(terminal_info().name);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -2803,12 +2924,14 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             unified_exec_wait_streak: None,
+            turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
+            connectors_force_refetch_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2823,6 +2946,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
+            queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2852,17 +2976,16 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget.bottom_pane.set_status_line_enabled(
-            widget
-                .config
-                .tui_status_line
-                .as_ref()
-                .is_some_and(|items| !items.is_empty()),
-        );
+        widget
+            .bottom_pane
+            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.sync_personality_command_enabled();
+        widget
+            .bottom_pane
+            .set_queued_message_edit_binding(widget.queued_message_edit_binding);
 
         widget
     }
@@ -2871,7 +2994,7 @@ impl ChatWidget {
     pub(crate) fn new_from_existing(
         common: ChatWidgetInit,
         conversation: std::sync::Arc<codex_core::CodexThread>,
-        session_configured: codex_core::protocol::SessionConfiguredEvent,
+        session_configured: codex_protocol::protocol::SessionConfiguredEvent,
     ) -> Self {
         let ChatWidgetInit {
             config,
@@ -2889,6 +3012,7 @@ impl ChatWidget {
             otel_manager,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
+        let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
@@ -2918,6 +3042,8 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
+        let queued_message_edit_binding =
+            queued_message_edit_binding_for_terminal(terminal_info().name);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -2957,12 +3083,14 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             unified_exec_wait_streak: None,
+            turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
+            connectors_force_refetch_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2973,6 +3101,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            queued_message_edit_binding,
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -3006,17 +3135,16 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
-        widget.bottom_pane.set_status_line_enabled(
-            widget
-                .config
-                .tui_status_line
-                .as_ref()
-                .is_some_and(|items| !items.is_empty()),
-        );
+        widget
+            .bottom_pane
+            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.sync_personality_command_enabled();
+        widget
+            .bottom_pane
+            .set_queued_message_edit_binding(widget.queued_message_edit_binding);
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -3089,6 +3217,18 @@ impl ChatWidget {
             _ => {}
         }
 
+        if key_event.kind == KeyEventKind::Press
+            && self.queued_message_edit_binding.is_press(key_event)
+            && !self.queued_user_messages.is_empty()
+        {
+            if let Some(user_message) = self.queued_user_messages.pop_back() {
+                self.restore_user_message_to_composer(user_message);
+                self.refresh_queued_user_messages();
+                self.request_redraw();
+            }
+            return;
+        }
+
         match key_event {
             KeyEvent {
                 code: KeyCode::BackTab,
@@ -3100,29 +3240,19 @@ impl ChatWidget {
             {
                 self.cycle_collaboration_mode();
             }
-            KeyEvent {
-                code: KeyCode::Up,
-                modifiers: KeyModifiers::ALT,
-                kind: KeyEventKind::Press,
-                ..
-            } if !self.queued_user_messages.is_empty() => {
-                // Prefer the most recently queued item.
-                if let Some(user_message) = self.queued_user_messages.pop_back() {
-                    self.restore_user_message_to_composer(user_message);
-                    self.refresh_queued_user_messages();
-                    self.request_redraw();
-                }
-            }
             _ => match self.bottom_pane.handle_key_event(key_event) {
                 InputResult::Submitted {
                     text,
                     text_elements,
                 } => {
+                    let local_images = self
+                        .bottom_pane
+                        .take_recent_submission_images_with_placeholders();
+                    let remote_image_urls = self.take_remote_image_urls();
                     let user_message = UserMessage {
                         text,
-                        local_images: self
-                            .bottom_pane
-                            .take_recent_submission_images_with_placeholders(),
+                        local_images,
+                        remote_image_urls,
                         text_elements,
                         mention_bindings: self
                             .bottom_pane
@@ -3143,11 +3273,14 @@ impl ChatWidget {
                     text,
                     text_elements,
                 } => {
+                    let local_images = self
+                        .bottom_pane
+                        .take_recent_submission_images_with_placeholders();
+                    let remote_image_urls = self.take_remote_image_urls();
                     let user_message = UserMessage {
                         text,
-                        local_images: self
-                            .bottom_pane
-                            .take_recent_submission_images_with_placeholders(),
+                        local_images,
+                        remote_image_urls,
                         text_elements,
                         mention_bindings: self
                             .bottom_pane
@@ -3240,6 +3373,9 @@ impl ChatWidget {
             }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
+            }
+            SlashCommand::Clear => {
+                self.app_event_tx.send(AppEvent::ClearUi);
             }
             SlashCommand::Resume => {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
@@ -3335,7 +3471,12 @@ impl ChatWidget {
                         return;
                     };
 
-                    if let Err(err) = self.config.approval_policy.can_set(&preset.approval) {
+                    if let Err(err) = self
+                        .config
+                        .permissions
+                        .approval_policy
+                        .can_set(&preset.approval)
+                    {
                         self.add_error_message(err.to_string());
                         return;
                     }
@@ -3353,6 +3494,11 @@ impl ChatWidget {
                     let _ = &self.otel_manager;
                     // Not supported; on non-Windows this command should never be reachable.
                 };
+            }
+            SlashCommand::SandboxReadRoot => {
+                self.add_error_message(
+                    "Usage: /sandbox-add-read-dir <absolute-directory-path>".to_string(),
+                );
             }
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
@@ -3404,11 +3550,20 @@ impl ChatWidget {
             SlashCommand::Statusline => {
                 self.open_status_line_setup();
             }
+            SlashCommand::Theme => {
+                self.open_theme_picker();
+            }
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
             SlashCommand::Clean => {
                 self.clean_background_terminals();
+            }
+            SlashCommand::MemoryDrop => {
+                self.submit_op(Op::DropMemories);
+            }
+            SlashCommand::MemoryUpdate => {
+                self.submit_op(Op::UpdateMemories);
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -3427,11 +3582,11 @@ impl ChatWidget {
                 }
             }
             SlashCommand::TestApproval => {
-                use codex_core::protocol::EventMsg;
+                use codex_protocol::protocol::EventMsg;
                 use std::collections::HashMap;
 
-                use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-                use codex_core::protocol::FileChange;
+                use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+                use codex_protocol::protocol::FileChange;
 
                 self.app_event_tx.send(AppEvent::CodexEvent(Event {
                     id: "1".to_string(),
@@ -3517,11 +3672,14 @@ impl ChatWidget {
                 else {
                     return;
                 };
+                let local_images = self
+                    .bottom_pane
+                    .take_recent_submission_images_with_placeholders();
+                let remote_image_urls = self.take_remote_image_urls();
                 let user_message = UserMessage {
                     text: prepared_args,
-                    local_images: self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders(),
+                    local_images,
+                    remote_image_urls,
                     text_elements: prepared_elements,
                     mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
                 };
@@ -3548,6 +3706,18 @@ impl ChatWidget {
                         user_facing_hint: None,
                     },
                 });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
+                self.app_event_tx
+                    .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
+                        path: prepared_args,
+                    });
                 self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),
@@ -3659,18 +3829,22 @@ impl ChatWidget {
         let UserMessage {
             text,
             local_images,
+            remote_image_urls,
             text_elements,
             mention_bindings,
         } = user_message;
-        if text.is_empty() && local_images.is_empty() {
+        if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
             return;
         }
-        if !local_images.is_empty() && !self.current_model_supports_images() {
+        if (!local_images.is_empty() || !remote_image_urls.is_empty())
+            && !self.current_model_supports_images()
+        {
             self.restore_blocked_image_submission(
                 text,
                 text_elements,
                 local_images,
                 mention_bindings,
+                remote_image_urls,
             );
             return;
         }
@@ -3693,6 +3867,12 @@ impl ChatWidget {
                 command: cmd.to_string(),
             });
             return;
+        }
+
+        for image_url in &remote_image_urls {
+            items.push(UserInput::Image {
+                image_url: image_url.clone(),
+            });
         }
 
         for image in &local_images {
@@ -3765,7 +3945,7 @@ impl ChatWidget {
                 if !selected_app_ids.insert(app_id.to_string()) {
                     continue;
                 }
-                if let Some(app) = apps.iter().find(|app| app.id == app_id) {
+                if let Some(app) = apps.iter().find(|app| app.id == app_id && app.is_enabled) {
                     items.push(UserInput::Mention {
                         name: app.name.clone(),
                         path: binding.path.clone(),
@@ -3803,8 +3983,8 @@ impl ChatWidget {
         let op = Op::UserTurn {
             items,
             cwd: self.config.cwd.clone(),
-            approval_policy: self.config.approval_policy.value(),
-            sandbox_policy: self.config.sandbox_policy.get().clone(),
+            approval_policy: self.config.permissions.approval_policy.value(),
+            sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
             model: effective_mode.model().to_string(),
             effort: effective_mode.reasoning_effort(),
             summary: self.config.model_reasoning_summary,
@@ -3834,13 +4014,21 @@ impl ChatWidget {
                 });
         }
 
-        // Only show the text portion in conversation history.
+        // Show replayable user content in conversation history.
         if !text.is_empty() {
             let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
             self.add_to_history(history_cell::new_user_prompt(
                 text,
                 text_elements,
                 local_image_paths,
+                remote_image_urls,
+            ));
+        } else if !remote_image_urls.is_empty() {
+            self.add_to_history(history_cell::new_user_prompt(
+                String::new(),
+                Vec::new(),
+                Vec::new(),
+                remote_image_urls,
             ));
         }
 
@@ -3860,9 +4048,11 @@ impl ChatWidget {
         text_elements: Vec<TextElement>,
         local_images: Vec<LocalImageAttachment>,
         mention_bindings: Vec<MentionBinding>,
+        remote_image_urls: Vec<String>,
     ) {
         // Preserve the user's composed payload so they can retry after changing models.
         let local_image_paths = local_images.iter().map(|img| img.path.clone()).collect();
+        self.set_remote_image_urls(remote_image_urls);
         self.bottom_pane.set_composer_text_with_mention_bindings(
             text,
             text_elements,
@@ -3889,13 +4079,13 @@ impl ChatWidget {
                 continue;
             }
             // `id: None` indicates a synthetic/fake id coming from replay.
-            self.dispatch_event_msg(None, msg, true);
+            self.dispatch_event_msg(None, msg, Some(ReplayKind::ResumeInitialMessages));
         }
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
-        self.dispatch_event_msg(Some(id), msg, false);
+        self.dispatch_event_msg(Some(id), msg, None);
     }
 
     pub(crate) fn handle_codex_event_replay(&mut self, event: Event) {
@@ -3903,7 +4093,7 @@ impl ChatWidget {
         if matches!(msg, EventMsg::ShutdownComplete) {
             return;
         }
-        self.dispatch_event_msg(None, msg, true);
+        self.dispatch_event_msg(None, msg, Some(ReplayKind::ThreadSnapshot));
     }
 
     /// Dispatch a protocol `EventMsg` to the appropriate handler.
@@ -3911,9 +4101,17 @@ impl ChatWidget {
     /// `id` is `Some` for live events and `None` for replayed events from
     /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
     /// that must not be used to correlate follow-up actions.
-    fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
+    fn dispatch_event_msg(
+        &mut self,
+        id: Option<String>,
+        msg: EventMsg,
+        replay_kind: Option<ReplayKind>,
+    ) {
+        let from_replay = replay_kind.is_some();
+        let is_resume_initial_replay =
+            matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
         let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
-        if !is_stream_error {
+        if !is_resume_initial_replay && !is_stream_error {
             self.restore_retry_status_header_if_present();
         }
 
@@ -3931,7 +4129,9 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
-            EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+                self.on_agent_message(message)
+            }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
             }
@@ -3946,7 +4146,11 @@ impl ChatWidget {
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TurnStarted(_) => self.on_task_started(),
+            EventMsg::TurnStarted(_) => {
+                if !is_resume_initial_replay {
+                    self.on_task_started();
+                }
+            }
             EventMsg::TurnComplete(TurnCompleteEvent {
                 last_agent_message, ..
             }) => self.on_task_complete(last_agent_message, from_replay),
@@ -3955,6 +4159,7 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
+            EventMsg::ModelReroute(_) => {}
             EventMsg::Error(ErrorEvent {
                 message,
                 codex_error_info,
@@ -3963,10 +4168,9 @@ impl ChatWidget {
                     && let Some(kind) = rate_limit_error_kind(&info)
                 {
                     match kind {
-                        RateLimitErrorKind::ModelCap {
-                            model,
-                            reset_after_seconds,
-                        } => self.on_model_cap_error(model, reset_after_seconds),
+                        RateLimitErrorKind::ServerOverloaded => {
+                            self.on_server_overloaded_error(message)
+                        }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
                             self.on_error(message)
                         }
@@ -4036,7 +4240,11 @@ impl ChatWidget {
                 message,
                 additional_details,
                 ..
-            }) => self.on_stream_error(message, additional_details),
+            }) => {
+                if !is_resume_initial_replay {
+                    self.on_stream_error(message, additional_details);
+                }
+            }
             EventMsg::UserMessage(ev) => {
                 if from_replay {
                     self.on_user_message_event(ev);
@@ -4048,17 +4256,19 @@ impl ChatWidget {
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::CollabAgentSpawnBegin(_) => {}
-            EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(collab::spawn_end(ev)),
+            EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(multi_agents::spawn_end(ev)),
             EventMsg::CollabAgentInteractionBegin(_) => {}
             EventMsg::CollabAgentInteractionEnd(ev) => {
-                self.on_collab_event(collab::interaction_end(ev))
+                self.on_collab_event(multi_agents::interaction_end(ev))
             }
-            EventMsg::CollabWaitingBegin(ev) => self.on_collab_event(collab::waiting_begin(ev)),
-            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
+            EventMsg::CollabWaitingBegin(ev) => {
+                self.on_collab_event(multi_agents::waiting_begin(ev))
+            }
+            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(multi_agents::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
-            EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
-            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(collab::resume_begin(ev)),
-            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(collab::resume_end(ev)),
+            EventMsg::CollabCloseEnd(ev) => self.on_collab_event(multi_agents::close_end(ev)),
+            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(multi_agents::resume_begin(ev)),
+            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(multi_agents::resume_end(ev)),
             EventMsg::ThreadRolledBack(rollback) => {
                 if from_replay {
                     self.app_event_tx.send(AppEvent::ApplyThreadRollback {
@@ -4071,6 +4281,9 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::RealtimeConversationStarted(_)
+            | EventMsg::RealtimeConversationRealtime(_)
+            | EventMsg::RealtimeConversationClosed(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
             EventMsg::ItemCompleted(event) => {
                 let item = event.item;
@@ -4142,11 +4355,16 @@ impl ChatWidget {
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
-        if !event.message.trim().is_empty() {
+        let remote_image_urls = event.images.unwrap_or_default();
+        if !event.message.trim().is_empty()
+            || !event.text_elements.is_empty()
+            || !remote_image_urls.is_empty()
+        {
             self.add_to_history(history_cell::new_user_prompt(
                 event.message,
                 event.text_elements,
                 event.local_images,
+                remote_image_urls,
             ));
         }
 
@@ -4276,11 +4494,26 @@ impl ChatWidget {
     }
 
     fn open_status_line_setup(&mut self) {
+        let configured_status_line_items = self.configured_status_line_items();
         let view = StatusLineSetupView::new(
-            self.config.tui_status_line.as_deref(),
+            Some(configured_status_line_items.as_slice()),
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn open_theme_picker(&mut self) {
+        let codex_home = codex_core::config::find_codex_home().ok();
+        let terminal_width = self
+            .last_rendered_width
+            .get()
+            .and_then(|width| u16::try_from(width).ok());
+        let params = crate::theme_picker::build_theme_picker_params(
+            self.config.tui_theme.as_deref(),
+            codex_home.as_deref(),
+            terminal_width,
+        );
+        self.bottom_pane.show_selection_view(params);
     }
 
     /// Parses configured status-line ids into known items and collects unknown ids.
@@ -4290,10 +4523,7 @@ impl ChatWidget {
         let mut invalid = Vec::new();
         let mut invalid_seen = HashSet::new();
         let mut items = Vec::new();
-        let Some(config_items) = self.config.tui_status_line.as_ref() else {
-            return (items, invalid);
-        };
-        for id in config_items {
+        for id in self.configured_status_line_items() {
             match id.parse::<StatusLineItem>() {
                 Ok(item) => items.push(item),
                 Err(_) => {
@@ -4304,6 +4534,15 @@ impl ChatWidget {
             }
         }
         (items, invalid)
+    }
+
+    fn configured_status_line_items(&self) -> Vec<String> {
+        self.config.tui_status_line.clone().unwrap_or_else(|| {
+            DEFAULT_STATUS_LINE_ITEMS
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        })
     }
 
     fn status_line_cwd(&self) -> &Path {
@@ -4530,7 +4769,13 @@ impl ChatWidget {
     }
 
     fn prefetch_connectors_with_options(&mut self, force_refetch: bool) {
-        if !self.connectors_enabled() || self.connectors_prefetch_in_flight {
+        if !self.connectors_enabled() {
+            return;
+        }
+        if self.connectors_prefetch_in_flight {
+            if force_refetch {
+                self.connectors_force_refetch_pending = true;
+            }
             return;
         }
 
@@ -4542,8 +4787,8 @@ impl ChatWidget {
         let config = self.config.clone();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let accessible_connectors =
-                match connectors::list_accessible_connectors_from_mcp_tools_with_options(
+            let accessible_result =
+                match connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
                     &config,
                     force_refetch,
                 )
@@ -4558,6 +4803,9 @@ impl ChatWidget {
                         return;
                     }
                 };
+            let should_schedule_force_refetch =
+                !force_refetch && !accessible_result.codex_apps_ready;
+            let accessible_connectors = accessible_result.connectors;
 
             app_event_tx.send(AppEvent::ConnectorsLoaded {
                 result: Ok(ConnectorsSnapshot {
@@ -4567,10 +4815,12 @@ impl ChatWidget {
             });
 
             let result: Result<ConnectorsSnapshot, String> = async {
-                let all_connectors = connectors::list_all_connectors(&config).await?;
+                let all_connectors =
+                    connectors::list_all_connectors_with_options(&config, force_refetch).await?;
                 let connectors = connectors::merge_connectors_with_accessible(
                     all_connectors,
                     accessible_connectors,
+                    true,
                 );
                 Ok(ConnectorsSnapshot { connectors })
             }
@@ -4581,6 +4831,12 @@ impl ChatWidget {
                 result,
                 is_final: true,
             });
+
+            if should_schedule_force_refetch {
+                app_event_tx.send(AppEvent::RefreshConnectors {
+                    force_refetch: true,
+                });
+            }
         });
     }
 
@@ -4625,7 +4881,7 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self.models_manager.try_list_models(&self.config).ok()?;
+        let models = self.models_manager.try_list_models().ok()?;
         models
             .iter()
             .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
@@ -4659,8 +4915,8 @@ impl ChatWidget {
     }
 
     fn open_rate_limit_switch_prompt(&mut self, preset: ModelPreset) {
-        let switch_model = preset.model.to_string();
-        let display_name = preset.display_name.to_string();
+        let switch_model = preset.model;
+        let switch_model_for_events = switch_model.clone();
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
 
         let switch_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -4669,13 +4925,13 @@ impl ChatWidget {
                 approval_policy: None,
                 sandbox_policy: None,
                 windows_sandbox_level: None,
-                model: Some(switch_model.clone()),
+                model: Some(switch_model_for_events.clone()),
                 effort: Some(Some(default_effort)),
                 summary: None,
                 collaboration_mode: None,
                 personality: None,
             }));
-            tx.send(AppEvent::UpdateModel(switch_model.clone()));
+            tx.send(AppEvent::UpdateModel(switch_model_for_events.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
         })];
 
@@ -4692,7 +4948,7 @@ impl ChatWidget {
 
         let items = vec![
             SelectionItem {
-                name: format!("Switch to {display_name}"),
+                name: format!("Switch to {switch_model}"),
                 description,
                 selected_description: None,
                 is_current: false,
@@ -4724,7 +4980,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Approaching rate limits".to_string()),
-            subtitle: Some(format!("Switch to {display_name} for lower credit usage?")),
+            subtitle: Some(format!("Switch to {switch_model} for lower credit usage?")),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -4742,7 +4998,7 @@ impl ChatWidget {
             return;
         }
 
-        let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config) {
+        let presets: Vec<ModelPreset> = match self.models_manager.try_list_models() {
             Ok(models) => models,
             Err(_) => {
                 self.add_info_message(
@@ -4871,7 +5127,7 @@ impl ChatWidget {
         let current_label = presets
             .iter()
             .find(|preset| preset.model.as_str() == current_model)
-            .map(|preset| preset.display_name.to_string())
+            .map(|preset| preset.model.to_string())
             .unwrap_or_else(|| self.model_display_name().to_string());
 
         let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
@@ -4884,19 +5140,23 @@ impl ChatWidget {
         }
 
         auto_presets.sort_by_key(|preset| Self::auto_model_order(&preset.model));
-
         let mut items: Vec<SelectionItem> = auto_presets
             .into_iter()
             .map(|preset| {
                 let description =
                     (!preset.description.is_empty()).then_some(preset.description.clone());
                 let model = preset.model.clone();
+                let should_prompt_plan_mode_scope = self.should_prompt_plan_mode_reasoning_scope(
+                    model.as_str(),
+                    Some(preset.default_reasoning_effort),
+                );
                 let actions = Self::model_selection_actions(
                     model.clone(),
                     Some(preset.default_reasoning_effort),
+                    should_prompt_plan_mode_scope,
                 );
                 SelectionItem {
-                    name: preset.display_name.clone(),
+                    name: model.clone(),
                     description,
                     is_current: model.as_str() == current_model,
                     is_default: preset.is_default,
@@ -4978,7 +5238,7 @@ impl ChatWidget {
                 });
             })];
             items.push(SelectionItem {
-                name: preset.display_name.clone(),
+                name: preset.model.clone(),
                 description,
                 is_current,
                 is_default: preset.is_default,
@@ -5048,40 +5308,135 @@ impl ChatWidget {
     fn model_selection_actions(
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
+        should_prompt_plan_mode_scope: bool,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
-            let effort_label = effort_for_action
-                .map(|effort| effort.to_string())
-                .unwrap_or_else(|| "default".to_string());
-            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                cwd: None,
-                approval_policy: None,
-                sandbox_policy: None,
-                windows_sandbox_level: None,
-                model: Some(model_for_action.clone()),
-                effort: Some(effort_for_action),
-                summary: None,
-                collaboration_mode: None,
-                personality: None,
-            }));
+            if should_prompt_plan_mode_scope {
+                tx.send(AppEvent::OpenPlanReasoningScopePrompt {
+                    model: model_for_action.clone(),
+                    effort: effort_for_action,
+                });
+                return;
+            }
+
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
             });
-            tracing::info!(
-                "Selected model: {}, Selected effort: {}",
-                model_for_action,
-                effort_label
-            );
         })]
+    }
+
+    fn should_prompt_plan_mode_reasoning_scope(
+        &self,
+        selected_model: &str,
+        selected_effort: Option<ReasoningEffortConfig>,
+    ) -> bool {
+        if !self.collaboration_modes_enabled()
+            || self.active_mode_kind() != ModeKind::Plan
+            || selected_model != self.current_model()
+        {
+            return false;
+        }
+
+        // Prompt whenever the selection is not a true no-op for both:
+        // 1) the active Plan-mode effective reasoning, and
+        // 2) the stored global defaults that would be updated by the fallback path.
+        selected_effort != self.effective_reasoning_effort()
+            || selected_model != self.current_collaboration_mode.model()
+            || selected_effort != self.current_collaboration_mode.reasoning_effort()
+    }
+
+    pub(crate) fn open_plan_reasoning_scope_prompt(
+        &mut self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
+        let reasoning_phrase = match effort {
+            Some(ReasoningEffortConfig::None) => "no reasoning".to_string(),
+            Some(selected_effort) => {
+                format!(
+                    "{} reasoning",
+                    Self::reasoning_effort_label(selected_effort).to_lowercase()
+                )
+            }
+            None => "the selected reasoning".to_string(),
+        };
+        let plan_only_description = format!("Always use {reasoning_phrase} in Plan mode.");
+        let plan_reasoning_source = if let Some(plan_override) =
+            self.config.plan_mode_reasoning_effort
+        {
+            format!(
+                "user-chosen Plan override ({})",
+                Self::reasoning_effort_label(plan_override).to_lowercase()
+            )
+        } else if let Some(plan_mask) = collaboration_modes::plan_mask(self.models_manager.as_ref())
+        {
+            match plan_mask.reasoning_effort.flatten() {
+                Some(plan_effort) => format!(
+                    "built-in Plan default ({})",
+                    Self::reasoning_effort_label(plan_effort).to_lowercase()
+                ),
+                None => "built-in Plan default (no reasoning)".to_string(),
+            }
+        } else {
+            "built-in Plan default".to_string()
+        };
+        let all_modes_description = format!(
+            "Set the global default reasoning level and the Plan mode override. This replaces the current {plan_reasoning_source}."
+        );
+        let subtitle = format!("Choose where to apply {reasoning_phrase}.");
+
+        let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
+            let model = model.clone();
+            move |tx| {
+                tx.send(AppEvent::UpdateModel(model.clone()));
+                tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+                tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
+            }
+        })];
+        let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::UpdateModel(model.clone()));
+            tx.send(AppEvent::UpdateReasoningEffort(effort));
+            tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+            tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
+            tx.send(AppEvent::PersistModelSelection {
+                model: model.clone(),
+                effort,
+            });
+        })];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(PLAN_MODE_REASONING_SCOPE_TITLE.to_string()),
+            subtitle: Some(subtitle),
+            footer_hint: Some(standard_popup_hint_line()),
+            items: vec![
+                SelectionItem {
+                    name: PLAN_MODE_REASONING_SCOPE_PLAN_ONLY.to_string(),
+                    description: Some(plan_only_description),
+                    actions: plan_only_actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: PLAN_MODE_REASONING_SCOPE_ALL_MODES.to_string(),
+                    description: Some(all_modes_description),
+                    actions: all_modes_actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
+        let in_plan_mode =
+            self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan;
 
         let warn_effort = if supported
             .iter()
@@ -5125,10 +5480,16 @@ impl ChatWidget {
         }
 
         if choices.len() == 1 {
-            if let Some(effort) = choices.first().and_then(|c| c.stored) {
-                self.apply_model_and_effort(preset.model, Some(effort));
+            let selected_effort = choices.first().and_then(|c| c.stored);
+            let selected_model = preset.model;
+            if self.should_prompt_plan_mode_reasoning_scope(&selected_model, selected_effort) {
+                self.app_event_tx
+                    .send(AppEvent::OpenPlanReasoningScopePrompt {
+                        model: selected_model,
+                        effort: selected_effort,
+                    });
             } else {
-                self.apply_model_and_effort(preset.model, None);
+                self.apply_model_and_effort(selected_model, selected_effort);
             }
             return;
         }
@@ -5144,7 +5505,13 @@ impl ChatWidget {
         let model_slug = preset.model.to_string();
         let is_current_model = self.current_model() == preset.model.as_str();
         let highlight_choice = if is_current_model {
-            self.effective_reasoning_effort()
+            if in_plan_mode {
+                self.config
+                    .plan_mode_reasoning_effort
+                    .or(self.effective_reasoning_effort())
+            } else {
+                self.effective_reasoning_effort()
+            }
         } else {
             default_choice
         };
@@ -5187,7 +5554,24 @@ impl ChatWidget {
             };
 
             let model_for_action = model_slug.clone();
-            let actions = Self::model_selection_actions(model_for_action, choice.stored);
+            let choice_effort = choice.stored;
+            let should_prompt_plan_mode_scope =
+                self.should_prompt_plan_mode_reasoning_scope(model_slug.as_str(), choice_effort);
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                if should_prompt_plan_mode_scope {
+                    tx.send(AppEvent::OpenPlanReasoningScopePrompt {
+                        model: model_for_action.clone(),
+                        effort: choice_effort,
+                    });
+                } else {
+                    tx.send(AppEvent::UpdateModel(model_for_action.clone()));
+                    tx.send(AppEvent::UpdateReasoningEffort(choice_effort));
+                    tx.send(AppEvent::PersistModelSelection {
+                        model: model_for_action.clone(),
+                        effort: choice_effort,
+                    });
+                }
+            })];
 
             items.push(SelectionItem {
                 name: effort_label,
@@ -5225,33 +5609,20 @@ impl ChatWidget {
         }
     }
 
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
-        self.app_event_tx
-            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                cwd: None,
-                approval_policy: None,
-                sandbox_policy: None,
-                windows_sandbox_level: None,
-                model: Some(model.clone()),
-                effort: Some(effort),
-                summary: None,
-                collaboration_mode: None,
-                personality: None,
-            }));
-        self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
+    fn apply_model_and_effort_without_persist(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
+        self.app_event_tx.send(AppEvent::UpdateModel(model));
         self.app_event_tx
             .send(AppEvent::UpdateReasoningEffort(effort));
-        self.app_event_tx.send(AppEvent::PersistModelSelection {
-            model: model.clone(),
-            effort,
-        });
-        tracing::info!(
-            "Selected model: {}, Selected effort: {}",
-            model,
-            effort
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "default".to_string())
-        );
+    }
+
+    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+        self.apply_model_and_effort_without_persist(model.clone(), effort);
+        self.app_event_tx
+            .send(AppEvent::PersistModelSelection { model, effort });
     }
 
     /// Open the permissions popup (alias for /permissions).
@@ -5262,8 +5633,8 @@ impl ChatWidget {
     /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
     pub(crate) fn open_permissions_popup(&mut self) {
         let include_read_only = cfg!(target_os = "windows");
-        let current_approval = self.config.approval_policy.value();
-        let current_sandbox = self.config.sandbox_policy.get();
+        let current_approval = self.config.permissions.approval_policy.value();
+        let current_sandbox = self.config.permissions.sandbox_policy.get();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
 
@@ -5286,12 +5657,17 @@ impl ChatWidget {
             let is_current =
                 Self::preset_matches_current(current_approval, current_sandbox, &preset);
             let name = if preset.id == "auto" && windows_degraded_sandbox_enabled {
-                "Default (non-elevated sandbox)".to_string()
+                "Default (non-admin sandbox)".to_string()
             } else {
                 preset.label.to_string()
             };
             let description = Some(preset.description.replace(" (Identical to Agent mode)", ""));
-            let disabled_reason = match self.config.approval_policy.can_set(&preset.approval) {
+            let disabled_reason = match self
+                .config
+                .permissions
+                .approval_policy
+                .can_set(&preset.approval)
+            {
                 Ok(()) => None,
                 Err(err) => Some(err.to_string()),
             };
@@ -5347,15 +5723,23 @@ impl ChatWidget {
                             });
                         })]
                     } else {
-                        Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                        Self::approval_preset_actions(
+                            preset.approval,
+                            preset.sandbox.clone(),
+                            name.clone(),
+                        )
                     }
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                    Self::approval_preset_actions(
+                        preset.approval,
+                        preset.sandbox.clone(),
+                        name.clone(),
+                    )
                 }
             } else {
-                Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                Self::approval_preset_actions(preset.approval, preset.sandbox.clone(), name.clone())
             };
             items.push(SelectionItem {
                 name,
@@ -5370,8 +5754,8 @@ impl ChatWidget {
 
         let footer_note = show_elevate_sandbox_hint.then(|| {
             vec![
-                "The non-elevated sandbox protects your files and prevents network access under most circumstances. However, it carries greater risk if prompt injected. To upgrade to the elevated sandbox, run ".dim(),
-                "/setup-elevated-sandbox".cyan(),
+                "The non-admin sandbox protects your files and prevents network access under most circumstances. However, it carries greater risk if prompt injected. To upgrade to the default sandbox, run ".dim(),
+                "/setup-default-sandbox".cyan(),
                 ".".dim(),
             ]
             .into()
@@ -5409,6 +5793,7 @@ impl ChatWidget {
     fn approval_preset_actions(
         approval: AskForApproval,
         sandbox: SandboxPolicy,
+        label: String,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             let sandbox_clone = sandbox.clone();
@@ -5425,6 +5810,9 @@ impl ChatWidget {
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
+            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(format!("Permissions updated to {label}"), None),
+            )));
         })]
     }
 
@@ -5433,21 +5821,7 @@ impl ChatWidget {
         current_sandbox: &SandboxPolicy,
         preset: &ApprovalPreset,
     ) -> bool {
-        if current_approval != preset.approval {
-            return false;
-        }
-        matches!(
-            (&preset.sandbox, current_sandbox),
-            (SandboxPolicy::ReadOnly, SandboxPolicy::ReadOnly)
-                | (
-                    SandboxPolicy::DangerFullAccess,
-                    SandboxPolicy::DangerFullAccess
-                )
-                | (
-                    SandboxPolicy::WorkspaceWrite { .. },
-                    SandboxPolicy::WorkspaceWrite { .. }
-                )
-        )
+        current_approval == preset.approval && *current_sandbox == preset.sandbox
     }
 
     #[cfg(target_os = "windows")]
@@ -5466,7 +5840,7 @@ impl ChatWidget {
             self.config.codex_home.as_path(),
             cwd.as_path(),
             &env_map,
-            self.config.sandbox_policy.get(),
+            self.config.permissions.sandbox_policy.get(),
             Some(self.config.codex_home.as_path()),
         ) {
             Ok(_) => None,
@@ -5485,6 +5859,7 @@ impl ChatWidget {
         preset: ApprovalPreset,
         return_to_permissions: bool,
     ) {
+        let selected_name = preset.label.to_string();
         let approval = preset.approval;
         let sandbox = preset.sandbox;
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
@@ -5501,12 +5876,14 @@ impl ChatWidget {
         ));
         let header = ColumnRenderable::with(header_children);
 
-        let mut accept_actions = Self::approval_preset_actions(approval, sandbox.clone());
+        let mut accept_actions =
+            Self::approval_preset_actions(approval, sandbox.clone(), selected_name.clone());
         accept_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
         }));
 
-        let mut accept_and_remember_actions = Self::approval_preset_actions(approval, sandbox);
+        let mut accept_and_remember_actions =
+            Self::approval_preset_actions(approval, sandbox, selected_name);
         accept_and_remember_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
             tx.send(AppEvent::PersistFullAccessWarningAcknowledged);
@@ -5567,13 +5944,13 @@ impl ChatWidget {
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let describe_policy = |policy: &SandboxPolicy| match policy {
             SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
-            SandboxPolicy::ReadOnly => "Read-Only mode",
+            SandboxPolicy::ReadOnly { .. } => "Read-Only mode",
             _ => "Agent mode",
         };
         let mode_label = preset
             .as_ref()
             .map(|p| describe_policy(&p.sandbox))
-            .unwrap_or_else(|| describe_policy(self.config.sandbox_policy.get()));
+            .unwrap_or_else(|| describe_policy(self.config.permissions.sandbox_policy.get()));
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -5616,7 +5993,11 @@ impl ChatWidget {
             }));
         }
         if let (Some(approval), Some(sandbox)) = (approval, sandbox.clone()) {
-            accept_actions.extend(Self::approval_preset_actions(approval, sandbox));
+            accept_actions.extend(Self::approval_preset_actions(
+                approval,
+                sandbox,
+                mode_label.to_string(),
+            ));
         }
 
         let mut accept_and_remember_actions: Vec<SelectionAction> = Vec::new();
@@ -5625,7 +6006,11 @@ impl ChatWidget {
             tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
         }));
         if let (Some(approval), Some(sandbox)) = (approval, sandbox) {
-            accept_and_remember_actions.extend(Self::approval_preset_actions(approval, sandbox));
+            accept_and_remember_actions.extend(Self::approval_preset_actions(
+                approval,
+                sandbox,
+                mode_label.to_string(),
+            ));
         }
 
         let items = vec![
@@ -5714,59 +6099,24 @@ impl ChatWidget {
             return;
         }
 
-        let current_approval = self.config.approval_policy.value();
-        let current_sandbox = self.config.sandbox_policy.get();
-        let presets = builtin_approval_presets();
-        let stay_full_access = presets
-            .iter()
-            .find(|preset| preset.id == "full-access")
-            .is_some_and(|preset| {
-                Self::preset_matches_current(current_approval, current_sandbox, preset)
-            });
         self.otel_manager
             .counter("codex.windows_sandbox.elevated_prompt_shown", 1, &[]);
 
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
             Paragraph::new(vec![
-                line!["Set Up Agent Sandbox".bold()],
-                line![""],
-                line!["Agent mode uses an experimental Windows sandbox that protects your files and prevents network access by default."],
-                line!["Learn more: https://developers.openai.com/codex/windows"],
+                line!["Set up the Codex agent sandbox to protect your files and control network access. Learn more <https://developers.openai.com/codex/windows>"],
             ])
             .wrap(Wrap { trim: false }),
         ));
 
-        let stay_label = if stay_full_access {
-            "Stay in Agent Full Access".to_string()
-        } else {
-            "Stay in Read-Only".to_string()
-        };
-        let mut stay_actions = if stay_full_access {
-            Vec::new()
-        } else {
-            presets
-                .iter()
-                .find(|preset| preset.id == "read-only")
-                .map(|preset| {
-                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
-                })
-                .unwrap_or_default()
-        };
-        stay_actions.insert(
-            0,
-            Box::new({
-                let otel = self.otel_manager.clone();
-                move |_tx| {
-                    otel.counter("codex.windows_sandbox.elevated_prompt_decline", 1, &[]);
-                }
-            }),
-        );
-
         let accept_otel = self.otel_manager.clone();
+        let legacy_otel = self.otel_manager.clone();
+        let legacy_preset = preset.clone();
+        let quit_otel = self.otel_manager.clone();
         let items = vec![
             SelectionItem {
-                name: "Set up agent sandbox (requires elevation)".to_string(),
+                name: "Set up default sandbox (requires Administrator permissions)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
                     accept_otel.counter("codex.windows_sandbox.elevated_prompt_accept", 1, &[]);
@@ -5778,9 +6128,24 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: stay_label,
+                name: "Use non-admin sandbox (higher risk if prompt injected)".to_string(),
                 description: None,
-                actions: stay_actions,
+                actions: vec![Box::new(move |tx| {
+                    legacy_otel.counter("codex.windows_sandbox.elevated_prompt_use_legacy", 1, &[]);
+                    tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
+                        preset: legacy_preset.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Quit".to_string(),
+                description: None,
+                actions: vec![Box::new(move |tx| {
+                    quit_otel.counter("codex.windows_sandbox.elevated_prompt_quit", 1, &[]);
+                    tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
+                })],
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -5799,32 +6164,19 @@ impl ChatWidget {
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, _preset: ApprovalPreset) {}
 
     #[cfg(target_os = "windows")]
-    pub(crate) fn open_windows_sandbox_fallback_prompt(
-        &mut self,
-        preset: ApprovalPreset,
-        reason: WindowsSandboxFallbackReason,
-    ) {
+    pub(crate) fn open_windows_sandbox_fallback_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
 
-        let _ = reason;
-
-        let current_approval = self.config.approval_policy.value();
-        let current_sandbox = self.config.sandbox_policy.get();
-        let presets = builtin_approval_presets();
-        let stay_full_access = presets
-            .iter()
-            .find(|preset| preset.id == "full-access")
-            .is_some_and(|preset| {
-                Self::preset_matches_current(current_approval, current_sandbox, preset)
-            });
         let mut lines = Vec::new();
-        lines.push(line!["Use Non-Elevated Sandbox?".bold()]);
+        lines.push(line![
+            "Couldn't set up your sandbox with Administrator permissions".bold()
+        ]);
         lines.push(line![""]);
         lines.push(line![
-            "Elevation failed. You can also use a non-elevated sandbox, which protects your files and prevents network access under most circumstances. However, it carries greater risk if prompt injected."
+            "You can still use Codex in a non-admin sandbox. It carries greater risk if prompt injected."
         ]);
         lines.push(line![
-            "Learn more: https://developers.openai.com/codex/windows"
+            "Learn more <https://developers.openai.com/codex/windows>"
         ]);
 
         let mut header = ColumnRenderable::new();
@@ -5832,34 +6184,10 @@ impl ChatWidget {
 
         let elevated_preset = preset.clone();
         let legacy_preset = preset;
-        let stay_label = if stay_full_access {
-            "Stay in Agent Full Access".to_string()
-        } else {
-            "Stay in Read-Only".to_string()
-        };
-        let mut stay_actions = if stay_full_access {
-            Vec::new()
-        } else {
-            presets
-                .iter()
-                .find(|preset| preset.id == "read-only")
-                .map(|preset| {
-                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
-                })
-                .unwrap_or_default()
-        };
-        stay_actions.insert(
-            0,
-            Box::new({
-                let otel = self.otel_manager.clone();
-                move |_tx| {
-                    otel.counter("codex.windows_sandbox.fallback_stay_current", 1, &[]);
-                }
-            }),
-        );
+        let quit_otel = self.otel_manager.clone();
         let items = vec![
             SelectionItem {
-                name: "Try elevated agent sandbox setup again".to_string(),
+                name: "Try setting up admin sandbox again".to_string(),
                 description: None,
                 actions: vec![Box::new({
                     let otel = self.otel_manager.clone();
@@ -5875,16 +6203,15 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: "Use non-elevated agent sandbox".to_string(),
+                name: "Use Codex with non-admin sandbox".to_string(),
                 description: None,
                 actions: vec![Box::new({
                     let otel = self.otel_manager.clone();
                     let preset = legacy_preset;
                     move |tx| {
                         otel.counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
-                        tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                        tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                             preset: preset.clone(),
-                            mode: WindowsSandboxEnableMode::Legacy,
                         });
                     }
                 })],
@@ -5892,9 +6219,12 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: stay_label,
+                name: "Quit".to_string(),
                 description: None,
-                actions: stay_actions,
+                actions: vec![Box::new(move |tx| {
+                    quit_otel.counter("codex.windows_sandbox.fallback_prompt_quit", 1, &[]);
+                    tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
+                })],
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -5910,16 +6240,11 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub(crate) fn open_windows_sandbox_fallback_prompt(
-        &mut self,
-        _preset: ApprovalPreset,
-        _reason: WindowsSandboxFallbackReason,
-    ) {
-    }
+    pub(crate) fn open_windows_sandbox_fallback_prompt(&mut self, _preset: ApprovalPreset) {}
 
     #[cfg(target_os = "windows")]
-    pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
-        if self.config.forced_auto_mode_downgraded_on_windows
+    pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self, show_now: bool) {
+        if show_now
             && WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled
             && let Some(preset) = builtin_approval_presets()
                 .into_iter()
@@ -5930,7 +6255,7 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {}
+    pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self, _show_now: bool) {}
 
     #[cfg(target_os = "windows")]
     pub(crate) fn show_windows_sandbox_setup_status(&mut self) {
@@ -5942,7 +6267,10 @@ impl ChatWidget {
         );
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(false);
-        self.set_status_header("Setting up agent sandbox. This can take a minute.".to_string());
+        self.set_status(
+            "Setting up sandbox...".to_string(),
+            Some("Hang tight, this may take a few minutes".to_string()),
+        );
         self.request_redraw();
     }
 
@@ -5960,36 +6288,31 @@ impl ChatWidget {
     #[cfg(not(target_os = "windows"))]
     pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {}
 
-    #[cfg(target_os = "windows")]
-    pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {
-        self.config.forced_auto_mode_downgraded_on_windows = false;
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[allow(dead_code)]
-    pub(crate) fn clear_forced_auto_mode_downgrade(&mut self) {}
-
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
-        if let Err(err) = self.config.approval_policy.set(policy) {
+        if let Err(err) = self.config.permissions.approval_policy.set(policy) {
             tracing::warn!(%err, "failed to set approval_policy on chat config");
         }
     }
 
     /// Set the sandbox policy in the widget's config copy.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
-        #[cfg(target_os = "windows")]
-        let should_clear_downgrade = !matches!(&policy, SandboxPolicy::ReadOnly)
-            || WindowsSandboxLevel::from_config(&self.config) != WindowsSandboxLevel::Disabled;
-
-        self.config.sandbox_policy.set(policy)?;
-
-        #[cfg(target_os = "windows")]
-        if should_clear_downgrade {
-            self.config.forced_auto_mode_downgraded_on_windows = false;
-        }
-
+        self.config.permissions.sandbox_policy.set(policy)?;
         Ok(())
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn set_windows_sandbox_mode(&mut self, mode: Option<WindowsSandboxModeToml>) {
+        self.config.permissions.windows_sandbox_mode = mode;
+        #[cfg(target_os = "windows")]
+        self.bottom_pane.set_windows_degraded_sandbox_active(
+            codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                && matches!(
+                    WindowsSandboxLevel::from_config(&self.config),
+                    WindowsSandboxLevel::RestrictedToken
+                ),
+        );
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -6020,6 +6343,11 @@ impl ChatWidget {
         }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
+        }
+        if feature == Feature::PreventIdleSleep {
+            self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
+            self.turn_sleep_inhibitor
+                .set_turn_running(self.agent_turn_running);
         }
         #[cfg(target_os = "windows")]
         if matches!(
@@ -6059,6 +6387,22 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
+    pub(crate) fn set_plan_mode_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        self.config.plan_mode_reasoning_effort = effort;
+        if self.collaboration_modes_enabled()
+            && let Some(mask) = self.active_collaboration_mask.as_mut()
+            && mask.mode == Some(ModeKind::Plan)
+        {
+            if let Some(effort) = effort {
+                mask.reasoning_effort = Some(Some(effort));
+            } else if let Some(plan_mask) =
+                collaboration_modes::plan_mask(self.models_manager.as_ref())
+            {
+                mask.reasoning_effort = plan_mask.reasoning_effort;
+            }
+        }
+    }
+
     /// Set the reasoning effort in the stored collaboration mode.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.current_collaboration_mode =
@@ -6066,7 +6410,10 @@ impl ChatWidget {
                 .with_updates(None, Some(effort), None);
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
+            && mask.mode != Some(ModeKind::Plan)
         {
+            // Generic "global default" updates should not mutate the active Plan mask.
+            // Plan reasoning is controlled by the Plan preset and Plan-only override updates.
             mask.reasoning_effort = Some(effort);
         }
     }
@@ -6074,6 +6421,11 @@ impl ChatWidget {
     /// Set the personality in the widget's config copy.
     pub(crate) fn set_personality(&mut self, personality: Personality) {
         self.config.personality = Some(personality);
+    }
+
+    /// Set the syntax theme override in the widget's config copy.
+    pub(crate) fn set_tui_theme(&mut self, theme: Option<String>) {
+        self.config.tui_theme = theme;
     }
 
     /// Set the model in the widget's config copy and stored collaboration mode.
@@ -6107,7 +6459,7 @@ impl ChatWidget {
     fn current_model_supports_personality(&self) -> bool {
         let model = self.current_model();
         self.models_manager
-            .try_list_models(&self.config)
+            .try_list_models()
             .ok()
             .and_then(|models| {
                 models
@@ -6125,7 +6477,7 @@ impl ChatWidget {
     fn current_model_supports_images(&self) -> bool {
         let model = self.current_model();
         self.models_manager
-            .try_list_models(&self.config)
+            .try_list_models()
             .ok()
             .and_then(|models| {
                 models
@@ -6153,7 +6505,6 @@ impl ChatWidget {
         &self.current_collaboration_mode
     }
 
-    #[cfg(test)]
     pub(crate) fn current_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         self.effective_reasoning_effort()
     }
@@ -6179,10 +6530,7 @@ impl ChatWidget {
         if !config.features.enabled(Feature::CollaborationModes) {
             return None;
         }
-        let mut mask = match config.experimental_mode {
-            Some(kind) => collaboration_modes::mask_for_kind(models_manager, kind)?,
-            None => collaboration_modes::default_mask(models_manager)?,
-        };
+        let mut mask = collaboration_modes::default_mask(models_manager)?;
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }
@@ -6293,13 +6641,45 @@ impl ChatWidget {
     ///
     /// When collaboration modes are enabled and a preset is selected,
     /// the current mode is attached to submissions as `Op::UserTurn { collaboration_mode: Some(...) }`.
-    pub(crate) fn set_collaboration_mask(&mut self, mask: CollaborationModeMask) {
+    pub(crate) fn set_collaboration_mask(&mut self, mut mask: CollaborationModeMask) {
         if !self.collaboration_modes_enabled() {
             return;
+        }
+        let previous_mode = self.active_mode_kind();
+        let previous_model = self.current_model().to_string();
+        let previous_effort = self.effective_reasoning_effort();
+        if mask.mode == Some(ModeKind::Plan)
+            && let Some(effort) = self.config.plan_mode_reasoning_effort
+        {
+            mask.reasoning_effort = Some(Some(effort));
         }
         self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();
         self.refresh_model_display();
+        let next_mode = self.active_mode_kind();
+        let next_model = self.current_model();
+        let next_effort = self.effective_reasoning_effort();
+        if previous_mode != next_mode
+            && (previous_model != next_model || previous_effort != next_effort)
+        {
+            let mut message = format!("Model changed to {next_model}");
+            if !next_model.starts_with("codex-auto-") {
+                let reasoning_label = match next_effort {
+                    Some(ReasoningEffortConfig::Minimal) => "minimal",
+                    Some(ReasoningEffortConfig::Low) => "low",
+                    Some(ReasoningEffortConfig::Medium) => "medium",
+                    Some(ReasoningEffortConfig::High) => "high",
+                    Some(ReasoningEffortConfig::XHigh) => "xhigh",
+                    None | Some(ReasoningEffortConfig::None) => "default",
+                };
+                message.push(' ');
+                message.push_str(reasoning_label);
+            }
+            message.push_str(" for ");
+            message.push_str(next_mode.display_name());
+            message.push_str(" mode.");
+            self.add_info_message(message, None);
+        }
         self.request_redraw();
     }
 
@@ -6459,6 +6839,7 @@ impl ChatWidget {
             let connector_title = connector_label.clone();
             let link_description = Self::connector_description(connector);
             let description = Self::connector_brief_description(connector);
+            let status_label = Self::connector_status_label(connector);
             let search_value = format!("{connector_label} {}", connector.id);
             let mut item = SelectionItem {
                 name: connector_label,
@@ -6467,42 +6848,47 @@ impl ChatWidget {
                 ..Default::default()
             };
             let is_installed = connector.is_accessible;
-            let (selected_label, missing_label, instructions) = if connector.is_accessible {
-                (
-                    "Press Enter to view the app link.",
-                    "App link unavailable.",
-                    "Manage this app in your browser.",
+            let selected_label = if is_installed {
+                format!(
+                    "{status_label}. Press Enter to open the app page to install, manage, or enable/disable this app."
                 )
             } else {
-                (
-                    "Press Enter to view the install link.",
-                    "Install link unavailable.",
-                    "Install this app in your browser, then reload Codex.",
-                )
+                format!("{status_label}. Press Enter to open the app page to install this app.")
+            };
+            let missing_label = format!("{status_label}. App link unavailable.");
+            let instructions = if connector.is_accessible {
+                "Manage this app in your browser."
+            } else {
+                "Install this app in your browser, then reload Codex."
             };
             if let Some(install_url) = connector.install_url.clone() {
+                let app_id = connector.id.clone();
+                let is_enabled = connector.is_enabled;
                 let title = connector_title.clone();
                 let instructions = instructions.to_string();
                 let description = link_description.clone();
                 item.actions = vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenAppLink {
+                        app_id: app_id.clone(),
                         title: title.clone(),
                         description: description.clone(),
                         instructions: instructions.clone(),
                         url: install_url.clone(),
                         is_installed,
+                        is_enabled,
                     });
                 })];
                 item.dismiss_on_select = true;
-                item.selected_description = Some(selected_label.to_string());
+                item.selected_description = Some(selected_label);
             } else {
+                let missing_label_for_action = missing_label.clone();
                 item.actions = vec![Box::new(move |tx| {
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(missing_label.to_string(), None),
+                        history_cell::new_info_event(missing_label_for_action.clone(), None),
                     )));
                 })];
                 item.dismiss_on_select = true;
-                item.selected_description = Some(missing_label.to_string());
+                item.selected_description = Some(missing_label);
             }
             items.push(item);
         }
@@ -6535,14 +6921,22 @@ impl ChatWidget {
     }
 
     fn connector_brief_description(connector: &connectors::AppInfo) -> String {
-        let status_label = if connector.is_accessible {
-            "Connected"
-        } else {
-            "Can be installed"
-        };
+        let status_label = Self::connector_status_label(connector);
         match Self::connector_description(connector) {
             Some(description) => format!("{status_label} · {description}"),
             None => status_label.to_string(),
+        }
+    }
+
+    fn connector_status_label(connector: &connectors::AppInfo) -> &'static str {
+        if connector.is_accessible {
+            if connector.is_enabled {
+                "Installed"
+            } else {
+                "Installed · Disabled"
+            }
+        } else {
+            "Can be installed"
         }
     }
 
@@ -6675,8 +7069,13 @@ impl ChatWidget {
     pub(crate) fn submit_user_message_with_mode(
         &mut self,
         text: String,
-        collaboration_mode: CollaborationModeMask,
+        mut collaboration_mode: CollaborationModeMask,
     ) {
+        if collaboration_mode.mode == Some(ModeKind::Plan)
+            && let Some(effort) = self.config.plan_mode_reasoning_effort
+        {
+            collaboration_mode.reasoning_effort = Some(Some(effort));
+        }
         if self.agent_turn_running
             && self.active_collaboration_mask.as_ref() != Some(&collaboration_mode)
         {
@@ -6690,6 +7089,7 @@ impl ChatWidget {
         let user_message = UserMessage {
             text,
             local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
         };
@@ -6720,6 +7120,19 @@ impl ChatWidget {
     ) {
         self.bottom_pane
             .set_composer_text(text, text_elements, local_image_paths);
+    }
+
+    pub(crate) fn set_remote_image_urls(&mut self, remote_image_urls: Vec<String>) {
+        self.bottom_pane.set_remote_image_urls(remote_image_urls);
+    }
+
+    fn take_remote_image_urls(&mut self) -> Vec<String> {
+        self.bottom_pane.take_remote_image_urls()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_image_urls(&self) -> Vec<String> {
+        self.bottom_pane.remote_image_urls()
     }
 
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
@@ -6767,12 +7180,38 @@ impl ChatWidget {
         result: Result<ConnectorsSnapshot, String>,
         is_final: bool,
     ) {
+        let mut trigger_pending_force_refetch = false;
         if is_final {
             self.connectors_prefetch_in_flight = false;
+            if self.connectors_force_refetch_pending {
+                self.connectors_force_refetch_pending = false;
+                trigger_pending_force_refetch = true;
+            }
         }
 
         match result {
-            Ok(snapshot) => {
+            Ok(mut snapshot) => {
+                if !is_final {
+                    snapshot.connectors = connectors::merge_connectors_with_accessible(
+                        Vec::new(),
+                        snapshot.connectors,
+                        false,
+                    );
+                }
+                snapshot.connectors =
+                    connectors::with_app_enabled_state(snapshot.connectors, &self.config);
+                if let ConnectorsCacheState::Ready(existing_snapshot) = &self.connectors_cache {
+                    let enabled_by_id: HashMap<&str, bool> = existing_snapshot
+                        .connectors
+                        .iter()
+                        .map(|connector| (connector.id.as_str(), connector.is_enabled))
+                        .collect();
+                    for connector in &mut snapshot.connectors {
+                        if let Some(is_enabled) = enabled_by_id.get(connector.id.as_str()) {
+                            connector.is_enabled = *is_enabled;
+                        }
+                    }
+                }
                 self.refresh_connectors_popup_if_open(&snapshot.connectors);
                 if is_final || !matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
                     self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
@@ -6782,13 +7221,39 @@ impl ChatWidget {
             Err(err) => {
                 if matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
                     warn!("failed to refresh apps list; retaining current apps snapshot: {err}");
-                    return;
+                } else {
+                    self.connectors_cache = ConnectorsCacheState::Failed(err);
+                    self.bottom_pane.set_connectors_snapshot(None);
                 }
-
-                self.connectors_cache = ConnectorsCacheState::Failed(err);
-                self.bottom_pane.set_connectors_snapshot(None);
             }
         }
+
+        if trigger_pending_force_refetch {
+            self.prefetch_connectors_with_options(true);
+        }
+    }
+
+    pub(crate) fn update_connector_enabled(&mut self, connector_id: &str, enabled: bool) {
+        let ConnectorsCacheState::Ready(mut snapshot) = self.connectors_cache.clone() else {
+            return;
+        };
+
+        let mut changed = false;
+        for connector in &mut snapshot.connectors {
+            if connector.id == connector_id {
+                changed = connector.is_enabled != enabled;
+                connector.is_enabled = enabled;
+                break;
+            }
+        }
+
+        if !changed {
+            return;
+        }
+
+        self.refresh_connectors_popup_if_open(&snapshot.connectors);
+        self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
+        self.bottom_pane.set_connectors_snapshot(Some(snapshot));
     }
 
     pub(crate) fn open_review_popup(&mut self) {
@@ -7224,18 +7689,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
-}
-
-fn format_duration_short(seconds: u64) -> String {
-    if seconds < 60 {
-        "less than a minute".to_string()
-    } else if seconds < 3600 {
-        format!("{}m", seconds / 60)
-    } else if seconds < 86_400 {
-        format!("{}h", seconds / 3600)
-    } else {
-        format!("{}d", seconds / 86_400)
-    }
 }
 
 #[cfg(test)]

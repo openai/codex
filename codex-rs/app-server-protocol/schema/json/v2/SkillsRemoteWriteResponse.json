@@ -4,16 +4,12 @@
     "id": {
       "type": "string"
     },
-    "name": {
-      "type": "string"
-    },
     "path": {
       "type": "string"
     }
   },
   "required": [
     "id",
-    "name",
     "path"
   ],
   "title": "SkillsRemoteWriteResponse",

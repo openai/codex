@@ -20,6 +20,7 @@ osx.framework(name = "CFNetwork")
 osx.framework(name = "FontServices")
 osx.framework(name = "Foundation")
 osx.framework(name = "ImageIO")
+osx.framework(name = "IOKit")
 osx.framework(name = "Kernel")
 osx.framework(name = "OSLog")
 osx.framework(name = "Security")
@@ -96,6 +97,7 @@ crate.annotation(
 inject_repo(crate, "zstd")
 
 bazel_dep(name = "bzip2", version = "1.0.8.bcr.3")
+bazel_dep(name = "libcap", version = "2.27.bcr.1")
 
 crate.annotation(
     crate = "bzip2-sys",

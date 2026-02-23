@@ -38,6 +38,7 @@ codex-file-search = { workspace = true }
 codex-login = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+codex-shell-command = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-approval-presets = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -46,6 +47,7 @@ codex-utils-elapsed = { workspace = true }
 codex-utils-fuzzy-match = { workspace = true }
 codex-utils-oss = { workspace = true }
 codex-utils-sandbox-summary = { workspace = true }
+codex-utils-sleep-inhibitor = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
 derive_more = { workspace = true, features = ["is_variant"] }
@@ -91,8 +93,8 @@ toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-tree-sitter-bash = { workspace = true }
-tree-sitter-highlight = { workspace = true }
+syntect = "5"
+two-face = { version = "0.5", default-features = false, features = ["syntect-default-onig"] }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }

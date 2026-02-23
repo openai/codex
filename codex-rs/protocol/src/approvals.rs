@@ -37,10 +37,35 @@ impl From<Vec<String>> for ExecPolicyAmendment {
     }
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkApprovalProtocol {
+    // TODO(viyatb): Add websocket protocol variants when managed proxy policy
+    // decisions expose websocket traffic as a distinct approval context.
+    Http,
+    #[serde(alias = "https_connect", alias = "http-connect")]
+    Https,
+    Socks5Tcp,
+    Socks5Udp,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct NetworkApprovalContext {
+    pub host: String,
+    pub protocol: NetworkApprovalProtocol,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecApprovalRequestEvent {
-    /// Identifier for the associated exec call, if available.
+    /// Identifier for the associated command execution item.
     pub call_id: String,
+    /// Identifier for this specific approval callback.
+    ///
+    /// When absent, the approval is for the command item itself (`call_id`).
+    /// This is present for subcommand approvals (via execve intercept).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approval_id: Option<String>,
     /// Turn ID that this command belongs to.
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
@@ -52,11 +77,23 @@ pub struct ExecApprovalRequestEvent {
     /// Optional human-readable reason for the approval (e.g. retry without sandbox).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Optional network context for a blocked request that can be approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub network_approval_context: Option<NetworkApprovalContext>,
     /// Proposed execpolicy amendment that can be applied to allow future runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     pub parsed_cmd: Vec<ParsedCommand>,
+}
+
+impl ExecApprovalRequestEvent {
+    pub fn effective_approval_id(&self) -> String {
+        self.approval_id
+            .clone()
+            .unwrap_or_else(|| self.call_id.clone())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

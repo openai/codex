@@ -46,6 +46,10 @@ struct Args {
     #[arg(long = "thread-id")]
     thread_id: Vec<String>,
 
+    /// Substring match against the log message.
+    #[arg(long)]
+    search: Option<String>,
+
     /// Include logs that do not have a thread id.
     #[arg(long)]
     threadless: bool,
@@ -57,6 +61,10 @@ struct Args {
     /// Poll interval in milliseconds.
     #[arg(long, default_value_t = 500)]
     poll_ms: u64,
+
+    /// Show compact output with only time, level, and message.
+    #[arg(long)]
+    compact: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +75,7 @@ struct LogFilter {
     module_like: Vec<String>,
     file_like: Vec<String>,
     thread_ids: Vec<String>,
+    search: Option<String>,
     include_threadless: bool,
 }
 
@@ -81,7 +90,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| PathBuf::from("."));
     let runtime = StateRuntime::init(codex_home, "logs-client".to_string(), None).await?;
 
-    let mut last_id = print_backfill(runtime.as_ref(), &filter, args.backfill).await?;
+    let mut last_id =
+        print_backfill(runtime.as_ref(), &filter, args.backfill, args.compact).await?;
     if last_id == 0 {
         last_id = fetch_max_id(runtime.as_ref(), &filter).await?;
     }
@@ -91,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
         let rows = fetch_new_rows(runtime.as_ref(), &filter, last_id).await?;
         for row in rows {
             last_id = last_id.max(row.id);
-            println!("{}", format_row(&row));
+            println!("{}", format_row(&row, args.compact));
         }
         tokio::time::sleep(poll_interval).await;
     }
@@ -154,6 +164,7 @@ fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {
         module_like,
         file_like,
         thread_ids,
+        search: args.search.clone(),
         include_threadless: args.threadless,
     })
 }
@@ -172,6 +183,7 @@ async fn print_backfill(
     runtime: &StateRuntime,
     filter: &LogFilter,
     backfill: usize,
+    compact: bool,
 ) -> anyhow::Result<i64> {
     if backfill == 0 {
         return Ok(0);
@@ -183,7 +195,7 @@ async fn print_backfill(
     let mut last_id = 0;
     for row in rows {
         last_id = last_id.max(row.id);
-        println!("{}", format_row(&row));
+        println!("{}", format_row(&row, compact));
     }
     Ok(last_id)
 }
@@ -233,6 +245,7 @@ fn to_log_query(
         module_like: filter.module_like.clone(),
         file_like: filter.file_like.clone(),
         thread_ids: filter.thread_ids.clone(),
+        search: filter.search.clone(),
         include_threadless: filter.include_threadless,
         after_id,
         limit,
@@ -240,8 +253,8 @@ fn to_log_query(
     }
 }
 
-fn format_row(row: &LogRow) -> String {
-    let timestamp = formatter::ts(row.ts, row.ts_nanos);
+fn format_row(row: &LogRow, compact: bool) -> String {
+    let timestamp = formatter::ts(row.ts, row.ts_nanos, compact);
     let level = row.level.as_str();
     let target = row.target.as_str();
     let message = row.message.as_deref().unwrap_or("");
@@ -251,9 +264,13 @@ fn format_row(row: &LogRow) -> String {
     let thread_id_colored = thread_id.blue().dimmed().to_string();
     let target_colored = target.dimmed().to_string();
     let message_colored = heuristic_formatting(message);
-    format!(
-        "{timestamp_colored} {level_colored} [{thread_id_colored}] {target_colored} - {message_colored}"
-    )
+    if compact {
+        format!("{timestamp_colored} {level_colored} {message_colored}")
+    } else {
+        format!(
+            "{timestamp_colored} {level_colored} [{thread_id_colored}] {target_colored} - {message_colored}"
+        )
+    }
 }
 
 fn heuristic_formatting(message: &str) -> String {
@@ -292,9 +309,10 @@ mod formatter {
             .join("\n")
     }
 
-    pub(super) fn ts(ts: i64, ts_nanos: i64) -> String {
+    pub(super) fn ts(ts: i64, ts_nanos: i64, compact: bool) -> String {
         let nanos = u32::try_from(ts_nanos).unwrap_or(0);
         match DateTime::<Utc>::from_timestamp(ts, nanos) {
+            Some(dt) if compact => dt.format("%H:%M:%S").to_string(),
             Some(dt) => dt.to_rfc3339_opts(SecondsFormat::Millis, true),
             None => format!("{ts}.{ts_nanos:09}Z"),
         }

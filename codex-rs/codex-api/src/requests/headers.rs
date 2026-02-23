@@ -17,6 +17,9 @@ pub(crate) fn subagent_header(source: &Option<SessionSource>) -> Option<String> 
     match sub {
         codex_protocol::protocol::SubAgentSource::Review => Some("review".to_string()),
         codex_protocol::protocol::SubAgentSource::Compact => Some("compact".to_string()),
+        codex_protocol::protocol::SubAgentSource::MemoryConsolidation => {
+            Some("memory_consolidation".to_string())
+        }
         codex_protocol::protocol::SubAgentSource::ThreadSpawn { .. } => {
             Some("collab_spawn".to_string())
         }

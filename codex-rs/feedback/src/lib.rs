@@ -224,7 +224,7 @@ impl CodexLogSnapshot {
         classification: &str,
         reason: Option<&str>,
         include_logs: bool,
-        rollout_path: Option<&std::path::Path>,
+        extra_log_files: &[PathBuf],
         session_source: Option<SessionSource>,
     ) -> Result<()> {
         use std::collections::BTreeMap;
@@ -279,7 +279,7 @@ impl CodexLogSnapshot {
         }
 
         let level = match classification {
-            "bug" | "bad_result" => Level::Error,
+            "bug" | "bad_result" | "safety_check" => Level::Error,
             _ => Level::Info,
         };
 
@@ -317,11 +317,22 @@ impl CodexLogSnapshot {
             }));
         }
 
-        if let Some((path, data)) = rollout_path.and_then(|p| fs::read(p).ok().map(|d| (p, d))) {
+        for path in extra_log_files {
+            let data = match fs::read(path) {
+                Ok(data) => data,
+                Err(err) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "failed to read log attachment; skipping"
+                    );
+                    continue;
+                }
+            };
             let fname = path
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "rollout.jsonl".to_string());
+                .unwrap_or_else(|| "extra-log.log".to_string());
             let content_type = "text/plain".to_string();
             envelope.add_item(EnvelopeItem::Attachment(Attachment {
                 buffer: data,
@@ -342,6 +353,7 @@ fn display_classification(classification: &str) -> String {
         "bug" => "Bug".to_string(),
         "bad_result" => "Bad result".to_string(),
         "good_result" => "Good result".to_string(),
+        "safety_check" => "Safety check".to_string(),
         _ => "Other".to_string(),
     }
 }

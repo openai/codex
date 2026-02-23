@@ -23,6 +23,23 @@ use serde::Serialize;
 use serde::de::Error as SerdeError;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
+pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 16;
+pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
+pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
+pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 1_024;
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowsSandboxModeToml {
+    Elevated,
+    Unelevated,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct WindowsToml {
+    pub sandbox: Option<WindowsSandboxModeToml>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpServerDisabledReason {
@@ -340,20 +357,126 @@ pub struct FeedbackConfigToml {
     pub enabled: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AppDisabledReason {
-    Unknown,
-    User,
+/// Memories settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct MemoriesToml {
+    /// Maximum number of recent raw memories retained for global consolidation.
+    pub max_raw_memories_for_global: Option<usize>,
+    /// Maximum age of the threads used for memories.
+    pub max_rollout_age_days: Option<i64>,
+    /// Maximum number of rollout candidates processed per pass.
+    pub max_rollouts_per_startup: Option<usize>,
+    /// Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.
+    pub min_rollout_idle_hours: Option<i64>,
+    /// Model used for thread summarisation.
+    pub phase_1_model: Option<String>,
+    /// Model used for memory consolidation.
+    pub phase_2_model: Option<String>,
 }
 
-impl fmt::Display for AppDisabledReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AppDisabledReason::Unknown => write!(f, "unknown"),
-            AppDisabledReason::User => write!(f, "user"),
+/// Effective memories settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoriesConfig {
+    pub max_raw_memories_for_global: usize,
+    pub max_rollout_age_days: i64,
+    pub max_rollouts_per_startup: usize,
+    pub min_rollout_idle_hours: i64,
+    pub phase_1_model: Option<String>,
+    pub phase_2_model: Option<String>,
+}
+
+impl Default for MemoriesConfig {
+    fn default() -> Self {
+        Self {
+            max_raw_memories_for_global: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+            max_rollout_age_days: DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS,
+            max_rollouts_per_startup: DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
+            min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
+            phase_1_model: None,
+            phase_2_model: None,
         }
     }
+}
+
+impl From<MemoriesToml> for MemoriesConfig {
+    fn from(toml: MemoriesToml) -> Self {
+        let defaults = Self::default();
+        Self {
+            max_raw_memories_for_global: toml
+                .max_raw_memories_for_global
+                .unwrap_or(defaults.max_raw_memories_for_global)
+                .min(4096),
+            max_rollout_age_days: toml
+                .max_rollout_age_days
+                .unwrap_or(defaults.max_rollout_age_days)
+                .clamp(0, 90),
+            max_rollouts_per_startup: toml
+                .max_rollouts_per_startup
+                .unwrap_or(defaults.max_rollouts_per_startup)
+                .min(128),
+            min_rollout_idle_hours: toml
+                .min_rollout_idle_hours
+                .unwrap_or(defaults.min_rollout_idle_hours)
+                .clamp(1, 48),
+            phase_1_model: toml.phase_1_model,
+            phase_2_model: toml.phase_2_model,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AppToolApproval {
+    #[default]
+    Auto,
+    Prompt,
+    Approve,
+}
+
+/// Default settings that apply to all apps.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppsDefaultConfig {
+    /// When `false`, apps are disabled unless overridden by per-app settings.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+
+    /// Whether tools with `destructive_hint = true` are allowed by default.
+    #[serde(
+        default = "default_enabled",
+        skip_serializing_if = "std::clone::Clone::clone"
+    )]
+    pub destructive_enabled: bool,
+
+    /// Whether tools with `open_world_hint = true` are allowed by default.
+    #[serde(
+        default = "default_enabled",
+        skip_serializing_if = "std::clone::Clone::clone"
+    )]
+    pub open_world_enabled: bool,
+}
+
+/// Per-tool settings for a single app tool.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppToolConfig {
+    /// Whether this tool is enabled. `Some(true)` explicitly allows this tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+
+    /// Approval mode for this tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_mode: Option<AppToolApproval>,
+}
+
+/// Tool settings for a single app.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppToolsConfig {
+    /// Per-tool overrides keyed by tool name (for example `repos/list`).
+    #[serde(default, flatten)]
+    pub tools: HashMap<String, AppToolConfig>,
 }
 
 /// Config values for a single app/connector.
@@ -364,15 +487,35 @@ pub struct AppConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 
-    /// Reason this app was disabled.
+    /// Whether tools with `destructive_hint = true` are allowed for this app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disabled_reason: Option<AppDisabledReason>,
+    pub destructive_enabled: Option<bool>,
+
+    /// Whether tools with `open_world_hint = true` are allowed for this app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_world_enabled: Option<bool>,
+
+    /// Approval mode for tools in this app unless a tool override exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_tools_approval_mode: Option<AppToolApproval>,
+
+    /// Whether tools are enabled by default for this app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_tools_enabled: Option<bool>,
+
+    /// Per-tool settings for this app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<AppToolsConfig>,
 }
 
 /// App/connector settings loaded from `config.toml`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AppsConfigToml {
+    /// Default settings for all apps.
+    #[serde(default, rename = "_default", skip_serializing_if = "Option::is_none")]
+    pub default: Option<AppsDefaultConfig>,
+
     /// Per-app settings keyed by app ID (for example `[apps.google_drive]`).
     #[serde(default, flatten)]
     pub apps: HashMap<String, AppConfig>,
@@ -520,11 +663,6 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
 
-    /// Start the TUI in the specified collaboration mode (plan/default).
-    /// Defaults to unset.
-    #[serde(default)]
-    pub experimental_mode: Option<ModeKind>,
-
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
     /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.
@@ -539,8 +677,17 @@ pub struct Tui {
     /// Ordered list of status line item identifiers.
     ///
     /// When set, the TUI renders the selected items as the status line.
+    /// When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and
+    /// `current-dir`.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
+
+    /// Syntax highlighting theme name (kebab-case).
+    ///
+    /// When set, overrides automatic light/dark theme detection.
+    /// Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 const fn default_true() -> bool {

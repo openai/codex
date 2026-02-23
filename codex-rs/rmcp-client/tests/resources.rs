@@ -10,6 +10,7 @@ use futures::FutureExt as _;
 use rmcp::model::AnnotateAble;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::ElicitationCapability;
+use rmcp::model::FormElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::ListResourceTemplatesResult;
@@ -29,10 +30,14 @@ fn init_params() -> InitializeRequestParams {
         meta: None,
         capabilities: ClientCapabilities {
             experimental: None,
+            extensions: None,
             roots: None,
             sampling: None,
             elicitation: Some(ElicitationCapability {
-                schema_validation: None,
+                form: Some(FormElicitationCapability {
+                    schema_validation: None,
+                }),
+                url: None,
             }),
             tasks: None,
         },
@@ -40,6 +45,7 @@ fn init_params() -> InitializeRequestParams {
             name: "codex-test".into(),
             version: "0.0.0-test".into(),
             title: Some("Codex rmcp resource test".into()),
+            description: None,
             icons: None,
             website_url: None,
         },

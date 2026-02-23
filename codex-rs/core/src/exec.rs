@@ -73,7 +73,7 @@ pub struct ExecParams {
 }
 
 /// Mechanism to terminate an exec invocation before it finishes naturally.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ExecExpiration {
     Timeout(Duration),
     DefaultTimeout,
@@ -95,7 +95,7 @@ impl From<u64> for ExecExpiration {
 }
 
 impl ExecExpiration {
-    async fn wait(self) {
+    pub(crate) async fn wait(self) {
         match self {
             ExecExpiration::Timeout(duration) => tokio::time::sleep(duration).await,
             ExecExpiration::DefaultTimeout => {
@@ -251,7 +251,7 @@ pub(crate) async fn execute_exec_env(
         cwd,
         expiration,
         env,
-        network,
+        network: network.clone(),
         sandbox_permissions,
         windows_sandbox_level,
         justification,
@@ -490,6 +490,7 @@ fn finalize_exec_result(
             if is_likely_sandbox_denied(sandbox_type, &exec_output) {
                 return Err(CodexErr::Sandbox(SandboxErr::Denied {
                     output: Box::new(exec_output),
+                    network_policy_decision: None,
                 }));
             }
 
@@ -701,13 +702,16 @@ async fn exec(
     let ExecParams {
         command,
         cwd,
-        env,
+        mut env,
         network,
         arg0,
         expiration,
         windows_sandbox_level: _,
         ..
     } = params;
+    if let Some(network) = network.as_ref() {
+        network.apply_to_env(&mut env);
+    }
 
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
@@ -722,7 +726,10 @@ async fn exec(
         arg0: arg0_ref,
         cwd,
         sandbox_policy,
-        network: network.as_ref(),
+        // The environment already has attempt-scoped proxy settings from
+        // apply_to_env_for_attempt above. Passing network here would reapply
+        // non-attempt proxy vars and drop attempt correlation metadata.
+        network: None,
         stdio_policy: StdioPolicy::RedirectForShellTool,
         env,
     })
@@ -952,6 +959,17 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_detection_ignores_network_policy_text_in_non_sandbox_mode() {
+        let output = make_exec_output(
+            0,
+            "",
+            "",
+            r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","reason":"not_allowed","source":"decider","protocol":"http","host":"google.com","port":80}"#,
+        );
+        assert!(!is_likely_sandbox_denied(SandboxType::None, &output));
+    }
+
+    #[test]
     fn sandbox_detection_uses_aggregated_output() {
         let output = make_exec_output(
             101,
@@ -961,6 +979,21 @@ mod tests {
         );
         assert!(is_likely_sandbox_denied(
             SandboxType::MacosSeatbelt,
+            &output
+        ));
+    }
+
+    #[test]
+    fn sandbox_detection_ignores_network_policy_text_with_zero_exit_code() {
+        let output = make_exec_output(
+            0,
+            "",
+            "",
+            r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","source":"decider","protocol":"http","host":"google.com","port":80}"#,
+        );
+
+        assert!(!is_likely_sandbox_denied(
+            SandboxType::LinuxSeccomp,
             &output
         ));
     }
@@ -1094,7 +1127,13 @@ mod tests {
             arg0: None,
         };
 
-        let output = exec(params, SandboxType::None, &SandboxPolicy::ReadOnly, None).await?;
+        let output = exec(
+            params,
+            SandboxType::None,
+            &SandboxPolicy::new_read_only_policy(),
+            None,
+        )
+        .await?;
         assert!(output.timed_out);
 
         let stdout = output.stdout.from_utf8_lossy().text;

@@ -2,6 +2,7 @@ use crate::admin;
 use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
+use crate::runtime::BlockedRequestObserver;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::socks5;
 use crate::state::NetworkProxyState;
@@ -70,6 +71,7 @@ pub struct NetworkProxyBuilder {
     admin_addr: Option<SocketAddr>,
     managed_by_codex: bool,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
 }
 
 impl Default for NetworkProxyBuilder {
@@ -81,6 +83,7 @@ impl Default for NetworkProxyBuilder {
             admin_addr: None,
             managed_by_codex: true,
             policy_decider: None,
+            blocked_request_observer: None,
         }
     }
 }
@@ -124,12 +127,31 @@ impl NetworkProxyBuilder {
         self
     }
 
+    pub fn blocked_request_observer<O>(mut self, observer: O) -> Self
+    where
+        O: BlockedRequestObserver,
+    {
+        self.blocked_request_observer = Some(Arc::new(observer));
+        self
+    }
+
+    pub fn blocked_request_observer_arc(
+        mut self,
+        observer: Arc<dyn BlockedRequestObserver>,
+    ) -> Self {
+        self.blocked_request_observer = Some(observer);
+        self
+    }
+
     pub async fn build(self) -> Result<NetworkProxy> {
         let state = self.state.ok_or_else(|| {
             anyhow::anyhow!(
                 "NetworkProxyBuilder requires a state; supply one via builder.state(...)"
             )
         })?;
+        state
+            .set_blocked_request_observer(self.blocked_request_observer.clone())
+            .await;
         let current_cfg = state.current_cfg().await?;
         let (requested_http_addr, requested_socks_addr, requested_admin_addr, reserved_listeners) =
             if self.managed_by_codex {
@@ -184,6 +206,10 @@ impl NetworkProxyBuilder {
             socks_addr,
             socks_enabled: current_cfg.network.enable_socks5,
             allow_local_binding: current_cfg.network.allow_local_binding,
+            allow_unix_sockets: current_cfg.network.allow_unix_sockets.clone(),
+            dangerously_allow_all_unix_sockets: current_cfg
+                .network
+                .dangerously_allow_all_unix_sockets,
             admin_addr,
             reserved_listeners,
             policy_decider: self.policy_decider,
@@ -218,6 +244,8 @@ pub struct NetworkProxy {
     socks_addr: SocketAddr,
     socks_enabled: bool,
     allow_local_binding: bool,
+    allow_unix_sockets: Vec<String>,
+    dangerously_allow_all_unix_sockets: bool,
     admin_addr: SocketAddr,
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
@@ -249,6 +277,8 @@ impl Eq for NetworkProxy {}
 pub const PROXY_URL_ENV_KEYS: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "WS_PROXY",
+    "WSS_PROXY",
     "ALL_PROXY",
     "FTP_PROXY",
     "YARN_HTTP_PROXY",
@@ -267,6 +297,7 @@ pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
 pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
 
 const FTP_PROXY_ENV_KEYS: &[&str] = &["FTP_PROXY", "ftp_proxy"];
+const WEBSOCKET_PROXY_ENV_KEYS: &[&str] = &["WS_PROXY", "WSS_PROXY", "ws_proxy", "wss_proxy"];
 
 pub const NO_PROXY_ENV_KEYS: &[&str] = &[
     "NO_PROXY",
@@ -348,24 +379,32 @@ fn apply_proxy_env_overrides(
         ],
         &http_proxy_url,
     );
+    // Some websocket clients look for dedicated WS/WSS proxy environment variables instead of
+    // HTTP(S)_PROXY. Keep them aligned with the managed HTTP proxy endpoint.
+    set_env_keys(env, WEBSOCKET_PROXY_ENV_KEYS, &http_proxy_url);
 
     // Keep local/private targets direct so local IPC and metadata endpoints avoid the proxy.
     set_env_keys(env, NO_PROXY_ENV_KEYS, DEFAULT_NO_PROXY_VALUE);
 
     env.insert("ELECTRON_GET_USE_PROXY".to_string(), "true".to_string());
 
+    // Keep HTTP_PROXY/HTTPS_PROXY as HTTP endpoints. A lot of clients break if
+    // those vars contain SOCKS URLs. We only switch ALL_PROXY here.
+    //
     if socks_enabled {
         set_env_keys(env, ALL_PROXY_ENV_KEYS, &socks_proxy_url);
         set_env_keys(env, FTP_PROXY_ENV_KEYS, &socks_proxy_url);
-        #[cfg(target_os = "macos")]
-        {
-            // Preserve existing SSH wrappers (for example: Secretive/Teleport setups)
-            // and only provide a SOCKS ProxyCommand fallback when one is not present.
-            env.entry("GIT_SSH_COMMAND".to_string())
-                .or_insert_with(|| format!("ssh -o ProxyCommand='nc -X 5 -x {socks_addr} %h %p'"));
-        }
     } else {
         set_env_keys(env, ALL_PROXY_ENV_KEYS, &http_proxy_url);
+        set_env_keys(env, FTP_PROXY_ENV_KEYS, &http_proxy_url);
+    }
+
+    #[cfg(target_os = "macos")]
+    if socks_enabled {
+        // Preserve existing SSH wrappers (for example: Secretive/Teleport setups)
+        // and only provide a SOCKS ProxyCommand fallback when one is not present.
+        env.entry("GIT_SSH_COMMAND".to_string())
+            .or_insert_with(|| format!("ssh -o ProxyCommand='nc -X 5 -x {socks_addr} %h %p'"));
     }
 }
 
@@ -384,6 +423,18 @@ impl NetworkProxy {
 
     pub fn admin_addr(&self) -> SocketAddr {
         self.admin_addr
+    }
+
+    pub fn allow_local_binding(&self) -> bool {
+        self.allow_local_binding
+    }
+
+    pub fn allow_unix_sockets(&self) -> &[String] {
+        &self.allow_unix_sockets
+    }
+
+    pub fn dangerously_allow_all_unix_sockets(&self) -> bool {
+        self.dangerously_allow_all_unix_sockets
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
@@ -408,7 +459,9 @@ impl NetworkProxy {
         ensure_rustls_crypto_provider();
 
         if !unix_socket_permissions_supported() {
-            warn!("allowUnixSockets is macOS-only; requests will be rejected on this platform");
+            warn!(
+                "allowUnixSockets and dangerouslyAllowAllUnixSockets are macOS-only; requests will be rejected on this platform"
+            );
         }
 
         let reserved_listeners = self.reserved_listeners.as_ref();
@@ -686,6 +739,14 @@ mod tests {
     }
 
     #[test]
+    fn has_proxy_url_env_vars_detects_websocket_proxy_keys() {
+        let mut env = HashMap::new();
+        env.insert("wss_proxy".to_string(), "http://127.0.0.1:3128".to_string());
+
+        assert_eq!(has_proxy_url_env_vars(&env), true);
+    }
+
+    #[test]
     fn apply_proxy_env_overrides_sets_common_tool_vars() {
         let mut env = HashMap::new();
         apply_proxy_env_overrides(
@@ -698,6 +759,14 @@ mod tests {
 
         assert_eq!(
             env.get("HTTP_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("WS_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("WSS_PROXY"),
             Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(
@@ -743,6 +812,46 @@ mod tests {
             Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_uses_plain_http_proxy_url() {
+        let mut env = HashMap::new();
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            true,
+            false,
+        );
+
+        assert_eq!(
+            env.get("HTTP_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("HTTPS_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("WS_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("WSS_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("ALL_PROXY"),
+            Some(&"socks5h://127.0.0.1:8081".to_string())
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            env.get("GIT_SSH_COMMAND"),
+            Some(&"ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string())
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(env.get("GIT_SSH_COMMAND"), None);
     }
 
     #[cfg(target_os = "macos")]

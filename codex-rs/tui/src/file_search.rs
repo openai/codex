@@ -81,12 +81,13 @@ impl FileSearchManager {
             session_token,
         });
         let session = file_search::create_session(
-            &self.search_dir,
+            vec![self.search_dir.clone()],
             file_search::FileSearchOptions {
                 compute_indices: true,
                 ..Default::default()
             },
             reporter,
+            None,
         );
         match session {
             Ok(session) => st.session = Some(session),

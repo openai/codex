@@ -36,8 +36,9 @@ async fn app_server_default_analytics_disabled_without_flag() -> Result<()> {
     .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
     // With analytics unset in the config and the default flag is false, metrics are disabled.
-    // No provider is built.
-    assert_eq!(provider.is_none(), true);
+    // A provider may still exist for non-metrics telemetry, so check metrics specifically.
+    let has_metrics = provider.as_ref().and_then(|otel| otel.metrics()).is_some();
+    assert_eq!(has_metrics, false);
     Ok(())
 }
 

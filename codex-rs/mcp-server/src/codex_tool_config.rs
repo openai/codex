@@ -2,9 +2,9 @@
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::protocol::AskForApproval;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::protocol::AskForApproval;
 use codex_utils_json_to_toml::json_to_toml;
 use rmcp::model::JsonObject;
 use rmcp::model::Tool;
@@ -127,6 +127,7 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
                 .into(),
         ),
         annotations: None,
+        execution: None,
         icons: None,
         meta: None,
     }
@@ -248,6 +249,7 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
             "Continue a Codex conversation by providing the thread id and prompt.".into(),
         ),
         annotations: None,
+        execution: None,
         icons: None,
         meta: None,
     }

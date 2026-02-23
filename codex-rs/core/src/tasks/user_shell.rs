@@ -21,6 +21,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::ExecCommandSource;
+use crate::protocol::ExecCommandStatus;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TurnStartedEvent;
 use crate::sandboxing::ExecRequest;
@@ -100,6 +101,10 @@ pub(crate) async fn execute_user_shell_command(
         // Auxiliary mode runs within an existing active turn. That turn already
         // emitted TurnStarted, so emitting another TurnStarted here would create
         // duplicate turn lifecycle events and confuse clients.
+        // TODO(ccunningham): After TurnStarted, emit model-visible turn context diffs for
+        // standalone lifecycle tasks (for example /shell, and review once it emits TurnStarted).
+        // `/compact` is an intentional exception because compaction requests should not include
+        // freshly reinjected context before the summary/replacement history is applied.
         let event = EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: turn_context.sub_id.clone(),
             model_context_window: turn_context.model_context_window(),
@@ -118,6 +123,7 @@ pub(crate) async fn execute_user_shell_command(
         &display_command,
         session_shell.as_ref(),
         turn_context.cwd.as_path(),
+        &turn_context.shell_environment_policy.r#set,
     );
 
     let call_id = Uuid::new_v4().to_string();
@@ -207,6 +213,7 @@ pub(crate) async fn execute_user_shell_command(
                         exit_code: -1,
                         duration: Duration::ZERO,
                         formatted_output: aborted_message,
+                        status: ExecCommandStatus::Failed,
                     }),
                 )
                 .await;
@@ -233,6 +240,11 @@ pub(crate) async fn execute_user_shell_command(
                             &output,
                             turn_context.truncation_policy,
                         ),
+                        status: if output.exit_code == 0 {
+                            ExecCommandStatus::Completed
+                        } else {
+                            ExecCommandStatus::Failed
+                        },
                     }),
                 )
                 .await;
@@ -272,6 +284,7 @@ pub(crate) async fn execute_user_shell_command(
                             &exec_output,
                             turn_context.truncation_policy,
                         ),
+                        status: ExecCommandStatus::Failed,
                     }),
                 )
                 .await;

@@ -1,25 +1,26 @@
 use codex_core::CodexThread;
-use codex_core::ContentItem;
 use codex_core::REVIEW_PROMPT;
-use codex_core::ResponseItem;
 use codex_core::config::Config;
-use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewCodeLocation;
-use codex_core::protocol::ReviewFinding;
-use codex_core::protocol::ReviewLineRange;
-use codex_core::protocol::ReviewOutputEvent;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::RolloutItem;
-use codex_core::protocol::RolloutLine;
 use codex_core::review_format::render_review_output_text;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewCodeLocation;
+use codex_protocol::protocol::ReviewFinding;
+use codex_protocol::protocol::ReviewLineRange;
+use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -371,25 +372,6 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         _ => false,
     })
     .await;
-    // On slower CI hosts, the final AgentMessage can arrive immediately after
-    // TurnComplete. Drain a brief tail window to make ordering nondeterminism
-    // harmless while still enforcing "exactly one final AgentMessage".
-    while let Ok(Ok(event)) =
-        tokio::time::timeout(std::time::Duration::from_millis(200), codex.next_event()).await
-    {
-        match event.msg {
-            EventMsg::AgentMessage(_) => agent_messages += 1,
-            EventMsg::EnteredReviewMode(_) => saw_entered = true,
-            EventMsg::ExitedReviewMode(_) => saw_exited = true,
-            EventMsg::AgentMessageContentDelta(_) => {
-                panic!("unexpected AgentMessageContentDelta surfaced during review")
-            }
-            EventMsg::AgentMessageDelta(_) => {
-                panic!("unexpected AgentMessageDelta surfaced during review")
-            }
-            _ => {}
-        }
-    }
     assert_eq!(1, agent_messages, "expected exactly one AgentMessage event");
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
@@ -891,7 +873,7 @@ async fn start_responses_server_with_sse(
     sse_raw: &str,
     expected_requests: usize,
 ) -> (MockServer, ResponseMock) {
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
     let sse = load_sse_fixture_with_id_from_str(sse_raw, &Uuid::new_v4().to_string());
     let responses = vec![sse; expected_requests];
     let request_log = mount_sse_sequence(&server, responses).await;

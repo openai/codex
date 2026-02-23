@@ -1,13 +1,13 @@
 use anyhow::Result;
 use codex_core::config::Constrained;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use codex_core::protocol::COLLABORATION_MODE_OPEN_TAG;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::RolloutItem;
-use codex_core::protocol::RolloutLine;
-use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::COLLABORATION_MODE_CLOSE_TAG;
+use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -108,7 +108,7 @@ async fn override_turn_context_without_user_turn_does_not_record_permissions_upd
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     });
     let test = builder.build(&server).await?;
 

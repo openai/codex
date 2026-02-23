@@ -114,6 +114,10 @@ pub fn is_first_party_originator(originator_value: &str) -> bool {
         || originator_value.starts_with("Codex ")
 }
 
+pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
+    originator_value == "codex_atlas" || originator_value == "codex_chatgpt_desktop"
+}
+
 pub fn get_codex_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
@@ -179,6 +183,20 @@ pub fn create_client() -> CodexHttpClient {
 }
 
 pub fn build_reqwest_client() -> reqwest::Client {
+    let ua = get_codex_user_agent();
+
+    let mut builder = reqwest::Client::builder()
+        // Set UA via dedicated helper to avoid header validation pitfalls
+        .user_agent(ua)
+        .default_headers(default_headers());
+    if is_sandboxed() {
+        builder = builder.no_proxy();
+    }
+
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+}
+
+pub fn default_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert("originator", originator().header_value);
     if let Ok(guard) = REQUIREMENTS_RESIDENCY.read()
@@ -190,17 +208,7 @@ pub fn build_reqwest_client() -> reqwest::Client {
         };
         headers.insert(RESIDENCY_HEADER_NAME, value);
     }
-    let ua = get_codex_user_agent();
-
-    let mut builder = reqwest::Client::builder()
-        // Set UA via dedicated helper to avoid header validation pitfalls
-        .user_agent(ua)
-        .default_headers(headers);
-    if is_sandboxed() {
-        builder = builder.no_proxy();
-    }
-
-    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    headers
 }
 
 fn is_sandboxed() -> bool {
@@ -228,6 +236,17 @@ mod tests {
         assert_eq!(is_first_party_originator("Codex Something Else"), true);
         assert_eq!(is_first_party_originator("codex_cli"), false);
         assert_eq!(is_first_party_originator("Other"), false);
+    }
+
+    #[test]
+    fn is_first_party_chat_originator_matches_known_values() {
+        assert_eq!(is_first_party_chat_originator("codex_atlas"), true);
+        assert_eq!(
+            is_first_party_chat_originator("codex_chatgpt_desktop"),
+            true
+        );
+        assert_eq!(is_first_party_chat_originator(DEFAULT_ORIGINATOR), false);
+        assert_eq!(is_first_party_chat_originator("codex_vscode"), false);
     }
 
     #[tokio::test]

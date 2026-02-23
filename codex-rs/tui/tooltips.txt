@@ -6,6 +6,7 @@ Use /permissions to control when Codex asks for confirmation.
 Run /review to get a code review of your current changes.
 Use /skills to list available skills or ask Codex to use one.
 Use /status to see the current model, approvals, and token usage.
+Use /statusline to configure which items appear in the status line.
 Use /fork to branch the current chat into a new thread.
 Use /init to create an AGENTS.md with project-specific guidance.
 Use /mcp to list configured MCP tools.

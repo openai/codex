@@ -8,10 +8,9 @@ const ANNOUNCEMENT_TIP_URL: &str =
 
 const IS_MACOS: bool = cfg!(target_os = "macos");
 
-const PAID_TOOLTIP: &str = "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. Run 'codex app' or visit https://chatgpt.com/codex";
+const PAID_TOOLTIP: &str = "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true";
 const PAID_TOOLTIP_NON_MAC: &str = "*New* 2x rate limits until *April 2nd*.";
-const OTHER_TOOLTIP: &str =
-    "*New* Build faster with the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex";
+const OTHER_TOOLTIP: &str = "*New* Build faster with the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true";
 const OTHER_TOOLTIP_NON_MAC: &str = "*New* Build faster with Codex.";
 const FREE_GO_TOOLTIP: &str =
     "*New* Codex is included in your plan for free through *March 2nd* – let’s build together.";

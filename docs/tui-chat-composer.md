@@ -56,10 +56,11 @@ The solution is to detect paste-like _bursts_ and buffer them into a single expl
 Up/Down recall is handled by `ChatComposerHistory` and merges two sources:
 
 - **Persistent history** (cross-session, fetched from `~/.codex/history.jsonl`): text-only. It
-  does **not** carry text element ranges or local image attachments, so recalling one of these
-  entries only restores the text.
+  does **not** carry text element ranges or image attachments, so recalling one of these entries
+  only restores the text.
 - **Local history** (current session): stores the full submission payload, including text
-  elements and local image paths. Recalling a local entry rehydrates placeholders and attachments.
+  elements, local image paths, and remote image URLs. Recalling a local entry rehydrates
+  placeholders and attachments.
 
 This distinction keeps the on-disk history backward compatible and avoids persisting attachments,
 while still providing a richer recall experience for in-session edits.
@@ -127,6 +128,23 @@ positional args, Enter auto-submits without calling `prepare_submission_text`. T
 - Prunes attachments based on expanded placeholders.
 - Clears pending pastes after a successful auto-submit.
 
+## Remote image rows (selection/deletion flow)
+
+Remote image URLs are shown as `[Image #N]` rows above the textarea, inside the same composer box.
+They are attachment rows, not editable textarea content.
+
+- TUI can remove these rows, but cannot type before/between them.
+- Press `Up` at textarea cursor position `0` to select the last remote image row.
+- While selected, `Up`/`Down` moves selection across remote image rows.
+- Pressing `Down` on the last row exits remote-row selection and returns to textarea editing.
+- `Delete` or `Backspace` removes the selected remote image row.
+
+Image numbering is unified:
+
+- Remote image rows always occupy `[Image #1]..[Image #M]`.
+- Local attached image placeholders start after that offset (`[Image #M+1]..`).
+- Removing remote rows relabels local placeholders so numbering stays contiguous.
+
 ## History navigation (Up/Down) and backtrack prefill
 
 `ChatComposerHistory` merges two kinds of history:
@@ -139,6 +157,7 @@ Local history entries capture:
 - raw text (including placeholders),
 - `TextElement` ranges for placeholders,
 - local image paths,
+- remote image URLs,
 - pending large-paste payloads (for drafts).
 
 Persistent history entries only restore text. They intentionally do **not** rehydrate attachments
@@ -150,17 +169,17 @@ line). This keeps multiline cursor movement intact while preserving shell-like h
 
 ### Draft recovery (Ctrl+C)
 
-Ctrl+C clears the composer but stashes the full draft state (text elements, image paths, and
-pending paste payloads) into local history. Pressing Up immediately restores that draft, including
-image placeholders and large-paste placeholders with their payloads.
+Ctrl+C clears the composer but stashes the full draft state (text elements, local image paths,
+remote image URLs, and pending paste payloads) into local history. Pressing Up immediately restores
+that draft, including image placeholders and large-paste placeholders with their payloads.
 
 ### Submitted message recall
 
-After a successful submission, the local history entry stores the submitted text and any element
-ranges and local image paths. Pending paste payloads are cleared during submission, so large-paste
-placeholders are expanded into their full text before being recorded. This means:
+After a successful submission, the local history entry stores the submitted text, element ranges,
+local image paths, and remote image URLs. Pending paste payloads are cleared during submission, so
+large-paste placeholders are expanded into their full text before being recorded. This means:
 
-- Up/Down recall of a submitted message restores image placeholders and their local paths.
+- Up/Down recall of a submitted message restores remote image rows plus local image placeholders.
 - Recalled entries place the cursor at end-of-line to match typical shell history editing.
 - Large-paste placeholders are not expected in recalled submitted history; the text is the
   expanded paste content.
@@ -168,14 +187,15 @@ placeholders are expanded into their full text before being recorded. This means
 ### Backtrack prefill
 
 Backtrack selections read `UserHistoryCell` data from the transcript. The composer prefill now
-reuses the selected message’s text elements and local image paths, so image placeholders and
-attachments rehydrate when rolling back to a prior user message.
+reuses the selected message’s text elements, local image paths, and remote image URLs, so image
+placeholders and attachments rehydrate when rolling back to a prior user message.
 
 ### External editor edits
 
 When the composer content is replaced from an external editor, the composer rebuilds text elements
 and keeps only attachments whose placeholders still appear in the new text. Image placeholders are
-then normalized to `[Image #1]..[Image #N]` to keep attachment mapping consistent after edits.
+then normalized to `[Image #M]..[Image #N]`, where `M` starts after the number of remote image
+rows, to keep attachment mapping consistent after edits.
 
 ## Paste burst: concepts and assumptions
 

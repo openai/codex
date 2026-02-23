@@ -112,7 +112,7 @@ mod tests {
     fn bwrap_flags_are_feature_gated() {
         let command = vec!["/bin/true".to_string()];
         let cwd = Path::new("/tmp");
-        let policy = SandboxPolicy::ReadOnly;
+        let policy = SandboxPolicy::new_read_only_policy();
 
         let with_bwrap =
             create_linux_sandbox_command_args(command.clone(), &policy, cwd, true, false);
@@ -132,7 +132,7 @@ mod tests {
     fn proxy_flag_is_included_when_requested() {
         let command = vec!["/bin/true".to_string()];
         let cwd = Path::new("/tmp");
-        let policy = SandboxPolicy::ReadOnly;
+        let policy = SandboxPolicy::new_read_only_policy();
 
         let args = create_linux_sandbox_command_args(command, &policy, cwd, true, true);
         assert_eq!(

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::fs;
 use tracing::error;
+use tracing::info;
 
 /// Manages loading and saving of models cache to disk.
 #[derive(Debug)]
@@ -28,6 +29,11 @@ impl ModelsCacheManager {
 
     /// Attempt to load a fresh cache entry. Returns `None` if the cache doesn't exist or is stale.
     pub(crate) async fn load_fresh(&self, expected_version: &str) -> Option<ModelsCache> {
+        info!(
+                cache_path = %self.cache_path.display(),
+                expected_version,
+            "models cache: attempting load_fresh"
+        );
         let cache = match self.load().await {
             Ok(cache) => cache?,
             Err(err) => {
@@ -35,12 +41,35 @@ impl ModelsCacheManager {
                 return None;
             }
         };
+        info!(
+            cache_path = %self.cache_path.display(),
+            cached_version = ?cache.client_version,
+            fetched_at = %cache.fetched_at,
+            "models cache: loaded cache file"
+        );
         if cache.client_version.as_deref() != Some(expected_version) {
+            info!(
+                cache_path = %self.cache_path.display(),
+                expected_version,
+                cached_version = ?cache.client_version,
+                "models cache: cache version mismatch"
+            );
             return None;
         }
         if !cache.is_fresh(self.cache_ttl) {
+            info!(
+                cache_path = %self.cache_path.display(),
+                cache_ttl_secs = self.cache_ttl.as_secs(),
+                fetched_at = %cache.fetched_at,
+                "models cache: cache is stale"
+            );
             return None;
         }
+        info!(
+            cache_path = %self.cache_path.display(),
+            cache_ttl_secs = self.cache_ttl.as_secs(),
+            "models cache: cache hit"
+        );
         Some(cache)
     }
 

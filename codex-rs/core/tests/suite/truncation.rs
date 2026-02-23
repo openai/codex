@@ -5,11 +5,11 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
@@ -384,7 +384,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
     fixture
         .submit_turn_with_policy(
             "call the rmcp echo tool with a very large message",
-            SandboxPolicy::ReadOnly,
+            SandboxPolicy::new_read_only_policy(),
         )
         .await?;
 
@@ -485,7 +485,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
@@ -742,7 +742,7 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
     fixture
         .submit_turn_with_policy(
             "call the rmcp echo tool with a very large message",
-            SandboxPolicy::ReadOnly,
+            SandboxPolicy::new_read_only_policy(),
         )
         .await?;
 

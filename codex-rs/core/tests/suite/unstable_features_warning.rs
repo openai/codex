@@ -1,12 +1,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use codex_config::CONFIG_TOML_FILE;
 use codex_core::CodexAuth;
 use codex_core::NewThread;
-use codex_core::config::CONFIG_TOML_FILE;
 use codex_core::features::Feature;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::InitialHistory;
-use codex_core::protocol::WarningEvent;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::WarningEvent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core::time::Duration;
 use core_test_support::load_default_config_for_test;
@@ -39,7 +39,7 @@ async fn emits_warning_when_unstable_features_enabled_via_config() {
         thread: conversation,
         ..
     } = thread_manager
-        .resume_thread_with_history(config, InitialHistory::New, auth_manager)
+        .resume_thread_with_history(config, InitialHistory::New, auth_manager, false)
         .await
         .expect("spawn conversation");
 
@@ -77,7 +77,7 @@ async fn suppresses_warning_when_configured() {
         thread: conversation,
         ..
     } = thread_manager
-        .resume_thread_with_history(config, InitialHistory::New, auth_manager)
+        .resume_thread_with_history(config, InitialHistory::New, auth_manager, false)
         .await
         .expect("spawn conversation");
 

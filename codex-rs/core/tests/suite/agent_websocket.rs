@@ -41,7 +41,7 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
     let test = builder.build_with_websocket_server(&server).await?;
     test.submit_turn_with_policy(
         "run the echo command",
-        test.config.sandbox_policy.get().clone(),
+        test.config.permissions.sandbox_policy.get().clone(),
     )
     .await?;
 
@@ -101,8 +101,11 @@ async fn websocket_first_turn_uses_request_prewarm_and_append() -> Result<()> {
 
     let mut builder = test_codex();
     let test = builder.build_with_websocket_server(&server).await?;
-    test.submit_turn_with_policy("hello", test.config.sandbox_policy.get().clone())
-        .await?;
+    test.submit_turn_with_policy(
+        "hello",
+        test.config.permissions.sandbox_policy.get().clone(),
+    )
+    .await?;
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
@@ -147,8 +150,11 @@ async fn websocket_first_turn_handles_handshake_delay_with_request_prewarm() -> 
 
     let mut builder = test_codex();
     let test = builder.build_with_websocket_server(&server).await?;
-    test.submit_turn_with_policy("hello", test.config.sandbox_policy.get().clone())
-        .await?;
+    test.submit_turn_with_policy(
+        "hello",
+        test.config.permissions.sandbox_policy.get().clone(),
+    )
+    .await?;
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
@@ -199,7 +205,7 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
     let test = builder.build_with_websocket_server(&server).await?;
     test.submit_turn_with_policy(
         "run the echo command",
-        test.config.sandbox_policy.get().clone(),
+        test.config.permissions.sandbox_policy.get().clone(),
     )
     .await?;
 

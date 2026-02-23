@@ -69,7 +69,7 @@ impl McpEscalationPolicy {
             .pause_for(async {
                 context
                     .peer
-                    .create_elicitation(CreateElicitationRequestParams {
+                    .create_elicitation(CreateElicitationRequestParams::FormElicitationParams {
                         meta: None,
                         message: format!(
                             "Allow agent to run `{command}` in `{}`?",

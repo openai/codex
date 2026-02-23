@@ -2,6 +2,9 @@ use crate::DB_ERROR_METRIC;
 use crate::LogEntry;
 use crate::LogQuery;
 use crate::LogRow;
+use crate::METRIC_DB_INIT;
+use crate::STATE_DB_FILENAME;
+use crate::STATE_DB_VERSION;
 use crate::SortKey;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
@@ -24,11 +27,13 @@ use sqlx::ConnectOptions;
 use sqlx::QueryBuilder;
 use sqlx::Row;
 use sqlx::Sqlite;
+use sqlx::SqliteConnection;
 use sqlx::SqlitePool;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::sqlite::SqliteSynchronous;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,13 +41,14 @@ use std::time::Duration;
 use tracing::warn;
 use uuid::Uuid;
 
-pub const STATE_DB_FILENAME: &str = "state";
-pub const STATE_DB_VERSION: u32 = 4;
-
-const METRIC_DB_INIT: &str = "codex.db.init";
-
 mod memories;
 // Memory-specific CRUD and phase job lifecycle methods live in `runtime/memories.rs`.
+
+// "Partition" is the retention bucket we cap at 10 MiB:
+// - one bucket per non-null thread_id
+// - one bucket per threadless (thread_id IS NULL) non-null process_uuid
+// - one bucket for threadless rows with process_uuid IS NULL
+const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct StateRuntime {
@@ -205,6 +211,8 @@ SELECT
     created_at,
     updated_at,
     source,
+    agent_nickname,
+    agent_role,
     model_provider,
     cwd,
     cli_version,
@@ -304,6 +312,8 @@ SELECT
     created_at,
     updated_at,
     source,
+    agent_nickname,
+    agent_role,
     model_provider,
     cwd,
     cli_version,
@@ -361,21 +371,247 @@ FROM threads
             return Ok(());
         }
 
+        let mut tx = self.pool.begin().await?;
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, module_path, file, line) ",
+            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, process_uuid, module_path, file, line, estimated_bytes) ",
         );
         builder.push_values(entries, |mut row, entry| {
+            let estimated_bytes = entry.message.as_ref().map_or(0, String::len) as i64
+                + entry.level.len() as i64
+                + entry.target.len() as i64
+                + entry.module_path.as_ref().map_or(0, String::len) as i64
+                + entry.file.as_ref().map_or(0, String::len) as i64;
             row.push_bind(entry.ts)
                 .push_bind(entry.ts_nanos)
                 .push_bind(&entry.level)
                 .push_bind(&entry.target)
                 .push_bind(&entry.message)
                 .push_bind(&entry.thread_id)
+                .push_bind(&entry.process_uuid)
                 .push_bind(&entry.module_path)
                 .push_bind(&entry.file)
-                .push_bind(entry.line);
+                .push_bind(entry.line)
+                .push_bind(estimated_bytes);
         });
-        builder.build().execute(self.pool.as_ref()).await?;
+        builder.build().execute(&mut *tx).await?;
+        self.prune_logs_after_insert(entries, &mut tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Enforce per-partition log size caps after a successful batch insert.
+    ///
+    /// We maintain two independent budgets:
+    /// - Thread logs: rows with `thread_id IS NOT NULL`, capped per `thread_id`.
+    /// - Threadless process logs: rows with `thread_id IS NULL` ("threadless"),
+    ///   capped per `process_uuid` (including `process_uuid IS NULL` as its own
+    ///   threadless partition).
+    ///
+    /// "Threadless" means the log row is not associated with any conversation
+    /// thread, so retention is keyed by process identity instead.
+    ///
+    /// This runs inside the same transaction as the insert so callers never
+    /// observe "inserted but not yet pruned" rows.
+    async fn prune_logs_after_insert(
+        &self,
+        entries: &[LogEntry],
+        tx: &mut SqliteConnection,
+    ) -> anyhow::Result<()> {
+        let thread_ids: BTreeSet<&str> = entries
+            .iter()
+            .filter_map(|entry| entry.thread_id.as_deref())
+            .collect();
+        if !thread_ids.is_empty() {
+            // Cheap precheck: only run the heavier window-function prune for
+            // threads that are currently above the cap.
+            let mut over_limit_threads_query =
+                QueryBuilder::<Sqlite>::new("SELECT thread_id FROM logs WHERE thread_id IN (");
+            {
+                let mut separated = over_limit_threads_query.separated(", ");
+                for thread_id in &thread_ids {
+                    separated.push_bind(*thread_id);
+                }
+            }
+            over_limit_threads_query.push(") GROUP BY thread_id HAVING SUM(");
+            over_limit_threads_query.push("estimated_bytes");
+            over_limit_threads_query.push(") > ");
+            over_limit_threads_query.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+            let over_limit_thread_ids: Vec<String> = over_limit_threads_query
+                .build()
+                .fetch_all(&mut *tx)
+                .await?
+                .into_iter()
+                .map(|row| row.try_get("thread_id"))
+                .collect::<Result<_, _>>()?;
+            if !over_limit_thread_ids.is_empty() {
+                // Enforce a strict per-thread cap by deleting every row whose
+                // newest-first cumulative bytes exceed the partition budget.
+                let mut prune_threads = QueryBuilder::<Sqlite>::new(
+                    r#"
+DELETE FROM logs
+WHERE id IN (
+    SELECT id
+    FROM (
+        SELECT
+            id,
+            SUM(
+"#,
+                );
+                prune_threads.push("estimated_bytes");
+                prune_threads.push(
+                    r#"
+            ) OVER (
+                PARTITION BY thread_id
+                ORDER BY ts DESC, ts_nanos DESC, id DESC
+            ) AS cumulative_bytes
+        FROM logs
+        WHERE thread_id IN (
+"#,
+                );
+                {
+                    let mut separated = prune_threads.separated(", ");
+                    for thread_id in &over_limit_thread_ids {
+                        separated.push_bind(thread_id);
+                    }
+                }
+                prune_threads.push(
+                    r#"
+        )
+    )
+    WHERE cumulative_bytes >
+"#,
+                );
+                prune_threads.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+                prune_threads.push("\n)");
+                prune_threads.build().execute(&mut *tx).await?;
+            }
+        }
+
+        let threadless_process_uuids: BTreeSet<&str> = entries
+            .iter()
+            .filter(|entry| entry.thread_id.is_none())
+            .filter_map(|entry| entry.process_uuid.as_deref())
+            .collect();
+        let has_threadless_null_process_uuid = entries
+            .iter()
+            .any(|entry| entry.thread_id.is_none() && entry.process_uuid.is_none());
+        if !threadless_process_uuids.is_empty() {
+            // Threadless logs are budgeted separately per process UUID.
+            let mut over_limit_processes_query = QueryBuilder::<Sqlite>::new(
+                "SELECT process_uuid FROM logs WHERE thread_id IS NULL AND process_uuid IN (",
+            );
+            {
+                let mut separated = over_limit_processes_query.separated(", ");
+                for process_uuid in &threadless_process_uuids {
+                    separated.push_bind(*process_uuid);
+                }
+            }
+            over_limit_processes_query.push(") GROUP BY process_uuid HAVING SUM(");
+            over_limit_processes_query.push("estimated_bytes");
+            over_limit_processes_query.push(") > ");
+            over_limit_processes_query.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+            let over_limit_process_uuids: Vec<String> = over_limit_processes_query
+                .build()
+                .fetch_all(&mut *tx)
+                .await?
+                .into_iter()
+                .map(|row| row.try_get("process_uuid"))
+                .collect::<Result<_, _>>()?;
+            if !over_limit_process_uuids.is_empty() {
+                // Same strict cap policy as thread pruning, but only for
+                // threadless rows in the affected process UUIDs.
+                let mut prune_threadless_process_logs = QueryBuilder::<Sqlite>::new(
+                    r#"
+DELETE FROM logs
+WHERE id IN (
+    SELECT id
+    FROM (
+        SELECT
+            id,
+            SUM(
+"#,
+                );
+                prune_threadless_process_logs.push("estimated_bytes");
+                prune_threadless_process_logs.push(
+                    r#"
+            ) OVER (
+                PARTITION BY process_uuid
+                ORDER BY ts DESC, ts_nanos DESC, id DESC
+            ) AS cumulative_bytes
+        FROM logs
+        WHERE thread_id IS NULL
+          AND process_uuid IN (
+"#,
+                );
+                {
+                    let mut separated = prune_threadless_process_logs.separated(", ");
+                    for process_uuid in &over_limit_process_uuids {
+                        separated.push_bind(process_uuid);
+                    }
+                }
+                prune_threadless_process_logs.push(
+                    r#"
+          )
+    )
+    WHERE cumulative_bytes >
+"#,
+                );
+                prune_threadless_process_logs.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+                prune_threadless_process_logs.push("\n)");
+                prune_threadless_process_logs
+                    .build()
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        if has_threadless_null_process_uuid {
+            // Rows without a process UUID still need a cap; treat NULL as its
+            // own threadless partition.
+            let mut null_process_usage_query = QueryBuilder::<Sqlite>::new("SELECT SUM(");
+            null_process_usage_query.push("estimated_bytes");
+            null_process_usage_query.push(
+                ") AS total_bytes FROM logs WHERE thread_id IS NULL AND process_uuid IS NULL",
+            );
+            let total_null_process_bytes: Option<i64> = null_process_usage_query
+                .build()
+                .fetch_one(&mut *tx)
+                .await?
+                .try_get("total_bytes")?;
+
+            if total_null_process_bytes.unwrap_or(0) > LOG_PARTITION_SIZE_LIMIT_BYTES {
+                let mut prune_threadless_null_process_logs = QueryBuilder::<Sqlite>::new(
+                    r#"
+DELETE FROM logs
+WHERE id IN (
+    SELECT id
+    FROM (
+        SELECT
+            id,
+            SUM(
+"#,
+                );
+                prune_threadless_null_process_logs.push("estimated_bytes");
+                prune_threadless_null_process_logs.push(
+                    r#"
+            ) OVER (
+                PARTITION BY process_uuid
+                ORDER BY ts DESC, ts_nanos DESC, id DESC
+            ) AS cumulative_bytes
+        FROM logs
+        WHERE thread_id IS NULL
+          AND process_uuid IS NULL
+    )
+    WHERE cumulative_bytes >
+"#,
+                );
+                prune_threadless_null_process_logs.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+                prune_threadless_null_process_logs.push("\n)");
+                prune_threadless_null_process_logs
+                    .build()
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
@@ -390,7 +626,7 @@ FROM threads
     /// Query logs with optional filters.
     pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogRow>> {
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT id, ts, ts_nanos, level, target, message, thread_id, file, line FROM logs WHERE 1 = 1",
+            "SELECT id, ts, ts_nanos, level, target, message, thread_id, process_uuid, file, line FROM logs WHERE 1 = 1",
         );
         push_log_filters(&mut builder, query);
         if query.descending {
@@ -459,6 +695,8 @@ INSERT INTO threads (
     created_at,
     updated_at,
     source,
+    agent_nickname,
+    agent_role,
     model_provider,
     cwd,
     cli_version,
@@ -472,12 +710,14 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
     source = excluded.source,
+    agent_nickname = excluded.agent_nickname,
+    agent_role = excluded.agent_role,
     model_provider = excluded.model_provider,
     cwd = excluded.cwd,
     cli_version = excluded.cli_version,
@@ -498,6 +738,8 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(datetime_to_epoch_seconds(metadata.created_at))
         .bind(datetime_to_epoch_seconds(metadata.updated_at))
         .bind(metadata.source.as_str())
+        .bind(metadata.agent_nickname.as_deref())
+        .bind(metadata.agent_role.as_deref())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())
@@ -650,6 +892,15 @@ ON CONFLICT(thread_id, position) DO NOTHING
         self.upsert_thread(&metadata).await
     }
 
+    /// Delete a thread metadata row by id.
+    pub async fn delete_thread(&self, thread_id: ThreadId) -> anyhow::Result<u64> {
+        let result = sqlx::query("DELETE FROM threads WHERE id = ?")
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected())
+    }
+
     async fn ensure_backfill_state_row(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
@@ -702,6 +953,11 @@ fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQu
     }
     if let Some(after_id) = query.after_id {
         builder.push(" AND id > ").push_bind(after_id);
+    }
+    if let Some(search) = query.search.as_ref() {
+        builder.push(" AND INSTR(message, ");
+        builder.push_bind(search.as_str());
+        builder.push(") > 0");
     }
 }
 
@@ -895,11 +1151,13 @@ fn push_thread_order_and_limit(
 
 #[cfg(test)]
 mod tests {
-    use super::STATE_DB_FILENAME;
-    use super::STATE_DB_VERSION;
     use super::StateRuntime;
     use super::ThreadMetadata;
     use super::state_db_filename;
+    use crate::LogEntry;
+    use crate::LogQuery;
+    use crate::STATE_DB_FILENAME;
+    use crate::STATE_DB_VERSION;
     use crate::model::Phase2JobClaimOutcome;
     use crate::model::Stage1JobClaimOutcome;
     use crate::model::Stage1StartupClaimParams;
@@ -1136,7 +1394,14 @@ WHERE id = 1
 
         assert!(
             runtime
-                .mark_stage1_job_succeeded(thread_id, ownership_token.as_str(), 100, "raw", "sum")
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    ownership_token.as_str(),
+                    100,
+                    "raw",
+                    "sum",
+                    None,
+                )
                 .await
                 .expect("mark stage1 succeeded"),
             "stage1 success should finalize for current token"
@@ -1424,6 +1689,105 @@ WHERE id = 1
     }
 
     #[tokio::test]
+    async fn claim_stage1_jobs_prefilters_threads_with_up_to_date_memory() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let now = Utc::now();
+        let eligible_newer_at = now - Duration::hours(13);
+        let eligible_older_at = now - Duration::hours(14);
+
+        let current_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
+        let up_to_date_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("up-to-date thread id");
+        let stale_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("stale thread id");
+        let worker_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("worker id");
+
+        let mut current =
+            test_thread_metadata(&codex_home, current_thread_id, codex_home.join("current"));
+        current.created_at = now;
+        current.updated_at = now;
+        runtime
+            .upsert_thread(&current)
+            .await
+            .expect("upsert current thread");
+
+        let mut up_to_date = test_thread_metadata(
+            &codex_home,
+            up_to_date_thread_id,
+            codex_home.join("up-to-date"),
+        );
+        up_to_date.created_at = eligible_newer_at;
+        up_to_date.updated_at = eligible_newer_at;
+        runtime
+            .upsert_thread(&up_to_date)
+            .await
+            .expect("upsert up-to-date thread");
+
+        let up_to_date_claim = runtime
+            .try_claim_stage1_job(
+                up_to_date_thread_id,
+                worker_id,
+                up_to_date.updated_at.timestamp(),
+                3600,
+                64,
+            )
+            .await
+            .expect("claim up-to-date thread for seed");
+        let up_to_date_token = match up_to_date_claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected seed claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    up_to_date_thread_id,
+                    up_to_date_token.as_str(),
+                    up_to_date.updated_at.timestamp(),
+                    "raw",
+                    "summary",
+                    None,
+                )
+                .await
+                .expect("mark up-to-date thread succeeded"),
+            "seed stage1 success should complete for up-to-date thread"
+        );
+
+        let mut stale =
+            test_thread_metadata(&codex_home, stale_thread_id, codex_home.join("stale"));
+        stale.created_at = eligible_older_at;
+        stale.updated_at = eligible_older_at;
+        runtime
+            .upsert_thread(&stale)
+            .await
+            .expect("upsert stale thread");
+
+        let allowed_sources = vec!["cli".to_string()];
+        let claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 1,
+                    max_claimed: 1,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3600,
+                },
+            )
+            .await
+            .expect("claim stage1 startup jobs");
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].thread.id, stale_thread_id);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn claim_stage1_jobs_enforces_global_running_cap() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
@@ -1551,6 +1915,93 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
+    async fn claim_stage1_jobs_processes_two_full_batches_across_startup_passes() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let current_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
+        let mut current =
+            test_thread_metadata(&codex_home, current_thread_id, codex_home.join("current"));
+        current.created_at = Utc::now();
+        current.updated_at = Utc::now();
+        runtime
+            .upsert_thread(&current)
+            .await
+            .expect("upsert current");
+
+        let eligible_at = Utc::now() - Duration::hours(13);
+        for idx in 0..200 {
+            let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+            let mut metadata = test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join(format!("thread-{idx}")),
+            );
+            metadata.created_at = eligible_at - Duration::seconds(idx as i64);
+            metadata.updated_at = eligible_at - Duration::seconds(idx as i64);
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("upsert eligible thread");
+        }
+
+        let allowed_sources = vec!["cli".to_string()];
+        let first_claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 5_000,
+                    max_claimed: 64,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3_600,
+                },
+            )
+            .await
+            .expect("first stage1 startup claim");
+        assert_eq!(first_claims.len(), 64);
+
+        for claim in first_claims {
+            assert!(
+                runtime
+                    .mark_stage1_job_succeeded(
+                        claim.thread.id,
+                        claim.ownership_token.as_str(),
+                        claim.thread.updated_at.timestamp(),
+                        "raw",
+                        "summary",
+                        None,
+                    )
+                    .await
+                    .expect("mark first-batch stage1 success"),
+                "first batch stage1 completion should succeed"
+            );
+        }
+
+        let second_claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 5_000,
+                    max_claimed: 64,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3_600,
+                },
+            )
+            .await
+            .expect("second stage1 startup claim");
+        assert_eq!(second_claims.len(), 64);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn stage1_output_cascades_on_thread_delete() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
@@ -1575,7 +2026,14 @@ WHERE kind = 'memory_stage1'
         };
         assert!(
             runtime
-                .mark_stage1_job_succeeded(thread_id, ownership_token.as_str(), 100, "raw", "sum")
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    ownership_token.as_str(),
+                    100,
+                    "raw",
+                    "sum",
+                    None,
+                )
                 .await
                 .expect("mark stage1 succeeded"),
             "mark stage1 succeeded should write stage1_outputs"
@@ -1611,7 +2069,7 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
-    async fn mark_stage1_job_succeeded_no_output_tracks_watermark_without_persisting_output() {
+    async fn mark_stage1_job_succeeded_no_output_skips_phase2_when_output_was_already_absent() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
@@ -1664,23 +2122,211 @@ WHERE kind = 'memory_stage1'
             .expect("claim stage1 up-to-date");
         assert_eq!(up_to_date, Stage1JobClaimOutcome::SkippedUpToDate);
 
+        let global_job_row_count = sqlx::query("SELECT COUNT(*) AS count FROM jobs WHERE kind = ?")
+            .bind("memory_consolidate_global")
+            .fetch_one(runtime.pool.as_ref())
+            .await
+            .expect("load phase2 job row count")
+            .try_get::<i64, _>("count")
+            .expect("phase2 job row count");
+        assert_eq!(
+            global_job_row_count, 0,
+            "no-output without an existing stage1 output should not enqueue phase2"
+        );
+
         let claim_phase2 = runtime
             .try_claim_global_phase2_job(owner, 3600)
             .await
             .expect("claim phase2");
+        assert_eq!(
+            claim_phase2,
+            Phase2JobClaimOutcome::SkippedNotDirty,
+            "phase2 should remain clean when no-output deleted nothing"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn mark_stage1_job_succeeded_no_output_enqueues_phase2_when_deleting_output() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join("workspace"),
+            ))
+            .await
+            .expect("upsert thread");
+
+        let first_claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .await
+            .expect("claim initial stage1");
+        let first_token = match first_claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected initial stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(thread_id, first_token.as_str(), 100, "raw", "sum", None)
+                .await
+                .expect("mark initial stage1 succeeded"),
+            "initial stage1 success should create stage1 output"
+        );
+
+        let phase2_claim = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2 after initial output");
+        let (phase2_token, phase2_input_watermark) = match phase2_claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected phase2 claim after initial output: {other:?}"),
+        };
+        assert_eq!(phase2_input_watermark, 100);
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(phase2_token.as_str(), phase2_input_watermark)
+                .await
+                .expect("mark initial phase2 succeeded"),
+            "initial phase2 success should clear global dirty state"
+        );
+
+        let no_output_claim = runtime
+            .try_claim_stage1_job(thread_id, owner_b, 101, 3600, 64)
+            .await
+            .expect("claim stage1 for no-output delete");
+        let no_output_token = match no_output_claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected no-output stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded_no_output(thread_id, no_output_token.as_str())
+                .await
+                .expect("mark stage1 no-output after existing output"),
+            "no-output should succeed when deleting an existing stage1 output"
+        );
+
+        let output_row_count =
+            sqlx::query("SELECT COUNT(*) AS count FROM stage1_outputs WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("load stage1 output count after delete")
+                .try_get::<i64, _>("count")
+                .expect("stage1 output count");
+        assert_eq!(output_row_count, 0);
+
+        let claim_phase2 = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2 after no-output deletion");
         let (phase2_token, phase2_input_watermark) = match claim_phase2 {
             Phase2JobClaimOutcome::Claimed {
                 ownership_token,
                 input_watermark,
             } => (ownership_token, input_watermark),
-            other => panic!("unexpected phase2 claim outcome after no-output success: {other:?}"),
+            other => panic!("unexpected phase2 claim after no-output deletion: {other:?}"),
         };
-        assert_eq!(phase2_input_watermark, 100);
+        assert_eq!(phase2_input_watermark, 101);
         assert!(
             runtime
-                .mark_global_phase2_job_succeeded(phase2_token.as_str(), phase2_input_watermark,)
+                .mark_global_phase2_job_succeeded(phase2_token.as_str(), phase2_input_watermark)
                 .await
-                .expect("mark phase2 succeeded after no-output")
+                .expect("mark phase2 succeeded after no-output delete")
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn stage1_retry_exhaustion_does_not_block_newer_watermark() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join("workspace"),
+            ))
+            .await
+            .expect("upsert thread");
+
+        for attempt in 0..3 {
+            let claim = runtime
+                .try_claim_stage1_job(thread_id, owner, 100, 3_600, 64)
+                .await
+                .expect("claim stage1 for retry exhaustion");
+            let ownership_token = match claim {
+                Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+                other => panic!(
+                    "attempt {} should claim stage1 before retries are exhausted: {other:?}",
+                    attempt + 1
+                ),
+            };
+            assert!(
+                runtime
+                    .mark_stage1_job_failed(thread_id, ownership_token.as_str(), "boom", 0)
+                    .await
+                    .expect("mark stage1 failed"),
+                "attempt {} should decrement retry budget",
+                attempt + 1
+            );
+        }
+
+        let exhausted_claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 100, 3_600, 64)
+            .await
+            .expect("claim stage1 after retry exhaustion");
+        assert_eq!(
+            exhausted_claim,
+            Stage1JobClaimOutcome::SkippedRetryExhausted
+        );
+
+        let newer_source_claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 101, 3_600, 64)
+            .await
+            .expect("claim stage1 with newer source watermark");
+        assert!(
+            matches!(newer_source_claim, Stage1JobClaimOutcome::Claimed { .. }),
+            "newer source watermark should reset retry budget and be claimable"
+        );
+
+        let job_row = sqlx::query(
+            "SELECT retry_remaining, input_watermark FROM jobs WHERE kind = ? AND job_key = ?",
+        )
+        .bind("memory_stage1")
+        .bind(thread_id.to_string())
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("load stage1 job row after newer-source claim");
+        assert_eq!(
+            job_row
+                .try_get::<i64, _>("retry_remaining")
+                .expect("retry_remaining"),
+            3
+        );
+        assert_eq!(
+            job_row
+                .try_get::<i64, _>("input_watermark")
+                .expect("input_watermark"),
+            101
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -1785,6 +2431,7 @@ WHERE kind = 'memory_stage1'
                     100,
                     "raw memory a",
                     "summary a",
+                    None,
                 )
                 .await
                 .expect("mark stage1 succeeded a"),
@@ -1807,6 +2454,7 @@ WHERE kind = 'memory_stage1'
                     101,
                     "raw memory b",
                     "summary b",
+                    Some("rollout-b"),
                 )
                 .await
                 .expect("mark stage1 succeeded b"),
@@ -1820,8 +2468,12 @@ WHERE kind = 'memory_stage1'
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].thread_id, thread_id_b);
         assert_eq!(outputs[0].rollout_summary, "summary b");
+        assert_eq!(outputs[0].rollout_slug.as_deref(), Some("rollout-b"));
+        assert_eq!(outputs[0].cwd, codex_home.join("workspace-b"));
         assert_eq!(outputs[1].thread_id, thread_id_a);
         assert_eq!(outputs[1].rollout_summary, "summary a");
+        assert_eq!(outputs[1].rollout_slug, None);
+        assert_eq!(outputs[1].cwd, codex_home.join("workspace-a"));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -1890,6 +2542,7 @@ VALUES (?, ?, ?, ?, ?)
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].thread_id, thread_id_non_empty);
         assert_eq!(outputs[0].rollout_summary, "summary");
+        assert_eq!(outputs[0].cwd, codex_home.join("workspace-non-empty"));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -1932,7 +2585,14 @@ VALUES (?, ?, ?, ?, ?)
         };
         assert!(
             runtime
-                .mark_stage1_job_succeeded(thread_a, token_a.as_str(), 100, "raw-a", "summary-a")
+                .mark_stage1_job_succeeded(
+                    thread_a,
+                    token_a.as_str(),
+                    100,
+                    "raw-a",
+                    "summary-a",
+                    None,
+                )
                 .await
                 .expect("mark stage1 succeeded a"),
             "stage1 success should persist output for thread a"
@@ -1948,7 +2608,14 @@ VALUES (?, ?, ?, ?, ?)
         };
         assert!(
             runtime
-                .mark_stage1_job_succeeded(thread_b, token_b.as_str(), 101, "raw-b", "summary-b")
+                .mark_stage1_job_succeeded(
+                    thread_b,
+                    token_b.as_str(),
+                    101,
+                    "raw-b",
+                    "summary-b",
+                    None,
+                )
                 .await
                 .expect("mark stage1 succeeded b"),
             "stage1 success should persist output for thread b"
@@ -2070,6 +2737,65 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
+    async fn phase2_backfilled_inputs_below_last_success_still_become_dirty() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .enqueue_global_consolidation(500)
+            .await
+            .expect("enqueue initial consolidation");
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner a");
+        let claim_a = runtime
+            .try_claim_global_phase2_job(owner_a, 3_600)
+            .await
+            .expect("claim initial consolidation");
+        let token_a = match claim_a {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => {
+                assert_eq!(input_watermark, 500);
+                ownership_token
+            }
+            other => panic!("unexpected initial phase2 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(token_a.as_str(), 500)
+                .await
+                .expect("mark initial phase2 success"),
+            "initial phase2 success should finalize"
+        );
+
+        runtime
+            .enqueue_global_consolidation(400)
+            .await
+            .expect("enqueue backfilled consolidation");
+
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
+        let claim_b = runtime
+            .try_claim_global_phase2_job(owner_b, 3_600)
+            .await
+            .expect("claim backfilled consolidation");
+        match claim_b {
+            Phase2JobClaimOutcome::Claimed {
+                input_watermark, ..
+            } => {
+                assert!(
+                    input_watermark > 500,
+                    "backfilled enqueue should advance dirty watermark beyond last success"
+                );
+            }
+            other => panic!("unexpected backfilled phase2 claim outcome: {other:?}"),
+        }
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn phase2_failure_fallback_updates_unowned_running_job() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
@@ -2125,6 +2851,351 @@ VALUES (?, ?, ?, ?, ?)
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 
+    #[tokio::test]
+    async fn query_logs_with_search_matches_substring() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1_700_000_001,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("alpha".to_string()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(42),
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 1_700_000_002,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("alphabet".to_string()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(43),
+                    module_path: None,
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                search: Some("alphab".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("query matching logs");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message.as_deref(), Some("alphabet"));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_old_rows_when_thread_exceeds_size_limit() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let six_mebibytes = "a".repeat(6 * 1024 * 1024);
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(1),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(2),
+                    module_path: Some("mod".to_string()),
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                thread_ids: vec!["thread-1".to_string()],
+                ..Default::default()
+            })
+            .await
+            .expect("query thread logs");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].ts, 2);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_single_thread_row_when_it_exceeds_size_limit() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let eleven_mebibytes = "d".repeat(11 * 1024 * 1024);
+        runtime
+            .insert_logs(&[LogEntry {
+                ts: 1,
+                ts_nanos: 0,
+                level: "INFO".to_string(),
+                target: "cli".to_string(),
+                message: Some(eleven_mebibytes),
+                thread_id: Some("thread-oversized".to_string()),
+                process_uuid: Some("proc-1".to_string()),
+                file: Some("main.rs".to_string()),
+                line: Some(1),
+                module_path: Some("mod".to_string()),
+            }])
+            .await
+            .expect("insert test log");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                thread_ids: vec!["thread-oversized".to_string()],
+                ..Default::default()
+            })
+            .await
+            .expect("query thread logs");
+
+        assert!(rows.is_empty());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_threadless_rows_per_process_uuid_only() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let six_mebibytes = "b".repeat(6 * 1024 * 1024);
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: None,
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(1),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: None,
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(2),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 3,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(3),
+                    module_path: Some("mod".to_string()),
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                thread_ids: vec!["thread-1".to_string()],
+                include_threadless: true,
+                ..Default::default()
+            })
+            .await
+            .expect("query thread and threadless logs");
+
+        let mut timestamps: Vec<i64> = rows.into_iter().map(|row| row.ts).collect();
+        timestamps.sort_unstable();
+        assert_eq!(timestamps, vec![2, 3]);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_single_threadless_process_row_when_it_exceeds_size_limit() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let eleven_mebibytes = "e".repeat(11 * 1024 * 1024);
+        runtime
+            .insert_logs(&[LogEntry {
+                ts: 1,
+                ts_nanos: 0,
+                level: "INFO".to_string(),
+                target: "cli".to_string(),
+                message: Some(eleven_mebibytes),
+                thread_id: None,
+                process_uuid: Some("proc-oversized".to_string()),
+                file: Some("main.rs".to_string()),
+                line: Some(1),
+                module_path: Some("mod".to_string()),
+            }])
+            .await
+            .expect("insert test log");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                include_threadless: true,
+                ..Default::default()
+            })
+            .await
+            .expect("query threadless logs");
+
+        assert!(rows.is_empty());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_threadless_rows_with_null_process_uuid() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let six_mebibytes = "c".repeat(6 * 1024 * 1024);
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: None,
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(1),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes),
+                    thread_id: None,
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(2),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 3,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("small".to_string()),
+                    thread_id: None,
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(3),
+                    module_path: Some("mod".to_string()),
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                include_threadless: true,
+                ..Default::default()
+            })
+            .await
+            .expect("query threadless logs");
+
+        let mut timestamps: Vec<i64> = rows.into_iter().map(|row| row.ts).collect();
+        timestamps.sort_unstable();
+        assert_eq!(timestamps, vec![2, 3]);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_single_threadless_null_process_row_when_it_exceeds_limit() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let eleven_mebibytes = "f".repeat(11 * 1024 * 1024);
+        runtime
+            .insert_logs(&[LogEntry {
+                ts: 1,
+                ts_nanos: 0,
+                level: "INFO".to_string(),
+                target: "cli".to_string(),
+                message: Some(eleven_mebibytes),
+                thread_id: None,
+                process_uuid: None,
+                file: Some("main.rs".to_string()),
+                line: Some(1),
+                module_path: Some("mod".to_string()),
+            }])
+            .await
+            .expect("insert test log");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                include_threadless: true,
+                ..Default::default()
+            })
+            .await
+            .expect("query threadless logs");
+
+        assert!(rows.is_empty());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
     fn test_thread_metadata(
         codex_home: &Path,
         thread_id: ThreadId,
@@ -2137,11 +3208,13 @@ VALUES (?, ?, ?, ?, ?)
             created_at: now,
             updated_at: now,
             source: "cli".to_string(),
+            agent_nickname: None,
+            agent_role: None,
             model_provider: "test-provider".to_string(),
             cwd,
             cli_version: "0.0.0".to_string(),
             title: String::new(),
-            sandbox_policy: crate::extract::enum_to_string(&SandboxPolicy::ReadOnly),
+            sandbox_policy: crate::extract::enum_to_string(&SandboxPolicy::new_read_only_policy()),
             approval_mode: crate::extract::enum_to_string(&AskForApproval::OnRequest),
             tokens_used: 0,
             first_user_message: Some("hello".to_string()),

@@ -239,11 +239,11 @@ client_request_definitions! {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
     },
-    SkillsRemoteRead => "skills/remote/read" {
+    SkillsRemoteList => "skills/remote/list" {
         params: v2::SkillsRemoteReadParams,
         response: v2::SkillsRemoteReadResponse,
     },
-    SkillsRemoteWrite => "skills/remote/write" {
+    SkillsRemoteExport => "skills/remote/export" {
         params: v2::SkillsRemoteWriteParams,
         response: v2::SkillsRemoteWriteResponse,
     },
@@ -307,6 +307,11 @@ client_request_definitions! {
     McpServerStatusList => "mcpServerStatus/list" {
         params: v2::ListMcpServerStatusParams,
         response: v2::ListMcpServerStatusResponse,
+    },
+
+    WindowsSandboxSetupStart => "windowsSandbox/setupStart" {
+        params: v2::WindowsSandboxSetupStartParams,
+        response: v2::WindowsSandboxSetupStartResponse,
     },
 
     LoginAccount => "account/login/start" {
@@ -457,6 +462,21 @@ client_request_definitions! {
     FuzzyFileSearch {
         params: FuzzyFileSearchParams,
         response: FuzzyFileSearchResponse,
+    },
+    #[experimental("fuzzyFileSearch/sessionStart")]
+    FuzzyFileSearchSessionStart => "fuzzyFileSearch/sessionStart" {
+        params: FuzzyFileSearchSessionStartParams,
+        response: FuzzyFileSearchSessionStartResponse,
+    },
+    #[experimental("fuzzyFileSearch/sessionUpdate")]
+    FuzzyFileSearchSessionUpdate => "fuzzyFileSearch/sessionUpdate" {
+        params: FuzzyFileSearchSessionUpdateParams,
+        response: FuzzyFileSearchSessionUpdateResponse,
+    },
+    #[experimental("fuzzyFileSearch/sessionStop")]
+    FuzzyFileSearchSessionStop => "fuzzyFileSearch/sessionStop" {
+        params: FuzzyFileSearchSessionStopParams,
+        response: FuzzyFileSearchSessionStopResponse,
     },
     /// Execute a command (argv vector) under the server's sandbox.
     ExecOneOffCommand {
@@ -702,10 +722,61 @@ pub struct FuzzyFileSearchResponse {
     pub files: Vec<FuzzyFileSearchResult>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionStartParams {
+    pub session_id: String,
+    pub roots: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+pub struct FuzzyFileSearchSessionStartResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionUpdateParams {
+    pub session_id: String,
+    pub query: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+pub struct FuzzyFileSearchSessionUpdateResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionStopParams {
+    pub session_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+pub struct FuzzyFileSearchSessionStopResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionUpdatedNotification {
+    pub session_id: String,
+    pub query: String,
+    pub files: Vec<FuzzyFileSearchResult>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionCompletedNotification {
+    pub session_id: String,
+}
+
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
+    ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
+    ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
@@ -732,11 +803,15 @@ server_notification_definitions! {
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
     /// Deprecated: Use `ContextCompaction` item type instead.
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
+    ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
+    FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
+    FuzzyFileSearchSessionCompleted => "fuzzyFileSearch/sessionCompleted" (FuzzyFileSearchSessionCompletedNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
+    WindowsSandboxSetupCompleted => "windowsSandbox/setupCompleted" (v2::WindowsSandboxSetupCompletedNotification),
 
     #[serde(rename = "account/login/completed")]
     #[ts(rename = "account/login/completed")]
@@ -935,6 +1010,7 @@ mod tests {
         let params = v1::ExecCommandApprovalParams {
             conversation_id,
             call_id: "call-42".to_string(),
+            approval_id: Some("approval-42".to_string()),
             command: vec!["echo".to_string(), "hello".to_string()],
             cwd: PathBuf::from("/tmp"),
             reason: Some("because tests".to_string()),
@@ -954,6 +1030,7 @@ mod tests {
                 "params": {
                     "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                     "callId": "call-42",
+                    "approvalId": "approval-42",
                     "command": ["echo", "hello"],
                     "cwd": "/tmp",
                     "reason": "because tests",
@@ -1170,7 +1247,8 @@ mod tests {
                 "id": 6,
                 "params": {
                     "limit": null,
-                    "cursor": null
+                    "cursor": null,
+                    "includeHidden": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -1258,6 +1336,28 @@ mod tests {
     }
 
     #[test]
+    fn serialize_thread_status_changed_notification() -> Result<()> {
+        let notification =
+            ServerNotification::ThreadStatusChanged(v2::ThreadStatusChangedNotification {
+                thread_id: "thr_123".to_string(),
+                status: v2::ThreadStatus::Idle,
+            });
+        assert_eq!(
+            json!({
+                "method": "thread/status/changed",
+                "params": {
+                    "threadId": "thr_123",
+                    "status": {
+                        "type": "idle"
+                    },
+                }
+            }),
+            serde_json::to_value(&notification)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn mock_experimental_method_is_marked_experimental() {
         let request = ClientRequest::MockExperimentalMethod {
             request_id: RequestId::Integer(1),
@@ -1265,18 +1365,5 @@ mod tests {
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("mock/experimentalMethod"));
-    }
-
-    #[test]
-    fn thread_start_mock_field_is_marked_experimental() {
-        let request = ClientRequest::ThreadStart {
-            request_id: RequestId::Integer(1),
-            params: v2::ThreadStartParams {
-                mock_experimental_field: Some("mock".to_string()),
-                ..Default::default()
-            },
-        };
-        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
-        assert_eq!(reason, Some("thread/start.mockExperimentalField"));
     }
 }

@@ -26,7 +26,8 @@ impl NetworkProtocol {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum NetworkPolicyDecision {
     Deny,
     Ask,
@@ -41,7 +42,8 @@ impl NetworkPolicyDecision {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum NetworkDecisionSource {
     BaselinePolicy,
     ModeGuard,
@@ -117,6 +119,10 @@ pub enum NetworkDecision {
 impl NetworkDecision {
     pub fn deny(reason: impl Into<String>) -> Self {
         Self::deny_with_source(reason, NetworkDecisionSource::Decider)
+    }
+
+    pub fn ask(reason: impl Into<String>) -> Self {
+        Self::ask_with_source(reason, NetworkDecisionSource::Decider)
     }
 
     pub fn deny_with_source(reason: impl Into<String>, source: NetworkDecisionSource) -> Self {
@@ -216,9 +222,9 @@ fn map_decider_decision(decision: NetworkDecision) -> NetworkDecision {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::config::NetworkProxySettings;
     use crate::reasons::REASON_DENIED;
+    use crate::reasons::REASON_NOT_ALLOWED;
     use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
     use crate::state::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
@@ -335,5 +341,17 @@ mod tests {
             }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn ask_uses_decider_source_and_ask_decision() {
+        assert_eq!(
+            NetworkDecision::ask(REASON_NOT_ALLOWED),
+            NetworkDecision::Deny {
+                reason: REASON_NOT_ALLOWED.to_string(),
+                source: NetworkDecisionSource::Decider,
+                decision: NetworkPolicyDecision::Ask,
+            }
+        );
     }
 }

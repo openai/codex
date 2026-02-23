@@ -2,7 +2,7 @@
 
 Embed the Codex agent in your workflows and apps.
 
-The TypeScript SDK wraps the bundled `codex` binary. It spawns the CLI and exchanges JSONL events over stdin/stdout.
+The TypeScript SDK wraps the `codex` CLI from `@openai/codex`. It spawns the CLI and exchanges JSONL events over stdin/stdout.
 
 ## Installation
 

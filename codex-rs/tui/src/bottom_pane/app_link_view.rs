@@ -10,6 +10,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use ratatui::widgets::Wrap;
 use textwrap::wrap;
 
 use super::CancellationEvent;
@@ -24,7 +25,8 @@ use crate::key_hint;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::user_message_style;
-use crate::wrapping::word_wrap_lines;
+use crate::wrapping::RtOptions;
+use crate::wrapping::adaptive_wrap_lines;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppLinkScreen {
@@ -32,12 +34,24 @@ enum AppLinkScreen {
     InstallConfirmation,
 }
 
+pub(crate) struct AppLinkViewParams {
+    pub(crate) app_id: String,
+    pub(crate) title: String,
+    pub(crate) description: Option<String>,
+    pub(crate) instructions: String,
+    pub(crate) url: String,
+    pub(crate) is_installed: bool,
+    pub(crate) is_enabled: bool,
+}
+
 pub(crate) struct AppLinkView {
+    app_id: String,
     title: String,
     description: Option<String>,
     instructions: String,
     url: String,
     is_installed: bool,
+    is_enabled: bool,
     app_event_tx: AppEventSender,
     screen: AppLinkScreen,
     selected_action: usize,
@@ -45,20 +59,24 @@ pub(crate) struct AppLinkView {
 }
 
 impl AppLinkView {
-    pub(crate) fn new(
-        title: String,
-        description: Option<String>,
-        instructions: String,
-        url: String,
-        is_installed: bool,
-        app_event_tx: AppEventSender,
-    ) -> Self {
-        Self {
+    pub(crate) fn new(params: AppLinkViewParams, app_event_tx: AppEventSender) -> Self {
+        let AppLinkViewParams {
+            app_id,
             title,
             description,
             instructions,
             url,
             is_installed,
+            is_enabled,
+        } = params;
+        Self {
+            app_id,
+            title,
+            description,
+            instructions,
+            url,
+            is_installed,
+            is_enabled,
             app_event_tx,
             screen: AppLinkScreen::Link,
             selected_action: 0,
@@ -66,16 +84,24 @@ impl AppLinkView {
         }
     }
 
-    fn action_labels(&self) -> [&'static str; 2] {
+    fn action_labels(&self) -> Vec<&'static str> {
         match self.screen {
             AppLinkScreen::Link => {
                 if self.is_installed {
-                    ["Manage on ChatGPT", "Back"]
+                    vec![
+                        "Manage on ChatGPT",
+                        if self.is_enabled {
+                            "Disable app"
+                        } else {
+                            "Enable app"
+                        },
+                        "Back",
+                    ]
                 } else {
-                    ["Install on ChatGPT", "Back"]
+                    vec!["Install on ChatGPT", "Back"]
                 }
             }
-            AppLinkScreen::InstallConfirmation => ["I already Installed it", "Back"],
+            AppLinkScreen::InstallConfirmation => vec!["I already Installed it", "Back"],
         }
     }
 
@@ -87,42 +113,47 @@ impl AppLinkView {
         self.selected_action = (self.selected_action + 1).min(self.action_labels().len() - 1);
     }
 
-    fn handle_primary_action(&mut self) {
-        match self.screen {
-            AppLinkScreen::Link => {
-                self.app_event_tx.send(AppEvent::OpenUrlInBrowser {
-                    url: self.url.clone(),
-                });
-                if !self.is_installed {
-                    self.screen = AppLinkScreen::InstallConfirmation;
-                    self.selected_action = 0;
-                }
-            }
-            AppLinkScreen::InstallConfirmation => {
-                self.app_event_tx.send(AppEvent::RefreshConnectors {
-                    force_refetch: true,
-                });
-                self.complete = true;
-            }
+    fn open_chatgpt_link(&mut self) {
+        self.app_event_tx.send(AppEvent::OpenUrlInBrowser {
+            url: self.url.clone(),
+        });
+        if !self.is_installed {
+            self.screen = AppLinkScreen::InstallConfirmation;
+            self.selected_action = 0;
         }
     }
 
-    fn handle_secondary_action(&mut self) {
-        match self.screen {
-            AppLinkScreen::Link => {
-                self.complete = true;
-            }
-            AppLinkScreen::InstallConfirmation => {
-                self.screen = AppLinkScreen::Link;
-                self.selected_action = 0;
-            }
-        }
+    fn refresh_connectors_and_close(&mut self) {
+        self.app_event_tx.send(AppEvent::RefreshConnectors {
+            force_refetch: true,
+        });
+        self.complete = true;
+    }
+
+    fn back_to_link_screen(&mut self) {
+        self.screen = AppLinkScreen::Link;
+        self.selected_action = 0;
+    }
+
+    fn toggle_enabled(&mut self) {
+        self.is_enabled = !self.is_enabled;
+        self.app_event_tx.send(AppEvent::SetAppEnabled {
+            id: self.app_id.clone(),
+            enabled: self.is_enabled,
+        });
     }
 
     fn activate_selected_action(&mut self) {
-        match self.selected_action {
-            0 => self.handle_primary_action(),
-            _ => self.handle_secondary_action(),
+        match self.screen {
+            AppLinkScreen::Link => match self.selected_action {
+                0 => self.open_chatgpt_link(),
+                1 if self.is_installed => self.toggle_enabled(),
+                _ => self.complete = true,
+            },
+            AppLinkScreen::InstallConfirmation => match self.selected_action {
+                0 => self.refresh_connectors_and_close(),
+                _ => self.back_to_link_screen(),
+            },
         }
     }
 
@@ -205,7 +236,10 @@ impl AppLinkView {
         lines.push(Line::from(""));
         lines.push(Line::from(vec!["Setup URL:".dim()]));
         let url_line = Line::from(vec![self.url.clone().cyan().underlined()]);
-        lines.extend(word_wrap_lines(vec![url_line], usable_width));
+        lines.extend(adaptive_wrap_lines(
+            vec![url_line],
+            RtOptions::new(usable_width),
+        ));
 
         lines
     }
@@ -308,20 +342,19 @@ impl BottomPaneView for AppLinkView {
                 ..
             } => self.move_selection_next(),
             KeyEvent {
-                code: KeyCode::Char('1'),
+                code: KeyCode::Char(c),
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.selected_action = 0;
-                self.activate_selected_action();
-            }
-            KeyEvent {
-                code: KeyCode::Char('2'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.selected_action = 1;
-                self.activate_selected_action();
+                if let Some(index) = c
+                    .to_digit(10)
+                    .and_then(|digit| digit.checked_sub(1))
+                    .map(|index| index as usize)
+                    && index < self.action_labels().len()
+                {
+                    self.selected_action = index;
+                    self.activate_selected_action();
+                }
             }
             KeyEvent {
                 code: KeyCode::Enter,
@@ -346,8 +379,12 @@ impl crate::render::renderable::Renderable for AppLinkView {
     fn desired_height(&self, width: u16) -> u16 {
         let content_width = width.saturating_sub(4).max(1);
         let content_lines = self.content_lines(content_width);
+        let content_rows = Paragraph::new(content_lines)
+            .wrap(Wrap { trim: false })
+            .line_count(content_width)
+            .max(1) as u16;
         let action_rows_height = self.action_rows_height(content_width);
-        content_lines.len() as u16 + action_rows_height + 3
+        content_rows + action_rows_height + 3
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -370,7 +407,9 @@ impl crate::render::renderable::Renderable for AppLinkView {
         let inner = content_area.inset(Insets::vh(1, 2));
         let content_width = inner.width.max(1);
         let lines = self.content_lines(content_width);
-        Paragraph::new(lines).render(inner, buf);
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(inner, buf);
 
         if actions_area.height > 0 {
             let actions_area = Rect {
@@ -400,5 +439,158 @@ impl crate::render::renderable::Renderable for AppLinkView {
             };
             self.hint_line().dim().render(hint_area, buf);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::render::renderable::Renderable;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn installed_app_has_toggle_action() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: "https://example.test/notion".to_string(),
+                is_installed: true,
+                is_enabled: true,
+            },
+            tx,
+        );
+
+        assert_eq!(
+            view.action_labels(),
+            vec!["Manage on ChatGPT", "Disable app", "Back"]
+        );
+    }
+
+    #[test]
+    fn toggle_action_sends_set_app_enabled_and_updates_label() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: "https://example.test/notion".to_string(),
+                is_installed: true,
+                is_enabled: true,
+            },
+            tx,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+
+        match rx.try_recv() {
+            Ok(AppEvent::SetAppEnabled { id, enabled }) => {
+                assert_eq!(id, "connector_1");
+                assert!(!enabled);
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+
+        assert_eq!(
+            view.action_labels(),
+            vec!["Manage on ChatGPT", "Enable app", "Back"]
+        );
+    }
+
+    #[test]
+    fn install_confirmation_does_not_split_long_url_like_token_without_scheme() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let url_like =
+            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: url_like.to_string(),
+                is_installed: true,
+                is_enabled: true,
+            },
+            tx,
+        );
+        view.screen = AppLinkScreen::InstallConfirmation;
+
+        let rendered: Vec<String> = view
+            .content_lines(40)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect();
+
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(url_like))
+                .count(),
+            1,
+            "expected full URL-like token in one rendered line, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn install_confirmation_render_keeps_url_tail_visible_when_narrow() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let url = "https://example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path/tail42";
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: url.to_string(),
+                is_installed: true,
+                is_enabled: true,
+            },
+            tx,
+        );
+        view.screen = AppLinkScreen::InstallConfirmation;
+
+        let width: u16 = 36;
+        let height = view.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let rendered_blob = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| {
+                        let symbol = buf[(x, y)].symbol();
+                        if symbol.is_empty() {
+                            ' '
+                        } else {
+                            symbol.chars().next().unwrap_or(' ')
+                        }
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered_blob.contains("tail42"),
+            "expected wrapped setup URL tail to remain visible in narrow pane, got:\n{rendered_blob}"
+        );
     }
 }

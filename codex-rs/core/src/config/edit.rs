@@ -1,9 +1,9 @@
-use crate::config::CONFIG_TOML_FILE;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
 use anyhow::Context;
+use codex_config::CONFIG_TOML_FILE;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -55,13 +55,15 @@ pub enum ConfigEdit {
     ClearPath { segments: Vec<String> },
 }
 
-pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
-    if items.is_empty() {
-        return ConfigEdit::ClearPath {
-            segments: vec!["tui".to_string(), "status_line".to_string()],
-        };
+/// Produces a config edit that sets `[tui] theme = "<name>"`.
+pub fn syntax_theme_edit(name: &str) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["tui".to_string(), "theme".to_string()],
+        value: value(name.to_string()),
     }
+}
 
+pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
     let mut array = toml_edit::Array::new();
     for item in items {
         array.push(item.clone());
@@ -816,6 +818,44 @@ impl ConfigEditsBuilder {
             segments: vec!["features".to_string(), key.to_string()],
             value: value(enabled),
         });
+        self
+    }
+
+    pub fn set_windows_sandbox_mode(mut self, mode: &str) -> Self {
+        let segments = if let Some(profile) = self.profile.as_ref() {
+            vec![
+                "profiles".to_string(),
+                profile.clone(),
+                "windows".to_string(),
+                "sandbox".to_string(),
+            ]
+        } else {
+            vec!["windows".to_string(), "sandbox".to_string()]
+        };
+        self.edits.push(ConfigEdit::SetPath {
+            segments,
+            value: value(mode),
+        });
+        self
+    }
+
+    pub fn clear_legacy_windows_sandbox_keys(mut self) -> Self {
+        for key in [
+            "experimental_windows_sandbox",
+            "elevated_windows_sandbox",
+            "enable_experimental_windows_sandbox",
+        ] {
+            let mut segments = vec!["features".to_string(), key.to_string()];
+            if let Some(profile) = self.profile.as_ref() {
+                segments = vec![
+                    "profiles".to_string(),
+                    profile.clone(),
+                    "features".to_string(),
+                    key.to_string(),
+                ];
+            }
+            self.edits.push(ConfigEdit::ClearPath { segments });
+        }
         self
     }
 

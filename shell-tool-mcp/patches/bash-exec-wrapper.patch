@@ -6,7 +6,7 @@ index 070f5119..d20ad2b9 100644
    char sample[HASH_BANG_BUFSIZ];
    size_t larray;
  
-+  char* exec_wrapper = getenv("BASH_EXEC_WRAPPER");
++  char* exec_wrapper = getenv("EXEC_WRAPPER");
 +  if (exec_wrapper && *exec_wrapper && !whitespace (*exec_wrapper))
 +    {
 +      char *orig_command = command;

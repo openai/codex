@@ -9,7 +9,7 @@ use codex_core::config_loader::RequirementSource;
 use codex_core::config_loader::ResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement;
 use codex_core::config_loader::WebSearchModeRequirement;
-use codex_core::protocol::SessionNetworkProxyRuntime;
+use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use toml::Value as TomlValue;
@@ -33,6 +33,7 @@ pub(crate) fn new_debug_config_output(
             http_addr,
             socks_addr,
             config
+                .permissions
                 .network
                 .as_ref()
                 .is_some_and(codex_core::config::NetworkProxySpec::socks_enabled),
@@ -331,6 +332,7 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy,
         dangerously_allow_non_loopback_admin,
+        dangerously_allow_all_unix_sockets,
         allowed_domains,
         denied_domains,
         allow_unix_sockets,
@@ -357,6 +359,11 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     if let Some(dangerously_allow_non_loopback_admin) = dangerously_allow_non_loopback_admin {
         parts.push(format!(
             "dangerously_allow_non_loopback_admin={dangerously_allow_non_loopback_admin}"
+        ));
+    }
+    if let Some(dangerously_allow_all_unix_sockets) = dangerously_allow_all_unix_sockets {
+        parts.push(format!(
+            "dangerously_allow_all_unix_sockets={dangerously_allow_all_unix_sockets}"
         ));
     }
     if let Some(allowed_domains) = allowed_domains {
@@ -397,9 +404,9 @@ mod tests {
     use codex_core::config_loader::SandboxModeRequirement;
     use codex_core::config_loader::Sourced;
     use codex_core::config_loader::WebSearchModeRequirement;
-    use codex_core::protocol::AskForApproval;
-    use codex_core::protocol::SandboxPolicy;
     use codex_protocol::config_types::WebSearchMode;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use ratatui::text::Line;
     use std::collections::BTreeMap;
@@ -474,44 +481,47 @@ mod tests {
         } else {
             absolute_path("/etc/codex/requirements.toml")
         };
-        let mut requirements = ConfigRequirements::default();
-        requirements.approval_policy = ConstrainedWithSource::new(
-            Constrained::allow_any(AskForApproval::OnRequest),
-            Some(RequirementSource::CloudRequirements),
-        );
-        requirements.sandbox_policy = ConstrainedWithSource::new(
-            Constrained::allow_any(SandboxPolicy::ReadOnly),
-            Some(RequirementSource::SystemRequirementsToml {
-                file: requirements_file.clone(),
-            }),
-        );
-        requirements.mcp_servers = Some(Sourced::new(
-            BTreeMap::from([(
-                "docs".to_string(),
-                McpServerRequirement {
-                    identity: McpServerIdentity::Command {
-                        command: "codex-mcp".to_string(),
+
+        let requirements = ConfigRequirements {
+            approval_policy: ConstrainedWithSource::new(
+                Constrained::allow_any(AskForApproval::OnRequest),
+                Some(RequirementSource::CloudRequirements),
+            ),
+            sandbox_policy: ConstrainedWithSource::new(
+                Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                Some(RequirementSource::SystemRequirementsToml {
+                    file: requirements_file.clone(),
+                }),
+            ),
+            mcp_servers: Some(Sourced::new(
+                BTreeMap::from([(
+                    "docs".to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Command {
+                            command: "codex-mcp".to_string(),
+                        },
                     },
+                )]),
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
+            )),
+            enforce_residency: ConstrainedWithSource::new(
+                Constrained::allow_any(Some(ResidencyRequirement::Us)),
+                Some(RequirementSource::CloudRequirements),
+            ),
+            web_search_mode: ConstrainedWithSource::new(
+                Constrained::allow_any(WebSearchMode::Cached),
+                Some(RequirementSource::CloudRequirements),
+            ),
+            network: Some(Sourced::new(
+                NetworkConstraints {
+                    enabled: Some(true),
+                    allowed_domains: Some(vec!["example.com".to_string()]),
+                    ..Default::default()
                 },
-            )]),
-            RequirementSource::LegacyManagedConfigTomlFromMdm,
-        ));
-        requirements.enforce_residency = ConstrainedWithSource::new(
-            Constrained::allow_any(Some(ResidencyRequirement::Us)),
-            Some(RequirementSource::CloudRequirements),
-        );
-        requirements.web_search_mode = ConstrainedWithSource::new(
-            Constrained::allow_any(WebSearchMode::Cached),
-            Some(RequirementSource::CloudRequirements),
-        );
-        requirements.network = Some(Sourced::new(
-            NetworkConstraints {
-                enabled: Some(true),
-                allowed_domains: Some(vec!["example.com".to_string()]),
-                ..Default::default()
-            },
-            RequirementSource::CloudRequirements,
-        ));
+                RequirementSource::CloudRequirements,
+            )),
+            ..ConfigRequirements::default()
+        };
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
@@ -570,7 +580,6 @@ mod tests {
         ));
         assert!(!rendered.contains("  - rules:"));
     }
-
     #[test]
     fn debug_config_output_lists_session_flag_key_value_pairs() {
         let session_flags = toml::from_str::<TomlValue>(
@@ -631,11 +640,13 @@ approval_policy = "never"
 
     #[test]
     fn debug_config_output_normalizes_empty_web_search_mode_list() {
-        let mut requirements = ConfigRequirements::default();
-        requirements.web_search_mode = ConstrainedWithSource::new(
-            Constrained::allow_any(WebSearchMode::Disabled),
-            Some(RequirementSource::CloudRequirements),
-        );
+        let requirements = ConfigRequirements {
+            web_search_mode: ConstrainedWithSource::new(
+                Constrained::allow_any(WebSearchMode::Disabled),
+                Some(RequirementSource::CloudRequirements),
+            ),
+            ..ConfigRequirements::default()
+        };
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: None,

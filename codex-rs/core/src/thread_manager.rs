@@ -21,6 +21,7 @@ use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -141,6 +142,7 @@ impl ThreadManager {
         codex_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
+        model_catalog: Option<ModelsResponse>,
     ) -> Self {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
@@ -149,7 +151,11 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager.clone())),
+                models_manager: Arc::new(ModelsManager::new(
+                    codex_home,
+                    auth_manager.clone(),
+                    model_catalog,
+                )),
                 skills_manager,
                 file_watcher,
                 auth_manager,
@@ -230,12 +236,11 @@ impl ThreadManager {
 
     pub async fn list_models(
         &self,
-        config: &Config,
         refresh_strategy: crate::models_manager::manager::RefreshStrategy,
     ) -> Vec<ModelPreset> {
         self.state
             .models_manager
-            .list_models(config, refresh_strategy)
+            .list_models(refresh_strategy)
             .await
     }
 
@@ -277,13 +282,15 @@ impl ThreadManager {
     }
 
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
-        self.start_thread_with_tools(config, Vec::new()).await
+        self.start_thread_with_tools(config, Vec::new(), false)
+            .await
     }
 
     pub async fn start_thread_with_tools(
         &self,
         config: Config,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         self.state
             .spawn_thread(
@@ -292,6 +299,7 @@ impl ThreadManager {
                 Arc::clone(&self.state.auth_manager),
                 self.agent_control(),
                 dynamic_tools,
+                persist_extended_history,
             )
             .await
     }
@@ -303,7 +311,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        self.resume_thread_with_history(config, initial_history, auth_manager)
+        self.resume_thread_with_history(config, initial_history, auth_manager, false)
             .await
     }
 
@@ -312,6 +320,7 @@ impl ThreadManager {
         config: Config,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
+        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         self.state
             .spawn_thread(
@@ -320,6 +329,7 @@ impl ThreadManager {
                 auth_manager,
                 self.agent_control(),
                 Vec::new(),
+                persist_extended_history,
             )
             .await
     }
@@ -349,6 +359,7 @@ impl ThreadManager {
         nth_user_message: usize,
         config: Config,
         path: PathBuf,
+        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
         let history = truncate_before_nth_user_message(history, nth_user_message);
@@ -359,6 +370,7 @@ impl ThreadManager {
                 Arc::clone(&self.state.auth_manager),
                 self.agent_control(),
                 Vec::new(),
+                persist_extended_history,
             )
             .await
     }
@@ -409,7 +421,7 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
-        self.spawn_new_thread_with_source(config, agent_control, self.session_source.clone())
+        self.spawn_new_thread_with_source(config, agent_control, self.session_source.clone(), false)
             .await
     }
 
@@ -418,6 +430,7 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
         session_source: SessionSource,
+        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -426,6 +439,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             Vec::new(),
+            persist_extended_history,
         )
         .await
     }
@@ -445,6 +459,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             Vec::new(),
+            false,
         )
         .await
     }
@@ -457,6 +472,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -465,10 +481,12 @@ impl ThreadManagerState {
             agent_control,
             self.session_source.clone(),
             dynamic_tools,
+            persist_extended_history,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_thread_with_source(
         &self,
         config: Config,
@@ -477,8 +495,9 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
-        self.file_watcher.register_config(&config);
+        let watch_registration = self.file_watcher.register_config(&config);
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
@@ -491,15 +510,18 @@ impl ThreadManagerState {
             session_source,
             agent_control,
             dynamic_tools,
+            persist_extended_history,
         )
         .await?;
-        self.finalize_thread_spawn(codex, thread_id).await
+        self.finalize_thread_spawn(codex, thread_id, watch_registration)
+            .await
     }
 
     async fn finalize_thread_spawn(
         &self,
         codex: Codex,
         thread_id: ThreadId,
+        watch_registration: crate::file_watcher::WatchRegistration,
     ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
         let session_configured = match event {
@@ -515,6 +537,7 @@ impl ThreadManagerState {
         let thread = Arc::new(CodexThread::new(
             codex,
             session_configured.rollout_path.clone(),
+            watch_registration,
         ));
         let mut threads = self.threads.write().await;
         threads.insert(thread_id, thread.clone());

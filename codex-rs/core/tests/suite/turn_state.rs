@@ -16,6 +16,7 @@ use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 
 const TURN_STATE_HEADER: &str = "x-codex-turn-state";
 
@@ -64,6 +65,25 @@ async fn responses_turn_state_persists_within_turn_and_resets_after() -> Result<
         Some("ts-1".to_string())
     );
     assert_eq!(requests[2].header(TURN_STATE_HEADER), None);
+
+    let parse_turn_id = |header: Option<String>| {
+        let value = header?;
+        let parsed: Value = serde_json::from_str(&value).ok()?;
+        parsed
+            .get("turn_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+
+    let first_turn_id = parse_turn_id(requests[0].header("x-codex-turn-metadata"))
+        .expect("first request should include turn metadata turn_id");
+    let second_turn_id = parse_turn_id(requests[1].header("x-codex-turn-metadata"))
+        .expect("follow-up request should include turn metadata turn_id");
+    let third_turn_id = parse_turn_id(requests[2].header("x-codex-turn-metadata"))
+        .expect("new turn request should include turn metadata turn_id");
+
+    assert_eq!(first_turn_id, second_turn_id);
+    assert_ne!(second_turn_id, third_turn_id);
 
     Ok(())
 }

@@ -1,6 +1,6 @@
 //! Exercises `ChatWidget` event handling and rendering invariants.
 //!
-//! These tests treat the widget as the adapter between `codex_core::protocol::EventMsg` inputs and
+//! These tests treat the widget as the adapter between `codex_protocol::protocol::EventMsg` inputs and
 //! the TUI output. Many assertions are snapshot-based so that layout regressions and status/header
 //! changes show up as stable, reviewable diffs.
 
@@ -20,49 +20,13 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
+#[cfg(target_os = "windows")]
+use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::RequirementSource;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_core::protocol::AgentMessageDeltaEvent;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningDeltaEvent;
-use codex_core::protocol::AgentReasoningEvent;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::BackgroundEventEvent;
-use codex_core::protocol::CreditsSnapshot;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::ExecPolicyAmendment;
-use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::ItemCompletedEvent;
-use codex_core::protocol::McpStartupCompleteEvent;
-use codex_core::protocol::McpStartupStatus;
-use codex_core::protocol::McpStartupUpdateEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::PatchApplyEndEvent;
-use codex_core::protocol::RateLimitWindow;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::SessionSource;
-use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TerminalInteractionEvent;
-use codex_core::protocol::ThreadRolledBackEvent;
-use codex_core::protocol::TokenCountEvent;
-use codex_core::protocol::TokenUsage;
-use codex_core::protocol::TokenUsageInfo;
-use codex_core::protocol::TurnCompleteEvent;
-use codex_core::protocol::TurnStartedEvent;
-use codex_core::protocol::UndoCompletedEvent;
-use codex_core::protocol::UndoStartedEvent;
-use codex_core::protocol::ViewImageToolCallEvent;
-use codex_core::protocol::WarningEvent;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::terminal::TerminalName;
 use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -82,8 +46,49 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::AgentMessageDeltaEvent;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::AgentReasoningDeltaEvent;
+use codex_protocol::protocol::AgentReasoningEvent;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecCommandBeginEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
+use codex_protocol::protocol::ExecPolicyAmendment;
+use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::McpStartupCompleteEvent;
+use codex_protocol::protocol::McpStartupStatus;
+use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PatchApplyBeginEvent;
+use codex_protocol::protocol::PatchApplyEndEvent;
+use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
+use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::StreamErrorEvent;
+use codex_protocol::protocol::TerminalInteractionEvent;
+use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::UndoCompletedEvent;
+use codex_protocol::protocol::UndoStartedEvent;
+use codex_protocol::protocol::ViewImageToolCallEvent;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -144,14 +149,14 @@ async fn resumed_initial_messages_render_history() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::ReadOnly,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -165,6 +170,7 @@ async fn resumed_initial_messages_render_history() {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
+                phase: None,
             }),
         ]),
         network_proxy: None,
@@ -212,14 +218,14 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::ReadOnly,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -248,16 +254,174 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
                 cell.message.clone(),
                 cell.text_elements.clone(),
                 cell.local_image_paths.clone(),
+                cell.remote_image_urls.clone(),
             ));
             break;
         }
     }
 
-    let (stored_message, stored_elements, stored_images) =
+    let (stored_message, stored_elements, stored_images, stored_remote_image_urls) =
         user_cell.expect("expected a replayed user history cell");
     assert_eq!(stored_message, message);
     assert_eq!(stored_elements, text_elements);
     assert_eq!(stored_images, local_images);
+    assert!(stored_remote_image_urls.is_empty());
+}
+
+#[tokio::test]
+async fn replayed_user_message_preserves_remote_image_urls() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let message = "replayed with remote image".to_string();
+    let remote_image_urls = vec!["https://example.com/image.png".to_string()];
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![EventMsg::UserMessage(UserMessageEvent {
+            message: message.clone(),
+            images: Some(remote_image_urls.clone()),
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        })]),
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((
+                cell.message.clone(),
+                cell.local_image_paths.clone(),
+                cell.remote_image_urls.clone(),
+            ));
+            break;
+        }
+    }
+
+    let (stored_message, stored_local_images, stored_remote_image_urls) =
+        user_cell.expect("expected a replayed user history cell");
+    assert_eq!(stored_message, message);
+    assert!(stored_local_images.is_empty());
+    assert_eq!(stored_remote_image_urls, remote_image_urls);
+}
+
+#[tokio::test]
+async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let remote_image_urls = vec!["https://example.com/remote-only.png".to_string()];
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![EventMsg::UserMessage(UserMessageEvent {
+            message: String::new(),
+            images: Some(remote_image_urls.clone()),
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        })]),
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((cell.message.clone(), cell.remote_image_urls.clone()));
+            break;
+        }
+    }
+
+    let (stored_message, stored_remote_image_urls) =
+        user_cell.expect("expected a replayed remote-image-only user history cell");
+    assert!(stored_message.is_empty());
+    assert_eq!(stored_remote_image_urls, remote_image_urls);
+}
+
+#[tokio::test]
+async fn replayed_user_message_with_only_local_images_does_not_render_history_cell() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let local_images = vec![PathBuf::from("/tmp/replay-local-only.png")];
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![EventMsg::UserMessage(UserMessageEvent {
+            message: String::new(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images,
+        })]),
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let mut found_user_history_cell = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && cell.as_any().downcast_ref::<UserHistoryCell>().is_some()
+        {
+            found_user_history_cell = true;
+            break;
+        }
+    }
+
+    assert!(!found_user_history_cell);
 }
 
 #[tokio::test]
@@ -330,14 +494,14 @@ async fn submission_preserves_text_elements_and_local_images() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::ReadOnly,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -392,16 +556,288 @@ async fn submission_preserves_text_elements_and_local_images() {
                 cell.message.clone(),
                 cell.text_elements.clone(),
                 cell.local_image_paths.clone(),
+                cell.remote_image_urls.clone(),
             ));
             break;
         }
     }
 
-    let (stored_message, stored_elements, stored_images) =
+    let (stored_message, stored_elements, stored_images, stored_remote_image_urls) =
         user_cell.expect("expected submitted user history cell");
     assert_eq!(stored_message, text);
     assert_eq!(stored_elements, text_elements);
     assert_eq!(stored_images, local_images);
+    assert!(stored_remote_image_urls.is_empty());
+}
+
+#[tokio::test]
+async fn submission_with_remote_and_local_images_keeps_local_placeholder_numbering() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let remote_url = "https://example.com/remote.png".to_string();
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+
+    let placeholder = "[Image #2]";
+    let text = format!("{placeholder} submit mixed");
+    let text_elements = vec![TextElement::new(
+        (0..placeholder.len()).into(),
+        Some(placeholder.to_string()),
+    )];
+    let local_images = vec![PathBuf::from("/tmp/submitted-mixed.png")];
+
+    chat.bottom_pane
+        .set_composer_text(text.clone(), text_elements.clone(), local_images.clone());
+    assert_eq!(chat.bottom_pane.composer_text(), "[Image #2] submit mixed");
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(items.len(), 3);
+    assert_eq!(
+        items[0],
+        UserInput::Image {
+            image_url: remote_url.clone(),
+        }
+    );
+    assert_eq!(
+        items[1],
+        UserInput::LocalImage {
+            path: local_images[0].clone(),
+        }
+    );
+    assert_eq!(
+        items[2],
+        UserInput::Text {
+            text: text.clone(),
+            text_elements: text_elements.clone(),
+        }
+    );
+    assert_eq!(text_elements[0].placeholder(&text), Some("[Image #2]"));
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((
+                cell.message.clone(),
+                cell.text_elements.clone(),
+                cell.local_image_paths.clone(),
+                cell.remote_image_urls.clone(),
+            ));
+            break;
+        }
+    }
+
+    let (stored_message, stored_elements, stored_images, stored_remote_image_urls) =
+        user_cell.expect("expected submitted user history cell");
+    assert_eq!(stored_message, text);
+    assert_eq!(stored_elements, text_elements);
+    assert_eq!(stored_images, local_images);
+    assert_eq!(stored_remote_image_urls, vec![remote_url]);
+}
+
+#[tokio::test]
+async fn enter_with_only_remote_images_submits_user_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let remote_url = "https://example.com/remote-only.png".to_string();
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Image {
+            image_url: remote_url.clone(),
+        }]
+    );
+    assert!(chat.remote_image_urls().is_empty());
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((cell.message.clone(), cell.remote_image_urls.clone()));
+            break;
+        }
+    }
+
+    let (stored_message, stored_remote_image_urls) =
+        user_cell.expect("expected submitted user history cell");
+    assert_eq!(stored_message, String::new());
+    assert_eq!(stored_remote_image_urls, vec![remote_url]);
+}
+
+#[tokio::test]
+async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let remote_url = "https://example.com/remote-only.png".to_string();
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(chat.remote_image_urls(), vec![remote_url]);
+}
+
+#[tokio::test]
+async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let remote_url = "https://example.com/remote-only.png".to_string();
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+
+    chat.open_review_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.remote_image_urls(), vec![remote_url]);
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let remote_url = "https://example.com/remote-only.png".to_string();
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+    chat.bottom_pane
+        .set_composer_input_enabled(false, Some("Input disabled for test.".to_string()));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.remote_image_urls(), vec![remote_url]);
+    assert_no_submit_op(&mut op_rx);
 }
 
 #[tokio::test]
@@ -410,14 +846,14 @@ async fn submission_prefers_selected_duplicate_skill_path() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::ReadOnly,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -442,6 +878,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             interface: None,
             dependencies: None,
             policy: None,
+            permissions: None,
             path: repo_skill_path,
             scope: SkillScope::Repo,
         },
@@ -452,6 +889,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             interface: None,
             dependencies: None,
             policy: None,
+            permissions: None,
             path: user_skill_path.clone(),
             scope: SkillScope::User,
         },
@@ -506,6 +944,7 @@ async fn blocked_image_restore_preserves_mention_bindings() {
         text_elements,
         local_images.clone(),
         mention_bindings.clone(),
+        Vec::new(),
     );
 
     let mention_start = text.find("$file").expect("mention token exists");
@@ -533,6 +972,94 @@ async fn blocked_image_restore_preserves_mention_bindings() {
         warning.contains("does not support image inputs"),
         "expected image warning, got: {warning:?}"
     );
+}
+
+#[tokio::test]
+async fn blocked_image_restore_with_remote_images_keeps_local_placeholder_mapping() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let first_placeholder = "[Image #2]";
+    let second_placeholder = "[Image #3]";
+    let text = format!("{first_placeholder} first\n{second_placeholder} second");
+    let second_start = text.find(second_placeholder).expect("second placeholder");
+    let text_elements = vec![
+        TextElement::new(
+            (0..first_placeholder.len()).into(),
+            Some(first_placeholder.to_string()),
+        ),
+        TextElement::new(
+            (second_start..second_start + second_placeholder.len()).into(),
+            Some(second_placeholder.to_string()),
+        ),
+    ];
+    let local_images = vec![
+        LocalImageAttachment {
+            placeholder: first_placeholder.to_string(),
+            path: PathBuf::from("/tmp/blocked-first.png"),
+        },
+        LocalImageAttachment {
+            placeholder: second_placeholder.to_string(),
+            path: PathBuf::from("/tmp/blocked-second.png"),
+        },
+    ];
+    let remote_image_urls = vec!["https://example.com/blocked-remote.png".to_string()];
+
+    chat.restore_blocked_image_submission(
+        text.clone(),
+        text_elements.clone(),
+        local_images.clone(),
+        Vec::new(),
+        remote_image_urls.clone(),
+    );
+
+    assert_eq!(chat.bottom_pane.composer_text(), text);
+    assert_eq!(chat.bottom_pane.composer_text_elements(), text_elements);
+    assert_eq!(chat.bottom_pane.composer_local_images(), local_images);
+    assert_eq!(chat.remote_image_urls(), remote_image_urls);
+}
+
+#[tokio::test]
+async fn queued_restore_with_remote_images_keeps_local_placeholder_mapping() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let first_placeholder = "[Image #2]";
+    let second_placeholder = "[Image #3]";
+    let text = format!("{first_placeholder} first\n{second_placeholder} second");
+    let second_start = text.find(second_placeholder).expect("second placeholder");
+    let text_elements = vec![
+        TextElement::new(
+            (0..first_placeholder.len()).into(),
+            Some(first_placeholder.to_string()),
+        ),
+        TextElement::new(
+            (second_start..second_start + second_placeholder.len()).into(),
+            Some(second_placeholder.to_string()),
+        ),
+    ];
+    let local_images = vec![
+        LocalImageAttachment {
+            placeholder: first_placeholder.to_string(),
+            path: PathBuf::from("/tmp/queued-first.png"),
+        },
+        LocalImageAttachment {
+            placeholder: second_placeholder.to_string(),
+            path: PathBuf::from("/tmp/queued-second.png"),
+        },
+    ];
+    let remote_image_urls = vec!["https://example.com/queued-remote.png".to_string()];
+
+    chat.restore_user_message_to_composer(UserMessage {
+        text: text.clone(),
+        local_images: local_images.clone(),
+        remote_image_urls: remote_image_urls.clone(),
+        text_elements: text_elements.clone(),
+        mention_bindings: Vec::new(),
+    });
+
+    assert_eq!(chat.bottom_pane.composer_text(), text);
+    assert_eq!(chat.bottom_pane.composer_text_elements(), text_elements);
+    assert_eq!(chat.bottom_pane.composer_local_images(), local_images);
+    assert_eq!(chat.remote_image_urls(), remote_image_urls);
 }
 
 #[tokio::test]
@@ -569,6 +1096,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
             placeholder: first_placeholder.to_string(),
             path: first_images[0].clone(),
         }],
+        remote_image_urls: Vec::new(),
         text_elements: first_elements,
         mention_bindings: Vec::new(),
     });
@@ -578,6 +1106,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
             placeholder: second_placeholder.to_string(),
             path: second_images[0].clone(),
         }],
+        remote_image_urls: Vec::new(),
         text_elements: second_elements,
         mention_bindings: Vec::new(),
     });
@@ -590,7 +1119,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     // must be renumbered to match the combined local image list.
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -647,6 +1176,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
     chat.queued_user_messages.push_back(UserMessage {
         text: "Implement the plan.".to_string(),
         local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
         text_elements: Vec::new(),
         mention_bindings: Vec::new(),
     });
@@ -654,7 +1184,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
 
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -709,6 +1239,7 @@ async fn remap_placeholders_uses_attachment_labels() {
         text,
         text_elements: elements,
         local_images: attachments,
+        remote_image_urls: vec!["https://example.com/a.png".to_string()],
         mention_bindings: Vec::new(),
     };
     let mut next_label = 3usize;
@@ -741,6 +1272,10 @@ async fn remap_placeholders_uses_attachment_labels() {
             },
         ]
     );
+    assert_eq!(
+        remapped.remote_image_urls,
+        vec!["https://example.com/a.png".to_string()]
+    );
 }
 
 #[tokio::test]
@@ -770,6 +1305,7 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         text,
         text_elements: elements,
         local_images: attachments,
+        remote_image_urls: Vec::new(),
         mention_bindings: Vec::new(),
     };
     let mut next_label = 3usize;
@@ -1028,6 +1564,7 @@ async fn make_chatwidget_manual(
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
+    let prevent_idle_sleep = cfg.features.enabled(Feature::PreventIdleSleep);
     let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
     let mut bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
@@ -1044,7 +1581,7 @@ async fn make_chatwidget_manual(
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
-    let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone()));
+    let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone(), None));
     let reasoning_effort = None;
     let base_mode = CollaborationMode {
         mode: ModeKind::Default,
@@ -1084,12 +1621,14 @@ async fn make_chatwidget_manual(
         skills_initial_state: None,
         last_unified_wait: None,
         unified_exec_wait_streak: None,
+        turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
         connectors_prefetch_in_flight: false,
+        connectors_force_refetch_pending: false,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
@@ -1102,6 +1641,7 @@ async fn make_chatwidget_manual(
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
+        queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
@@ -1146,6 +1686,15 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
     }
 }
 
+fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
+    while let Ok(op) = op_rx.try_recv() {
+        assert!(
+            !matches!(op, Op::UserTurn { .. }),
+            "unexpected submit op: {op:?}"
+        );
+    }
+}
+
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
@@ -1153,6 +1702,7 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.models_manager = Arc::new(ModelsManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
+        None,
     ));
 }
 
@@ -1628,6 +2178,243 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
 }
 
 #[tokio::test]
+async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    assert_matches!(
+        event,
+        AppEvent::OpenPlanReasoningScopePrompt {
+            model,
+            effort: Some(_)
+        } if model == "gpt-5.1-codex-max"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    let current_preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.set_reasoning_effort(Some(current_preset.default_reasoning_effort));
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateModel(model) if model == "gpt-5.1-codex-max"
+        )),
+        "expected model update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
+        "expected reasoning update event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_global_opens_scope_prompt()
+ {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    // Reproduce: Plan effective reasoning remains the preset (medium), but the
+    // global default differs (high). Pressing Enter on the current Plan choice
+    // should open the scope prompt rather than silently rewriting the global default.
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    assert_matches!(
+        event,
+        AppEvent::OpenPlanReasoningScopePrompt {
+            model,
+            effort: Some(ReasoningEffortConfig::Medium)
+        } if model == "gpt-5.1-codex-max"
+    );
+}
+
+#[tokio::test]
+async fn plan_mode_reasoning_override_is_marked_current_in_reasoning_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    set_chatgpt_auth(&mut chat);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
+
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("Low (current)"));
+    assert!(
+        !popup.contains("High (current)"),
+        "expected Plan override to drive current reasoning label, got: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    let preset = get_available_model(&chat, "gpt-5");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateModel(model) if model == "gpt-5"
+        )),
+        "expected model update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
+        "expected reasoning update event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected plan override to be updated; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistPlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected updated plan override to be persisted; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelection { model, effort: Some(ReasoningEffortConfig::High) }
+                if model == "gpt-5.1-codex-max"
+        )),
+        "expected global model reasoning selection persistence; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_mentions_selected_reasoning() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::Medium),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("Choose where to apply medium reasoning."));
+    assert!(popup.contains("Always use medium reasoning in Plan mode."));
+    assert!(popup.contains("Apply to Plan mode override"));
+    assert!(popup.contains("Apply to global default and Plan mode override"));
+    assert!(popup.contains("user-chosen Plan override (low)"));
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_mentions_built_in_plan_default_when_no_override() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::Medium),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("built-in Plan default (medium)"));
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasoning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected plan-only reasoning update; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::UpdateReasoningEffort(_))),
+        "did not expect all-modes reasoning update; events: {events:?}"
+    );
+}
+
+#[tokio::test]
 async fn submit_user_message_with_mode_errors_when_mode_changes_during_running_turn() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -1927,12 +2714,14 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     // Trigger an exec approval request with a short, single-line command
     let ev = ExecApprovalRequestEvent {
         call_id: "call-short".into(),
+        approval_id: Some("call-short".into()),
         turn_id: "turn-short".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        network_approval_context: None,
         proposed_execpolicy_amendment: None,
         parsed_cmd: vec![],
     };
@@ -1971,12 +2760,14 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     // Multiline command: modal should show full command, history records decision only
     let ev_multi = ExecApprovalRequestEvent {
         call_id: "call-multi".into(),
+        approval_id: Some("call-multi".into()),
         turn_id: "turn-multi".into(),
         command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        network_approval_context: None,
         proposed_execpolicy_amendment: None,
         parsed_cmd: vec![],
     };
@@ -2023,10 +2814,12 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let long = format!("echo {}", "a".repeat(200));
     let ev_long = ExecApprovalRequestEvent {
         call_id: "call-long".into(),
+        approval_id: Some("call-long".into()),
         turn_id: "turn-long".into(),
         command: vec!["bash".into(), "-lc".into(), long],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        network_approval_context: None,
         proposed_execpolicy_amendment: None,
         parsed_cmd: vec![],
     };
@@ -2059,7 +2852,8 @@ fn begin_exec_with_source(
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
-    let parsed_cmd: Vec<ParsedCommand> = codex_core::parse_command::parse_command(&command);
+    let parsed_cmd: Vec<ParsedCommand> =
+        codex_shell_command::parse_command::parse_command(&command);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let interaction_input = None;
     let event = ExecCommandBeginEvent {
@@ -2180,6 +2974,11 @@ fn end_exec(
             exit_code,
             duration: std::time::Duration::from_millis(5),
             formatted_output: aggregated,
+            status: if exit_code == 0 {
+                CoreExecCommandStatus::Completed
+            } else {
+                CoreExecCommandStatus::Failed
+            },
         }),
     });
 }
@@ -2196,7 +2995,7 @@ fn active_blob(chat: &ChatWidget) -> String {
 fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
     let models = chat
         .models_manager
-        .try_list_models(&chat.config)
+        .try_list_models()
         .expect("models lock available");
     models
         .iter()
@@ -2222,6 +3021,9 @@ async fn empty_enter_during_task_does_not_queue() {
 #[tokio::test]
 async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_message_edit_binding = crate::key_hint::alt(KeyCode::Up);
+    chat.bottom_pane
+        .set_queued_message_edit_binding(crate::key_hint::alt(KeyCode::Up));
 
     // Simulate a running task so messages would normally be queued.
     chat.bottom_pane.set_task_running(true);
@@ -2246,6 +3048,77 @@ async fn alt_up_edits_most_recent_queued_message() {
     assert_eq!(
         chat.queued_user_messages.front().unwrap().text,
         "first queued"
+    );
+}
+
+async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
+    terminal_name: TerminalName,
+) {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_name);
+    chat.bottom_pane
+        .set_queued_message_edit_binding(chat.queued_message_edit_binding);
+
+    // Simulate a running task so messages would normally be queued.
+    chat.bottom_pane.set_task_running(true);
+
+    // Seed two queued messages.
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    // Press Shift+Left to edit the most recent (last) queued message.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+
+    // Composer should now contain the last queued message.
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "second queued".to_string()
+    );
+    // And the queue should now contain only the remaining (older) item.
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "first queued"
+    );
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_apple_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::AppleTerminal)
+        .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_warp_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::WarpTerminal)
+        .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_vscode_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::VsCode).await;
+}
+
+#[test]
+fn queued_message_edit_binding_mapping_covers_special_terminals() {
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::AppleTerminal),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::WarpTerminal),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::VsCode),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::Iterm2),
+        crate::key_hint::alt(KeyCode::Up)
     );
 }
 
@@ -2622,7 +3495,7 @@ async fn exec_end_without_begin_uses_event_command() {
         "-lc".to_string(),
         "echo orphaned".to_string(),
     ];
-    let parsed_cmd = codex_core::parse_command::parse_command(&command);
+    let parsed_cmd = codex_shell_command::parse_command::parse_command(&command);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     chat.handle_codex_event(Event {
         id: "call-orphan".to_string(),
@@ -2641,6 +3514,7 @@ async fn exec_end_without_begin_uses_event_command() {
             exit_code: 0,
             duration: std::time::Duration::from_millis(5),
             formatted_output: "done".to_string(),
+            status: CoreExecCommandStatus::Completed,
         }),
     });
 
@@ -2655,6 +3529,114 @@ async fn exec_end_without_begin_uses_event_command() {
         !blob.contains("call-orphan"),
         "call id should not be rendered when event has the command: {blob:?}"
     );
+}
+
+#[tokio::test]
+async fn exec_end_without_begin_does_not_flush_unrelated_running_exploring_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    begin_exec(&mut chat, "call-exploring", "cat /dev/null");
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(active_blob(&chat).contains("Read null"));
+
+    let orphan =
+        begin_unified_exec_startup(&mut chat, "call-orphan", "proc-1", "echo repro-marker");
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    end_exec(&mut chat, orphan, "repro-marker\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "only the orphan end should be inserted");
+    let orphan_blob = lines_to_single_string(&cells[0]);
+    assert!(
+        orphan_blob.contains("• Ran echo repro-marker"),
+        "expected orphan end to render a standalone entry: {orphan_blob:?}"
+    );
+    let active = active_blob(&chat);
+    assert!(
+        active.contains("• Exploring"),
+        "expected unrelated exploring call to remain active: {active:?}"
+    );
+    assert!(
+        active.contains("Read null"),
+        "expected active exploring command to remain visible: {active:?}"
+    );
+    assert!(
+        !active.contains("echo repro-marker"),
+        "orphaned end should not replace the active exploring cell: {active:?}"
+    );
+}
+
+#[tokio::test]
+async fn exec_end_without_begin_flushes_completed_unrelated_exploring_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin_ls = begin_exec(&mut chat, "call-ls", "ls -la");
+    end_exec(&mut chat, begin_ls, "", "", 0);
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(active_blob(&chat).contains("ls -la"));
+
+    let orphan = begin_unified_exec_startup(&mut chat, "call-after", "proc-1", "echo after");
+    end_exec(&mut chat, orphan, "after\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        2,
+        "completed exploring cell should flush before the orphan entry"
+    );
+    let first = lines_to_single_string(&cells[0]);
+    let second = lines_to_single_string(&cells[1]);
+    assert!(
+        first.contains("• Explored"),
+        "expected flushed exploring cell: {first:?}"
+    );
+    assert!(
+        first.contains("List ls -la"),
+        "expected flushed exploring cell: {first:?}"
+    );
+    assert!(
+        second.contains("• Ran echo after"),
+        "expected orphan end entry after flush: {second:?}"
+    );
+    assert!(
+        chat.active_cell.is_none(),
+        "both entries should be finalized"
+    );
+}
+
+#[tokio::test]
+async fn overlapping_exploring_exec_end_is_not_misclassified_as_orphan() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let begin_ls = begin_exec(&mut chat, "call-ls", "ls -la");
+    let begin_cat = begin_exec(&mut chat, "call-cat", "cat foo.txt");
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    end_exec(&mut chat, begin_ls, "foo.txt\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "tracked end inside an exploring cell should not render as an orphan"
+    );
+    let active = active_blob(&chat);
+    assert!(
+        active.contains("List ls -la"),
+        "expected first command still grouped: {active:?}"
+    );
+    assert!(
+        active.contains("Read foo.txt"),
+        "expected second running command to stay in the same active cell: {active:?}"
+    );
+    assert!(
+        active.contains("• Exploring"),
+        "expected grouped exploring header to remain active: {active:?}"
+    );
+
+    end_exec(&mut chat, begin_cat, "hello\n", "", 0);
 }
 
 #[tokio::test]
@@ -2699,6 +3681,29 @@ async fn exec_history_shows_unified_exec_tool_calls() {
 
     let blob = active_blob(&chat);
     assert_eq!(blob, "• Explored\n  └ List ls\n");
+}
+
+#[tokio::test]
+async fn unified_exec_unknown_end_with_active_exploring_cell_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    begin_exec(&mut chat, "call-exploring", "cat /dev/null");
+    let orphan =
+        begin_unified_exec_startup(&mut chat, "call-orphan", "proc-1", "echo repro-marker");
+    end_exec(&mut chat, orphan, "repro-marker\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    let history = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let active = active_blob(&chat);
+    let snapshot = format!("History:\n{history}\nActive:\n{active}");
+    assert_snapshot!(
+        "unified_exec_unknown_end_with_active_exploring_cell",
+        snapshot
+    );
 }
 
 #[tokio::test]
@@ -2765,6 +3770,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
         id: "turn-1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Final response.".into(),
+            phase: None,
         }),
     });
     chat.handle_codex_event(Event {
@@ -3024,6 +4030,66 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
 }
 
 #[tokio::test]
+async fn mode_switch_surfaces_model_change_notification_when_effective_model_changes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let default_model = chat.current_model().to_string();
+
+    let mut plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mode");
+    plan_mask.model = Some("gpt-5.1-codex-mini".to_string());
+    chat.set_collaboration_mask(plan_mask);
+
+    let plan_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan_messages.contains("Model changed to gpt-5.1-codex-mini medium for Plan mode."),
+        "expected Plan-mode model switch notice, got: {plan_messages:?}"
+    );
+
+    let default_mask = collaboration_modes::default_mask(chat.models_manager.as_ref())
+        .expect("expected default collaboration mode");
+    chat.set_collaboration_mask(default_mask);
+
+    let default_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let expected_default_message =
+        format!("Model changed to {default_model} default for Default mode.");
+    assert!(
+        default_messages.contains(&expected_default_message),
+        "expected Default-mode model switch notice, got: {default_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_same() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+
+    let plan_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan_messages.contains("Model changed to gpt-5.3-codex medium for Plan mode."),
+        "expected reasoning-change notice in Plan mode, got: {plan_messages:?}"
+    );
+}
+
+#[tokio::test]
 async fn collab_slash_command_opens_picker_and_updates_mode() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
@@ -3088,7 +4154,12 @@ async fn plan_slash_command_switches_to_plan_mode() {
 
     chat.dispatch_command(SlashCommand::Plan);
 
-    assert!(rx.try_recv().is_err(), "plan should not emit an app event");
+    while let Ok(event) = rx.try_recv() {
+        assert!(
+            matches!(event, AppEvent::InsertHistoryCell(_)),
+            "plan should not emit a non-history app event: {event:?}"
+        );
+    }
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 }
@@ -3098,14 +4169,14 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
-    let configured = codex_core::protocol::SessionConfiguredEvent {
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::ReadOnly,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -3182,7 +4253,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
 }
 
 #[tokio::test]
-async fn experimental_mode_plan_applies_on_startup() {
+async fn experimental_mode_plan_is_ignored_on_startup() {
     let codex_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -3226,7 +4297,7 @@ async fn experimental_mode_plan_applies_on_startup() {
     };
 
     let chat = ChatWidget::new(init, thread_manager);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_model(), resolved_model);
 }
 
@@ -3256,7 +4327,29 @@ async fn set_reasoning_effort_updates_active_collaboration_mask() {
 
     chat.set_reasoning_effort(None);
 
-    assert_eq!(chat.current_reasoning_effort(), None);
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Medium)
+    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn set_reasoning_effort_does_not_override_active_plan_override() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::High));
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
 }
 
@@ -3378,6 +4471,54 @@ async fn slash_clean_submits_background_terminal_cleanup() {
         rendered.contains("Stopping all background terminals."),
         "expected cleanup confirmation, got {rendered:?}"
     );
+}
+
+#[tokio::test]
+async fn slash_clear_requests_ui_clear_when_idle() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Clear);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ClearUi));
+}
+
+#[tokio::test]
+async fn slash_clear_is_disabled_while_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_task_running(true);
+
+    chat.dispatch_command(SlashCommand::Clear);
+
+    let event = rx.try_recv().expect("expected disabled command error");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains("'/clear' is disabled while a task is in progress."),
+                "expected /clear task-running error, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "expected no follow-up events");
+}
+
+#[tokio::test]
+async fn slash_memory_drop_submits_drop_memories_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryDrop);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
+}
+
+#[tokio::test]
+async fn slash_memory_update_submits_update_memories_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryUpdate);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
 }
 
 #[tokio::test]
@@ -3660,7 +4801,7 @@ async fn interrupt_exec_marks_failed_snapshot() {
     // cause the active exec cell to be finalized as failed and flushed.
     chat.handle_codex_event(Event {
         id: "call-int".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -3696,7 +4837,7 @@ async fn interrupted_turn_error_message_snapshot() {
     // Abort the turn (like pressing Esc) and drain inserted history.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -3840,18 +4981,24 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.enable(Feature::Apps);
     chat.bottom_pane.set_connectors_enabled(true);
+    let notion_id = "unit_test_apps_popup_refresh_connector_1";
+    let linear_id = "unit_test_apps_popup_refresh_connector_2";
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
             connectors: vec![codex_chatgpt::connectors::AppInfo {
-                id: "connector_1".to_string(),
+                id: notion_id.to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
                 distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
+                is_enabled: true,
             }],
         }),
         false,
@@ -3867,29 +5014,41 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
         before.contains("Installed 1 of 1 available apps."),
         "expected initial apps popup snapshot, got:\n{before}"
     );
+    assert!(
+        before.contains("Installed. Press Enter to open the app page"),
+        "expected selected app description to explain the app page action, got:\n{before}"
+    );
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
             connectors: vec![
                 codex_chatgpt::connectors::AppInfo {
-                    id: "connector_1".to_string(),
+                    id: notion_id.to_string(),
                     name: "Notion".to_string(),
                     description: Some("Workspace docs".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
                     distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
                     install_url: Some("https://example.test/notion".to_string()),
                     is_accessible: true,
+                    is_enabled: true,
                 },
                 codex_chatgpt::connectors::AppInfo {
-                    id: "connector_2".to_string(),
+                    id: linear_id.to_string(),
                     name: "Linear".to_string(),
                     description: Some("Project tracking".to_string()),
                     logo_url: None,
                     logo_url_dark: None,
                     distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
                     install_url: Some("https://example.test/linear".to_string()),
                     is_accessible: true,
+                    is_enabled: true,
                 },
             ],
         }),
@@ -3912,27 +5071,37 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.enable(Feature::Apps);
     chat.bottom_pane.set_connectors_enabled(true);
+    let notion_id = "unit_test_apps_refresh_failure_connector_1";
+    let linear_id = "unit_test_apps_refresh_failure_connector_2";
 
     let full_connectors = vec![
         codex_chatgpt::connectors::AppInfo {
-            id: "connector_1".to_string(),
+            id: notion_id.to_string(),
             name: "Notion".to_string(),
             description: Some("Workspace docs".to_string()),
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             install_url: Some("https://example.test/notion".to_string()),
             is_accessible: true,
+            is_enabled: true,
         },
         codex_chatgpt::connectors::AppInfo {
-            id: "connector_2".to_string(),
+            id: linear_id.to_string(),
             name: "Linear".to_string(),
             description: Some("Project tracking".to_string()),
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             install_url: Some("https://example.test/linear".to_string()),
             is_accessible: false,
+            is_enabled: true,
         },
     ];
     chat.on_connectors_loaded(
@@ -3945,14 +5114,18 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
             connectors: vec![codex_chatgpt::connectors::AppInfo {
-                id: "connector_1".to_string(),
+                id: notion_id.to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
                 logo_url: None,
                 logo_url_dark: None,
                 distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
+                is_enabled: true,
             }],
         }),
         false,
@@ -3969,6 +5142,328 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     assert!(
         popup.contains("Installed 1 of 2 available apps."),
         "expected previous full snapshot to be preserved, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetch() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+    chat.connectors_prefetch_in_flight = true;
+    chat.connectors_force_refetch_pending = true;
+
+    let full_connectors = vec![codex_chatgpt::connectors::AppInfo {
+        id: "unit_test_apps_refresh_failure_pending_connector".to_string(),
+        name: "Notion".to_string(),
+        description: Some("Workspace docs".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: Some("https://example.test/notion".to_string()),
+        is_accessible: true,
+        is_enabled: true,
+    }];
+    chat.connectors_cache = ConnectorsCacheState::Ready(ConnectorsSnapshot {
+        connectors: full_connectors.clone(),
+    });
+
+    chat.on_connectors_loaded(Err("failed to load apps".to_string()), true);
+
+    assert!(chat.connectors_prefetch_in_flight);
+    assert!(!chat.connectors_force_refetch_pending);
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
+    );
+}
+
+#[tokio::test]
+async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    let full_connectors = vec![
+        codex_chatgpt::connectors::AppInfo {
+            id: "unit_test_connector_1".to_string(),
+            name: "Notion".to_string(),
+            description: Some("Workspace docs".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://example.test/notion".to_string()),
+            is_accessible: true,
+            is_enabled: true,
+        },
+        codex_chatgpt::connectors::AppInfo {
+            id: "unit_test_connector_2".to_string(),
+            name: "Linear".to_string(),
+            description: Some("Project tracking".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://example.test/linear".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+        },
+    ];
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: full_connectors.clone(),
+        }),
+        true,
+    );
+    chat.add_connectors_output();
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![
+                codex_chatgpt::connectors::AppInfo {
+                    id: "unit_test_connector_1".to_string(),
+                    name: "Notion".to_string(),
+                    description: Some("Workspace docs".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/notion".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                },
+                codex_chatgpt::connectors::AppInfo {
+                    id: "connector_openai_hidden".to_string(),
+                    name: "Hidden OpenAI".to_string(),
+                    description: Some("Should be filtered".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/hidden-openai".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                },
+            ],
+        }),
+        false,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed 1 of 1 available apps."),
+        "expected partial refresh popup to use filtered connectors, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("Hidden OpenAI"),
+        "expected disallowed connector to be filtered from partial refresh popup, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: false,
+            }],
+        }),
+        true,
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed · Disabled. Press Enter to open the app page"),
+        "expected selected app description to include disabled status, got:\n{popup}"
+    );
+    assert!(
+        popup.contains("enable/disable this app."),
+        "expected selected app description to mention enable/disable action, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_initial_load_applies_enabled_state_from_config() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let user_config = toml::from_str::<TomlValue>(
+        "[apps.connector_1]\nenabled = false\ndisabled_reason = \"user\"\n",
+    )
+    .expect("apps config");
+    chat.config.config_layer_stack = chat
+        .config
+        .config_layer_stack
+        .with_user_config(&config_toml_path, user_config);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot)
+            if snapshot
+                .connectors
+                .iter()
+                .find(|connector| connector.id == "connector_1")
+                .is_some_and(|connector| !connector.is_enabled)
+    );
+}
+
+#[tokio::test]
+async fn apps_refresh_preserves_toggled_enabled_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+    chat.update_connector_enabled("connector_1", false);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot)
+            if snapshot
+                .connectors
+                .iter()
+                .find(|connector| connector.id == "connector_1")
+                .is_some_and(|connector| !connector.is_enabled)
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed · Disabled. Press Enter to open the app page"),
+        "expected disabled status to persist after reload, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_popup_for_not_installed_app_uses_install_only_selected_description() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_2".to_string(),
+                name: "Linear".to_string(),
+                description: Some("Project tracking".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/linear".to_string()),
+                is_accessible: false,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Can be installed. Press Enter to open the app page to install"),
+        "expected selected app description to be install-only for not-installed apps, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("enable/disable this app."),
+        "did not expect enable/disable text for not-installed apps, got:\n{popup}"
     );
 }
 
@@ -4096,7 +5591,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
 }
 
 #[tokio::test]
-async fn model_cap_error_does_not_switch_models() {
+async fn server_overloaded_error_does_not_switch_models() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("boomslang")).await;
     chat.set_model("boomslang");
     while rx.try_recv().is_ok() {}
@@ -4105,11 +5600,8 @@ async fn model_cap_error_does_not_switch_models() {
     chat.handle_codex_event(Event {
         id: "err-1".to_string(),
         msg: EventMsg::Error(ErrorEvent {
-            message: "model cap".to_string(),
-            codex_error_info: Some(CodexErrorInfo::ModelCap {
-                model: "boomslang".to_string(),
-                reset_after_seconds: Some(120),
-            }),
+            message: "server overloaded".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ServerOverloaded),
         }),
     });
 
@@ -4117,7 +5609,7 @@ async fn model_cap_error_does_not_switch_models() {
         if let AppEvent::UpdateModel(model) = event {
             assert_eq!(
                 model, "boomslang",
-                "did not expect model switch on model-cap error"
+                "did not expect model switch on server-overloaded error"
             );
         }
     }
@@ -4126,7 +5618,7 @@ async fn model_cap_error_does_not_switch_models() {
         if let Op::OverrideTurnContext { model, .. } = event {
             assert!(
                 model.is_none(),
-                "did not expect OverrideTurnContext model update on model-cap error"
+                "did not expect OverrideTurnContext model update on server-overloaded error"
             );
         }
     }
@@ -4161,27 +5653,37 @@ async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     chat.open_approvals_popup();
 
     let popup = render_bottom_popup(&chat, 80);
-    insta::with_settings!({ snapshot_suffix => "windows_degraded" }, {
-        assert_snapshot!("approvals_selection_popup", popup);
-    });
+    assert!(
+        popup.contains("Default (non-admin sandbox)"),
+        "expected degraded sandbox label in approvals popup: {popup}"
+    );
+    assert!(
+        popup.contains("/setup-default-sandbox"),
+        "expected setup hint in approvals popup: {popup}"
+    );
+    assert!(
+        popup.contains("non-admin sandbox"),
+        "expected degraded sandbox note in approvals popup: {popup}"
+    );
 }
 
 #[tokio::test]
-async fn preset_matching_ignores_extra_writable_roots() {
+async fn preset_matching_requires_exact_workspace_write_settings() {
     let preset = builtin_approval_presets()
         .into_iter()
         .find(|p| p.id == "auto")
         .expect("auto preset exists");
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![AbsolutePathBuf::try_from("C:\\extra").unwrap()],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };
 
     assert!(
-        ChatWidget::preset_matches_current(AskForApproval::OnRequest, &current_sandbox, &preset),
-        "WorkspaceWrite with extra roots should still match the Agent preset"
+        !ChatWidget::preset_matches_current(AskForApproval::OnRequest, &current_sandbox, &preset),
+        "WorkspaceWrite with extra roots should not match the Default preset"
     );
     assert!(
         !ChatWidget::preset_matches_current(AskForApproval::Never, &current_sandbox, &preset),
@@ -4216,8 +5718,12 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("requires elevation"),
-        "expected auto mode prompt to mention elevation, popup: {popup}"
+        popup.contains("requires Administrator permissions"),
+        "expected auto mode prompt to mention Administrator permissions, popup: {popup}"
+    );
+    assert!(
+        popup.contains("Use non-admin sandbox"),
+        "expected auto mode prompt to include non-admin fallback option, popup: {popup}"
     );
 }
 
@@ -4228,22 +5734,40 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 
     chat.set_feature_enabled(Feature::WindowsSandbox, false);
     chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
-    chat.config.forced_auto_mode_downgraded_on_windows = true;
 
-    chat.maybe_prompt_windows_sandbox_enable();
+    chat.maybe_prompt_windows_sandbox_enable(true);
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("requires elevation"),
-        "expected startup prompt to explain elevation: {popup}"
+        popup.contains("requires Administrator permissions"),
+        "expected startup prompt to mention Administrator permissions: {popup}"
     );
     assert!(
-        popup.contains("Set up agent sandbox"),
-        "expected startup prompt to offer agent sandbox setup: {popup}"
+        popup.contains("Set up default sandbox"),
+        "expected startup prompt to offer default sandbox setup: {popup}"
     );
     assert!(
-        popup.contains("Stay in"),
-        "expected startup prompt to offer staying in current mode: {popup}"
+        popup.contains("Use non-admin sandbox"),
+        "expected startup prompt to offer non-admin fallback: {popup}"
+    );
+    assert!(
+        popup.contains("Quit"),
+        "expected startup prompt to offer quit action: {popup}"
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn startup_does_not_prompt_for_windows_sandbox_when_not_requested() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.set_feature_enabled(Feature::WindowsSandbox, false);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
+    chat.maybe_prompt_windows_sandbox_enable(false);
+
+    assert!(
+        chat.bottom_pane.no_modal_or_popup_active(),
+        "expected no startup sandbox NUX popup when startup trigger is false"
     );
 }
 
@@ -4455,7 +5979,7 @@ async fn disabled_slash_command_while_task_running_snapshot() {
 async fn approvals_popup_shows_disabled_presets() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.config.approval_policy =
+    chat.config.permissions.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
             AskForApproval::OnRequest => Ok(()),
             _ => Err(invalid_value(
@@ -4491,7 +6015,7 @@ async fn approvals_popup_shows_disabled_presets() {
 async fn approvals_popup_navigation_skips_disabled() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
-    chat.config.approval_policy =
+    chat.config.permissions.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
             AskForApproval::OnRequest => Ok(()),
             _ => Err(invalid_value(candidate.to_string(), "[on-request]")),
@@ -4558,6 +6082,196 @@ async fn approvals_popup_navigation_skips_disabled() {
     );
 }
 
+#[tokio::test]
+async fn permissions_selection_emits_history_cell_when_selection_changes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected one permissions selection history cell"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Permissions updated to"),
+        "expected permissions selection history message, got: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn permissions_selection_history_snapshot_after_mode_switch() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    #[cfg(target_os = "windows")]
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one mode-switch history cell");
+    assert_snapshot!(
+        "permissions_selection_history_after_mode_switch",
+        lines_to_single_string(&cells[0])
+    );
+}
+
+#[tokio::test]
+async fn permissions_selection_history_snapshot_full_access_to_default() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::Never)
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::DangerFullAccess)
+        .expect("set sandbox policy");
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one mode-switch history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    #[cfg(target_os = "windows")]
+    insta::with_settings!({ snapshot_suffix => "windows" }, {
+        assert_snapshot!("permissions_selection_history_full_access_to_default", rendered);
+    });
+    #[cfg(not(target_os = "windows"))]
+    assert_snapshot!(
+        "permissions_selection_history_full_access_to_default",
+        rendered
+    );
+}
+
+#[tokio::test]
+async fn permissions_selection_emits_history_cell_when_current_is_selected() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected history cell even when selecting current permissions"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Permissions updated to"),
+        "expected permissions update history message, got: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn permissions_full_access_history_cell_emitted_only_after_confirmation() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = None;
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    #[cfg(target_os = "windows")]
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let mut open_confirmation_event = None;
+    let mut cells_before_confirmation = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                cells_before_confirmation.push(cell.display_lines(80));
+            }
+            AppEvent::OpenFullAccessConfirmation {
+                preset,
+                return_to_permissions,
+            } => {
+                open_confirmation_event = Some((preset, return_to_permissions));
+            }
+            _ => {}
+        }
+    }
+    if cfg!(not(target_os = "windows")) {
+        assert!(
+            cells_before_confirmation.is_empty(),
+            "did not expect history cell before confirming full access"
+        );
+    }
+    let (preset, return_to_permissions) =
+        open_confirmation_event.expect("expected full access confirmation event");
+    chat.open_full_access_confirmation(preset, return_to_permissions);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Enable full access?"),
+        "expected full access confirmation popup, got: {popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let cells_after_confirmation = drain_insert_history(&mut rx);
+    let total_history_cells = cells_before_confirmation.len() + cells_after_confirmation.len();
+    assert_eq!(
+        total_history_cells, 1,
+        "expected one full access history cell total"
+    );
+    let rendered = if !cells_before_confirmation.is_empty() {
+        lines_to_single_string(&cells_before_confirmation[0])
+    } else {
+        lines_to_single_string(&cells_after_confirmation[0])
+    };
+    assert!(
+        rendered.contains("Permissions updated to Full Access"),
+        "expected full access update history message, got: {rendered}"
+    );
+}
+
 //
 // Snapshot test: command approval modal
 //
@@ -4568,16 +6282,21 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
     // Build a chat widget with manual channels to avoid spawning the agent.
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     // Ensure policy allows surfacing approvals explicitly (not strictly required for direct event).
-    chat.config.approval_policy.set(AskForApproval::OnRequest)?;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
     // Inject an exec approval request to display the approval modal.
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd".into(),
+        approval_id: Some("call-approve-cmd".into()),
         turn_id: "turn-approve-cmd".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        network_approval_context: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
             "echo".into(),
             "hello".into(),
@@ -4623,14 +6342,19 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
 #[tokio::test]
 async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.approval_policy.set(AskForApproval::OnRequest)?;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
 
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd-noreason".into(),
+        approval_id: Some("call-approve-cmd-noreason".into()),
         turn_id: "turn-approve-cmd-noreason".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        network_approval_context: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
             "echo".into(),
             "hello".into(),
@@ -4665,16 +6389,21 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
 async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
 -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.approval_policy.set(AskForApproval::OnRequest)?;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
 
     let script = "python - <<'PY'\nprint('hello')\nPY".to_string();
     let command = vec!["bash".into(), "-lc".into(), script];
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd-multiline-trunc".into(),
+        approval_id: Some("call-approve-cmd-multiline-trunc".into()),
         turn_id: "turn-approve-cmd-multiline-trunc".into(),
         command: command.clone(),
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        network_approval_context: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         parsed_cmd: vec![],
     };
@@ -4705,7 +6434,10 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
 #[tokio::test]
 async fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.approval_policy.set(AskForApproval::OnRequest)?;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
 
     // Build a small changeset and a reason/grant_root to exercise the prompt text.
     let mut changes = HashMap::new();
@@ -4760,7 +6492,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
     // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -4799,7 +6531,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -4828,7 +6560,7 @@ async fn interrupt_clears_unified_exec_processes() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -4849,7 +6581,7 @@ async fn review_ended_keeps_unified_exec_processes() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::ReviewEnded,
         }),
@@ -4894,7 +6626,7 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -5002,7 +6734,7 @@ async fn ui_snapshots_small_heights_task_running() {
 // task (status indicator active) while an approval request is shown.
 #[tokio::test]
 async fn status_widget_and_approval_modal_snapshot() {
-    use codex_core::protocol::ExecApprovalRequestEvent;
+    use codex_protocol::protocol::ExecApprovalRequestEvent;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     // Begin a running task so the status indicator would be active.
@@ -5025,12 +6757,14 @@ async fn status_widget_and_approval_modal_snapshot() {
     // Now show an approval modal (e.g. exec approval).
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-exec".into(),
+        approval_id: Some("call-approve-exec".into()),
         turn_id: "turn-approve-exec".into(),
         command: vec!["echo".into(), "hello world".into()],
         cwd: PathBuf::from("/tmp"),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        network_approval_context: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
             "echo".into(),
             "hello world".into(),
@@ -5237,6 +6971,7 @@ async fn apply_patch_events_emit_history_cells() {
         stderr: String::new(),
         success: true,
         changes: end_changes,
+        status: CorePatchApplyStatus::Completed,
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
@@ -5382,7 +7117,7 @@ async fn apply_patch_approval_sends_op_with_call_id() {
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::CodexOp(Op::PatchApproval { id, decision }) = app_ev {
             assert_eq!(id, "call-999");
-            assert_matches!(decision, codex_core::protocol::ReviewDecision::Approved);
+            assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
             found = true;
             break;
         }
@@ -5430,7 +7165,7 @@ async fn apply_patch_full_flow_integration_like() {
     match forwarded {
         Op::PatchApproval { id, decision } => {
             assert_eq!(id, "call-1");
-            assert_matches!(decision, codex_core::protocol::ReviewDecision::Approved);
+            assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
         }
         other => panic!("unexpected op forwarded: {other:?}"),
     }
@@ -5464,6 +7199,7 @@ async fn apply_patch_full_flow_integration_like() {
             stderr: String::new(),
             success: true,
             changes: end_changes,
+            status: CorePatchApplyStatus::Completed,
         }),
     });
 }
@@ -5472,7 +7208,10 @@ async fn apply_patch_full_flow_integration_like() {
 async fn apply_patch_untrusted_shows_approval_modal() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     // Ensure approval policy is untrusted (OnRequest)
-    chat.config.approval_policy.set(AskForApproval::OnRequest)?;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
 
     // Simulate a patch approval request from backend
     let mut changes = HashMap::new();
@@ -5520,7 +7259,10 @@ async fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     // Ensure we are in OnRequest so an approval is surfaced
-    chat.config.approval_policy.set(AskForApproval::OnRequest)?;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
 
     // Simulate backend asking to apply a patch adding two lines to README.md
     let mut changes = HashMap::new();
@@ -5648,6 +7390,160 @@ async fn stream_error_updates_status_indicator() {
 }
 
 #[tokio::test]
+async fn replayed_turn_started_does_not_mark_task_running() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.replay_initial_messages(vec![EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: "turn-1".to_string(),
+        model_context_window: None,
+        collaboration_mode_kind: ModeKind::Default,
+    })]);
+
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget().is_none());
+}
+
+#[tokio::test]
+async fn thread_snapshot_replayed_turn_started_marks_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    drain_insert_history(&mut rx);
+    assert!(chat.bottom_pane.is_task_running());
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Working");
+}
+
+#[tokio::test]
+async fn replayed_stream_error_does_not_set_retry_status_or_status_indicator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_status_header("Idle".to_string());
+
+    chat.replay_initial_messages(vec![EventMsg::StreamError(StreamErrorEvent {
+        message: "Reconnecting... 2/5".to_string(),
+        codex_error_info: Some(CodexErrorInfo::Other),
+        additional_details: Some("Idle timeout waiting for SSE".to_string()),
+    })]);
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected no history cell for replayed StreamError event"
+    );
+    assert_eq!(chat.current_status_header, "Idle");
+    assert!(chat.retry_status_header.is_none());
+    assert!(chat.bottom_pane.status_widget().is_none());
+}
+
+#[tokio::test]
+async fn thread_snapshot_replayed_stream_recovery_restores_previous_status_header() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "task".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    chat.handle_codex_event_replay(Event {
+        id: "retry".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting... 1/5".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: None,
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    chat.handle_codex_event_replay(Event {
+        id: "delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "hello".to_string(),
+        }),
+    });
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Working");
+    assert_eq!(status.details(), None);
+    assert!(chat.retry_status_header.is_none());
+}
+
+#[tokio::test]
+async fn resume_replay_interrupted_reconnect_does_not_leave_stale_working_state() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_status_header("Idle".to_string());
+
+    chat.replay_initial_messages(vec![
+        EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+        EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting... 1/5".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: None,
+        }),
+        EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "hello".to_string(),
+        }),
+    ]);
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected no history cells for replayed interrupted reconnect sequence"
+    );
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget().is_none());
+    assert_eq!(chat.current_status_header, "Idle");
+    assert!(chat.retry_status_header.is_none());
+}
+
+#[tokio::test]
+async fn replayed_interrupted_reconnect_footer_row_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.replay_initial_messages(vec![
+        EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+        EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting... 2/5".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: Some("Idle timeout waiting for SSE".to_string()),
+        }),
+    ]);
+
+    let header = render_bottom_first_row(&chat, 80);
+    assert!(
+        !header.contains("Reconnecting") && !header.contains("Working"),
+        "expected replayed interrupted reconnect to avoid active status row, got {header:?}"
+    );
+    assert_snapshot!("replayed_interrupted_reconnect_footer_row", header);
+}
+
+#[tokio::test]
 async fn stream_error_restores_hidden_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
@@ -5764,7 +7660,7 @@ async fn status_line_branch_refreshes_after_interrupt() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
-        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
@@ -5873,6 +7769,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "First message".into(),
+            phase: None,
         }),
     });
 
@@ -5881,6 +7778,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Second message".into(),
+            phase: None,
         }),
     });
 
@@ -5926,6 +7824,7 @@ async fn final_reasoning_then_message_without_deltas_are_rendered() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
+            phase: None,
         }),
     });
 
@@ -5986,6 +7885,7 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
+            phase: None,
         }),
     });
 
@@ -6007,7 +7907,12 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message:
+                "I’m going to search the repo for where “Change Approved” is rendered to update that view."
+                    .into(),
+            phase: None,
+        }),
     });
 
     let command = vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()];
@@ -6054,6 +7959,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             exit_code: 0,
             duration: std::time::Duration::from_millis(16000),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
         }),
     });
     chat.handle_codex_event(Event {

@@ -237,20 +237,6 @@ fn is_literal_word_or_number(node: Node<'_>) -> bool {
     node.named_children(&mut cursor).next().is_none()
 }
 
-fn has_named_descendant_kind(node: Node<'_>, kind: &str) -> bool {
-    let mut stack = vec![node];
-    while let Some(current) = stack.pop() {
-        if current.kind() == kind {
-            return true;
-        }
-        let mut cursor = current.walk();
-        for child in current.named_children(&mut cursor) {
-            stack.push(child);
-        }
-    }
-    false
-}
-
 fn is_allowed_heredoc_attachment_kind(kind: &str) -> bool {
     matches!(
         kind,
@@ -280,6 +266,20 @@ fn find_single_command_node(root: Node<'_>) -> Option<Node<'_>> {
         }
     }
     single_command
+}
+
+fn has_named_descendant_kind(node: Node<'_>, kind: &str) -> bool {
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        if current.kind() == kind {
+            return true;
+        }
+        let mut cursor = current.walk();
+        for child in current.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
 }
 
 fn parse_double_quoted_string(node: Node, src: &str) -> Option<String> {
@@ -546,6 +546,16 @@ mod tests {
             parse_shell_lc_single_command_prefix(&command),
             Some(vec!["python3".to_string()])
         );
+    }
+
+    #[test]
+    fn parse_shell_lc_single_command_prefix_rejects_herestring_with_chaining() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            r#"echo hello > /tmp/out.txt && cat /tmp/out.txt"#.to_string(),
+        ];
+        assert_eq!(parse_shell_lc_single_command_prefix(&command), None);
     }
 
     #[test]

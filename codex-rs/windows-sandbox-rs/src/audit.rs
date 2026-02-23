@@ -262,7 +262,7 @@ pub fn apply_capability_denies_for_world_writable(
             }
             (sid, roots)
         }
-        SandboxPolicy::ReadOnly => (
+        SandboxPolicy::ReadOnly { .. } => (
             unsafe { convert_string_sid_to_sid(&caps.readonly) }.ok_or_else(|| {
                 anyhow!("ConvertStringSidToSidW failed for readonly capability")
             })?,

@@ -1,6 +1,5 @@
 use super::LoaderOverrides;
 use super::load_config_layers_state;
-use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::ConfigToml;
@@ -11,10 +10,11 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLoadError;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
-use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
-use crate::config_loader::config_requirements::RequirementSource;
-use crate::config_loader::fingerprint::version_for_toml;
+use crate::config_loader::ConfigRequirementsWithSources;
+use crate::config_loader::RequirementSource;
 use crate::config_loader::load_requirements_toml;
+use crate::config_loader::version_for_toml;
+use codex_config::CONFIG_TOML_FILE;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
@@ -153,7 +153,7 @@ async fn returns_config_error_for_schema_error_in_user_config() {
     let config_error = config_error_from_io(&err);
     let _guard = codex_utils_absolute_path::AbsolutePathBufGuard::new(tmp.path());
     let expected_config_error =
-        super::diagnostics::config_error_from_config_toml(&config_path, contents)
+        codex_config::config_error_from_typed_toml::<ConfigToml>(&config_path, contents)
             .expect("schema error");
     assert_eq!(config_error, &expected_config_error);
 }
@@ -166,7 +166,7 @@ fn schema_error_points_to_feature_value() {
     std::fs::write(&config_path, contents).expect("write config");
 
     let _guard = codex_utils_absolute_path::AbsolutePathBufGuard::new(tmp.path());
-    let error = super::diagnostics::config_error_from_config_toml(&config_path, contents)
+    let error = codex_config::config_error_from_typed_toml::<ConfigToml>(&config_path, contents)
         .expect("schema error");
 
     let value_line = contents.lines().nth(1).expect("value line");
@@ -240,7 +240,9 @@ async fn returns_empty_when_all_layers_missing() {
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
         #[cfg(target_os = "macos")]
-        managed_preferences_base64: None,
+        // Force managed preferences to resolve as empty so this test does not
+        // inherit non-empty machine-specific managed state.
+        managed_preferences_base64: Some(String::new()),
         macos_managed_config_requirements_base64: None,
     };
 
@@ -410,7 +412,7 @@ allowed_sandbox_modes = ["read-only"]
     );
     assert_eq!(
         *state.requirements().sandbox_policy.get(),
-        SandboxPolicy::ReadOnly
+        SandboxPolicy::new_read_only_policy()
     );
     assert!(
         state
@@ -425,6 +427,7 @@ allowed_sandbox_modes = ["read-only"]
             .sandbox_policy
             .can_set(&SandboxPolicy::WorkspaceWrite {
                 writable_roots: Vec::new(),
+                read_only_access: Default::default(),
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -1246,19 +1249,19 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
 }
 
 mod requirements_exec_policy_tests {
-    use super::super::config_requirements::ConfigRequirementsWithSources;
-    use super::super::requirements_exec_policy::RequirementsExecPolicyDecisionToml;
-    use super::super::requirements_exec_policy::RequirementsExecPolicyParseError;
-    use super::super::requirements_exec_policy::RequirementsExecPolicyPatternTokenToml;
-    use super::super::requirements_exec_policy::RequirementsExecPolicyPrefixRuleToml;
-    use super::super::requirements_exec_policy::RequirementsExecPolicyToml;
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
     use crate::config_loader::ConfigRequirementsToml;
+    use crate::config_loader::ConfigRequirementsWithSources;
     use crate::config_loader::RequirementSource;
     use crate::exec_policy::load_exec_policy;
     use codex_app_server_protocol::ConfigLayerSource;
+    use codex_config::RequirementsExecPolicyDecisionToml;
+    use codex_config::RequirementsExecPolicyParseError;
+    use codex_config::RequirementsExecPolicyPatternTokenToml;
+    use codex_config::RequirementsExecPolicyPrefixRuleToml;
+    use codex_config::RequirementsExecPolicyToml;
     use codex_execpolicy::Decision;
     use codex_execpolicy::Evaluation;
     use codex_execpolicy::RuleMatch;

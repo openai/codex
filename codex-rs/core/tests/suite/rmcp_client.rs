@@ -11,15 +11,8 @@ use std::time::UNIX_EPOCH;
 use codex_core::CodexAuth;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::McpInvocation;
-use codex_core::protocol::McpToolCallBeginEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -28,6 +21,12 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpToolCallBeginEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::responses;
@@ -126,7 +125,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
@@ -293,7 +292,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
@@ -410,6 +409,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 experimental_supported_tools: Vec::new(),
                 input_modalities: vec![InputModality::Text],
                 prefer_websockets: false,
+                used_fallback_model_metadata: false,
             }],
         },
     )
@@ -440,8 +440,6 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
     let fixture = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
-            config.features.enable(Feature::RemoteModels);
-
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 server_name.to_string(),
@@ -477,7 +475,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
     fixture
         .thread_manager
         .get_models_manager()
-        .list_models(&fixture.config, RefreshStrategy::Online)
+        .list_models(RefreshStrategy::Online)
         .await;
     assert_eq!(models_mock.requests().len(), 1);
 
@@ -491,7 +489,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: text_only_model_slug.to_string(),
             effort: None,
             summary: ReasoningSummary::Auto,
@@ -603,7 +601,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
@@ -762,7 +760,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
@@ -842,8 +840,31 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
 /// This test writes to a fallback credentials file in CODEX_HOME.
 /// Ideally, we wouldn't need to serialize the test but it's much more cumbersome to wire CODEX_HOME through the code.
 #[serial(codex_home)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
+#[test]
+fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
+    const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+
+    let handle = std::thread::Builder::new()
+        .name("streamable_http_with_oauth_round_trip".to_string())
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(|| -> anyhow::Result<()> {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()?;
+            runtime.block_on(streamable_http_with_oauth_round_trip_impl())
+        })?;
+
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!(
+            "streamable_http_with_oauth_round_trip thread panicked"
+        )),
+    }
+}
+
+#[allow(clippy::expect_used)]
+async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -914,6 +935,11 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
+            // This test seeds OAuth tokens in CODEX_HOME/.credentials.json and
+            // validates file-backed OAuth loading. Force file mode so Linux
+            // keyring backend quirks do not affect this test.
+            config.mcp_oauth_credentials_store_mode = serde_json::from_value(json!("file"))
+                .expect("`file` should deserialize as OAuthCredentialsStoreMode");
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 server_name.to_string(),
@@ -953,7 +979,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,

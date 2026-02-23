@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::types::Personality;
+use crate::config::types::WindowsToml;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -23,12 +24,20 @@ pub struct ConfigProfile {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
+    /// Optional path to a JSON model catalog (applied on startup only).
+    pub model_catalog_json: Option<AbsolutePathBuf>,
     pub personality: Option<Personality>,
     pub chatgpt_base_url: Option<String>,
     /// Optional path to a file containing model instructions.
     pub model_instructions_file: Option<AbsolutePathBuf>,
+    pub js_repl_node_path: Option<AbsolutePathBuf>,
+    /// Ordered list of directories to search for Node modules in `js_repl`.
+    pub js_repl_node_module_dirs: Option<Vec<AbsolutePathBuf>>,
+    /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
+    pub zsh_path: Option<AbsolutePathBuf>,
     /// Deprecated: ignored. Use `model_instructions_file`.
     #[schemars(skip)]
     pub experimental_instructions_file: Option<AbsolutePathBuf>,
@@ -40,6 +49,8 @@ pub struct ConfigProfile {
     pub tools_view_image: Option<bool>,
     pub web_search: Option<WebSearchMode>,
     pub analytics: Option<crate::config::types::AnalyticsConfigToml>,
+    #[serde(default)]
+    pub windows: Option<WindowsToml>,
     /// Optional feature toggles scoped to this profile.
     #[serde(default)]
     // Injects known feature keys into the schema and forbids unknown keys.

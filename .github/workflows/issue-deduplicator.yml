@@ -15,34 +15,68 @@ jobs:
     permissions:
       contents: read
     outputs:
-      codex_output: ${{ steps.codex.outputs.final-message }}
+      codex_output: ${{ steps.select-final.outputs.codex_output }}
     steps:
       - uses: actions/checkout@v6
 
       - name: Prepare Codex inputs
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -eo pipefail
 
           CURRENT_ISSUE_FILE=codex-current-issue.json
-          EXISTING_ISSUES_FILE=codex-existing-issues.json
+          EXISTING_ALL_FILE=codex-existing-issues-all.json
+          EXISTING_OPEN_FILE=codex-existing-issues-open.json
 
-          gh issue list --repo "${{ github.repository }}" \
-            --json number,title,body,createdAt \
+          gh issue list --repo "$REPO" \
+            --json number,title,body,createdAt,updatedAt,state,labels \
             --limit 1000 \
             --state all \
             --search "sort:created-desc" \
-            | jq '.' \
-            > "$EXISTING_ISSUES_FILE"
+            | jq '[.[] | {
+                number,
+                title,
+                body: ((.body // "")[0:4000]),
+                createdAt,
+                updatedAt,
+                state,
+                labels: ((.labels // []) | map(.name))
+              }]' \
+            > "$EXISTING_ALL_FILE"
 
-          gh issue view "${{ github.event.issue.number }}" \
-            --repo "${{ github.repository }}" \
+          gh issue list --repo "$REPO" \
+            --json number,title,body,createdAt,updatedAt,state,labels \
+            --limit 1000 \
+            --state open \
+            --search "sort:created-desc" \
+            | jq '[.[] | {
+                number,
+                title,
+                body: ((.body // "")[0:4000]),
+                createdAt,
+                updatedAt,
+                state,
+                labels: ((.labels // []) | map(.name))
+              }]' \
+            > "$EXISTING_OPEN_FILE"
+
+          gh issue view "$ISSUE_NUMBER" \
+            --repo "$REPO" \
             --json number,title,body \
-            | jq '.' \
+            | jq '{number, title, body: ((.body // "")[0:4000])}' \
             > "$CURRENT_ISSUE_FILE"
 
-      - id: codex
+          echo "Prepared duplicate detection input files."
+          echo "all_issue_count=$(jq 'length' "$EXISTING_ALL_FILE")"
+          echo "open_issue_count=$(jq 'length' "$EXISTING_OPEN_FILE")"
+
+      # Prompt instructions are intentionally inline in this workflow. The old
+      # .github/prompts/issue-deduplicator.txt file is obsolete and removed.
+      - id: codex-all
+        name: Find duplicates (pass 1, all issues)
         uses: openai/codex-action@main
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
@@ -52,14 +86,17 @@ jobs:
 
             You will receive the following JSON files located in the current working directory:
             - `codex-current-issue.json`: JSON object describing the newly created issue (fields: number, title, body).
-            - `codex-existing-issues.json`: JSON array of recent issues (each element includes number, title, body, createdAt).
+            - `codex-existing-issues-all.json`: JSON array of recent issues with states, timestamps, and labels.
 
             Instructions:
             - Compare the current issue against the existing issues to find up to five that appear to describe the same underlying problem or request.
-            - Focus on the underlying intent and context of each issue—such as reported symptoms, feature requests, reproduction steps, or error messages—rather than relying solely on string similarity or synthetic metrics.
-            - After your analysis, validate your results in 1-2 lines explaining your decision to return the selected matches.
-            - When unsure, prefer returning fewer matches.
-            - Include at most five numbers.
+            - Prioritize concrete overlap in symptoms, reproduction details, error signatures, and user intent.
+            - Prefer active unresolved issues when confidence is similar.
+            - Closed issues can still be valid duplicates if they clearly match.
+            - Return fewer matches rather than speculative ones.
+            - If confidence is low, return an empty list.
+            - Include at most five issue numbers.
+            - After analysis, provide a short reason for your decision.
 
           output-schema: |
             {
@@ -76,6 +113,179 @@ jobs:
               "required": ["issues", "reason"],
               "additionalProperties": false
             }
+
+      - id: normalize-all
+        name: Normalize pass 1 output
+        env:
+          CODEX_OUTPUT: ${{ steps.codex-all.outputs.final-message }}
+          CURRENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -eo pipefail
+
+          raw=${CODEX_OUTPUT//$'\r'/}
+          parsed=false
+          issues='[]'
+          reason=''
+
+          if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type == "object" and (.issues | type == "array")' >/dev/null 2>&1; then
+            parsed=true
+            issues=$(printf '%s' "$raw" | jq -c '[.issues[] | tostring]')
+            reason=$(printf '%s' "$raw" | jq -r '.reason // ""')
+          else
+            reason='Pass 1 output was empty or invalid JSON.'
+          fi
+
+          filtered=$(jq -cn --argjson issues "$issues" --arg current "$CURRENT_ISSUE_NUMBER" '[
+            $issues[]
+            | tostring
+            | select(. != $current)
+          ] | reduce .[] as $issue ([]; if index($issue) then . else . + [$issue] end) | .[:5]')
+
+          has_matches=false
+          if [ "$(jq 'length' <<< "$filtered")" -gt 0 ]; then
+            has_matches=true
+          fi
+
+          echo "Pass 1 parsed: $parsed"
+          echo "Pass 1 matches after filtering: $(jq 'length' <<< "$filtered")"
+          echo "Pass 1 reason: $reason"
+
+          {
+            echo "issues_json=$filtered"
+            echo "reason<<EOF"
+            echo "$reason"
+            echo "EOF"
+            echo "has_matches=$has_matches"
+          } >> "$GITHUB_OUTPUT"
+
+      - id: codex-open
+        name: Find duplicates (pass 2, open issues)
+        if: ${{ steps.normalize-all.outputs.has_matches != 'true' }}
+        uses: openai/codex-action@main
+        with:
+          openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          allow-users: "*"
+          prompt: |
+            You are an assistant that triages new GitHub issues by identifying potential duplicates.
+
+            This is a fallback pass because a broad search did not find convincing matches.
+
+            You will receive the following JSON files located in the current working directory:
+            - `codex-current-issue.json`: JSON object describing the newly created issue (fields: number, title, body).
+            - `codex-existing-issues-open.json`: JSON array of open issues only.
+
+            Instructions:
+            - Search only these active unresolved issues for duplicates of the current issue.
+            - Prioritize concrete overlap in symptoms, reproduction details, error signatures, and user intent.
+            - Prefer fewer, higher-confidence matches.
+            - If confidence is low, return an empty list.
+            - Include at most five issue numbers.
+            - After analysis, provide a short reason for your decision.
+
+          output-schema: |
+            {
+              "type": "object",
+              "properties": {
+                "issues": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "reason": { "type": "string" }
+              },
+              "required": ["issues", "reason"],
+              "additionalProperties": false
+            }
+
+      - id: normalize-open
+        name: Normalize pass 2 output
+        if: ${{ steps.normalize-all.outputs.has_matches != 'true' }}
+        env:
+          CODEX_OUTPUT: ${{ steps.codex-open.outputs.final-message }}
+          CURRENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -eo pipefail
+
+          raw=${CODEX_OUTPUT//$'\r'/}
+          parsed=false
+          issues='[]'
+          reason=''
+
+          if [ -n "$raw" ] && printf '%s' "$raw" | jq -e 'type == "object" and (.issues | type == "array")' >/dev/null 2>&1; then
+            parsed=true
+            issues=$(printf '%s' "$raw" | jq -c '[.issues[] | tostring]')
+            reason=$(printf '%s' "$raw" | jq -r '.reason // ""')
+          else
+            reason='Pass 2 output was empty or invalid JSON.'
+          fi
+
+          filtered=$(jq -cn --argjson issues "$issues" --arg current "$CURRENT_ISSUE_NUMBER" '[
+            $issues[]
+            | tostring
+            | select(. != $current)
+          ] | reduce .[] as $issue ([]; if index($issue) then . else . + [$issue] end) | .[:5]')
+
+          has_matches=false
+          if [ "$(jq 'length' <<< "$filtered")" -gt 0 ]; then
+            has_matches=true
+          fi
+
+          echo "Pass 2 parsed: $parsed"
+          echo "Pass 2 matches after filtering: $(jq 'length' <<< "$filtered")"
+          echo "Pass 2 reason: $reason"
+
+          {
+            echo "issues_json=$filtered"
+            echo "reason<<EOF"
+            echo "$reason"
+            echo "EOF"
+            echo "has_matches=$has_matches"
+          } >> "$GITHUB_OUTPUT"
+
+      - id: select-final
+        name: Select final duplicate set
+        env:
+          PASS1_ISSUES: ${{ steps.normalize-all.outputs.issues_json }}
+          PASS1_REASON: ${{ steps.normalize-all.outputs.reason }}
+          PASS2_ISSUES: ${{ steps.normalize-open.outputs.issues_json }}
+          PASS2_REASON: ${{ steps.normalize-open.outputs.reason }}
+          PASS1_HAS_MATCHES: ${{ steps.normalize-all.outputs.has_matches }}
+          PASS2_HAS_MATCHES: ${{ steps.normalize-open.outputs.has_matches }}
+        run: |
+          set -eo pipefail
+
+          selected_issues='[]'
+          selected_reason='No plausible duplicates found.'
+          selected_pass='none'
+
+          if [ "$PASS1_HAS_MATCHES" = "true" ]; then
+            selected_issues=${PASS1_ISSUES:-'[]'}
+            selected_reason=${PASS1_REASON:-'Pass 1 found duplicates.'}
+            selected_pass='all'
+          fi
+
+          if [ "$PASS2_HAS_MATCHES" = "true" ]; then
+            selected_issues=${PASS2_ISSUES:-'[]'}
+            selected_reason=${PASS2_REASON:-'Pass 2 found duplicates.'}
+            selected_pass='open-fallback'
+          fi
+
+          final_json=$(jq -cn \
+            --argjson issues "$selected_issues" \
+            --arg reason "$selected_reason" \
+            --arg pass "$selected_pass" \
+            '{issues: $issues, reason: $reason, pass: $pass}')
+
+          echo "Final pass used: $selected_pass"
+          echo "Final duplicate count: $(jq '.issues | length' <<< "$final_json")"
+          echo "Final reason: $(jq -r '.reason' <<< "$final_json")"
+
+          {
+            echo "codex_output<<EOF"
+            echo "$final_json"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
   comment-on-issue:
     name: Comment with potential duplicates
@@ -105,11 +315,17 @@ jobs:
 
             const issues = Array.isArray(parsed?.issues) ? parsed.issues : [];
             const currentIssueNumber = String(context.payload.issue.number);
+            const passUsed = typeof parsed?.pass === 'string' ? parsed.pass : 'unknown';
+            const reason = typeof parsed?.reason === 'string' ? parsed.reason : '';
 
             console.log(`Current issue number: ${currentIssueNumber}`);
+            console.log(`Pass used: ${passUsed}`);
+            if (reason) {
+              console.log(`Reason: ${reason}`);
+            }
             console.log(issues);
 
-            const filteredIssues = issues.filter((value) => String(value) !== currentIssueNumber);
+            const filteredIssues = [...new Set(issues.map((value) => String(value)))].filter((value) => value !== currentIssueNumber).slice(0, 5);
 
             if (filteredIssues.length === 0) {
               core.info('Codex reported no potential duplicates.');

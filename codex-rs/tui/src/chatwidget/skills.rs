@@ -14,13 +14,13 @@ use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
 use codex_chatgpt::connectors::AppInfo;
 use codex_core::connectors::connector_mention_slug;
-use codex_core::protocol::ListSkillsResponseEvent;
-use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_core::protocol::SkillsListEntry;
 use codex_core::skills::model::SkillDependencies;
 use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::skills::model::SkillToolDependency;
+use codex_protocol::protocol::ListSkillsResponseEvent;
+use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
+use codex_protocol::protocol::SkillsListEntry;
 
 impl ChatWidget {
     pub(crate) fn open_skills_list(&mut self) {
@@ -190,6 +190,7 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
                     .collect(),
             }),
         policy: None,
+        permissions: None,
         path: skill.path.clone(),
         scope: skill.scope,
     }
@@ -267,12 +268,12 @@ pub(crate) fn find_app_mentions(
     }
 
     let mut slug_counts: HashMap<String, usize> = HashMap::new();
-    for app in apps {
+    for app in apps.iter().filter(|app| app.is_enabled) {
         let slug = connector_mention_slug(app);
         *slug_counts.entry(slug).or_insert(0) += 1;
     }
 
-    for app in apps {
+    for app in apps.iter().filter(|app| app.is_enabled) {
         let slug = connector_mention_slug(app);
         let slug_count = slug_counts.get(&slug).copied().unwrap_or(0);
         if mentions.names.contains(&slug)
@@ -285,7 +286,7 @@ pub(crate) fn find_app_mentions(
     }
 
     apps.iter()
-        .filter(|app| selected_ids.contains(&app.id))
+        .filter(|app| app.is_enabled && selected_ids.contains(&app.id))
         .cloned()
         .collect()
 }

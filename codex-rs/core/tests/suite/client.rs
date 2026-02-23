@@ -1,14 +1,10 @@
 use codex_core::CodexAuth;
-use codex_core::ContentItem;
-use codex_core::LocalShellAction;
-use codex_core::LocalShellExecAction;
-use codex_core::LocalShellStatus;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
-use codex_core::ResponseItem;
+use codex_core::ResponsesWebsocketVersion;
 use codex_core::ThreadManager;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
@@ -16,9 +12,6 @@ use codex_core::built_in_model_providers;
 use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
 use codex_core::features::Feature;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -27,16 +20,27 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::LocalShellExecAction;
+use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
+use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_message_item_added;
+use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
@@ -579,6 +583,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         codex_home.path().to_path_buf(),
         auth_manager,
         SessionSource::Exec,
+        config.model_catalog.clone(),
     );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config)
@@ -669,6 +674,10 @@ async fn includes_user_instructions_message_in_request() {
 async fn includes_apps_guidance_as_developer_message_when_enabled() {
     skip_if_no_network!();
     let server = MockServer::start().await;
+    let apps_server = AppsTestServer::mount(&server)
+        .await
+        .expect("mount apps MCP mock");
+    let apps_base_url = apps_server.chatgpt_base_url.clone();
 
     let resp_mock = mount_sse_once(
         &server,
@@ -678,8 +687,10 @@ async fn includes_apps_guidance_as_developer_message_when_enabled() {
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
-        .with_config(|config| {
+        .with_config(move |config| {
             config.features.enable(Feature::Apps);
+            config.features.disable(Feature::AppsMcpGateway);
+            config.chatgpt_base_url = apps_base_url;
         });
     let codex = builder
         .build(&server)
@@ -971,8 +982,8 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
                 text_elements: Vec::new(),
             }],
             cwd: config.cwd.clone(),
-            approval_policy: config.approval_policy.value(),
-            sandbox_policy: config.sandbox_policy.get().clone(),
+            approval_policy: config.permissions.approval_policy.value(),
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: session_configured.model.clone(),
             effort: Some(ReasoningEffort::Low),
             summary: config.model_reasoning_summary,
@@ -1343,8 +1354,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
-        false,
-        false,
+        None::<ResponsesWebsocketVersion>,
         false,
         false,
         None,
@@ -1784,6 +1794,64 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let incomplete_response = sse(vec![
+        ev_response_created("resp_incomplete"),
+        ev_message_item_added("msg_incomplete", "partial content"),
+        ev_output_text_delta("continued chunk"),
+        json!({
+            "type": "response.incomplete",
+            "response": {
+                "id": "resp_incomplete",
+                "object": "response",
+                "status": "incomplete",
+                "error": null,
+                "incomplete_details": {
+                    "reason": "content_filter"
+                }
+            }
+        }),
+    ]);
+
+    let responses_mock = mount_sse_once(&server, incomplete_response).await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model_provider.stream_max_retries = Some(0);
+        })
+        .build(&server)
+        .await?;
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "trigger incomplete".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
+    assert!(
+        matches!(
+            error_event,
+            EventMsg::Error(ref err)
+                if err.message
+                    == "stream disconnected before completion: Incomplete response returned, reason: content_filter"
+        ),
+        "expected incomplete content filter error; got {error_event:?}"
+    );
+
+    assert_eq!(responses_mock.requests().len(), 1);
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     Ok(())
 }
 

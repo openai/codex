@@ -4,8 +4,10 @@ expression: popup
 ---
   How was this?
 
-› 1. bug          Crash, error message, hang, or broken UI/behavior.
-  2. bad result   Output was off-target, incorrect, incomplete, or unhelpful.
-  3. good result  Helpful, correct, high‑quality, or delightful result worth
-                  celebrating.
-  4. other        Slowness, feature suggestion, UX feedback, or anything else.
+› 1. bug           Crash, error message, hang, or broken UI/behavior.
+  2. bad result    Output was off-target, incorrect, incomplete, or unhelpful.
+  3. good result   Helpful, correct, high‑quality, or delightful result worth
+                   celebrating.
+  4. safety check  Benign usage blocked due to safety checks or refusals.
+  5. other         Slowness, feature suggestion, UX feedback, or anything
+                   else.

@@ -7,8 +7,8 @@ use anyhow::Result;
 use codex_core::MCP_SANDBOX_STATE_CAPABILITY;
 use codex_core::MCP_SANDBOX_STATE_METHOD;
 use codex_core::SandboxState;
-use codex_core::protocol::SandboxPolicy;
 use codex_execpolicy::Policy;
+use codex_protocol::protocol::SandboxPolicy;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
@@ -123,7 +123,7 @@ impl ExecTool {
                 .await
                 .clone()
                 .unwrap_or_else(|| SandboxState {
-                    sandbox_policy: SandboxPolicy::ReadOnly,
+                    sandbox_policy: SandboxPolicy::new_read_only_policy(),
                     codex_linux_sandbox_exe: None,
                     sandbox_cwd: PathBuf::from(&params.workdir),
                     use_linux_sandbox_bwrap: false,

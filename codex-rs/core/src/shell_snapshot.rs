@@ -95,10 +95,15 @@ impl ShellSnapshot {
                 )
                 .await
                 .map(Arc::new);
-                let success = if snapshot.is_some() { "true" } else { "false" };
-                let _ = timer.map(|timer| timer.record(&[("success", success)]));
-                otel_manager.counter("codex.shell_snapshot", 1, &[("success", success)]);
-                let _ = shell_snapshot_tx.send(snapshot);
+                let success = snapshot.is_ok();
+                let success_tag = if success { "true" } else { "false" };
+                let _ = timer.map(|timer| timer.record(&[("success", success_tag)]));
+                let mut counter_tags = vec![("success", success_tag)];
+                if let Some(failure_reason) = snapshot.as_ref().err() {
+                    counter_tags.push(("failure_reason", *failure_reason));
+                }
+                otel_manager.counter("codex.shell_snapshot", 1, &counter_tags);
+                let _ = shell_snapshot_tx.send(snapshot.ok());
             }
             .instrument(snapshot_span),
         );
@@ -109,7 +114,7 @@ impl ShellSnapshot {
         session_id: ThreadId,
         session_cwd: &Path,
         shell: &Shell,
-    ) -> Option<Self> {
+    ) -> std::result::Result<Self, &'static str> {
         // File to store the snapshot
         let extension = match shell.shell_type {
             ShellType::PowerShell => "ps1",
@@ -129,32 +134,31 @@ impl ShellSnapshot {
         });
 
         // Make the new snapshot.
-        let snapshot =
-            match write_shell_snapshot(shell.shell_type.clone(), &path, session_cwd).await {
-                Ok(path) => {
-                    tracing::info!("Shell snapshot successfully created: {}", path.display());
-                    Some(Self {
-                        path,
-                        cwd: session_cwd.to_path_buf(),
-                    })
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        "Failed to create shell snapshot for {}: {err:?}",
-                        shell.name()
-                    );
-                    None
-                }
-            };
+        let path = match write_shell_snapshot(shell.shell_type.clone(), &path, session_cwd).await {
+            Ok(path) => {
+                tracing::info!("Shell snapshot successfully created: {}", path.display());
+                path
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to create shell snapshot for {}: {err:?}",
+                    shell.name()
+                );
+                return Err("write_failed");
+            }
+        };
 
-        if let Some(snapshot) = snapshot.as_ref()
-            && let Err(err) = validate_snapshot(shell, &snapshot.path, session_cwd).await
-        {
+        let snapshot = Self {
+            path,
+            cwd: session_cwd.to_path_buf(),
+        };
+
+        if let Err(err) = validate_snapshot(shell, &snapshot.path, session_cwd).await {
             tracing::error!("Shell snapshot validation failed: {err:?}");
-            return None;
+            return Err("validation_failed");
         }
 
-        snapshot
+        Ok(snapshot)
     }
 }
 

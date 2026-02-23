@@ -322,7 +322,12 @@ impl TextArea {
                 code: KeyCode::Delete,
                 modifiers: KeyModifiers::ALT,
                 ..
-            }  => self.delete_forward_word(),
+            }
+            | KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::ALT,
+                ..
+            } => self.delete_forward_word(),
             KeyEvent {
                 code: KeyCode::Delete,
                 ..
@@ -1761,6 +1766,15 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
         assert_eq!(t.text(), "ello");
         assert_eq!(t.cursor(), 0);
+    }
+
+    #[test]
+    fn delete_forward_word_alt_d() {
+        let mut t = ta_with("hello world");
+        t.set_cursor(6);
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT));
+        pretty_assertions::assert_eq!(t.text(), "hello ");
+        pretty_assertions::assert_eq!(t.cursor(), 6);
     }
 
     #[test]

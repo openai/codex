@@ -1,6 +1,6 @@
-use super::config_requirements::ConfigRequirementsToml;
-use super::config_requirements::ConfigRequirementsWithSources;
-use super::config_requirements::RequirementSource;
+use super::ConfigRequirementsToml;
+use super::ConfigRequirementsWithSources;
+use super::RequirementSource;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use core_foundation::base::TCFType;

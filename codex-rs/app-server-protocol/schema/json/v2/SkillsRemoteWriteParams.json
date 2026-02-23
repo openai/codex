@@ -3,14 +3,10 @@
   "properties": {
     "hazelnutId": {
       "type": "string"
-    },
-    "isPreload": {
-      "type": "boolean"
     }
   },
   "required": [
-    "hazelnutId",
-    "isPreload"
+    "hazelnutId"
   ],
   "title": "SkillsRemoteWriteParams",
   "type": "object"

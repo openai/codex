@@ -3,7 +3,7 @@ pub use codex_protocol::protocol::SandboxPolicy;
 
 pub fn parse_policy(value: &str) -> Result<SandboxPolicy> {
     match value {
-        "read-only" => Ok(SandboxPolicy::ReadOnly),
+        "read-only" => Ok(SandboxPolicy::new_read_only_policy()),
         "workspace-write" => Ok(SandboxPolicy::new_workspace_write_policy()),
         "danger-full-access" | "external-sandbox" => anyhow::bail!(
             "DangerFullAccess and ExternalSandbox are not supported for sandboxing"
@@ -52,6 +52,9 @@ mod tests {
 
     #[test]
     fn parses_read_only_policy() {
-        assert_eq!(parse_policy("read-only").unwrap(), SandboxPolicy::ReadOnly);
+        assert_eq!(
+            parse_policy("read-only").unwrap(),
+            SandboxPolicy::new_read_only_policy()
+        );
     }
 }
