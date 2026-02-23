@@ -587,6 +587,26 @@ mod tests {
     }
 
     #[test]
+    fn supports_grep_regexp_equals_forms() {
+        assert_parsed(
+            &shlex_split_safe("grep --regexp=TODO -n src"),
+            vec![ParsedCommand::Search {
+                cmd: "grep '--regexp=TODO' -n src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("grep -eTODO -n src"),
+            vec![ParsedCommand::Search {
+                cmd: "grep -eTODO -n src".to_string(),
+                query: Some("TODO".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+    }
+
+    #[test]
     fn supports_egrep_and_fgrep() {
         assert_parsed(
             &shlex_split_safe("egrep -R TODO src"),
@@ -1735,6 +1755,18 @@ fn parse_grep_like(main_cmd: &[String], args: &[String]) -> ParsedCommand {
             after_double_dash = true;
             continue;
         }
+        if let Some(rest) = arg.strip_prefix("--regexp=") {
+            if pattern.is_none() {
+                pattern = Some(rest.to_string());
+            }
+            continue;
+        }
+        if let Some(rest) = arg.strip_prefix("--file=") {
+            if pattern.is_none() {
+                pattern = Some(rest.to_string());
+            }
+            continue;
+        }
         match arg.as_str() {
             "-e" | "--regexp" => {
                 if let Some(pat) = iter.next()
@@ -1758,6 +1790,20 @@ fn parse_grep_like(main_cmd: &[String], args: &[String]) -> ParsedCommand {
                 continue;
             }
             _ => {}
+        }
+        if let Some(rest) = arg.strip_prefix("-e")
+            && !rest.is_empty()
+            && pattern.is_none()
+        {
+            pattern = Some(rest.to_string());
+            continue;
+        }
+        if let Some(rest) = arg.strip_prefix("-f")
+            && !rest.is_empty()
+            && pattern.is_none()
+        {
+            pattern = Some(rest.to_string());
+            continue;
         }
         if arg.starts_with('-') {
             continue;
