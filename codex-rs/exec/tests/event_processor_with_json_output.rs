@@ -666,6 +666,39 @@ fn collab_wait_end_without_begin_synthesizes_failed_item() {
 }
 
 #[test]
+fn collab_wait_end_with_empty_statuses_is_failed() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let sender_thread_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
+
+    let end = event(
+        "c4",
+        EventMsg::CollabWaitingEnd(CollabWaitingEndEvent {
+            sender_thread_id,
+            call_id: "call-12".to_string(),
+            agent_statuses: Vec::new(),
+            statuses: std::collections::HashMap::new(),
+        }),
+    );
+    let events = ep.collect_thread_events(&end);
+    assert_eq!(
+        events,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
+                    tool: CollabTool::Wait,
+                    sender_thread_id: sender_thread_id.to_string(),
+                    receiver_thread_ids: Vec::new(),
+                    prompt: None,
+                    agents_states: std::collections::HashMap::new(),
+                    status: CollabToolCallStatus::Failed,
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
 fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
 

@@ -500,7 +500,7 @@ impl EventProcessorWithJsonOutput {
     }
 
     fn handle_collab_wait_end(&mut self, ev: &CollabWaitingEndEvent) -> Vec<ThreadEvent> {
-        let status = if ev.statuses.values().any(is_collab_failure) {
+        let status = if ev.statuses.is_empty() || ev.statuses.values().any(is_collab_failure) {
             CollabToolCallStatus::Failed
         } else {
             CollabToolCallStatus::Completed
