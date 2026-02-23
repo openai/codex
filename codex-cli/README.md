@@ -527,7 +527,11 @@ Codex CLI **does** support OpenAI organizations with [Zero Data Retention (ZDR)]
 OpenAI rejected the request. Error details: Status: 400, Code: unsupported_parameter, Type: invalid_request_error, Message: 400 Previous response cannot be used for this organization due to Zero Data Retention.
 ```
 
-You may need to upgrade to a more recent version with: `npm i -g @openai/codex@latest`
+You may need to upgrade to a more recent version with one of:
+- `npm i -g @openai/codex@latest`
+- `pnpm add -g @openai/codex@latest`
+- `yarn global add @openai/codex@latest`
+- `bun install -g @openai/codex@latest`
 
 ---
 
