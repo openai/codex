@@ -63,13 +63,14 @@ pub fn sanitize_metric_tag_value(value: &str) -> String {
 }
 
 /// Find all UUIDs in a string.
+#[allow(clippy::unwrap_used)]
 pub fn find_uuids(s: &str) -> Vec<String> {
     static RE: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
         regex_lite::Regex::new(
             r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}",
         )
-        .unwrap()
+        .unwrap() // Unwrap is safe thanks to the tests.
     });
 
     re.find_iter(s).map(|m| m.as_str().to_string()).collect()
