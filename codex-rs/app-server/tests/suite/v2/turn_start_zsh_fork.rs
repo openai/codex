@@ -535,8 +535,16 @@ exec "{}" -df "$@"
             }],
             cwd: Some(workspace.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::OnRequest),
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::ReadOnly {
-                access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
+            sandbox_policy: Some(if cfg!(target_os = "linux") {
+                // The zsh exec-bridge wrapper uses a Unix socket back to the parent
+                // process. Linux restricted sandbox seccomp denies connect(2), so use
+                // full access here; this test is validating zsh approval/decline
+                // behavior, not Linux sandboxing.
+                codex_app_server_protocol::SandboxPolicy::DangerFullAccess
+            } else {
+                codex_app_server_protocol::SandboxPolicy::ReadOnly {
+                    access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
+                }
             }),
             model: Some("mock-model".to_string()),
             effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
