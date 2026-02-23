@@ -96,7 +96,11 @@ try {
     const updateCommand =
       packageManager === "bun"
         ? "bun install -g @openai/codex@latest"
-        : "npm install -g @openai/codex@latest";
+        : packageManager === "pnpm"
+          ? "pnpm add -g @openai/codex@latest"
+          : packageManager === "yarn"
+            ? "yarn global add @openai/codex@latest"
+            : "npm install -g @openai/codex@latest";
     throw new Error(
       `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
     );
@@ -108,7 +112,11 @@ if (!vendorRoot) {
   const updateCommand =
     packageManager === "bun"
       ? "bun install -g @openai/codex@latest"
-      : "npm install -g @openai/codex@latest";
+      : packageManager === "pnpm"
+        ? "pnpm add -g @openai/codex@latest"
+        : packageManager === "yarn"
+          ? "yarn global add @openai/codex@latest"
+          : "npm install -g @openai/codex@latest";
   throw new Error(
     `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
   );
@@ -142,10 +150,22 @@ function detectPackageManager() {
   if (/\bbun\//.test(userAgent)) {
     return "bun";
   }
+  if (/\bpnpm\//.test(userAgent)) {
+    return "pnpm";
+  }
+  if (/\byarn\//.test(userAgent)) {
+    return "yarn";
+  }
 
   const execPath = process.env.npm_execpath || "";
   if (execPath.includes("bun")) {
     return "bun";
+  }
+  if (execPath.includes("pnpm")) {
+    return "pnpm";
+  }
+  if (execPath.includes("yarn")) {
+    return "yarn";
   }
 
   if (
@@ -166,10 +186,15 @@ if (existsSync(pathDir)) {
 const updatedPath = getUpdatedPath(additionalDirs);
 
 const env = { ...process.env, PATH: updatedPath };
+const packageManager = detectPackageManager();
 const packageManagerEnvVar =
-  detectPackageManager() === "bun"
+  packageManager === "bun"
     ? "CODEX_MANAGED_BY_BUN"
-    : "CODEX_MANAGED_BY_NPM";
+    : packageManager === "pnpm"
+      ? "CODEX_MANAGED_BY_PNPM"
+      : packageManager === "yarn"
+        ? "CODEX_MANAGED_BY_YARN"
+        : "CODEX_MANAGED_BY_NPM";
 env[packageManagerEnvVar] = "1";
 
 const child = spawn(binaryPath, process.argv.slice(2), {
