@@ -41,7 +41,7 @@ pub(crate) fn request_user_input_unavailable_message(mode: ModeKind) -> Option<S
 pub(crate) fn request_user_input_tool_description() -> String {
     let allowed_modes = format_allowed_modes();
     format!(
-        "Request user input for one to three short questions and wait for the response. This tool is only available in {allowed_modes}."
+        "Request user input for one to three short questions and wait for the response. Before calling this tool, send a user-facing update that summarizes the available choices and why you need them. This tool is only available in {allowed_modes}."
     )
 }
 
@@ -145,7 +145,7 @@ mod tests {
     fn request_user_input_tool_description_mentions_plan_only() {
         assert_eq!(
             request_user_input_tool_description(),
-            "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.".to_string()
+            "Request user input for one to three short questions and wait for the response. Before calling this tool, send a user-facing update that summarizes the available choices and why you need them. This tool is only available in Plan mode.".to_string()
         );
     }
 }
