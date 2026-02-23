@@ -28,6 +28,10 @@ const TARGET_NUM_CHANNELS: u16 = 1;
 const TARGET_SAMPLES_PER_CHANNEL: u32 = 480;
 #[cfg(not(test))]
 const PLAYBACK_BUFFER_SECONDS: usize = 5;
+#[cfg(not(test))]
+const MAX_AUDIO_FRAME_DECODED_BYTES: usize = 128 * 1024;
+#[cfg(not(test))]
+const MAX_AUDIO_FRAME_ENCODED_BYTES: usize = 192 * 1024;
 
 pub(crate) struct RealtimeAudioController {
     backend: RealtimeAudioBackend,
@@ -277,9 +281,23 @@ impl PlaybackState {
         if frame.num_channels == 0 {
             return Ok(());
         }
+        if frame.data.len() > MAX_AUDIO_FRAME_ENCODED_BYTES {
+            warn!(
+                encoded_len = frame.data.len(),
+                "dropping oversized realtime audio frame before base64 decode"
+            );
+            return Ok(());
+        }
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(frame.data.as_bytes())
             .context("failed to decode realtime audio base64")?;
+        if decoded.len() > MAX_AUDIO_FRAME_DECODED_BYTES {
+            warn!(
+                decoded_len = decoded.len(),
+                "dropping oversized realtime audio frame after base64 decode"
+            );
+            return Ok(());
+        }
         if decoded.len() % 2 != 0 {
             return Err(anyhow::anyhow!(
                 "realtime audio payload has odd byte length"
