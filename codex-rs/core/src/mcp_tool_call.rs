@@ -575,6 +575,12 @@ async fn maybe_request_mcp_tool_approval(
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
+    // codex_apps tools run their own product-grade elicitation/approval flow inside
+    // `call_mcp_tool_with_elicitation`.
+    if server == CODEX_APPS_MCP_SERVER_NAME {
+        return None;
+    }
+
     if approval_mode == AppToolApproval::Approve {
         return None;
     }
