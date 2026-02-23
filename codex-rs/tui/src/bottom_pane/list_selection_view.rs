@@ -1013,6 +1013,28 @@ mod tests {
         }
     }
 
+    struct StyledMarkerRenderable {
+        marker: &'static str,
+        style: Style,
+        height: u16,
+    }
+
+    impl Renderable for StyledMarkerRenderable {
+        fn render(&self, area: Rect, buf: &mut Buffer) {
+            for y in area.y..area.y.saturating_add(area.height) {
+                for x in area.x..area.x.saturating_add(area.width) {
+                    if x < buf.area().width && y < buf.area().height {
+                        buf[(x, y)].set_symbol(self.marker).set_style(self.style);
+                    }
+                }
+            }
+        }
+
+        fn desired_height(&self, _width: u16) -> u16 {
+            self.height
+        }
+    }
+
     fn make_selection_view(subtitle: Option<&str>) -> ListSelectionView {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -1153,11 +1175,38 @@ mod tests {
     }
 
     #[test]
-    fn theme_picker_side_preview_preserves_diff_marker_background() {
+    fn theme_picker_enables_side_content_background_preservation() {
+        let params = crate::theme_picker::build_theme_picker_params(None, None, Some(120));
+        assert!(
+            params.preserve_side_content_bg,
+            "theme picker should preserve side-content backgrounds to keep diff preview styling",
+        );
+    }
+
+    #[test]
+    fn preserve_side_content_bg_keeps_rendered_background_colors() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let params = crate::theme_picker::build_theme_picker_params(None, None, Some(120));
-        let view = ListSelectionView::new(params, tx);
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Debug".to_string()),
+                items: vec![SelectionItem {
+                    name: "Item 1".to_string(),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }],
+                side_content: Box::new(StyledMarkerRenderable {
+                    marker: "+",
+                    style: Style::default().bg(Color::Blue),
+                    height: 1,
+                }),
+                side_content_width: SideContentWidth::Half,
+                side_content_min_width: 10,
+                preserve_side_content_bg: true,
+                ..Default::default()
+            },
+            tx,
+        );
         let area = Rect::new(0, 0, 120, 35);
         let mut buf = Buffer::empty(area);
 
@@ -1169,11 +1218,11 @@ mod tests {
                 let cell = &buf[(x, y)];
                 (cell.symbol() == "+").then(|| cell.style().bg)
             })
-            .expect("expected preview to render at least one '+' diff marker");
-        assert_ne!(
+            .expect("expected side content to render at least one '+' marker");
+        assert_eq!(
             plus_bg,
-            Some(Color::Reset),
-            "expected side preview '+' marker to keep diff background styling"
+            Some(Color::Blue),
+            "expected side-content marker to preserve custom background styling",
         );
     }
 

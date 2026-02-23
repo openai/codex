@@ -10,11 +10,9 @@
 //! **Theme-aware styling:** diff backgrounds adapt to the terminal's
 //! background lightness via [`DiffTheme`].  Dark terminals get muted tints
 //! (`#212922` green, `#3C170F` red); light terminals get GitHub-style pastels
-//! with distinct gutter backgrounds for contrast.  Colors are specified as
-//! `Color::Rgb` constants rather than going through
-//! [`crate::terminal_palette::best_color`], because `best_color` relies on
-//! `supports_color` which can fail to detect true-color capability when
-//! crossterm has already entered the alternate screen.
+//! with distinct gutter backgrounds for contrast. The renderer uses fixed
+//! palettes for truecolor / 256-color / 16-color terminals so add/delete lines
+//! remain visually distinct even when quantizing to limited palettes.
 //!
 //! **Highlighting strategy for `Update` diffs:** the renderer highlights each
 //! hunk as a single concatenated block rather than line-by-line.  This
@@ -52,13 +50,23 @@ const TAB_WIDTH: usize = 4;
 // Light-theme values match GitHub's diff colors for familiarity.  The gutter
 // (line-number column) uses slightly more saturated variants on light
 // backgrounds so the numbers remain readable against the pastel line background.
-const DARK_ADD_LINE_BG: Color = Color::Rgb(33, 41, 34); // #212922
-const DARK_DEL_LINE_BG: Color = Color::Rgb(60, 23, 15); // #3C170F
-const LIGHT_ADD_LINE_BG: Color = Color::Rgb(218, 251, 225); // #dafbe1
-const LIGHT_DEL_LINE_BG: Color = Color::Rgb(255, 235, 233); // #ffebe9
-const LIGHT_ADD_NUM_BG: Color = Color::Rgb(172, 238, 187); // #aceebb
-const LIGHT_DEL_NUM_BG: Color = Color::Rgb(255, 206, 203); // #ffcecb
-const LIGHT_GUTTER_FG: Color = Color::Rgb(31, 35, 40); // #1f2328
+// Truecolor palette.
+const DARK_TC_ADD_LINE_BG_RGB: (u8, u8, u8) = (33, 58, 43); // #213A2B
+const DARK_TC_DEL_LINE_BG_RGB: (u8, u8, u8) = (74, 34, 29); // #4A221D
+const LIGHT_TC_ADD_LINE_BG_RGB: (u8, u8, u8) = (218, 251, 225); // #dafbe1
+const LIGHT_TC_DEL_LINE_BG_RGB: (u8, u8, u8) = (255, 235, 233); // #ffebe9
+const LIGHT_TC_ADD_NUM_BG_RGB: (u8, u8, u8) = (172, 238, 187); // #aceebb
+const LIGHT_TC_DEL_NUM_BG_RGB: (u8, u8, u8) = (255, 206, 203); // #ffcecb
+const LIGHT_TC_GUTTER_FG_RGB: (u8, u8, u8) = (31, 35, 40); // #1f2328
+
+// 256-color palette.
+const DARK_256_ADD_LINE_BG_IDX: u8 = 22;
+const DARK_256_DEL_LINE_BG_IDX: u8 = 52;
+const LIGHT_256_ADD_LINE_BG_IDX: u8 = 194;
+const LIGHT_256_DEL_LINE_BG_IDX: u8 = 224;
+const LIGHT_256_ADD_NUM_BG_IDX: u8 = 157;
+const LIGHT_256_DEL_NUM_BG_IDX: u8 = 217;
+const LIGHT_256_GUTTER_FG_IDX: u8 = 236;
 
 use crate::color::is_light;
 use crate::exec_command::relativize_to_home;
@@ -69,7 +77,11 @@ use crate::render::line_utils::prefix_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
+use crate::terminal_palette::StdoutColorLevel;
 use crate::terminal_palette::default_bg;
+use crate::terminal_palette::indexed_color;
+use crate::terminal_palette::rgb_color;
+use crate::terminal_palette::stdout_color_level;
 use codex_core::git_info::get_git_repo_root;
 use codex_protocol::protocol::FileChange;
 
@@ -96,6 +108,13 @@ pub(crate) enum DiffLineType {
 enum DiffTheme {
     Dark,
     Light,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffColorLevel {
+    TrueColor,
+    Ansi256,
+    Ansi16,
 }
 
 pub struct DiffSummary {
@@ -598,6 +617,28 @@ fn push_wrapped_diff_line_inner_with_theme(
     syntax_spans: Option<&[RtSpan<'static>]>,
     theme: DiffTheme,
 ) -> Vec<RtLine<'static>> {
+    push_wrapped_diff_line_inner_with_theme_and_color_level(
+        line_number,
+        kind,
+        text,
+        width,
+        line_number_width,
+        syntax_spans,
+        theme,
+        diff_color_level(),
+    )
+}
+
+fn push_wrapped_diff_line_inner_with_theme_and_color_level(
+    line_number: usize,
+    kind: DiffLineType,
+    text: &str,
+    width: usize,
+    line_number_width: usize,
+    syntax_spans: Option<&[RtSpan<'static>]>,
+    theme: DiffTheme,
+    color_level: DiffColorLevel,
+) -> Vec<RtLine<'static>> {
     let ln_str = line_number.to_string();
 
     // Reserve a fixed number of spaces (equal to the widest line number plus a
@@ -606,13 +647,21 @@ fn push_wrapped_diff_line_inner_with_theme(
     let prefix_cols = gutter_width + 1;
 
     let (sign_char, sign_style, content_style) = match kind {
-        DiffLineType::Insert => ('+', style_sign_add(theme), style_add(theme)),
-        DiffLineType::Delete => ('-', style_sign_del(theme), style_del(theme)),
+        DiffLineType::Insert => (
+            '+',
+            style_sign_add(theme, color_level),
+            style_add(theme, color_level),
+        ),
+        DiffLineType::Delete => (
+            '-',
+            style_sign_del(theme, color_level),
+            style_del(theme, color_level),
+        ),
         DiffLineType::Context => (' ', style_context(), style_context()),
     };
 
-    let line_bg = style_line_bg(kind, theme);
-    let gutter_style = style_gutter(kind, theme);
+    let line_bg = style_line_bg_for(kind, theme, color_level);
+    let gutter_style = style_gutter_for(kind, theme, color_level);
 
     // When we have syntax spans, compose them with the diff style for a richer
     // view. The sign character keeps the diff color; content gets syntax colors
@@ -786,6 +835,14 @@ fn diff_theme() -> DiffTheme {
     diff_theme_for_bg(default_bg())
 }
 
+fn diff_color_level() -> DiffColorLevel {
+    match stdout_color_level() {
+        StdoutColorLevel::TrueColor => DiffColorLevel::TrueColor,
+        StdoutColorLevel::Ansi256 => DiffColorLevel::Ansi256,
+        StdoutColorLevel::Ansi16 | StdoutColorLevel::Unknown => DiffColorLevel::Ansi16,
+    }
+}
+
 // -- Style helpers ------------------------------------------------------------
 //
 // Each diff line is composed of three visual regions, styled independently:
@@ -809,13 +866,11 @@ fn diff_theme() -> DiffTheme {
 /// Full-width background applied to the `RtLine` itself (not individual spans).
 /// Context lines intentionally leave the background unset so the terminal
 /// default shows through.
-fn style_line_bg(kind: DiffLineType, theme: DiffTheme) -> Style {
-    match (theme, kind) {
-        (DiffTheme::Light, DiffLineType::Insert) => Style::default().bg(LIGHT_ADD_LINE_BG),
-        (DiffTheme::Light, DiffLineType::Delete) => Style::default().bg(LIGHT_DEL_LINE_BG),
-        (DiffTheme::Dark, DiffLineType::Insert) => Style::default().bg(DARK_ADD_LINE_BG),
-        (DiffTheme::Dark, DiffLineType::Delete) => Style::default().bg(DARK_DEL_LINE_BG),
-        (_, DiffLineType::Context) => Style::default(),
+fn style_line_bg_for(kind: DiffLineType, theme: DiffTheme, color_level: DiffColorLevel) -> Style {
+    match kind {
+        DiffLineType::Insert => Style::default().bg(add_line_bg(theme, color_level)),
+        DiffLineType::Delete => Style::default().bg(del_line_bg(theme, color_level)),
+        DiffLineType::Context => Style::default(),
     }
 }
 
@@ -823,52 +878,106 @@ fn style_context() -> Style {
     Style::default()
 }
 
+fn add_line_bg(theme: DiffTheme, color_level: DiffColorLevel) -> Color {
+    match (theme, color_level) {
+        (DiffTheme::Dark, DiffColorLevel::TrueColor) => rgb_color(DARK_TC_ADD_LINE_BG_RGB),
+        (DiffTheme::Dark, DiffColorLevel::Ansi256) => indexed_color(DARK_256_ADD_LINE_BG_IDX),
+        (DiffTheme::Dark, DiffColorLevel::Ansi16) => Color::Green,
+        (DiffTheme::Light, DiffColorLevel::TrueColor) => rgb_color(LIGHT_TC_ADD_LINE_BG_RGB),
+        (DiffTheme::Light, DiffColorLevel::Ansi256) => indexed_color(LIGHT_256_ADD_LINE_BG_IDX),
+        (DiffTheme::Light, DiffColorLevel::Ansi16) => Color::LightGreen,
+    }
+}
+
+fn del_line_bg(theme: DiffTheme, color_level: DiffColorLevel) -> Color {
+    match (theme, color_level) {
+        (DiffTheme::Dark, DiffColorLevel::TrueColor) => rgb_color(DARK_TC_DEL_LINE_BG_RGB),
+        (DiffTheme::Dark, DiffColorLevel::Ansi256) => indexed_color(DARK_256_DEL_LINE_BG_IDX),
+        (DiffTheme::Dark, DiffColorLevel::Ansi16) => Color::Red,
+        (DiffTheme::Light, DiffColorLevel::TrueColor) => rgb_color(LIGHT_TC_DEL_LINE_BG_RGB),
+        (DiffTheme::Light, DiffColorLevel::Ansi256) => indexed_color(LIGHT_256_DEL_LINE_BG_IDX),
+        (DiffTheme::Light, DiffColorLevel::Ansi16) => Color::LightRed,
+    }
+}
+
+fn light_gutter_fg(color_level: DiffColorLevel) -> Color {
+    match color_level {
+        DiffColorLevel::TrueColor => rgb_color(LIGHT_TC_GUTTER_FG_RGB),
+        DiffColorLevel::Ansi256 => indexed_color(LIGHT_256_GUTTER_FG_IDX),
+        DiffColorLevel::Ansi16 => Color::Black,
+    }
+}
+
+fn light_add_num_bg(color_level: DiffColorLevel) -> Color {
+    match color_level {
+        DiffColorLevel::TrueColor => rgb_color(LIGHT_TC_ADD_NUM_BG_RGB),
+        DiffColorLevel::Ansi256 => indexed_color(LIGHT_256_ADD_NUM_BG_IDX),
+        DiffColorLevel::Ansi16 => Color::Green,
+    }
+}
+
+fn light_del_num_bg(color_level: DiffColorLevel) -> Color {
+    match color_level {
+        DiffColorLevel::TrueColor => rgb_color(LIGHT_TC_DEL_NUM_BG_RGB),
+        DiffColorLevel::Ansi256 => indexed_color(LIGHT_256_DEL_NUM_BG_IDX),
+        DiffColorLevel::Ansi16 => Color::Red,
+    }
+}
+
 /// Line-number gutter style.  On light backgrounds the gutter has an opaque
 /// tinted background so numbers contrast against the pastel line fill.  On
 /// dark backgrounds a simple `DIM` modifier is sufficient.
-fn style_gutter(kind: DiffLineType, theme: DiffTheme) -> Style {
+fn style_gutter_for(kind: DiffLineType, theme: DiffTheme, color_level: DiffColorLevel) -> Style {
     match (theme, kind) {
-        (DiffTheme::Light, DiffLineType::Insert) => {
-            Style::default().fg(LIGHT_GUTTER_FG).bg(LIGHT_ADD_NUM_BG)
-        }
-        (DiffTheme::Light, DiffLineType::Delete) => {
-            Style::default().fg(LIGHT_GUTTER_FG).bg(LIGHT_DEL_NUM_BG)
-        }
+        (DiffTheme::Light, DiffLineType::Insert) => Style::default()
+            .fg(light_gutter_fg(color_level))
+            .bg(light_add_num_bg(color_level)),
+        (DiffTheme::Light, DiffLineType::Delete) => Style::default()
+            .fg(light_gutter_fg(color_level))
+            .bg(light_del_num_bg(color_level)),
         _ => style_gutter_dim(),
     }
+}
+
+fn style_gutter(kind: DiffLineType, theme: DiffTheme) -> Style {
+    style_gutter_for(kind, theme, diff_color_level())
 }
 
 /// Sign character (`+`) for insert lines.  On dark terminals it inherits the
 /// full content style (green fg + tinted bg).  On light terminals it uses only
 /// a green foreground and lets the line-level bg show through.
-fn style_sign_add(theme: DiffTheme) -> Style {
+fn style_sign_add(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
     match theme {
         DiffTheme::Light => Style::default().fg(Color::Green),
-        DiffTheme::Dark => style_add(theme),
+        DiffTheme::Dark => style_add(theme, color_level),
     }
 }
 
 /// Sign character (`-`) for delete lines.  Mirror of [`style_sign_add`].
-fn style_sign_del(theme: DiffTheme) -> Style {
+fn style_sign_del(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
     match theme {
         DiffTheme::Light => Style::default().fg(Color::Red),
-        DiffTheme::Dark => style_del(theme),
+        DiffTheme::Dark => style_del(theme, color_level),
     }
 }
 
 /// Content style for insert lines (plain, non-syntax-highlighted text).
-fn style_add(theme: DiffTheme) -> Style {
+fn style_add(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
     match theme {
-        DiffTheme::Light => Style::default().bg(LIGHT_ADD_LINE_BG),
-        DiffTheme::Dark => Style::default().fg(Color::Green).bg(DARK_ADD_LINE_BG),
+        DiffTheme::Light => Style::default().bg(add_line_bg(theme, color_level)),
+        DiffTheme::Dark => Style::default()
+            .fg(Color::Green)
+            .bg(add_line_bg(theme, color_level)),
     }
 }
 
 /// Content style for delete lines (plain, non-syntax-highlighted text).
-fn style_del(theme: DiffTheme) -> Style {
+fn style_del(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
     match theme {
-        DiffTheme::Light => Style::default().bg(LIGHT_DEL_LINE_BG),
-        DiffTheme::Dark => Style::default().fg(Color::Red).bg(DARK_DEL_LINE_BG),
+        DiffTheme::Light => Style::default().bg(del_line_bg(theme, color_level)),
+        DiffTheme::Dark => Style::default()
+            .fg(Color::Red)
+            .bg(del_line_bg(theme, color_level)),
     }
 }
 
@@ -1286,48 +1395,117 @@ mod tests {
     }
 
     #[test]
-    fn dark_theme_preserves_existing_diff_backgrounds() {
+    fn truecolor_dark_theme_uses_configured_backgrounds() {
         assert_eq!(
-            style_line_bg(DiffLineType::Insert, DiffTheme::Dark),
-            Style::default().bg(DARK_ADD_LINE_BG)
+            style_line_bg_for(
+                DiffLineType::Insert,
+                DiffTheme::Dark,
+                DiffColorLevel::TrueColor
+            ),
+            Style::default().bg(rgb_color(DARK_TC_ADD_LINE_BG_RGB))
         );
         assert_eq!(
-            style_line_bg(DiffLineType::Delete, DiffTheme::Dark),
-            Style::default().bg(DARK_DEL_LINE_BG)
+            style_line_bg_for(
+                DiffLineType::Delete,
+                DiffTheme::Dark,
+                DiffColorLevel::TrueColor
+            ),
+            Style::default().bg(rgb_color(DARK_TC_DEL_LINE_BG_RGB))
         );
         assert_eq!(
-            style_gutter(DiffLineType::Insert, DiffTheme::Dark),
+            style_gutter_for(
+                DiffLineType::Insert,
+                DiffTheme::Dark,
+                DiffColorLevel::TrueColor
+            ),
             style_gutter_dim()
         );
         assert_eq!(
-            style_gutter(DiffLineType::Delete, DiffTheme::Dark),
+            style_gutter_for(
+                DiffLineType::Delete,
+                DiffTheme::Dark,
+                DiffColorLevel::TrueColor
+            ),
             style_gutter_dim()
         );
     }
 
     #[test]
-    fn light_theme_uses_readable_gutter_and_line_backgrounds() {
+    fn ansi256_dark_theme_uses_distinct_add_and_delete_backgrounds() {
         assert_eq!(
-            style_line_bg(DiffLineType::Insert, DiffTheme::Light),
-            Style::default().bg(LIGHT_ADD_LINE_BG)
+            style_line_bg_for(
+                DiffLineType::Insert,
+                DiffTheme::Dark,
+                DiffColorLevel::Ansi256
+            ),
+            Style::default().bg(indexed_color(DARK_256_ADD_LINE_BG_IDX))
         );
         assert_eq!(
-            style_line_bg(DiffLineType::Delete, DiffTheme::Light),
-            Style::default().bg(LIGHT_DEL_LINE_BG)
+            style_line_bg_for(
+                DiffLineType::Delete,
+                DiffTheme::Dark,
+                DiffColorLevel::Ansi256
+            ),
+            Style::default().bg(indexed_color(DARK_256_DEL_LINE_BG_IDX))
+        );
+        assert_ne!(
+            style_line_bg_for(
+                DiffLineType::Insert,
+                DiffTheme::Dark,
+                DiffColorLevel::Ansi256
+            ),
+            style_line_bg_for(
+                DiffLineType::Delete,
+                DiffTheme::Dark,
+                DiffColorLevel::Ansi256
+            ),
+            "256-color mode should keep add/delete backgrounds distinct"
+        );
+    }
+
+    #[test]
+    fn light_truecolor_theme_uses_readable_gutter_and_line_backgrounds() {
+        assert_eq!(
+            style_line_bg_for(
+                DiffLineType::Insert,
+                DiffTheme::Light,
+                DiffColorLevel::TrueColor
+            ),
+            Style::default().bg(rgb_color(LIGHT_TC_ADD_LINE_BG_RGB))
         );
         assert_eq!(
-            style_gutter(DiffLineType::Insert, DiffTheme::Light),
-            Style::default().fg(LIGHT_GUTTER_FG).bg(LIGHT_ADD_NUM_BG)
+            style_line_bg_for(
+                DiffLineType::Delete,
+                DiffTheme::Light,
+                DiffColorLevel::TrueColor
+            ),
+            Style::default().bg(rgb_color(LIGHT_TC_DEL_LINE_BG_RGB))
         );
         assert_eq!(
-            style_gutter(DiffLineType::Delete, DiffTheme::Light),
-            Style::default().fg(LIGHT_GUTTER_FG).bg(LIGHT_DEL_NUM_BG)
+            style_gutter_for(
+                DiffLineType::Insert,
+                DiffTheme::Light,
+                DiffColorLevel::TrueColor
+            ),
+            Style::default()
+                .fg(rgb_color(LIGHT_TC_GUTTER_FG_RGB))
+                .bg(rgb_color(LIGHT_TC_ADD_NUM_BG_RGB))
+        );
+        assert_eq!(
+            style_gutter_for(
+                DiffLineType::Delete,
+                DiffTheme::Light,
+                DiffColorLevel::TrueColor
+            ),
+            Style::default()
+                .fg(rgb_color(LIGHT_TC_GUTTER_FG_RGB))
+                .bg(rgb_color(LIGHT_TC_DEL_NUM_BG_RGB))
         );
     }
 
     #[test]
     fn light_theme_wrapped_lines_keep_number_gutter_contrast() {
-        let lines = push_wrapped_diff_line_inner_with_theme(
+        let lines = push_wrapped_diff_line_inner_with_theme_and_color_level(
             12,
             DiffLineType::Insert,
             "abcdefghij",
@@ -1335,6 +1513,7 @@ mod tests {
             line_number_width(12),
             None,
             DiffTheme::Light,
+            DiffColorLevel::TrueColor,
         );
 
         assert!(
@@ -1343,14 +1522,18 @@ mod tests {
         );
         assert_eq!(
             lines[0].spans[0].style,
-            Style::default().fg(LIGHT_GUTTER_FG).bg(LIGHT_ADD_NUM_BG)
+            Style::default()
+                .fg(rgb_color(LIGHT_TC_GUTTER_FG_RGB))
+                .bg(rgb_color(LIGHT_TC_ADD_NUM_BG_RGB))
         );
         assert_eq!(
             lines[1].spans[0].style,
-            Style::default().fg(LIGHT_GUTTER_FG).bg(LIGHT_ADD_NUM_BG)
+            Style::default()
+                .fg(rgb_color(LIGHT_TC_GUTTER_FG_RGB))
+                .bg(rgb_color(LIGHT_TC_ADD_NUM_BG_RGB))
         );
-        assert_eq!(lines[0].style.bg, Some(LIGHT_ADD_LINE_BG));
-        assert_eq!(lines[1].style.bg, Some(LIGHT_ADD_LINE_BG));
+        assert_eq!(lines[0].style.bg, Some(rgb_color(LIGHT_TC_ADD_LINE_BG_RGB)));
+        assert_eq!(lines[1].style.bg, Some(rgb_color(LIGHT_TC_ADD_LINE_BG_RGB)));
     }
 
     #[test]
