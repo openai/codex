@@ -1,6 +1,7 @@
 use crate::exec::ExecToolCallOutput;
 use crate::tools::sandboxing::ToolError;
 use std::path::PathBuf;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -23,27 +24,16 @@ use codex_protocol::approvals::ExecPolicyAmendment;
 #[cfg(unix)]
 use codex_utils_pty::process_group::kill_child_process_group;
 #[cfg(unix)]
-use serde::Deserialize;
-#[cfg(unix)]
-use serde::Serialize;
-#[cfg(unix)]
-use std::io::Read;
-#[cfg(unix)]
-use std::io::Write;
-#[cfg(unix)]
-use std::time::Instant;
 #[cfg(unix)]
 use tokio::io::AsyncReadExt;
-#[cfg(unix)]
-use tokio::net::UnixListener;
-#[cfg(unix)]
-use tokio::net::UnixStream;
 
-pub(crate) const ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR: &str =
-    "CODEX_ZSH_EXEC_BRIDGE_WRAPPER_SOCKET";
-pub(crate) const ZSH_EXEC_WRAPPER_MODE_ENV_VAR: &str = "CODEX_ZSH_EXEC_WRAPPER_MODE";
-#[cfg(unix)]
-pub(crate) const EXEC_WRAPPER_ENV_VAR: &str = "EXEC_WRAPPER";
+use codex_shell_exec_bridge::AsyncSocket;
+use codex_shell_exec_bridge::EXEC_WRAPPER_ENV_VAR;
+use codex_shell_exec_bridge::WrapperExecAction;
+use codex_shell_exec_bridge::WrapperIpcRequest;
+use codex_shell_exec_bridge::WrapperIpcResponse;
+use codex_shell_exec_bridge::ZSH_EXEC_BRIDGE_SOCKET_ENV_VAR;
+use codex_shell_exec_bridge::ZSH_EXEC_WRAPPER_MODE_ENV_VAR;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct ZshExecBridgeSessionState {
@@ -54,37 +44,6 @@ pub(crate) struct ZshExecBridgeSessionState {
 pub(crate) struct ZshExecBridge {
     zsh_path: Option<PathBuf>,
     state: Mutex<ZshExecBridgeSessionState>,
-}
-
-#[cfg(unix)]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum WrapperIpcRequest {
-    ExecRequest {
-        request_id: String,
-        file: String,
-        argv: Vec<String>,
-        cwd: String,
-    },
-}
-
-#[cfg(unix)]
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum WrapperIpcResponse {
-    ExecResponse {
-        request_id: String,
-        action: WrapperExecAction,
-        reason: Option<String>,
-    },
-}
-
-#[cfg(unix)]
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum WrapperExecAction {
-    Run,
-    Deny,
 }
 
 impl ZshExecBridge {
@@ -103,13 +62,6 @@ impl ZshExecBridge {
     pub(crate) async fn shutdown(&self) {
         let mut state = self.state.lock().await;
         state.initialized_session_id = None;
-    }
-
-    pub(crate) fn next_wrapper_socket_path(&self) -> PathBuf {
-        let socket_id = Uuid::new_v4().as_simple().to_string();
-        let temp_dir = std::env::temp_dir();
-        let canonical_temp_dir = temp_dir.canonicalize().unwrap_or(temp_dir);
-        canonical_temp_dir.join(format!("czs-{}.sock", &socket_id[..12]))
     }
 
     #[cfg(not(unix))]
@@ -145,21 +97,13 @@ impl ZshExecBridge {
             return Err(ToolError::Rejected("command args are empty".to_string()));
         }
 
-        let wrapper_socket_path = req
-            .env
-            .get(ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.next_wrapper_socket_path());
-
-        let listener = {
-            let _ = std::fs::remove_file(&wrapper_socket_path);
-            UnixListener::bind(&wrapper_socket_path).map_err(|err| {
-                ToolError::Rejected(format!(
-                    "bind wrapper socket at {}: {err}",
-                    wrapper_socket_path.display()
-                ))
-            })?
-        };
+        let (server_socket, client_socket) = AsyncSocket::pair().map_err(|err| {
+            ToolError::Rejected(format!("failed to create zsh wrapper socket pair: {err}"))
+        })?;
+        client_socket.set_cloexec(false).map_err(|err| {
+            ToolError::Rejected(format!("disable cloexec on wrapper socket: {err}"))
+        })?;
+        let fd = client_socket.as_raw_fd().to_string();
 
         let wrapper_path = std::env::current_exe().map_err(|err| {
             ToolError::Rejected(format!("resolve current executable path: {err}"))
@@ -180,10 +124,7 @@ impl ZshExecBridge {
         cmd.kill_on_drop(true);
         cmd.env_clear();
         cmd.envs(&req.env);
-        cmd.env(
-            ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR,
-            wrapper_socket_path.to_string_lossy().to_string(),
-        );
+        cmd.env(ZSH_EXEC_BRIDGE_SOCKET_ENV_VAR, fd);
         cmd.env(EXEC_WRAPPER_ENV_VAR, &wrapper_path);
         cmd.env(ZSH_EXEC_WRAPPER_MODE_ENV_VAR, "1");
 
@@ -194,6 +135,7 @@ impl ZshExecBridge {
                 zsh_path.display()
             ))
         })?;
+        drop(client_socket);
 
         let (stream_tx, mut stream_rx) =
             tokio::sync::mpsc::unbounded_channel::<(ExecOutputStream, Vec<u8>)>();
@@ -249,7 +191,13 @@ impl ZshExecBridge {
         while child_exit.is_none() || stream_open {
             tokio::select! {
                 result = child.wait(), if child_exit.is_none() => {
-                    child_exit = Some(result.map_err(|err| ToolError::Rejected(format!("wait for zsh fork command exit: {err}")))?);
+                    child_exit = Some(
+                        result.map_err(|err| {
+                            ToolError::Rejected(format!(
+                                "wait for zsh fork command exit: {err}"
+                            ))
+                        })?
+                    );
                 }
                 stream = stream_rx.recv(), if stream_open => {
                     if let Some((output_stream, chunk)) = stream {
@@ -271,12 +219,25 @@ impl ZshExecBridge {
                         stream_open = false;
                     }
                 }
-                accept_result = listener.accept(), if child_exit.is_none() => {
-                    let (stream, _) = accept_result.map_err(|err| {
-                        ToolError::Rejected(format!("failed to accept wrapper request: {err}"))
+                result = server_socket.receive_with_fds::<WrapperIpcRequest>(), if child_exit.is_none() => {
+                    let (request, fds) = result.map_err(|err| {
+                        ToolError::Rejected(format!("failed to receive wrapper request: {err}"))
                     })?;
+                    if !fds.is_empty() {
+                        return Err(ToolError::Rejected(format!(
+                            "unexpected fds in wrapper request: {}",
+                            fds.len()
+                        )));
+                    }
                     if self
-                        .handle_wrapper_request(stream, req.justification.clone(), session, turn, call_id)
+                        .handle_wrapper_request(
+                            request,
+                            req.justification.clone(),
+                            session,
+                            turn,
+                            call_id,
+                            &server_socket,
+                        )
                         .await?
                     {
                         user_rejected = true;
@@ -293,8 +254,6 @@ impl ZshExecBridge {
                 }
             }
         }
-
-        let _ = std::fs::remove_file(&wrapper_socket_path);
 
         let status = child_exit.ok_or_else(|| {
             ToolError::Rejected("zsh fork command did not return exit status".to_string())
@@ -323,21 +282,13 @@ impl ZshExecBridge {
     #[cfg(unix)]
     async fn handle_wrapper_request(
         &self,
-        mut stream: UnixStream,
+        request: WrapperIpcRequest,
         approval_reason: Option<String>,
         session: &crate::codex::Session,
         turn: &crate::codex::TurnContext,
         call_id: &str,
+        socket: &AsyncSocket,
     ) -> Result<bool, ToolError> {
-        let mut request_buf = Vec::new();
-        stream.read_to_end(&mut request_buf).await.map_err(|err| {
-            ToolError::Rejected(format!("read wrapper request from socket: {err}"))
-        })?;
-        let request_line = String::from_utf8(request_buf).map_err(|err| {
-            ToolError::Rejected(format!("decode wrapper request as utf-8: {err}"))
-        })?;
-        let request = parse_wrapper_request_line(request_line.trim())?;
-
         let (request_id, file, argv, cwd) = match request {
             WrapperIpcRequest::ExecRequest {
                 request_id,
@@ -367,35 +318,37 @@ impl ZshExecBridge {
             )
             .await;
 
-        let (action, reason, user_rejected) = match decision {
+        let (action, reason) = match decision {
             ReviewDecision::Approved
             | ReviewDecision::ApprovedForSession
-            | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
-                (WrapperExecAction::Run, None, false)
-            }
+            | ReviewDecision::ApprovedExecpolicyAmendment { .. } => (WrapperExecAction::Run, None),
             ReviewDecision::Denied => (
                 WrapperExecAction::Deny,
                 Some("command denied by host approval policy".to_string()),
-                true,
             ),
             ReviewDecision::Abort => (
                 WrapperExecAction::Deny,
                 Some("command aborted by host approval policy".to_string()),
-                true,
             ),
         };
 
-        write_json_line(
-            &mut stream,
-            &WrapperIpcResponse::ExecResponse {
-                request_id,
-                action,
-                reason,
-            },
-        )
-        .await?;
+        let response = WrapperIpcResponse::ExecResponse {
+            request_id,
+            action,
+            reason,
+        };
+        socket
+            .send(response.clone())
+            .await
+            .map_err(|err| ToolError::Rejected(format!("send wrapper response failed: {err}")))?;
 
-        Ok(user_rejected)
+        Ok(matches!(
+            response,
+            WrapperIpcResponse::ExecResponse {
+                action: WrapperExecAction::Deny,
+                ..
+            }
+        ))
     }
 
     #[cfg(unix)]
@@ -420,138 +373,79 @@ impl ZshExecBridge {
     }
 }
 
-pub fn maybe_run_zsh_exec_wrapper_mode() -> anyhow::Result<bool> {
+pub async fn maybe_run_zsh_exec_wrapper_mode() -> anyhow::Result<bool> {
     if std::env::var_os(ZSH_EXEC_WRAPPER_MODE_ENV_VAR).is_none() {
         return Ok(false);
     }
 
-    run_exec_wrapper_mode()?;
+    run_exec_wrapper_mode().await?;
     Ok(true)
 }
 
-fn run_exec_wrapper_mode() -> anyhow::Result<()> {
-    #[cfg(not(unix))]
-    {
-        anyhow::bail!("zsh exec wrapper mode is only supported on unix");
+#[cfg(unix)]
+async fn run_exec_wrapper_mode() -> anyhow::Result<()> {
+    let raw_fd = std::env::var(ZSH_EXEC_BRIDGE_SOCKET_ENV_VAR)?
+        .parse::<i32>()
+        .context("invalid wrapper socket fd")?;
+    if raw_fd < 0 {
+        anyhow::bail!("wrapper socket fd must be non-negative");
     }
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::net::UnixStream as StdUnixStream;
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 2 {
+        anyhow::bail!("exec wrapper mode requires target executable path");
+    }
+    let file = args[1].clone();
+    let argv = if args.len() > 2 {
+        args[2..].to_vec()
+    } else {
+        vec![file.clone()]
+    };
+    let cwd = std::env::current_dir()?.to_string_lossy().to_string();
 
-        let args: Vec<String> = std::env::args().collect();
-        if args.len() < 2 {
-            anyhow::bail!("exec wrapper mode requires target executable path");
-        }
-        let file = args[1].clone();
-        let argv = if args.len() > 2 {
-            args[2..].to_vec()
+    let socket = {
+        use std::os::fd::FromRawFd;
+        use std::os::fd::OwnedFd;
+        unsafe { AsyncSocket::from_fd(OwnedFd::from_raw_fd(raw_fd))? }
+    };
+    let request_id = Uuid::new_v4().to_string();
+    let request = WrapperIpcRequest::ExecRequest {
+        request_id: request_id.clone(),
+        file: file.clone(),
+        argv,
+        cwd,
+    };
+    socket.send(request).await?;
+    let response = socket.receive::<WrapperIpcResponse>().await?;
+    let (response_request_id, action, reason) = match response {
+        WrapperIpcResponse::ExecResponse {
+            request_id,
+            action,
+            reason,
+        } => (request_id, action, reason),
+    };
+    if response_request_id != request_id {
+        anyhow::bail!(
+            "wrapper response request_id mismatch: expected {request_id}, got {response_request_id}"
+        );
+    }
+
+    if action == WrapperExecAction::Deny {
+        if let Some(reason) = reason {
+            tracing::warn!("execution denied: {reason}");
         } else {
-            vec![file.clone()]
-        };
-        let cwd = std::env::current_dir()
-            .context("resolve wrapper cwd")?
-            .to_string_lossy()
-            .to_string();
-        let socket_path = std::env::var(ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR)
-            .context("missing wrapper socket path env var")?;
-
-        let request_id = Uuid::new_v4().to_string();
-        let request = WrapperIpcRequest::ExecRequest {
-            request_id: request_id.clone(),
-            file: file.clone(),
-            argv: argv.clone(),
-            cwd,
-        };
-        let mut stream = StdUnixStream::connect(&socket_path)
-            .with_context(|| format!("connect to wrapper socket at {socket_path}"))?;
-        let encoded = serde_json::to_string(&request).context("serialize wrapper request")?;
-        stream
-            .write_all(encoded.as_bytes())
-            .context("write wrapper request")?;
-        stream
-            .write_all(b"\n")
-            .context("write wrapper request newline")?;
-        stream
-            .shutdown(std::net::Shutdown::Write)
-            .context("shutdown wrapper write")?;
-
-        let mut response_buf = String::new();
-        stream
-            .read_to_string(&mut response_buf)
-            .context("read wrapper response")?;
-        let response: WrapperIpcResponse =
-            serde_json::from_str(response_buf.trim()).context("parse wrapper response")?;
-
-        let (response_request_id, action, reason) = match response {
-            WrapperIpcResponse::ExecResponse {
-                request_id,
-                action,
-                reason,
-            } => (request_id, action, reason),
-        };
-        if response_request_id != request_id {
-            anyhow::bail!(
-                "wrapper response request_id mismatch: expected {request_id}, got {response_request_id}"
-            );
+            tracing::warn!("execution denied");
         }
-
-        if action == WrapperExecAction::Deny {
-            if let Some(reason) = reason {
-                tracing::warn!("execution denied: {reason}");
-            } else {
-                tracing::warn!("execution denied");
-            }
-            std::process::exit(1);
-        }
-
-        let mut command = std::process::Command::new(&file);
-        if argv.len() > 1 {
-            command.args(&argv[1..]);
-        }
-        command.env_remove(ZSH_EXEC_WRAPPER_MODE_ENV_VAR);
-        command.env_remove(ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR);
-        command.env_remove(EXEC_WRAPPER_ENV_VAR);
-        let status = command.status().context("spawn wrapped executable")?;
-        std::process::exit(status.code().unwrap_or(1));
+        std::process::exit(1);
     }
-}
 
-#[cfg(unix)]
-fn parse_wrapper_request_line(request_line: &str) -> Result<WrapperIpcRequest, ToolError> {
-    serde_json::from_str(request_line)
-        .map_err(|err| ToolError::Rejected(format!("parse wrapper request payload: {err}")))
-}
-
-#[cfg(unix)]
-async fn write_json_line<W: tokio::io::AsyncWrite + Unpin, T: Serialize>(
-    writer: &mut W,
-    message: &T,
-) -> Result<(), ToolError> {
-    let encoded = serde_json::to_string(message)
-        .map_err(|err| ToolError::Rejected(format!("serialize wrapper message: {err}")))?;
-    tokio::io::AsyncWriteExt::write_all(writer, encoded.as_bytes())
-        .await
-        .map_err(|err| ToolError::Rejected(format!("write wrapper message: {err}")))?;
-    tokio::io::AsyncWriteExt::write_all(writer, b"\n")
-        .await
-        .map_err(|err| ToolError::Rejected(format!("write wrapper newline: {err}")))?;
-    tokio::io::AsyncWriteExt::flush(writer)
-        .await
-        .map_err(|err| ToolError::Rejected(format!("flush wrapper message: {err}")))?;
-    Ok(())
-}
-
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_wrapper_request_line_rejects_malformed_json() {
-        let err = parse_wrapper_request_line("this-is-not-json").unwrap_err();
-        let ToolError::Rejected(message) = err else {
-            panic!("expected ToolError::Rejected");
-        };
-        assert!(message.starts_with("parse wrapper request payload:"));
+    let mut command = std::process::Command::new(&file);
+    if args.len() > 2 {
+        command.args(&args[2..]);
     }
+    command.env_remove(ZSH_EXEC_WRAPPER_MODE_ENV_VAR);
+    command.env_remove(ZSH_EXEC_BRIDGE_SOCKET_ENV_VAR);
+    command.env_remove(EXEC_WRAPPER_ENV_VAR);
+    let status = command.status().context("spawn wrapped executable")?;
+    std::process::exit(status.code().unwrap_or(1));
 }

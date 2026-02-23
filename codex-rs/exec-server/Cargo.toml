@@ -24,6 +24,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-core = { workspace = true }
+codex-shell-exec-bridge = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }

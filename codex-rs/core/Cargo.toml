@@ -43,6 +43,7 @@ codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-shell-exec-bridge = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-home-dir = { workspace = true }

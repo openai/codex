@@ -12,21 +12,21 @@ use codex_core::SandboxState;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_shell_exec_bridge::AsyncDatagramSocket;
+use codex_shell_exec_bridge::AsyncSocket;
+use codex_shell_exec_bridge::ESCALATE_SOCKET_ENV_VAR;
+use codex_shell_exec_bridge::EXEC_WRAPPER_ENV_VAR;
+use codex_shell_exec_bridge::EscalateAction;
+use codex_shell_exec_bridge::EscalateRequest;
+use codex_shell_exec_bridge::EscalateResponse;
+use codex_shell_exec_bridge::LEGACY_BASH_EXEC_WRAPPER_ENV_VAR;
+use codex_shell_exec_bridge::SuperExecMessage;
+use codex_shell_exec_bridge::SuperExecResult;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
-use crate::posix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
-use crate::posix::escalate_protocol::EXEC_WRAPPER_ENV_VAR;
-use crate::posix::escalate_protocol::EscalateAction;
-use crate::posix::escalate_protocol::EscalateRequest;
-use crate::posix::escalate_protocol::EscalateResponse;
-use crate::posix::escalate_protocol::LEGACY_BASH_EXEC_WRAPPER_ENV_VAR;
-use crate::posix::escalate_protocol::SuperExecMessage;
-use crate::posix::escalate_protocol::SuperExecResult;
 use crate::posix::escalation_policy::EscalationPolicy;
 use crate::posix::mcp::ExecParams;
-use crate::posix::socket::AsyncDatagramSocket;
-use crate::posix::socket::AsyncSocket;
 use codex_core::exec::ExecExpiration;
 
 pub(crate) struct EscalateServer {

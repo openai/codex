@@ -21,6 +21,7 @@ members = [
     "core",
     "hooks",
     "secrets",
+    "shell-exec-bridge",
     "exec",
     "exec-server",
     "execpolicy",
@@ -113,6 +114,7 @@ codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
+codex-shell-exec-bridge = { path = "shell-exec-bridge" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }

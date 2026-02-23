@@ -73,14 +73,20 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{self};
 
 use crate::posix::mcp_escalation_policy::ExecPolicyOutcome;
+use codex_shell_exec_bridge::ESCALATE_SOCKET_ENV_VAR;
+use codex_shell_exec_bridge::EXEC_WRAPPER_ENV_VAR;
+use codex_shell_exec_bridge::EscalateAction;
+use codex_shell_exec_bridge::EscalateRequest;
+use codex_shell_exec_bridge::EscalateResponse;
+use codex_shell_exec_bridge::LEGACY_BASH_EXEC_WRAPPER_ENV_VAR;
+use codex_shell_exec_bridge::SuperExecMessage;
+use codex_shell_exec_bridge::SuperExecResult;
 
 mod escalate_client;
-mod escalate_protocol;
 mod escalate_server;
 mod escalation_policy;
 mod mcp;
 mod mcp_escalation_policy;
-mod socket;
 mod stopwatch;
 
 pub use mcp::ExecResult;

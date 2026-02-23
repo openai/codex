@@ -4,17 +4,16 @@ use std::os::fd::FromRawFd as _;
 use std::os::fd::OwnedFd;
 
 use anyhow::Context as _;
-
-use crate::posix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
-use crate::posix::escalate_protocol::EXEC_WRAPPER_ENV_VAR;
-use crate::posix::escalate_protocol::EscalateAction;
-use crate::posix::escalate_protocol::EscalateRequest;
-use crate::posix::escalate_protocol::EscalateResponse;
-use crate::posix::escalate_protocol::LEGACY_BASH_EXEC_WRAPPER_ENV_VAR;
-use crate::posix::escalate_protocol::SuperExecMessage;
-use crate::posix::escalate_protocol::SuperExecResult;
-use crate::posix::socket::AsyncDatagramSocket;
-use crate::posix::socket::AsyncSocket;
+use codex_shell_exec_bridge::AsyncDatagramSocket;
+use codex_shell_exec_bridge::AsyncSocket;
+use codex_shell_exec_bridge::ESCALATE_SOCKET_ENV_VAR;
+use codex_shell_exec_bridge::EXEC_WRAPPER_ENV_VAR;
+use codex_shell_exec_bridge::EscalateAction;
+use codex_shell_exec_bridge::EscalateRequest;
+use codex_shell_exec_bridge::EscalateResponse;
+use codex_shell_exec_bridge::LEGACY_BASH_EXEC_WRAPPER_ENV_VAR;
+use codex_shell_exec_bridge::SuperExecMessage;
+use codex_shell_exec_bridge::SuperExecResult;
 
 fn get_escalate_client() -> anyhow::Result<AsyncDatagramSocket> {
     // TODO: we should defensively require only calling this once, since AsyncSocket will take ownership of the fd.

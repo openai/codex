@@ -546,7 +546,7 @@ fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         // Run wrapper mode only after arg0 dispatch so `codex-linux-sandbox`
         // invocations don't get misclassified as zsh exec-wrapper calls.
-        if codex_core::maybe_run_zsh_exec_wrapper_mode()? {
+        if codex_core::maybe_run_zsh_exec_wrapper_mode().await? {
             return Ok(());
         }
         cli_main(codex_linux_sandbox_exe).await?;

@@ -1653,6 +1653,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-secrets",
  "codex-shell-command",
+ "codex-shell-exec-bridge",
  "codex-skills",
  "codex-state",
  "codex-utils-absolute-path",
@@ -1786,6 +1787,7 @@ dependencies = [
  "codex-execpolicy",
  "codex-protocol",
  "codex-shell-command",
+ "codex-shell-exec-bridge",
  "codex-utils-cargo-bin",
  "core_test_support",
  "exec_server_test_support",
@@ -2199,6 +2201,21 @@ dependencies = [
  "tree-sitter-bash",
  "url",
  "which",
+]
+
+[[package]]
+name = "codex-shell-exec-bridge"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "socket2 0.6.2",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
