@@ -4508,6 +4508,32 @@ async fn slash_realtime_toggle_sends_start_then_close_ops() {
 }
 
 #[tokio::test]
+async fn disabling_realtime_feature_closes_active_session() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::RealtimeConversation, true);
+
+    chat.dispatch_command(SlashCommand::Realtime);
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::RealtimeConversationStart(
+            ConversationStartParams { .. }
+        ))
+    );
+    assert_eq!(
+        chat.realtime_conversation_state,
+        RealtimeConversationUiState::Working
+    );
+
+    chat.set_feature_enabled(Feature::RealtimeConversation, false);
+
+    assert_eq!(
+        chat.realtime_conversation_state,
+        RealtimeConversationUiState::Stopped
+    );
+    assert_matches!(op_rx.try_recv(), Ok(Op::RealtimeConversationClose));
+}
+
+#[tokio::test]
 async fn realtime_events_update_lifecycle_state() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::RealtimeConversation, true);

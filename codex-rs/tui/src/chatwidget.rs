@@ -6489,6 +6489,9 @@ impl ChatWidget {
         if feature == Feature::RealtimeConversation {
             self.sync_realtime_command_enabled();
             if !enabled {
+                if self.realtime_conversation_state != RealtimeConversationUiState::Stopped {
+                    self.submit_op(Op::RealtimeConversationClose);
+                }
                 if let Some(a) = self.realtime_audio_controller.take() {
                     RealtimeAudioController::shutdown(a)
                 }
