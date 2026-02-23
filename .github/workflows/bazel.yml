@@ -107,6 +107,45 @@ jobs:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
+          set -o pipefail
+
+          bazel_console_log="$(mktemp)"
+
+          print_failed_bazel_test_logs() {
+            local console_log="$1"
+            local testlogs_dir
+
+            testlogs_dir="$(bazel $BAZEL_STARTUP_ARGS info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
+
+            local failed_targets=()
+            while IFS= read -r target; do
+              failed_targets+=("$target")
+            done < <(
+              grep -E '^FAIL: //' "$console_log" \
+                | sed -E 's#^FAIL: (//[^ ]+).*#\1#' \
+                | sort -u
+            )
+
+            if [[ ${#failed_targets[@]} -eq 0 ]]; then
+              echo "No failed Bazel test targets were found in console output."
+              return
+            fi
+
+            for target in "${failed_targets[@]}"; do
+              local rel_path="${target#//}"
+              rel_path="${rel_path/:/\/}"
+              local test_log="${testlogs_dir}/${rel_path}/test.log"
+
+              echo "::group::Bazel test log tail for ${target}"
+              if [[ -f "$test_log" ]]; then
+                tail -n 200 "$test_log"
+              else
+                echo "Missing test log: $test_log"
+              fi
+              echo "::endgroup::"
+            done
+          }
+
           bazel_args=(
             test
             //...
@@ -119,10 +158,19 @@ jobs:
 
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
             echo "BuildBuddy API key is available; using remote Bazel configuration."
+            # Work around Bazel 9 remote repo contents cache / overlay materialization failures
+            # seen in CI (for example "is not a symlink" or permission errors while
+            # materializing external repos such as rules_perl). We still use BuildBuddy for
+            # remote execution/cache; this only disables the startup-level repo contents cache.
+            set +e
             bazel $BAZEL_STARTUP_ARGS \
+              --noexperimental_remote_repo_contents_cache \
               --bazelrc=.github/workflows/ci.bazelrc \
               "${bazel_args[@]}" \
-              "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY"
+              "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" \
+              2>&1 | tee "$bazel_console_log"
+            bazel_status=${PIPESTATUS[0]}
+            set -e
           else
             echo "BuildBuddy API key is not available; using local Bazel configuration."
             # Keep fork/community PRs on Bazel but disable remote services that are
@@ -141,9 +189,18 @@ jobs:
             #   clear remote cache/execution endpoints configured in .bazelrc.
             #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
             #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
+            set +e
             bazel $BAZEL_STARTUP_ARGS \
               --noexperimental_remote_repo_contents_cache \
               "${bazel_args[@]}" \
               --remote_cache= \
-              --remote_executor=
+              --remote_executor= \
+              2>&1 | tee "$bazel_console_log"
+            bazel_status=${PIPESTATUS[0]}
+            set -e
+          fi
+
+          if [[ ${bazel_status:-0} -ne 0 ]]; then
+            print_failed_bazel_test_logs "$bazel_console_log"
+            exit "$bazel_status"
           fi

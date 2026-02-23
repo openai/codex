@@ -8,7 +8,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug)]
-pub(crate) struct Stopwatch {
+pub struct Stopwatch {
     limit: Duration,
     inner: Arc<Mutex<StopwatchState>>,
     notify: Arc<Notify>,
@@ -22,7 +22,7 @@ struct StopwatchState {
 }
 
 impl Stopwatch {
-    pub(crate) fn new(limit: Duration) -> Self {
+    pub fn new(limit: Duration) -> Self {
         Self {
             inner: Arc::new(Mutex::new(StopwatchState {
                 elapsed: Duration::ZERO,
@@ -34,7 +34,7 @@ impl Stopwatch {
         }
     }
 
-    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+    pub fn cancellation_token(&self) -> CancellationToken {
         let limit = self.limit;
         let token = CancellationToken::new();
         let cancel = token.clone();
@@ -80,7 +80,7 @@ impl Stopwatch {
     /// resumes automatically when the future completes. Nested/overlapping
     /// calls are reference-counted so the stopwatch only resumes when every
     /// pause is lifted.
-    pub(crate) async fn pause_for<F, T>(&self, fut: F) -> T
+    pub async fn pause_for<F, T>(&self, fut: F) -> T
     where
         F: Future<Output = T>,
     {

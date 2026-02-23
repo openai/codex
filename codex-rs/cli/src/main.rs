@@ -543,10 +543,12 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
-    if codex_core::maybe_run_zsh_exec_wrapper_mode()? {
-        return Ok(());
-    }
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
+        // Run wrapper mode only after arg0 dispatch so `codex-linux-sandbox`
+        // invocations don't get misclassified as zsh exec-wrapper calls.
+        if codex_core::maybe_run_zsh_exec_wrapper_mode()? {
+            return Ok(());
+        }
         cli_main(codex_linux_sandbox_exe).await?;
         Ok(())
     })
@@ -1108,6 +1110,34 @@ mod tests {
         assert!(args.last);
         assert_eq!(args.session_id, None);
         assert_eq!(args.prompt.as_deref(), Some("2+2"));
+    }
+
+    #[test]
+    fn exec_resume_accepts_output_last_message_flag_after_subcommand() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "exec",
+            "resume",
+            "session-123",
+            "-o",
+            "/tmp/resume-output.md",
+            "re-review",
+        ])
+        .expect("parse should succeed");
+
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+        let Some(codex_exec::Command::Resume(args)) = exec.command else {
+            panic!("expected exec resume");
+        };
+
+        assert_eq!(
+            exec.last_message_file,
+            Some(std::path::PathBuf::from("/tmp/resume-output.md"))
+        );
+        assert_eq!(args.session_id.as_deref(), Some("session-123"));
+        assert_eq!(args.prompt.as_deref(), Some("re-review"));
     }
 
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {
