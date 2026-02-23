@@ -187,16 +187,16 @@ Rules:
                     }
                 ),
                 (
-                    "monitor".to_string(),
+                    "awaiter".to_string(),
                     AgentRoleConfig {
-                        description: Some(r#"Use a `monitor` agent EVERY TIME you must run a command that might take some time.
+                        description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that might take some time.
 This includes, but not only:
 * testing
 * monitoring of a long running process
 * explicit ask to wait for something
 
-When YOU wait for the `monitor` agent to be done, use the largest possible timeout."#.to_string()),
-                        config_file: Some("monitor.toml".to_string().parse().unwrap_or_default()),
+When YOU wait for the `awaiter` agent to be done, use the largest possible timeout."#.to_string()),
+                        config_file: Some("awaiter.toml".to_string().parse().unwrap_or_default()),
                     }
                 )
             ])
@@ -207,10 +207,10 @@ When YOU wait for the `monitor` agent to be done, use the largest possible timeo
     /// Resolves a built-in role `config_file` path to embedded content.
     pub(super) fn config_file_contents(path: &Path) -> Option<&'static str> {
         const EXPLORER: &str = include_str!("builtins/explorer.toml");
-        const MONITOR: &str = include_str!("builtins/monitor.toml");
+        const AWAITER: &str = include_str!("builtins/awaiter.toml");
         match path.to_str()? {
             "explorer.toml" => Some(EXPLORER),
-            "monitor.toml" => Some(MONITOR),
+            "awaiter.toml" => Some(AWAITER),
             _ => None,
         }
     }
