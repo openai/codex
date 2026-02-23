@@ -555,43 +555,41 @@ sqlite = true
     )?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;
-    // Wait for the DB to be ready.
-    timeout(DEFAULT_READ_TIMEOUT, async {
+    // SQLite-backed search filtering can race initial backfill. Retry until the
+    // sqlite path is active (or timeout) instead of asserting on the first reply.
+    let ids = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
-            if codex_core::state_db::open_if_present(codex_home.path(), "mock_provider")
-                .await
-                .is_some()
-            {
-                break;
+            let request_id = mcp
+                .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                    cursor: None,
+                    limit: Some(10),
+                    sort_key: None,
+                    model_providers: Some(vec!["mock_provider".to_string()]),
+                    source_kinds: None,
+                    archived: None,
+                    cwd: None,
+                    search_term: Some("needle".to_string()),
+                })
+                .await?;
+            let resp: JSONRPCResponse = mcp
+                .read_stream_until_response_message(RequestId::Integer(request_id))
+                .await?;
+            let ThreadListResponse {
+                data, next_cursor, ..
+            } = to_response::<ThreadListResponse>(resp)?;
+
+            if next_cursor.is_none() {
+                let ids: Vec<String> = data.into_iter().map(|thread| thread.id).collect();
+                if ids == vec![newer_match.clone(), older_match.clone()] {
+                    break Ok::<Vec<String>, anyhow::Error>(ids);
+                }
             }
+
             sleep(std::time::Duration::from_millis(25)).await;
         }
     })
-    .await?;
-    let request_id = mcp
-        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
-            cursor: None,
-            limit: Some(10),
-            sort_key: None,
-            model_providers: Some(vec!["mock_provider".to_string()]),
-            source_kinds: None,
-            archived: None,
-            cwd: None,
-            search_term: Some("needle".to_string()),
-        })
-        .await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
     .await??;
-    let ThreadListResponse {
-        data, next_cursor, ..
-    } = to_response::<ThreadListResponse>(resp)?;
-
-    assert_eq!(next_cursor, None);
-    let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
-    assert_eq!(ids, vec![newer_match.as_str(), older_match.as_str()]);
+    assert_eq!(ids, vec![newer_match, older_match]);
 
     Ok(())
 }
