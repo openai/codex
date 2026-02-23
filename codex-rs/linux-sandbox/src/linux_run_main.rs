@@ -90,10 +90,8 @@ pub fn run_main() -> ! {
     }
     ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_bwrap_sandbox);
 
-    let disable_nested_managed_proxy = should_disable_managed_proxy_for_nested_bwrap(
-        allow_network_for_proxy,
-        apply_seccomp_then_exec,
-    );
+    let disable_nested_managed_proxy =
+        allow_network_for_proxy && !apply_seccomp_then_exec && has_bwrap_ancestor();
     if disable_nested_managed_proxy {
         eprintln!(
             "codex-linux-sandbox: nested Codex bubblewrap sandbox detected; \
@@ -189,25 +187,6 @@ fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_bwrap_san
     if apply_seccomp_then_exec && !use_bwrap_sandbox {
         panic!("--apply-seccomp-then-exec requires --use-bwrap-sandbox");
     }
-}
-
-fn should_disable_managed_proxy_for_nested_bwrap(
-    allow_network_for_proxy: bool,
-    apply_seccomp_then_exec: bool,
-) -> bool {
-    should_disable_managed_proxy_for_nested_bwrap_with_ancestor_bwrap(
-        allow_network_for_proxy,
-        apply_seccomp_then_exec,
-        has_bwrap_ancestor(),
-    )
-}
-
-fn should_disable_managed_proxy_for_nested_bwrap_with_ancestor_bwrap(
-    allow_network_for_proxy: bool,
-    apply_seccomp_then_exec: bool,
-    has_bwrap_ancestor: bool,
-) -> bool {
-    allow_network_for_proxy && !apply_seccomp_then_exec && has_bwrap_ancestor
 }
 
 fn has_bwrap_ancestor() -> bool {
