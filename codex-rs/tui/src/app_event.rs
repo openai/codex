@@ -60,8 +60,8 @@ pub(crate) enum AppEvent {
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
-    /// Fork the current session into a new thread.
-    ForkCurrentSession,
+    /// Open the turn picker for forking the current session into a new thread.
+    OpenForkTurnPicker,
 
     /// Request to exit the application.
     ///

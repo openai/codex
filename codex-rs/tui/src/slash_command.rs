@@ -69,7 +69,7 @@ impl SlashCommand {
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Clear => "clear the terminal screen and scrollback",
-            SlashCommand::Fork => "fork the current chat",
+            SlashCommand::Fork => "fork the current chat from a previous turn",
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",

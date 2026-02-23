@@ -75,6 +75,7 @@ mod exec_cell;
 mod exec_command;
 mod external_editor;
 mod file_search;
+mod fork_turn_picker;
 mod frames;
 mod get_git_diff;
 mod history_cell;

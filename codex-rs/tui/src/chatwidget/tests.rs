@@ -4582,12 +4582,12 @@ async fn slash_resume_opens_picker() {
 }
 
 #[tokio::test]
-async fn slash_fork_requests_current_fork() {
+async fn slash_fork_opens_turn_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.dispatch_command(SlashCommand::Fork);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenForkTurnPicker));
 }
 
 #[tokio::test]
