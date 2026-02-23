@@ -23,6 +23,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::exec_cell::spinner;
 use crate::key_hint;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
 use crate::text_formatting::capitalize_first;
@@ -253,7 +254,10 @@ impl Renderable for StatusIndicatorWidget {
         }
 
         let mut lines = Vec::new();
-        lines.push(Line::from(spans));
+        lines.push(truncate_line_with_ellipsis_if_overflow(
+            Line::from(spans),
+            usize::from(area.width),
+        ));
         if area.height > 1 {
             // If there is enough space, add the details lines below the header.
             let details = self.wrapped_details_lines(area.width);
