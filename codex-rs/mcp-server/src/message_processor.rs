@@ -2,10 +2,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_core::AuthManager;
+use codex_core::NewThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
+use codex_core::find_thread_path_by_id_str;
+use codex_core::read_session_meta_line;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
@@ -38,6 +42,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     initialized: bool,
+    codex_home: PathBuf,
     codex_linux_sandbox_exe: Option<PathBuf>,
     thread_manager: Arc<ThreadManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
@@ -66,6 +71,7 @@ impl MessageProcessor {
         Self {
             outgoing,
             initialized: false,
+            codex_home: config.codex_home.clone(),
             codex_linux_sandbox_exe,
             thread_manager,
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
@@ -482,17 +488,28 @@ impl MessageProcessor {
         let outgoing = self.outgoing.clone();
         let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
 
-        let codex = match self.thread_manager.get_thread(thread_id).await {
-            Ok(c) => c,
+        let (effective_thread_id, codex) = match self.thread_manager.get_thread(thread_id).await {
+            Ok(c) => (thread_id, c),
             Err(_) => {
-                tracing::warn!("Session not found for thread_id: {thread_id}");
-                let result = crate::codex_tool_runner::create_call_tool_result_with_thread_id(
-                    thread_id,
-                    format!("Session not found for thread_id: {thread_id}"),
-                    Some(true),
+                tracing::info!(
+                    "Thread {thread_id} not in memory, attempting disk rehydration"
                 );
-                outgoing.send_response(request_id, result).await;
-                return;
+                match self.try_rehydrate_from_disk(thread_id).await {
+                    Ok(new_thread) => (new_thread.thread_id, new_thread.thread),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Rehydration failed for thread_id {thread_id}: {e}"
+                        );
+                        let result =
+                            crate::codex_tool_runner::create_call_tool_result_with_thread_id(
+                                thread_id,
+                                format!("Session not found for thread_id: {thread_id}"),
+                                Some(true),
+                            );
+                        outgoing.send_response(request_id, result).await;
+                        return;
+                    }
+                }
             }
         };
 
@@ -504,7 +521,7 @@ impl MessageProcessor {
 
             async move {
                 crate::codex_tool_runner::run_codex_tool_session_reply(
-                    thread_id,
+                    effective_thread_id,
                     codex,
                     outgoing,
                     request_id,
@@ -535,6 +552,50 @@ impl MessageProcessor {
                 ),
             )
             .await;
+    }
+
+    /// Attempt to rehydrate a thread from its on-disk JSONL rollout transcript.
+    ///
+    /// When the MCP server restarts, in-memory sessions are lost. This method
+    /// locates the persisted rollout file for the given `thread_id`, reads its
+    /// conversation history, and resumes it as a new thread. The caller receives
+    /// a [`NewThread`] with a fresh `thread_id` that the client can use for
+    /// subsequent `codex-reply` calls.
+    async fn try_rehydrate_from_disk(
+        &self,
+        thread_id: ThreadId,
+    ) -> std::io::Result<NewThread> {
+        // 1. Locate the JSONL rollout file on disk.
+        let path = find_thread_path_by_id_str(&self.codex_home, &thread_id.to_string())
+            .await?
+            .ok_or_else(|| {
+                std::io::Error::other(format!(
+                    "no rollout file found for thread_id: {thread_id}"
+                ))
+            })?;
+
+        // 2. Read session metadata to recover the original working directory.
+        let session_meta = read_session_meta_line(&path).await?;
+        let cwd = session_meta.meta.cwd;
+
+        // 3. Build a Config using the original cwd.
+        let overrides = ConfigOverrides {
+            cwd: Some(cwd),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            ..Default::default()
+        };
+        let config = Config::load_with_cli_overrides_and_harness_overrides(
+            Vec::new(),
+            overrides,
+        )
+        .await?;
+
+        // 4. Resume the thread with its full conversation history.
+        let auth_manager = self.thread_manager.auth_manager();
+        self.thread_manager
+            .resume_thread_from_rollout(config, path, auth_manager)
+            .await
+            .map_err(|e| std::io::Error::other(format!("failed to resume thread: {e}")))
     }
 
     // ---------------------------------------------------------------------

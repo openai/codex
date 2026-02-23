@@ -222,6 +222,10 @@ impl ThreadManager {
         self.state.session_source.clone()
     }
 
+    pub fn auth_manager(&self) -> Arc<AuthManager> {
+        Arc::clone(&self.state.auth_manager)
+    }
+
     pub fn skills_manager(&self) -> Arc<SkillsManager> {
         self.state.skills_manager.clone()
     }
