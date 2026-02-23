@@ -2484,6 +2484,7 @@ name = "codex-utils-string"
 version = "0.0.0"
 dependencies = [
  "pretty_assertions",
+ "regex-lite",
 ]
 
 [[package]]

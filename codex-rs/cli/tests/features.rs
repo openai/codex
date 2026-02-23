@@ -49,10 +49,12 @@ async fn features_enable_under_development_feature_prints_warning() -> Result<()
     let codex_home = TempDir::new()?;
 
     let mut cmd = codex_command(codex_home.path())?;
-    cmd.args(["features", "enable", "sqlite"])
+    cmd.args(["features", "enable", "runtime_metrics"])
         .assert()
         .success()
-        .stderr(contains("Under-development features enabled: sqlite."));
+        .stderr(contains(
+            "Under-development features enabled: runtime_metrics.",
+        ));
 
     Ok(())
 }
