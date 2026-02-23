@@ -549,10 +549,16 @@ impl BottomPane {
     /// Update the status indicator header (defaults to "Working") and details below it.
     ///
     /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
-    pub(crate) fn update_status(&mut self, header: String, details: Option<String>) {
+    pub(crate) fn update_status(
+        &mut self,
+        header: String,
+        details: Option<String>,
+        details_capitalize: bool,
+        details_max_lines: usize,
+    ) {
         if let Some(status) = self.status.as_mut() {
             status.update_header(header);
-            status.update_details(details);
+            status.update_details(details, details_capitalize, details_max_lines.max(1));
             self.request_redraw();
         }
     }
@@ -982,6 +988,7 @@ impl Renderable for BottomPane {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
@@ -1275,6 +1282,8 @@ mod tests {
         pane.update_status(
             "Working".to_string(),
             Some("First detail line\nSecond detail line".to_string()),
+            true,
+            STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
         pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
 
