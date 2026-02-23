@@ -6,8 +6,8 @@ import type { ThreadId } from "./ThreadId";
 
 export type ExecCommandApprovalParams = { conversationId: ThreadId, 
 /**
- * Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent]
- * and [codex_core::protocol::ExecCommandEndEvent].
+ * Use to correlate this with [codex_protocol::protocol::ExecCommandBeginEvent]
+ * and [codex_protocol::protocol::ExecCommandEndEvent].
  */
 callId: string, 
 /**

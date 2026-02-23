@@ -18,11 +18,14 @@ workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 clap = { workspace = true, features = ["derive"] }
 codex-core = { workspace = true }
+codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 landlock = { workspace = true }
 libc = { workspace = true }
 seccompiler = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+url = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 pretty_assertions = { workspace = true }

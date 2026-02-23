@@ -17,6 +17,8 @@ members = [
     "cli",
     "config",
     "shell-command",
+    "shell-escalation",
+    "skills",
     "core",
     "hooks",
     "secrets",
@@ -112,6 +114,8 @@ codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
+codex-shell-escalation = { path = "shell-escalation" }
+codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
@@ -186,7 +190,7 @@ itertools = "0.14.0"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
 lazy_static = "1"
-libc = "0.2.177"
+libc = "0.2.182"
 log = "0.4"
 lru = "0.16.3"
 maplit = "1.0.2"
@@ -202,7 +206,7 @@ opentelemetry-otlp = "0.31.0"
 opentelemetry-semantic-conventions = "0.31.0"
 opentelemetry_sdk = "0.31.0"
 os_info = "3.12.0"
-owo-colors = "4.2.0"
+owo-colors = "4.3.0"
 path-absolutize = "3.1.1"
 pathdiff = "0.2"
 portable-pty = "0.9.0"
@@ -274,7 +278,7 @@ tracing-subscriber = "0.3.22"
 tracing-test = "0.2.5"
 tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
-tree-sitter-highlight = "0.25.10"
+syntect = "5"
 ts-rs = "11"
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uds_windows = "1.1.0"

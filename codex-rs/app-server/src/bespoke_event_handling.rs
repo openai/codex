@@ -76,28 +76,28 @@ use codex_app_server_protocol::convert_patch_changes;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::find_thread_name_by_id;
-use codex_core::parse_command::shlex_join;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::CodexErrorInfo as CoreCodexErrorInfo;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::McpToolCallBeginEvent;
-use codex_core::protocol::McpToolCallEndEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
-use codex_core::protocol::TokenCountEvent;
-use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::McpToolCallBeginEvent;
+use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
+use codex_shell_command::parse_command::shlex_join;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::path::Path;
@@ -1942,7 +1942,7 @@ async fn on_command_execution_request_approval_response(
 }
 
 fn collab_resume_begin_item(
-    begin_event: codex_core::protocol::CollabResumeBeginEvent,
+    begin_event: codex_protocol::protocol::CollabResumeBeginEvent,
 ) -> ThreadItem {
     ThreadItem::CollabAgentToolCall {
         id: begin_event.call_id,
@@ -1955,7 +1955,7 @@ fn collab_resume_begin_item(
     }
 }
 
-fn collab_resume_end_item(end_event: codex_core::protocol::CollabResumeEndEvent) -> ThreadItem {
+fn collab_resume_end_item(end_event: codex_protocol::protocol::CollabResumeEndEvent) -> ThreadItem {
     let status = match &end_event.status {
         codex_protocol::protocol::AgentStatus::Errored(_)
         | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
@@ -2060,17 +2060,17 @@ mod tests {
     use anyhow::anyhow;
     use anyhow::bail;
     use codex_app_server_protocol::TurnPlanStepStatus;
-    use codex_core::protocol::CollabResumeBeginEvent;
-    use codex_core::protocol::CollabResumeEndEvent;
-    use codex_core::protocol::CreditsSnapshot;
-    use codex_core::protocol::McpInvocation;
-    use codex_core::protocol::RateLimitSnapshot;
-    use codex_core::protocol::RateLimitWindow;
-    use codex_core::protocol::TokenUsage;
-    use codex_core::protocol::TokenUsageInfo;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
+    use codex_protocol::protocol::CollabResumeBeginEvent;
+    use codex_protocol::protocol::CollabResumeEndEvent;
+    use codex_protocol::protocol::CreditsSnapshot;
+    use codex_protocol::protocol::McpInvocation;
+    use codex_protocol::protocol::RateLimitSnapshot;
+    use codex_protocol::protocol::RateLimitWindow;
+    use codex_protocol::protocol::TokenUsage;
+    use codex_protocol::protocol::TokenUsageInfo;
     use pretty_assertions::assert_eq;
     use rmcp::model::Content;
     use serde_json::Value as JsonValue;

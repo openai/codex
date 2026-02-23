@@ -637,9 +637,9 @@ async fn maybe_request_mcp_tool_approval(
 }
 
 fn is_full_access_mode(turn_context: &TurnContext) -> bool {
-    matches!(turn_context.approval_policy, AskForApproval::Never)
+    matches!(turn_context.approval_policy.value(), AskForApproval::Never)
         && matches!(
-            turn_context.sandbox_policy,
+            turn_context.sandbox_policy.get(),
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
         )
 }

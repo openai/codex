@@ -1,17 +1,17 @@
 use crate::history_cell::PlainHistoryCell;
 use crate::render::line_utils::prefix_lines;
 use crate::text_formatting::truncate_text;
-use codex_core::protocol::AgentStatus;
-use codex_core::protocol::CollabAgentInteractionEndEvent;
-use codex_core::protocol::CollabAgentRef;
-use codex_core::protocol::CollabAgentSpawnEndEvent;
-use codex_core::protocol::CollabAgentStatusEntry;
-use codex_core::protocol::CollabCloseEndEvent;
-use codex_core::protocol::CollabResumeBeginEvent;
-use codex_core::protocol::CollabResumeEndEvent;
-use codex_core::protocol::CollabWaitingBeginEvent;
-use codex_core::protocol::CollabWaitingEndEvent;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::CollabAgentInteractionEndEvent;
+use codex_protocol::protocol::CollabAgentRef;
+use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabAgentStatusEntry;
+use codex_protocol::protocol::CollabCloseEndEvent;
+use codex_protocol::protocol::CollabResumeBeginEvent;
+use codex_protocol::protocol::CollabResumeEndEvent;
+use codex_protocol::protocol::CollabWaitingBeginEvent;
+use codex_protocol::protocol::CollabWaitingEndEvent;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -22,11 +22,56 @@ const COLLAB_PROMPT_PREVIEW_GRAPHEMES: usize = 160;
 const COLLAB_AGENT_ERROR_PREVIEW_GRAPHEMES: usize = 160;
 const COLLAB_AGENT_RESPONSE_PREVIEW_GRAPHEMES: usize = 240;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AgentPickerThreadEntry {
+    pub(crate) agent_nickname: Option<String>,
+    pub(crate) agent_role: Option<String>,
+    pub(crate) is_closed: bool,
+}
+
 #[derive(Clone, Copy)]
 struct AgentLabel<'a> {
     thread_id: Option<ThreadId>,
     nickname: Option<&'a str>,
     role: Option<&'a str>,
+}
+
+pub(crate) fn agent_picker_status_dot_spans(is_closed: bool) -> Vec<Span<'static>> {
+    let dot = if is_closed {
+        "•".dark_gray()
+    } else {
+        "•".green()
+    };
+    vec![dot, " ".into()]
+}
+
+pub(crate) fn format_agent_picker_item_name(
+    agent_nickname: Option<&str>,
+    agent_role: Option<&str>,
+    is_primary: bool,
+) -> String {
+    if is_primary {
+        return "Main [default]".to_string();
+    }
+
+    let agent_nickname = agent_nickname
+        .map(str::trim)
+        .filter(|nickname| !nickname.is_empty());
+    let agent_role = agent_role.map(str::trim).filter(|role| !role.is_empty());
+    match (agent_nickname, agent_role) {
+        (Some(agent_nickname), Some(agent_role)) => format!("{agent_nickname} [{agent_role}]"),
+        (Some(agent_nickname), None) => agent_nickname.to_string(),
+        (None, Some(agent_role)) => format!("[{agent_role}]"),
+        (None, None) => "Agent".to_string(),
+    }
+}
+
+pub(crate) fn sort_agent_picker_threads(agent_threads: &mut [(ThreadId, AgentPickerThreadEntry)]) {
+    agent_threads.sort_by(|(left_id, left), (right_id, right)| {
+        left.is_closed
+            .cmp(&right.is_closed)
+            .then_with(|| left_id.to_string().cmp(&right_id.to_string()))
+    });
 }
 
 pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {

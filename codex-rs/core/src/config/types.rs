@@ -681,6 +681,13 @@ pub struct Tui {
     /// `current-dir`.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
+
+    /// Syntax highlighting theme name (kebab-case).
+    ///
+    /// When set, overrides automatic light/dark theme detection.
+    /// Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 const fn default_true() -> bool {

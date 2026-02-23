@@ -3,7 +3,6 @@ edition.workspace = true
 license.workspace = true
 name = "codex-core"
 version.workspace = true
-build = "build.rs"
 
 [lib]
 doctest = false
@@ -34,6 +33,7 @@ codex-async-utils = { workspace = true }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
 codex-shell-command = { workspace = true }
+codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }
@@ -58,7 +58,6 @@ env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-include_dir = { workspace = true }
 indexmap = { workspace = true }
 indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
@@ -78,7 +77,6 @@ rmcp = { workspace = true, default-features = false, features = [
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_path_to_error = { workspace = true }
 serde_yaml = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }

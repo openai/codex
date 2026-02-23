@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 codex-core = { workspace = true }
+codex-protocol = { workspace = true }
 
 [dev-dependencies]
 codex-utils-absolute-path = { workspace = true }

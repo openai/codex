@@ -28,6 +28,11 @@ into this binary.
 - When enabled, the helper isolates the PID namespace via `--unshare-pid`.
 - When enabled and network is restricted without proxy routing, the helper also
   isolates the network namespace via `--unshare-net`.
+- In managed proxy mode, the helper uses `--unshare-net` plus an internal
+  TCP->UDS->TCP routing bridge so tool traffic reaches only configured proxy
+  endpoints.
+- In managed proxy mode, after the bridge is live, seccomp blocks new
+  AF_UNIX/socketpair creation for the user command.
 - When enabled, it mounts a fresh `/proc` via `--proc /proc` by default, but
   you can skip this in restrictive container environments with `--no-proc`.
 
