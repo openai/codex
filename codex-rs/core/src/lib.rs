@@ -109,7 +109,6 @@ pub mod terminal;
 mod tools;
 pub mod turn_diff_tracker;
 mod turn_metadata;
-mod zsh_exec_bridge;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;
@@ -153,8 +152,6 @@ pub use file_watcher::FileWatcherEvent;
 pub use safety::get_platform_sandbox;
 pub use tools::spec::parse_tool_input_schema;
 pub use turn_metadata::build_turn_metadata_header;
-pub use zsh_exec_bridge::maybe_run_zsh_exec_wrapper_mode;
-
 pub use client::ModelClient;
 pub use client::ModelClientSession;
 pub use client::ResponsesWebsocketVersion;

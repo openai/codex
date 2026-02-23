@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use codex_core::SandboxState;
 use codex_execpolicy::Policy;
+use codex_protocol::protocol::SandboxPolicy;
 use path_absolutize::Absolutize as _;
 use tokio::process::Command;
 use tokio::sync::RwLock;
@@ -26,6 +26,26 @@ use crate::unix::escalation_policy::EscalationPolicy;
 use crate::unix::socket::AsyncDatagramSocket;
 use crate::unix::socket::AsyncSocket;
 use crate::unix::stopwatch::Stopwatch;
+
+#[derive(Debug, Clone)]
+pub struct SandboxState {
+    pub sandbox_policy: SandboxPolicy,
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub sandbox_cwd: PathBuf,
+    pub use_linux_sandbox_bwrap: bool,
+}
+
+#[async_trait::async_trait]
+pub trait ShellCommandExecutor: Send + Sync {
+    async fn run(
+        &self,
+        command: Vec<String>,
+        cwd: PathBuf,
+        env: HashMap<String, String>,
+        cancel_rx: CancellationToken,
+        sandbox_state: &SandboxState,
+    ) -> anyhow::Result<ExecResult>;
+}
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct ExecParams {
@@ -71,11 +91,10 @@ impl EscalateServer {
         params: ExecParams,
         cancel_rx: CancellationToken,
         sandbox_state: &SandboxState,
+        command_executor: &dyn ShellCommandExecutor,
     ) -> anyhow::Result<ExecResult> {
         let (escalate_server, escalate_client) = AsyncDatagramSocket::pair()?;
         let client_socket = escalate_client.into_inner();
-        client_socket.set_cloexec(false)?;
-
         let escalate_task = tokio::spawn(escalate_task(escalate_server, self.policy.clone()));
         let mut env = std::env::vars().collect::<HashMap<String, String>>();
         env.insert(
@@ -91,47 +110,27 @@ impl EscalateServer {
             self.execve_wrapper.to_string_lossy().to_string(),
         );
 
-        let ExecParams {
-            command,
-            workdir,
-            timeout_ms: _,
-            login,
-        } = params;
-        let result = codex_core::exec::process_exec_tool_call(
-            codex_core::exec::ExecParams {
-                command: vec![
-                    self.bash_path.to_string_lossy().to_string(),
-                    if login == Some(false) {
-                        "-c".to_string()
-                    } else {
-                        "-lc".to_string()
-                    },
-                    command,
-                ],
-                cwd: PathBuf::from(&workdir),
-                expiration: codex_core::exec::ExecExpiration::Cancellation(cancel_rx),
-                env,
-                network: None,
-                sandbox_permissions: codex_core::sandboxing::SandboxPermissions::UseDefault,
-                windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
-                justification: None,
-                arg0: None,
+        let command = vec![
+            self.bash_path.to_string_lossy().to_string(),
+            if params.login == Some(false) {
+                "-c".to_string()
+            } else {
+                "-lc".to_string()
             },
-            &sandbox_state.sandbox_policy,
-            &sandbox_state.sandbox_cwd,
-            &sandbox_state.codex_linux_sandbox_exe,
-            sandbox_state.use_linux_sandbox_bwrap,
-            None,
-        )
-        .await?;
+            params.command,
+        ];
+        let result = command_executor
+            .run(
+                command,
+                PathBuf::from(&params.workdir),
+                env,
+                cancel_rx,
+                sandbox_state,
+            )
+            .await?;
         escalate_task.abort();
 
-        Ok(ExecResult {
-            exit_code: result.exit_code,
-            output: result.aggregated_output.text,
-            duration: result.duration,
-            timed_out: result.timed_out,
-        })
+        Ok(result)
     }
 }
 
@@ -150,6 +149,7 @@ pub async fn run_escalate_server(
     policy: Arc<RwLock<Policy>>,
     escalation_policy_factory: impl EscalationPolicyFactory,
     effective_timeout: Duration,
+    command_executor: &dyn ShellCommandExecutor,
 ) -> anyhow::Result<ExecResult> {
     let stopwatch = Stopwatch::new(effective_timeout);
     let cancel_token = stopwatch.cancellation_token();
@@ -160,7 +160,7 @@ pub async fn run_escalate_server(
     );
 
     escalate_server
-        .exec(exec_params, cancel_token, sandbox_state)
+        .exec(exec_params, cancel_token, sandbox_state, command_executor)
         .await
 }
 
@@ -272,6 +272,7 @@ async fn handle_escalate_session_with_policy(
                 .await?;
         }
     }
+
     Ok(())
 }
 
@@ -279,7 +280,6 @@ async fn handle_escalate_session_with_policy(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
     use std::path::Path;
     use std::path::PathBuf;
 
