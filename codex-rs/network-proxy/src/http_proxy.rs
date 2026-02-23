@@ -51,6 +51,7 @@ use rama_http_backend::server::HttpServer;
 use rama_http_backend::server::layer::upgrade::UpgradeLayer;
 use rama_http_backend::server::layer::upgrade::Upgraded;
 use rama_net::Protocol;
+use rama_net::address::HostWithOptPort;
 use rama_net::address::ProxyAddress;
 use rama_net::client::ConnectorService;
 use rama_net::client::EstablishedClientConnection;
@@ -504,6 +505,10 @@ async fn http_plain_proxy(
     };
     let host = normalize_host(&authority.host.to_string());
     let port = authority.port;
+    if let Err(err) = validate_plain_http_host_header(&req, &authority) {
+        warn!("HTTP request host mismatch: {err}");
+        return Ok(text_response(StatusCode::BAD_REQUEST, "host mismatch"));
+    }
     let enabled = match app_state
         .enabled()
         .await
@@ -708,6 +713,45 @@ fn remove_hop_by_hop_request_headers(headers: &mut HeaderMap) {
     }
 }
 
+fn validate_plain_http_host_header(
+    req: &Request,
+    target: &rama_net::address::HostWithPort,
+) -> std::result::Result<(), &'static str> {
+    // Only enforce this in absolute-form requests. Origin-form requests use the Host header as the
+    // routing authority, so there is no separate target authority to compare against.
+    if req.uri().authority().is_none() {
+        return Ok(());
+    }
+
+    let Some(raw_host) = req.headers().get(header::HOST) else {
+        return Ok(());
+    };
+    let raw_host = raw_host.to_str().map_err(|_| "invalid Host header")?;
+    let parsed = HostWithOptPort::try_from(raw_host).map_err(|_| "invalid Host header")?;
+
+    let target_host = normalize_host(&target.host.to_string());
+    let request_host = normalize_host(&parsed.host.to_string());
+    if request_host.is_empty() || request_host != target_host {
+        return Err("request Host header host does not match target authority");
+    }
+
+    let expected_port = target.port;
+    let request_port = match parsed.port {
+        Some(port) => port,
+        None => match req.uri().scheme_str() {
+            Some("http") => 80,
+            Some("https") => 443,
+            Some(_) | None => expected_port,
+        },
+    };
+
+    if request_port != expected_port {
+        return Err("request Host header port does not match target authority");
+    }
+
+    Ok(())
+}
+
 fn json_blocked(host: &str, reason: &str, details: Option<&PolicyDecisionDetails<'_>>) -> Response {
     let (message, decision, source, protocol, port) = details
         .map(|details| {
@@ -890,6 +934,23 @@ mod tests {
             response.headers().get("x-proxy-error").unwrap(),
             "blocked-by-denylist"
         );
+    }
+
+    #[tokio::test]
+    async fn http_plain_proxy_rejects_absolute_uri_host_header_mismatch() {
+        let state = Arc::new(network_proxy_state_for_policy(
+            NetworkProxySettings::default(),
+        ));
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://raw.githubusercontent.com/openai/codex/main/README.md")
+            .header(header::HOST, "api.github.com")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state);
+
+        let response = http_plain_proxy(None, req).await;
+        assert_eq!(response.unwrap().status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]
