@@ -131,6 +131,7 @@ pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
+use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
@@ -549,10 +550,16 @@ impl BottomPane {
     /// Update the status indicator header (defaults to "Working") and details below it.
     ///
     /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
-    pub(crate) fn update_status(&mut self, header: String, details: Option<String>) {
+    pub(crate) fn update_status(
+        &mut self,
+        header: String,
+        details: Option<String>,
+        details_capitalization: StatusDetailsCapitalization,
+        details_max_lines: usize,
+    ) {
         if let Some(status) = self.status.as_mut() {
             status.update_header(header);
-            status.update_details(details);
+            status.update_details(details, details_capitalization, details_max_lines.max(1));
             self.request_redraw();
         }
     }
@@ -982,6 +989,8 @@ impl Renderable for BottomPane {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
+    use crate::status_indicator_widget::StatusDetailsCapitalization;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
@@ -1275,6 +1284,8 @@ mod tests {
         pane.update_status(
             "Working".to_string(),
             Some("First detail line\nSecond detail line".to_string()),
+            StatusDetailsCapitalization::CapitalizeFirst,
+            STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
         pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
 

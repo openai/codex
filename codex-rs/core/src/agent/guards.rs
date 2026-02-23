@@ -118,6 +118,9 @@ impl Guards {
             } else {
                 active_agents.used_agent_nicknames.clear();
                 active_agents.nickname_reset_count += 1;
+                if let Some(metrics) = codex_otel::metrics::global() {
+                    let _ = metrics.counter("codex.multi_agent.nickname_pool_reset", 1, &[]);
+                }
                 names.choose(&mut rand::rng())?.to_string()
             }
         };
