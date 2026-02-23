@@ -5523,8 +5523,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
                 file_list
             };
             Some(format!(
-                "apply_patch started ({count} file change(s))\nFiles: {file_list}",
-                count = total_file_count
+                "apply_patch started ({total_file_count} file change(s))\nFiles: {file_list}"
             ))
         }
         EventMsg::PatchApplyEnd(event) => {
