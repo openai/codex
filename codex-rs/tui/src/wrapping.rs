@@ -112,6 +112,7 @@ fn map_owned_wrapped_line_to_range(text: &str, cursor: usize, wrapped: &str) -> 
     }
 
     let mut end = start;
+    let mut saw_source_char = false;
     let mut chars = wrapped.chars().peekable();
     while let Some(ch) = chars.next() {
         if end < text.len() {
@@ -120,6 +121,7 @@ fn map_owned_wrapped_line_to_range(text: &str, cursor: usize, wrapped: &str) -> 
             };
             if ch == src {
                 end += src.len_utf8();
+                saw_source_char = true;
                 continue;
             }
         }
@@ -131,7 +133,20 @@ fn map_owned_wrapped_line_to_range(text: &str, cursor: usize, wrapped: &str) -> 
             continue;
         }
 
-        panic!("wrap_ranges: could not map owned line {wrapped:?} to source near byte {cursor}");
+        // Non-source chars can be synthesized by textwrap in owned output
+        // (e.g. non-space indent prefixes). Keep going and map the source bytes
+        // we can confidently match instead of crashing the app.
+        if !saw_source_char {
+            continue;
+        }
+
+        tracing::warn!(
+            wrapped = %wrapped,
+            cursor,
+            end,
+            "wrap_ranges: could not fully map owned line; returning partial source range"
+        );
+        break;
     }
 
     start..end
@@ -1227,6 +1242,54 @@ them."#
                 .any(|line| concat_line(line).contains(long_non_url)),
             "expected long non-url token to wrap on mixed lines, got: {out:?}"
         );
+    }
+
+    #[test]
+    fn map_owned_wrapped_line_to_range_recovers_on_non_prefix_mismatch() {
+        // Match source chars first, then introduce a non-penalty mismatch.
+        // The function should recover and return the mapped prefix range.
+        let range = map_owned_wrapped_line_to_range("hello world", 0, "helloX");
+        assert_eq!(range, 0..5);
+    }
+
+    #[test]
+    fn wrap_ranges_recovers_with_non_space_indents() {
+        let text = "The quick brown fox jumps over the lazy dog";
+        let wrapped = textwrap::wrap(
+            text,
+            textwrap::Options::new(12)
+                .initial_indent("* ")
+                .subsequent_indent("  "),
+        );
+        assert!(
+            wrapped
+                .iter()
+                .any(|line| matches!(line, std::borrow::Cow::Owned(_))),
+            "expected textwrap to produce owned lines with synthetic indent prefixes"
+        );
+
+        let ranges = wrap_ranges(
+            text,
+            textwrap::Options::new(12)
+                .initial_indent("* ")
+                .subsequent_indent("  "),
+        );
+        assert!(!ranges.is_empty());
+
+        // wrap_ranges returns cursor-oriented ranges that may overlap by one byte;
+        // rebuild with cursor progression to validate full source coverage.
+        let mut rebuilt = String::new();
+        let mut cursor = 0usize;
+        for range in ranges {
+            let start = range.start.max(cursor).min(text.len());
+            let end = range.end.min(text.len());
+            if start < end {
+                rebuilt.push_str(&text[start..end]);
+            }
+            cursor = cursor.max(end);
+        }
+
+        assert_eq!(rebuilt, text);
     }
 
     #[test]
