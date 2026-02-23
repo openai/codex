@@ -516,7 +516,17 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
 #[tokio::test]
 async fn thread_list_respects_search_term_filter() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_minimal_config(codex_home.path())?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+model = "mock-model"
+approval_policy = "never"
+suppress_unstable_features_warning = true
+
+[features]
+sqlite = true
+"#,
+    )?;
 
     let older_match = create_fake_rollout(
         codex_home.path(),
