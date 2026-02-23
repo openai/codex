@@ -5395,6 +5395,14 @@ impl CodexMessageProcessor {
 
         match turn_id {
             Ok(turn_id) => {
+                // `turn/started` is emitted optimistically from this request handler before the
+                // core `TurnStarted` event necessarily reaches the listener task. Mark the thread
+                // active now so follow-up requests (for example `thread/resume`) observe a
+                // consistent running status instead of racing on event propagation.
+                self.thread_watch_manager
+                    .note_turn_started(&params.thread_id)
+                    .await;
+
                 let turn = Turn {
                     id: turn_id.clone(),
                     items: vec![],
@@ -5511,6 +5519,13 @@ impl CodexMessageProcessor {
         parent_thread_id: String,
         review_thread_id: String,
     ) {
+        // Keep thread status in sync with the optimistic `turn/started` notification emitted
+        // below. The listener task will eventually receive the real `TurnStarted` event and
+        // confirm the same state.
+        self.thread_watch_manager
+            .note_turn_started(&parent_thread_id)
+            .await;
+
         let response = ReviewStartResponse {
             turn: turn.clone(),
             review_thread_id,
