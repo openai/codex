@@ -1,5 +1,5 @@
+use crate::certs::ManagedMitmCa;
 use crate::config::NetworkMode;
-use crate::mitm_certs::ManagedMitmCa;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::responses::blocked_text_response;
