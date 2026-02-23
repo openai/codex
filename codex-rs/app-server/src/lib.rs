@@ -102,46 +102,68 @@ enum OutboundControlEvent {
     DisconnectAll,
 }
 
-async fn maybe_finish_ctrl_c_restart(
-    restart_requested: bool,
-    restart_forced: bool,
-    running_turn_count: usize,
-    last_logged_running_turn_count: &mut Option<usize>,
-    connection_count: usize,
-    websocket_accept_shutdown: Option<&CancellationToken>,
-    outbound_control_tx: &mpsc::Sender<OutboundControlEvent>,
-) -> bool {
-    if !restart_requested {
-        return false;
+#[derive(Default)]
+struct ShutdownState {
+    requested: bool,
+    forced: bool,
+    last_logged_running_turn_count: Option<usize>,
+}
+
+enum ShutdownAction {
+    Noop,
+    Finish,
+}
+
+impl ShutdownState {
+    fn requested(&self) -> bool {
+        self.requested
     }
 
-    if restart_forced || running_turn_count == 0 {
-        if restart_forced {
-            info!(
-                "received second Ctrl-C; forcing restart with {running_turn_count} running assistant turn(s) and {connection_count} connection(s)"
-            );
-        } else {
-            info!(
-                "Ctrl-C restart: no assistant turns running; stopping acceptor and disconnecting {connection_count} connection(s)"
-            );
-        }
-        if let Some(shutdown_token) = websocket_accept_shutdown {
-            shutdown_token.cancel();
-        }
-        let _ = outbound_control_tx
-            .send(OutboundControlEvent::DisconnectAll)
-            .await;
-        return true;
+    fn forced(&self) -> bool {
+        self.forced
     }
 
-    if *last_logged_running_turn_count != Some(running_turn_count) {
+    fn on_ctrl_c(&mut self, connection_count: usize, running_turn_count: usize) {
+        if self.requested {
+            self.forced = true;
+            return;
+        }
+
+        self.requested = true;
+        self.last_logged_running_turn_count = None;
         info!(
-            "Ctrl-C restart: waiting for {running_turn_count} running assistant turn(s) to finish"
+            "received Ctrl-C; entering graceful restart drain (connections={}, runningAssistantTurns={}, requests still accepted until no assistant turns are running)",
+            connection_count, running_turn_count,
         );
-        *last_logged_running_turn_count = Some(running_turn_count);
     }
 
-    false
+    fn update(&mut self, running_turn_count: usize, connection_count: usize) -> ShutdownAction {
+        if !self.requested {
+            return ShutdownAction::Noop;
+        }
+
+        if self.forced || running_turn_count == 0 {
+            if self.forced {
+                info!(
+                    "received second Ctrl-C; forcing restart with {running_turn_count} running assistant turn(s) and {connection_count} connection(s)"
+                );
+            } else {
+                info!(
+                    "Ctrl-C restart: no assistant turns running; stopping acceptor and disconnecting {connection_count} connection(s)"
+                );
+            }
+            return ShutdownAction::Finish;
+        }
+
+        if self.last_logged_running_turn_count != Some(running_turn_count) {
+            info!(
+                "Ctrl-C restart: waiting for {running_turn_count} running assistant turn(s) to finish"
+            );
+            self.last_logged_running_turn_count = Some(running_turn_count);
+        }
+
+        ShutdownAction::Noop
+    }
 }
 
 fn config_warning_from_error(
@@ -544,47 +566,34 @@ pub async fn run_main_with_transport(
         };
         async move {
             let mut listen_for_threads = true;
-            let mut restart_requested = false;
-            let mut restart_forced = false;
-            let mut last_logged_running_turn_count = None;
+            let mut shutdown_state = ShutdownState::default();
             loop {
                 let running_turn_count = {
                     let running_turn_count = running_turn_count_rx.borrow();
                     *running_turn_count
                 };
-                if maybe_finish_ctrl_c_restart(
-                    restart_requested,
-                    restart_forced,
-                    running_turn_count,
-                    &mut last_logged_running_turn_count,
-                    connections.len(),
-                    websocket_accept_shutdown.as_ref(),
-                    &outbound_control_tx,
-                )
-                .await
-                {
+                if matches!(
+                    shutdown_state.update(running_turn_count, connections.len()),
+                    ShutdownAction::Finish
+                ) {
+                    if let Some(shutdown_token) = &websocket_accept_shutdown {
+                        shutdown_token.cancel();
+                    }
+                    let _ = outbound_control_tx
+                        .send(OutboundControlEvent::DisconnectAll)
+                        .await;
                     break;
                 }
 
                 tokio::select! {
-                    ctrl_c_result = tokio::signal::ctrl_c(), if graceful_ctrl_c_restart_enabled && !restart_forced => {
+                    ctrl_c_result = tokio::signal::ctrl_c(), if graceful_ctrl_c_restart_enabled && !shutdown_state.forced() => {
                         if let Err(err) = ctrl_c_result {
                             warn!("failed to listen for Ctrl-C during graceful restart drain: {err}");
                         }
-                        if restart_requested {
-                            restart_forced = true;
-                        } else {
-                            restart_requested = true;
-                            last_logged_running_turn_count = None;
-                            let running_turn_count = *running_turn_count_rx.borrow();
-                            info!(
-                                "received Ctrl-C; entering graceful restart drain (connections={}, runningAssistantTurns={}, requests still accepted until no assistant turns are running)",
-                                connections.len(),
-                                running_turn_count,
-                            );
-                        }
+                        let running_turn_count = *running_turn_count_rx.borrow();
+                        shutdown_state.on_ctrl_c(connections.len(), running_turn_count);
                     }
-                    changed = running_turn_count_rx.changed(), if graceful_ctrl_c_restart_enabled && restart_requested => {
+                    changed = running_turn_count_rx.changed(), if graceful_ctrl_c_restart_enabled && shutdown_state.requested() => {
                         if changed.is_err() {
                             warn!("running-turn watcher closed during graceful restart drain");
                         }
