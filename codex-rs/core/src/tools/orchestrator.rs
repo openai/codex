@@ -48,7 +48,7 @@ impl ToolOrchestrator {
     async fn run_attempt<Rq, Out, T>(
         tool: &mut T,
         req: &Rq,
-        tool_ctx: &ToolCtx<'_>,
+        tool_ctx: &ToolCtx,
         attempt: &SandboxAttempt<'_>,
         has_managed_network_requirements: bool,
     ) -> (Result<Out, ToolError>, Option<DeferredNetworkApproval>)
@@ -100,7 +100,7 @@ impl ToolOrchestrator {
         &mut self,
         tool: &mut T,
         req: &Rq,
-        tool_ctx: &ToolCtx<'_>,
+        tool_ctx: &ToolCtx,
         turn_ctx: &crate::codex::TurnContext,
         approval_policy: AskForApproval,
     ) -> Result<OrchestratorRunResult<Out>, ToolError>
