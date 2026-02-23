@@ -1622,10 +1622,16 @@ impl Session {
                     .reconstruct_history_from_rollout(&turn_context, &rollout_items)
                     .await;
                 let previous_model = reconstructed.previous_model.clone();
+                let reference_context_item = reconstructed
+                    .user_turn_baselines
+                    .last()
+                    .filter(|frame| !frame.invalidated_by_following_compaction)
+                    .map(|frame| frame.turn_context_item.clone());
                 let curr = turn_context.model_info.slug.as_str();
                 {
                     let mut state = self.state.lock().await;
                     state.set_user_turn_baselines(reconstructed.user_turn_baselines.clone());
+                    state.set_reference_context_item(reference_context_item);
                     state.set_previous_model(previous_model.clone());
                 }
 
@@ -1673,6 +1679,7 @@ impl Session {
                 {
                     let mut state = self.state.lock().await;
                     state.set_user_turn_baselines(reconstructed.user_turn_baselines.clone());
+                    state.set_reference_context_item(None);
                     state.set_previous_model(reconstructed.previous_model.clone());
                 }
 

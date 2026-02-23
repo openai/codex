@@ -86,8 +86,6 @@ impl ContextManager {
 
     pub(crate) fn set_user_turn_baselines(&mut self, baselines: Vec<UserTurnBaselineFrame>) {
         self.user_turn_baselines = baselines;
-        self.reference_context_item =
-            self.effective_reference_context_item_from_user_turn_baselines();
     }
 
     pub(crate) fn user_turn_baselines(&self) -> Vec<UserTurnBaselineFrame> {
