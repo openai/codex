@@ -293,6 +293,7 @@ ORDER BY position ASC
     }
 
     /// List threads using the underlying database.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_threads(
         &self,
         page_size: usize,
