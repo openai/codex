@@ -53,6 +53,7 @@ use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -73,6 +74,11 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::RealtimeAudioFrame;
+use codex_protocol::protocol::RealtimeConversationClosedEvent;
+use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeConversationStartedEvent;
+use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionSource;
@@ -1668,6 +1674,8 @@ async fn make_chatwidget_manual(
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
         external_editor_state: ExternalEditorState::Closed,
+        realtime_conversation_state: RealtimeConversationUiState::Stopped,
+        realtime_audio_controller: None,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -4446,6 +4454,170 @@ async fn slash_quit_requests_exit() {
     chat.dispatch_command(SlashCommand::Quit);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn slash_realtime_shows_error_when_feature_disabled() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::RealtimeConversation, false);
+
+    chat.dispatch_command(SlashCommand::Realtime);
+
+    match op_rx.try_recv() {
+        Err(TryRecvError::Empty) => {}
+        other => panic!("expected no realtime op when feature is disabled, got {other:?}"),
+    }
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Realtime conversation is disabled."),
+        "expected disabled message, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("realtime_conversation = true"),
+        "expected config hint, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_realtime_toggle_sends_start_then_close_ops() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::RealtimeConversation, true);
+
+    chat.dispatch_command(SlashCommand::Realtime);
+
+    let start = match op_rx.try_recv() {
+        Ok(Op::RealtimeConversationStart(params)) => params,
+        other => panic!("expected realtime start op, got {other:?}"),
+    };
+    assert_eq!(
+        start,
+        ConversationStartParams {
+            prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
+            session_id: None,
+        }
+    );
+
+    chat.dispatch_command(SlashCommand::Realtime);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::RealtimeConversationClose));
+}
+
+#[tokio::test]
+async fn realtime_events_update_lifecycle_state() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::RealtimeConversation, true);
+
+    chat.dispatch_command(SlashCommand::Realtime);
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::RealtimeConversationStart(
+            ConversationStartParams { .. }
+        ))
+    );
+    assert_eq!(
+        chat.realtime_conversation_state,
+        RealtimeConversationUiState::Working
+    );
+
+    chat.handle_codex_event(Event {
+        id: "rt-started".into(),
+        msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
+            session_id: Some("sess-123".to_string()),
+        }),
+    });
+    assert_eq!(
+        chat.realtime_conversation_state,
+        RealtimeConversationUiState::Working
+    );
+
+    chat.handle_codex_event(Event {
+        id: "rt-audio".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::AudioOut(RealtimeAudioFrame {
+                data: String::new(),
+                sample_rate: 24_000,
+                num_channels: 1,
+                samples_per_channel: Some(0),
+            }),
+        }),
+    });
+    assert_eq!(
+        chat.realtime_conversation_state,
+        RealtimeConversationUiState::Working
+    );
+
+    chat.handle_codex_event(Event {
+        id: "rt-closed".into(),
+        msg: EventMsg::RealtimeConversationClosed(RealtimeConversationClosedEvent {
+            reason: Some("requested".to_string()),
+        }),
+    });
+    assert_eq!(
+        chat.realtime_conversation_state,
+        RealtimeConversationUiState::Stopped
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Starting realtime conversation..."),
+        "expected start status message, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Realtime conversation started (sess-123)."),
+        "expected started status message, got {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Realtime conversation closed (requested)."),
+        "expected closed status message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn live_user_message_renders_only_during_realtime_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let user_message_event = || {
+        EventMsg::UserMessage(UserMessageEvent {
+            message: "delegated user text".to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        })
+    };
+
+    chat.handle_codex_event(Event {
+        id: "live-user-normal".into(),
+        msg: user_message_event(),
+    });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "expected live user message to remain hidden outside realtime mode"
+    );
+
+    chat.realtime_conversation_state = RealtimeConversationUiState::Working;
+    chat.handle_codex_event(Event {
+        id: "live-user-realtime".into(),
+        msg: user_message_event(),
+    });
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("delegated user text"),
+        "expected live user message in realtime mode, got {rendered:?}"
+    );
 }
 
 #[tokio::test]

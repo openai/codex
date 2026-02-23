@@ -290,6 +290,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_realtime_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_realtime_command_enabled(enabled);
+        self.request_redraw();
+    }
+
     /// Update the key hint shown next to queued messages so it matches the
     /// binding that `ChatWidget` actually listens for.
     pub(crate) fn set_queued_message_edit_binding(&mut self, binding: KeyBinding) {

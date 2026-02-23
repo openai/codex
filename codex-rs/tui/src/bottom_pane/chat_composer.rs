@@ -333,6 +333,7 @@ pub(crate) struct ChatComposer {
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     connectors_enabled: bool,
     personality_command_enabled: bool,
+    realtime_command_enabled: bool,
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
@@ -433,6 +434,7 @@ impl ChatComposer {
             collaboration_mode_indicator: None,
             connectors_enabled: false,
             personality_command_enabled: false,
+            realtime_command_enabled: false,
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
@@ -504,6 +506,10 @@ impl ChatComposer {
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.personality_command_enabled = enabled;
+    }
+
+    pub fn set_realtime_command_enabled(&mut self, enabled: bool) {
+        self.realtime_command_enabled = enabled;
     }
     /// Centralized feature gating keeps config checks out of call sites.
     fn popups_enabled(&self) -> bool {
@@ -2100,6 +2106,7 @@ impl ChatComposer {
                     self.collaboration_modes_enabled,
                     self.connectors_enabled,
                     self.personality_command_enabled,
+                    self.realtime_command_enabled,
                     self.windows_degraded_sandbox_active,
                 )
                 .is_some();
@@ -2299,6 +2306,7 @@ impl ChatComposer {
                 self.collaboration_modes_enabled,
                 self.connectors_enabled,
                 self.personality_command_enabled,
+                self.realtime_command_enabled,
                 self.windows_degraded_sandbox_active,
             )
         {
@@ -2333,6 +2341,7 @@ impl ChatComposer {
             self.collaboration_modes_enabled,
             self.connectors_enabled,
             self.personality_command_enabled,
+            self.realtime_command_enabled,
             self.windows_degraded_sandbox_active,
         )?;
 
@@ -3030,6 +3039,7 @@ impl ChatComposer {
             self.collaboration_modes_enabled,
             self.connectors_enabled,
             self.personality_command_enabled,
+            self.realtime_command_enabled,
             self.windows_degraded_sandbox_active,
         )
         .is_some();
@@ -3091,6 +3101,7 @@ impl ChatComposer {
             self.collaboration_modes_enabled,
             self.connectors_enabled,
             self.personality_command_enabled,
+            self.realtime_command_enabled,
             self.windows_degraded_sandbox_active,
         ) {
             return true;
@@ -3144,12 +3155,14 @@ impl ChatComposer {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
                     let connectors_enabled = self.connectors_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
+                    let realtime_command_enabled = self.realtime_command_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
                             collaboration_modes_enabled,
                             connectors_enabled,
                             personality_command_enabled,
+                            realtime_command_enabled,
                             windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         },
                     );

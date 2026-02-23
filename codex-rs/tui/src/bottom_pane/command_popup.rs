@@ -39,6 +39,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
     pub(crate) connectors_enabled: bool,
     pub(crate) personality_command_enabled: bool,
+    pub(crate) realtime_command_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
 }
 
@@ -49,6 +50,7 @@ impl CommandPopup {
             flags.collaboration_modes_enabled,
             flags.connectors_enabled,
             flags.personality_command_enabled,
+            flags.realtime_command_enabled,
             flags.windows_degraded_sandbox_active,
         )
         .into_iter()
@@ -494,6 +496,7 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 personality_command_enabled: true,
+                realtime_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -513,6 +516,7 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 personality_command_enabled: true,
+                realtime_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -532,6 +536,7 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 personality_command_enabled: false,
+                realtime_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -559,6 +564,7 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 personality_command_enabled: true,
+                realtime_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -567,6 +573,54 @@ mod tests {
         match popup.selected_item() {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "personality"),
             other => panic!("expected personality to be selected for exact match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn realtime_command_hidden_when_disabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                personality_command_enabled: true,
+                realtime_command_enabled: false,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/rea".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+        assert!(
+            !cmds.contains(&"realtime"),
+            "expected '/realtime' to be hidden when disabled, got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn realtime_command_visible_when_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                personality_command_enabled: true,
+                realtime_command_enabled: true,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/realtime".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "realtime"),
+            other => panic!("expected realtime to be selected for exact match, got {other:?}"),
         }
     }
 

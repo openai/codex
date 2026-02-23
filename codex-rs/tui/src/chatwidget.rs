@@ -91,6 +91,7 @@ use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::ErrorEvent;
@@ -113,6 +114,10 @@ use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RealtimeConversationClosedEvent;
+use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeConversationStartedEvent;
+use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -162,6 +167,8 @@ const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
+const REALTIME_CONVERSATION_PROMPT: &str =
+    "Low-level realtime conversation for TUI audio loop testing.";
 
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
@@ -234,6 +241,7 @@ use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
 use crate::multi_agents;
+use crate::realtime_audio::RealtimeAudioController;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -500,6 +508,13 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RealtimeConversationUiState {
+    #[default]
+    Stopped,
+    Working,
+}
+
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -662,6 +677,8 @@ pub(crate) struct ChatWidget {
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
+    realtime_conversation_state: RealtimeConversationUiState,
+    realtime_audio_controller: Option<RealtimeAudioController>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -2800,6 +2817,8 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            realtime_conversation_state: RealtimeConversationUiState::Stopped,
+            realtime_audio_controller: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2813,6 +2832,7 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.sync_personality_command_enabled();
+        widget.sync_realtime_command_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
@@ -2970,6 +2990,8 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            realtime_conversation_state: RealtimeConversationUiState::Stopped,
+            realtime_audio_controller: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2983,6 +3005,7 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.sync_personality_command_enabled();
+        widget.sync_realtime_command_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
@@ -3129,6 +3152,8 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            realtime_conversation_state: RealtimeConversationUiState::Stopped,
+            realtime_audio_controller: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3142,6 +3167,7 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.sync_personality_command_enabled();
+        widget.sync_realtime_command_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
@@ -3346,6 +3372,105 @@ impl ChatWidget {
         self.bottom_pane.can_launch_external_editor()
     }
 
+    fn toggle_realtime_conversation(&mut self) {
+        if !self.realtime_command_enabled() {
+            self.add_info_message(
+                "Realtime conversation is disabled.".to_string(),
+                Some(
+                    "Enable `[features].realtime_conversation = true` in config.toml.".to_string(),
+                ),
+            );
+            return;
+        }
+
+        match self.realtime_conversation_state {
+            RealtimeConversationUiState::Stopped => {
+                self.realtime_conversation_state = RealtimeConversationUiState::Working;
+                self.add_info_message("Starting realtime conversation...".to_string(), None);
+                self.submit_op(Op::RealtimeConversationStart(ConversationStartParams {
+                    prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
+                    session_id: None,
+                }));
+            }
+            RealtimeConversationUiState::Working => {
+                self.realtime_conversation_state = RealtimeConversationUiState::Stopped;
+                if let Some(a) = self.realtime_audio_controller.take() {
+                    RealtimeAudioController::shutdown(a)
+                }
+                self.add_info_message("Stopping realtime conversation...".to_string(), None);
+                self.submit_op(Op::RealtimeConversationClose);
+            }
+        }
+    }
+
+    fn on_realtime_conversation_started(&mut self, event: RealtimeConversationStartedEvent) {
+        if self.realtime_conversation_state == RealtimeConversationUiState::Stopped {
+            self.submit_op(Op::RealtimeConversationClose);
+            return;
+        }
+
+        match RealtimeAudioController::start(self.codex_op_tx.clone()) {
+            Ok(controller) => {
+                self.realtime_audio_controller = Some(controller);
+                self.realtime_conversation_state = RealtimeConversationUiState::Working;
+                let message = match event.session_id {
+                    Some(session_id) => format!("Realtime conversation started ({session_id})."),
+                    None => "Realtime conversation started.".to_string(),
+                };
+                self.add_info_message(message, None);
+            }
+            Err(err) => {
+                self.realtime_conversation_state = RealtimeConversationUiState::Stopped;
+                self.add_error_message(format!("Failed to start realtime audio IO: {err}"));
+                self.submit_op(Op::RealtimeConversationClose);
+            }
+        }
+    }
+
+    fn on_realtime_conversation_event(&mut self, event: RealtimeConversationRealtimeEvent) {
+        match event.payload {
+            RealtimeEvent::AudioOut(frame) => {
+                if let Some(controller) = &self.realtime_audio_controller
+                    && let Err(err) = controller.enqueue_audio_out(frame)
+                {
+                    warn!("failed to queue realtime audio playback frame: {err}");
+                }
+            }
+            RealtimeEvent::Error(message) => {
+                if let Some(a) = self.realtime_audio_controller.take() {
+                    RealtimeAudioController::shutdown(a)
+                }
+                if self.realtime_conversation_state != RealtimeConversationUiState::Stopped {
+                    self.realtime_conversation_state = RealtimeConversationUiState::Stopped;
+                }
+                self.add_error_message(format!("Realtime conversation error: {message}"));
+            }
+            RealtimeEvent::SessionCreated { session_id } => {
+                debug!("realtime conversation session created: {session_id}");
+            }
+            RealtimeEvent::SessionUpdated { backend_prompt } => {
+                debug!(
+                    "realtime conversation session updated: {:?}",
+                    backend_prompt
+                );
+            }
+            RealtimeEvent::ConversationItemAdded(_) => {}
+        }
+    }
+
+    fn on_realtime_conversation_closed(&mut self, event: RealtimeConversationClosedEvent) {
+        if let Some(a) = self.realtime_audio_controller.take() {
+            RealtimeAudioController::shutdown(a)
+        }
+        self.realtime_conversation_state = RealtimeConversationUiState::Stopped;
+
+        let message = match event.reason {
+            Some(reason) => format!("Realtime conversation closed ({reason})."),
+            None => "Realtime conversation closed.".to_string(),
+        };
+        self.add_info_message(message, None);
+    }
+
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -3502,6 +3627,9 @@ impl ChatWidget {
             }
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
+            }
+            SlashCommand::Realtime => {
+                self.toggle_realtime_conversation();
             }
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_quit_without_confirmation();
@@ -4246,7 +4374,9 @@ impl ChatWidget {
                 }
             }
             EventMsg::UserMessage(ev) => {
-                if from_replay {
+                if from_replay
+                    || self.realtime_conversation_state == RealtimeConversationUiState::Working
+                {
                     self.on_user_message_event(ev);
                 }
             }
@@ -4276,14 +4406,26 @@ impl ChatWidget {
                     });
                 }
             }
+            EventMsg::RealtimeConversationStarted(ev) => {
+                if !from_replay {
+                    self.on_realtime_conversation_started(ev);
+                }
+            }
+            EventMsg::RealtimeConversationRealtime(ev) => {
+                if !from_replay {
+                    self.on_realtime_conversation_event(ev);
+                }
+            }
+            EventMsg::RealtimeConversationClosed(ev) => {
+                if !from_replay {
+                    self.on_realtime_conversation_closed(ev);
+                }
+            }
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::RealtimeConversationStarted(_)
-            | EventMsg::RealtimeConversationRealtime(_)
-            | EventMsg::RealtimeConversationClosed(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
             EventMsg::ItemCompleted(event) => {
                 let item = event.item;
@@ -6344,6 +6486,15 @@ impl ChatWidget {
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
+        if feature == Feature::RealtimeConversation {
+            self.sync_realtime_command_enabled();
+            if !enabled {
+                if let Some(a) = self.realtime_audio_controller.take() {
+                    RealtimeAudioController::shutdown(a)
+                }
+                self.realtime_conversation_state = RealtimeConversationUiState::Stopped;
+            }
+        }
         if feature == Feature::PreventIdleSleep {
             self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
             self.turn_sleep_inhibitor
@@ -6454,6 +6605,16 @@ impl ChatWidget {
     fn sync_personality_command_enabled(&mut self) {
         self.bottom_pane
             .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
+    }
+
+    fn sync_realtime_command_enabled(&mut self) {
+        self.bottom_pane.set_realtime_command_enabled(
+            self.config.features.enabled(Feature::RealtimeConversation),
+        );
+    }
+
+    fn realtime_command_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::RealtimeConversation)
     }
 
     fn current_model_supports_personality(&self) -> bool {

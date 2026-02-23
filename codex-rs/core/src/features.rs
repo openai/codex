@@ -143,6 +143,8 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
     ResponsesWebsocketsV2,
+    /// Enable hidden TUI `/realtime` low-level realtime conversation controls.
+    RealtimeConversation,
 }
 
 impl Feature {
@@ -649,6 +651,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RealtimeConversation,
+        key: "realtime_conversation",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
