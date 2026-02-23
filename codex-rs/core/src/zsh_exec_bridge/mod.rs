@@ -166,6 +166,10 @@ impl ZshExecBridge {
         })?;
 
         let mut cmd = tokio::process::Command::new(&command[0]);
+        #[cfg(unix)]
+        if let Some(arg0) = &req.arg0 {
+            cmd.arg0(arg0);
+        }
         if command.len() > 1 {
             cmd.args(&command[1..]);
         }
