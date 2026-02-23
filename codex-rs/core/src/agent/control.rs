@@ -10,6 +10,7 @@ use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
@@ -123,8 +124,11 @@ impl AgentControl {
                             "parent thread rollout unavailable for fork: {parent_thread_id}"
                         ))
                     })?;
-                    let initial_history =
-                        RolloutRecorder::get_rollout_history(&rollout_path).await?;
+                    let initial_history = InitialHistory::Forked(
+                        RolloutRecorder::get_rollout_history(&rollout_path)
+                            .await?
+                            .get_rollout_items(),
+                    );
                     state
                         .fork_thread_with_source(
                             config,
@@ -778,6 +782,7 @@ mod tests {
             .get_thread(child_thread_id)
             .await
             .expect("child thread should be registered");
+        assert_ne!(child_thread_id, parent_thread_id);
         let history = child_thread.codex.session.clone_history().await;
         assert!(history_contains_text(
             history.raw_items(),
