@@ -4,6 +4,9 @@ Runtime: shell
 Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
+#[cfg(unix)]
+mod unix_escalation;
+
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
@@ -26,10 +29,10 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
-use crate::zsh_exec_bridge::ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
@@ -37,8 +40,8 @@ pub struct ShellRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
-    pub env: std::collections::HashMap<String, String>,
-    pub explicit_env_overrides: std::collections::HashMap<String, String>,
+    pub env: HashMap<String, String>,
+    pub explicit_env_overrides: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
@@ -73,6 +76,7 @@ impl Sandboxable for ShellRuntime {
     fn sandbox_preference(&self) -> SandboxablePreference {
         SandboxablePreference::Auto
     }
+
     fn escalate_on_failure(&self) -> bool {
         true
     }
@@ -165,15 +169,13 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let base_command = &req.command;
-        let session_shell = ctx.session.user_shell();
         let command = maybe_wrap_shell_lc_with_snapshot(
-            base_command,
-            session_shell.as_ref(),
+            &req.command,
+            ctx.session.user_shell().as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,
         );
-        let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
+        let command = if matches!(ctx.session.user_shell().shell_type, ShellType::PowerShell)
             && ctx.session.features().enabled(Feature::PowershellUtf8)
         {
             prefix_powershell_script_with_utf8(&command)
@@ -181,34 +183,9 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             command
         };
 
-        if ctx.session.features().enabled(Feature::ShellZshFork) {
-            let wrapper_socket_path = ctx
-                .session
-                .services
-                .zsh_exec_bridge
-                .next_wrapper_socket_path();
-            let mut zsh_fork_env = req.env.clone();
-            zsh_fork_env.insert(
-                ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR.to_string(),
-                wrapper_socket_path.to_string_lossy().to_string(),
-            );
-            let spec = build_command_spec(
-                &command,
-                &req.cwd,
-                &zsh_fork_env,
-                req.timeout_ms.into(),
-                req.sandbox_permissions,
-                req.justification.clone(),
-            )?;
-            let env = attempt
-                .env_for(spec, req.network.as_ref())
-                .map_err(|err| ToolError::Codex(err.into()))?;
-            return ctx
-                .session
-                .services
-                .zsh_exec_bridge
-                .execute_shell_request(&env, &ctx.session, &ctx.turn, &ctx.call_id)
-                .await;
+        #[cfg(unix)]
+        if let Some(out) = unix_escalation::try_run_zsh_fork(req, attempt, ctx, &command).await? {
+            return Ok(out);
         }
 
         let spec = build_command_spec(
