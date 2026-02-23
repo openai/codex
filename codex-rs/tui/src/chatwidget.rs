@@ -513,6 +513,9 @@ pub(crate) enum ExternalEditorState {
 /// Quit/interrupt behavior intentionally spans layers: the bottom pane owns local input routing
 /// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
 /// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
+#[cfg(test)]
+type ClipboardTextWriterOverride = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync + 'static>;
+
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -666,8 +669,7 @@ pub(crate) struct ChatWidget {
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
     #[cfg(test)]
-    clipboard_text_writer_override:
-        Option<Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync + 'static>>,
+    clipboard_text_writer_override: Option<ClipboardTextWriterOverride>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.

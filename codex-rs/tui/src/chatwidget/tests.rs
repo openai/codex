@@ -4360,7 +4360,7 @@ async fn slash_copy_copies_latest_final_reply() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected copy success info message");
     let rendered = lines_to_single_string(&cells[0]);
-    assert_snapshot!("slash_copy_success_info_message", rendered.clone());
+    assert_snapshot!("slash_copy_success_info_message", rendered);
     assert!(
         rendered.contains("Copied latest Codex output to clipboard."),
         "expected copy confirmation, got {rendered:?}"
@@ -4427,7 +4427,7 @@ async fn slash_copy_reports_when_no_copyable_output_exists() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one info message");
     let rendered = lines_to_single_string(&cells[0]);
-    assert_snapshot!("slash_copy_no_output_info_message", rendered.clone());
+    assert_snapshot!("slash_copy_no_output_info_message", rendered);
     assert!(
         rendered.contains("No completed Codex output available to copy yet."),
         "expected no-output message, got {rendered:?}"
@@ -4510,7 +4510,7 @@ async fn slash_copy_reports_clipboard_write_error() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one error message");
     let rendered = lines_to_single_string(&cells[0]);
-    assert_snapshot!("slash_copy_clipboard_error_message", rendered.clone());
+    assert_snapshot!("slash_copy_clipboard_error_message", rendered);
     assert!(
         rendered.contains("Failed to copy to clipboard: simulated clipboard failure"),
         "expected copy error message, got {rendered:?}"
