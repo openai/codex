@@ -763,11 +763,7 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
         }
     });
 
-    let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done()],
-        vec![usage_limit_error],
-    ]])
-    .await;
+    let server = start_websocket_server(vec![vec![vec![usage_limit_error]]]).await;
     let mut builder = test_codex().with_config(|config| {
         config.model_provider.request_max_retries = Some(0);
         config.model_provider.stream_max_retries = Some(0);
@@ -845,11 +841,7 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
         }
     });
 
-    let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done()],
-        vec![invalid_request_error],
-    ]])
-    .await;
+    let server = start_websocket_server(vec![vec![vec![invalid_request_error]]]).await;
     let mut builder = test_codex().with_config(|config| {
         config.model_provider.request_max_retries = Some(0);
         config.model_provider.stream_max_retries = Some(0);

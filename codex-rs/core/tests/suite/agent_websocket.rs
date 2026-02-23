@@ -211,7 +211,12 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
     assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(first_turn["type"].as_str(), Some("response.create"));
     assert_eq!(first_turn["previous_response_id"].as_str(), Some("warm-1"));
-    assert_eq!(first_turn["input"], Value::Array(Vec::new()));
+    assert!(
+        first_turn
+            .get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+    );
     assert_eq!(second_turn["type"].as_str(), Some("response.create"));
     assert_eq!(second_turn["previous_response_id"].as_str(), Some("resp-1"));
 

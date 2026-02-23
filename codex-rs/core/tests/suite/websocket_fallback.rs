@@ -67,9 +67,9 @@ async fn websocket_fallback_switches_to_http_on_upgrade_required_connect() -> Re
         .filter(|req| req.method == Method::POST && req.url.path().ends_with("/responses"))
         .count();
 
-    // Deferred request prewarm attempts websocket first; 426 activates fallback before stream().
-    // After fallback, the turn runs over HTTP.
-    assert_eq!(websocket_attempts, 1);
+    // Startup prewarm now only preconnects for v1 (one websocket GET with no request body).
+    // The first turn then attempts websocket once, sees 426, and falls back to HTTP.
+    assert_eq!(websocket_attempts, 2);
     assert_eq!(http_attempts, 1);
     assert_eq!(response_mock.requests().len(), 1);
 
