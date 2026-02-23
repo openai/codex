@@ -9,6 +9,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -1036,37 +1040,79 @@ impl JsReplManager {
                     arguments: req.arguments.clone(),
                 }
             };
+        let should_inject_view_image_output = req.tool_name == VIEW_IMAGE_TOOL_NAME;
 
         let call = crate::tools::router::ToolCall {
             tool_name: req.tool_name,
             call_id: req.id.clone(),
             payload,
         };
+        let session = Arc::clone(&exec.session);
+        let turn = Arc::clone(&exec.turn);
+        let tracker = Arc::clone(&exec.tracker);
 
         match router
             .dispatch_tool_call(
-                exec.session,
-                exec.turn,
-                exec.tracker,
+                session,
+                turn,
+                tracker,
                 call,
                 crate::tools::router::ToolCallSource::JsRepl,
             )
             .await
         {
-            Ok(response) => match serde_json::to_value(response) {
-                Ok(value) => RunToolResult {
-                    id: req.id,
-                    ok: true,
-                    response: Some(value),
-                    error: None,
-                },
-                Err(err) => RunToolResult {
-                    id: req.id,
-                    ok: false,
-                    response: None,
-                    error: Some(format!("failed to serialize tool output: {err}")),
-                },
-            },
+            Ok(response) => {
+                if should_inject_view_image_output
+                    && let ResponseInputItem::FunctionCallOutput { output, .. } = &response
+                    && let Some(content_items) = output.content_items()
+                {
+                    let content = content_items
+                        .iter()
+                        .map(|item| match item {
+                            FunctionCallOutputContentItem::InputText { text } => {
+                                ContentItem::InputText { text: text.clone() }
+                            }
+                            FunctionCallOutputContentItem::InputImage { image_url } => {
+                                ContentItem::InputImage {
+                                    image_url: image_url.clone(),
+                                }
+                            }
+                        })
+                        .collect();
+
+                    if exec
+                        .session
+                        .inject_response_items(vec![ResponseInputItem::Message {
+                            role: "user".to_string(),
+                            content,
+                        }])
+                        .await
+                        .is_err()
+                    {
+                        return RunToolResult {
+                            id: req.id,
+                            ok: false,
+                            response: None,
+                            error: Some("unable to attach image (no active task)".to_string()),
+                        };
+                    }
+                }
+
+                match serde_json::to_value(response) {
+                    Ok(value) => RunToolResult {
+                        id: req.id,
+                        ok: true,
+                        response: Some(value),
+                        error: None,
+                    },
+                    Err(err) => RunToolResult {
+                        id: req.id,
+                        ok: false,
+                        response: None,
+                        error: Some(format!("failed to serialize tool output: {err}")),
+                    },
+                }
+            }
             Err(err) => RunToolResult {
                 id: req.id,
                 ok: false,
