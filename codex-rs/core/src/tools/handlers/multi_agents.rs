@@ -414,7 +414,7 @@ mod resume_agent {
             return Err(err);
         }
         turn.otel_manager
-            .counter("codex.mutli_agent.resume", 1, &[]);
+            .counter("codex.multi_agent.resume", 1, &[]);
 
         let content = serde_json::to_string(&ResumeAgentResult { status }).map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize resume_agent result: {err}"))
