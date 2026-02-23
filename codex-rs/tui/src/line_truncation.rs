@@ -20,15 +20,13 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
         spans,
     } = line;
     let mut used = 0usize;
-    let mut spans_out: Vec<Span<'static>> = Vec::new();
+    let mut spans_out: Vec<Span<'static>> = Vec::with_capacity(spans.len());
 
     for span in spans {
-        let text = span.content.into_owned();
-        let style = span.style;
-        let span_width = UnicodeWidthStr::width(text.as_str());
+        let span_width = UnicodeWidthStr::width(span.content.as_ref());
 
         if span_width == 0 {
-            spans_out.push(Span::styled(text, style));
+            spans_out.push(span);
             continue;
         }
 
@@ -38,22 +36,24 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
 
         if used + span_width <= max_width {
             used += span_width;
-            spans_out.push(Span::styled(text, style));
+            spans_out.push(span);
             continue;
         }
 
-        let mut truncated = String::new();
-        for ch in text.chars() {
+        let style = span.style;
+        let text = span.content.as_ref();
+        let mut end_idx = 0usize;
+        for (idx, ch) in text.char_indices() {
             let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
             if used + ch_width > max_width {
                 break;
             }
-            truncated.push(ch);
+            end_idx = idx + ch.len_utf8();
             used += ch_width;
         }
 
-        if !truncated.is_empty() {
-            spans_out.push(Span::styled(truncated, style));
+        if end_idx > 0 {
+            spans_out.push(Span::styled(text[..end_idx].to_string(), style));
         }
 
         break;
@@ -66,6 +66,11 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
     }
 }
 
+/// Truncate a styled line to `max_width` and append an ellipsis on overflow.
+///
+/// Intended for short UI rows. This preserves a fast no-overflow path (width
+/// pre-scan + return original line unchanged) and uses `truncate_line_to_width`
+/// for the overflow case.
 pub(crate) fn truncate_line_with_ellipsis_if_overflow(
     line: Line<'static>,
     max_width: usize,
