@@ -1256,6 +1256,22 @@ mod tests {
                 path: Some("src".to_string()),
             }],
         );
+
+        assert_parsed(
+            &shlex_split_safe("fd --search-path src foo"),
+            vec![ParsedCommand::Search {
+                cmd: "fd --search-path src foo".to_string(),
+                query: Some("foo".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("fd --search-path src"),
+            vec![ParsedCommand::ListFiles {
+                cmd: "fd --search-path src".to_string(),
+                path: Some("src".to_string()),
+            }],
+        );
     }
 
     #[test]
@@ -1849,6 +1865,22 @@ fn is_pathish(s: &str) -> bool {
 
 fn parse_fd_query_and_path(tail: &[String]) -> (Option<String>, Option<String>) {
     let args_no_connector = trim_at_connector(tail);
+    let mut search_paths = Vec::new();
+    let mut i = 0;
+    while i < args_no_connector.len() {
+        let arg = &args_no_connector[i];
+        if arg == "--search-path" {
+            if let Some(path) = args_no_connector.get(i + 1) {
+                search_paths.push(path.clone());
+            }
+            i += 2;
+            continue;
+        }
+        if let Some(path) = arg.strip_prefix("--search-path=") {
+            search_paths.push(path.to_string());
+        }
+        i += 1;
+    }
     // fd has several flags that take values (e.g., -t/--type, -e/--extension).
     // Skip those values when extracting positional operands.
     let candidates = skip_flag_values(
@@ -1867,7 +1899,7 @@ fn parse_fd_query_and_path(tail: &[String]) -> (Option<String>, Option<String>) 
         .into_iter()
         .filter(|p| !p.starts_with('-'))
         .collect();
-    match non_flags.as_slice() {
+    let (query, mut path) = match non_flags.as_slice() {
         [one] => {
             if is_pathish(one) {
                 (None, Some(short_display_path(one)))
@@ -1877,7 +1909,11 @@ fn parse_fd_query_and_path(tail: &[String]) -> (Option<String>, Option<String>) 
         }
         [q, p, ..] => (Some((*q).clone()), Some(short_display_path(p))),
         _ => (None, None),
+    };
+    if path.is_none() && !search_paths.is_empty() {
+        path = search_paths.first().map(|p| short_display_path(p));
     }
+    (query, path)
 }
 
 fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>) {
