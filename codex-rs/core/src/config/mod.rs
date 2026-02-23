@@ -1905,8 +1905,8 @@ impl Config {
             })
             .unwrap_or_default();
         let zsh_path = zsh_path_override
-            .or(config_profile.zsh_path.map(Into::into))
-            .or(cfg.zsh_path.map(Into::into));
+            .or(config_profile.zsh_path)
+            .or(cfg.zsh_path);
 
         let review_model = override_review_model.or(cfg.review_model);
 

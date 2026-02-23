@@ -141,6 +141,7 @@ pub trait EscalationPolicyFactory {
     fn create_policy(&self, policy: Arc<RwLock<Policy>>, stopwatch: Stopwatch) -> Self::Policy;
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_escalate_server(
     exec_params: ExecParams,
     sandbox_state: &SandboxState,
