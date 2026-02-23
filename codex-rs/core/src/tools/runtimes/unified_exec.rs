@@ -153,7 +153,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     fn network_approval_spec(
         &self,
         req: &UnifiedExecRequest,
-        _ctx: &ToolCtx<'_>,
+        _ctx: &ToolCtx,
     ) -> Option<NetworkApprovalSpec> {
         req.network.as_ref()?;
         Some(NetworkApprovalSpec {
@@ -166,7 +166,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         &mut self,
         req: &UnifiedExecRequest,
         attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx<'_>,
+        ctx: &ToolCtx,
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
