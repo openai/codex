@@ -157,3 +157,29 @@ fn valid_inner_stage_modes_do_not_panic() {
     ensure_inner_stage_mode_is_valid(false, true);
     ensure_inner_stage_mode_is_valid(true, true);
 }
+
+#[test]
+fn codex_bwrap_cmdline_requires_argv0_marker() {
+    assert_eq!(
+        is_codex_bwrap_cmdline(&[
+            "bwrap".to_string(),
+            "--argv0".to_string(),
+            "codex-linux-sandbox".to_string(),
+            "--".to_string(),
+            "/path/to/codex-linux-sandbox".to_string(),
+        ]),
+        true
+    );
+    assert_eq!(
+        is_codex_bwrap_cmdline(&["bwrap".to_string(), "--".to_string(), "/bin/sh".to_string(),]),
+        false
+    );
+    assert_eq!(
+        is_codex_bwrap_cmdline(&[
+            "bwrap".to_string(),
+            "--argv0".to_string(),
+            "bash".to_string(),
+        ]),
+        false
+    );
+}
