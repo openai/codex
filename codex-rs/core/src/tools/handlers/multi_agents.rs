@@ -109,6 +109,7 @@ mod spawn {
     #[derive(Debug, Serialize)]
     struct SpawnAgentResult {
         agent_id: String,
+        nickname: Option<String>,
     }
 
     pub async fn handle(
@@ -183,6 +184,7 @@ mod spawn {
                 .unwrap_or((None, None)),
             None => (None, None),
         };
+        let nickname = new_agent_nickname.clone();
         session
             .send_event(
                 &turn,
@@ -202,6 +204,7 @@ mod spawn {
 
         let content = serde_json::to_string(&SpawnAgentResult {
             agent_id: new_thread_id.to_string(),
+            nickname,
         })
         .map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize spawn_agent result: {err}"))
@@ -1085,6 +1088,7 @@ mod tests {
         #[derive(Debug, Deserialize)]
         struct SpawnAgentResult {
             agent_id: String,
+            nickname: Option<String>,
         }
 
         let (mut session, mut turn) = make_session_and_context().await;
@@ -1121,6 +1125,12 @@ mod tests {
         let result: SpawnAgentResult =
             serde_json::from_str(&content).expect("spawn_agent result should be json");
         let agent_id = agent_id(&result.agent_id).expect("agent_id should be valid");
+        assert!(
+            result
+                .nickname
+                .as_deref()
+                .is_some_and(|nickname| !nickname.is_empty())
+        );
         let snapshot = manager
             .get_thread(agent_id)
             .await
@@ -1184,6 +1194,7 @@ mod tests {
         #[derive(Debug, Deserialize)]
         struct SpawnAgentResult {
             agent_id: String,
+            nickname: Option<String>,
         }
 
         let (mut session, mut turn) = make_session_and_context().await;
@@ -1221,6 +1232,12 @@ mod tests {
         let result: SpawnAgentResult =
             serde_json::from_str(&content).expect("spawn_agent result should be json");
         assert!(!result.agent_id.is_empty());
+        assert!(
+            result
+                .nickname
+                .as_deref()
+                .is_some_and(|nickname| !nickname.is_empty())
+        );
         assert_eq!(success, Some(true));
     }
 
