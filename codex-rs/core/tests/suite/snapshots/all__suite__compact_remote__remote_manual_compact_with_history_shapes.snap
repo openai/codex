@@ -1,9 +1,8 @@
 ---
 source: core/tests/suite/compact_remote.rs
-assertion_line: 178
-expression: "format_labeled_requests_snapshot(\"Remote manual /compact where remote compact output is summary-only: follow-up layout uses returned summary plus new user message.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", follow_up_request),])"
+expression: "format_labeled_requests_snapshot(\"Remote manual /compact where remote compact output is compaction-only: follow-up layout uses the returned compaction item plus new user message.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", follow_up_request),])"
 ---
-Scenario: Remote manual /compact where remote compact output is summary-only: follow-up layout uses returned summary plus new user message.
+Scenario: Remote manual /compact where remote compact output is compaction-only: follow-up layout uses the returned compaction item plus new user message.
 
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
@@ -13,9 +12,8 @@ Scenario: Remote manual /compact where remote compact output is summary-only: fo
 04:message/assistant:FIRST_REMOTE_REPLY
 
 ## Remote Post-Compaction History Layout
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:REMOTE_COMPACTED_SUMMARY
-04:compaction:encrypted=true
-05:message/user:after compact
+00:compaction:encrypted=true
+01:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/user:<AGENTS_MD>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+04:message/user:after compact

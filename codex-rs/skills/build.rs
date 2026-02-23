@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
-    let samples_dir = Path::new("src/skills/assets/samples");
+    let samples_dir = Path::new("src/assets/samples");
     if !samples_dir.exists() {
         return;
     }
