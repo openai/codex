@@ -28,7 +28,6 @@ use crate::tools::sandboxing::default_exec_approval_requirement;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
-use std::sync::Arc;
 
 pub(crate) struct ToolOrchestrator {
     sandbox: SandboxManager,
@@ -66,8 +65,8 @@ impl ToolOrchestrator {
         .await;
 
         let attempt_tool_ctx = ToolCtx {
-            session: Arc::clone(&tool_ctx.session),
-            turn: Arc::clone(&tool_ctx.turn),
+            session: tool_ctx.session.clone(),
+            turn: tool_ctx.turn.clone(),
             call_id: tool_ctx.call_id.clone(),
             tool_name: tool_ctx.tool_name.clone(),
         };

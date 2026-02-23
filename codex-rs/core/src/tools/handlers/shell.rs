@@ -296,8 +296,8 @@ impl ShellHandler {
             &exec_params.command,
             &exec_params.cwd,
             exec_params.expiration.timeout_ms(),
-            &session,
-            &turn,
+            session.clone(),
+            turn.clone(),
             Some(&tracker),
             &call_id,
             tool_name.as_str(),
@@ -343,8 +343,8 @@ impl ShellHandler {
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = ShellRuntime::new();
         let tool_ctx = ToolCtx {
-            session: std::sync::Arc::clone(&session),
-            turn: std::sync::Arc::clone(&turn),
+            session: session.clone(),
+            turn: turn.clone(),
             call_id: call_id.clone(),
             tool_name,
         };

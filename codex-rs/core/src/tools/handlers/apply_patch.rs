@@ -107,7 +107,7 @@ impl ToolHandler for ApplyPatchHandler {
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
         match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
-                match apply_patch::apply_patch(&turn, changes).await {
+                match apply_patch::apply_patch(turn.as_ref(), changes).await {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
                         Ok(ToolOutput::Function {
@@ -140,8 +140,8 @@ impl ToolHandler for ApplyPatchHandler {
                         let mut orchestrator = ToolOrchestrator::new();
                         let mut runtime = ApplyPatchRuntime::new();
                         let tool_ctx = ToolCtx {
-                            session: Arc::clone(&session),
-                            turn: Arc::clone(&turn),
+                            session: session.clone(),
+                            turn: turn.clone(),
                             call_id: call_id.clone(),
                             tool_name: tool_name.to_string(),
                         };
@@ -150,7 +150,7 @@ impl ToolHandler for ApplyPatchHandler {
                                 &mut runtime,
                                 &req,
                                 &tool_ctx,
-                                &turn,
+                                turn.as_ref(),
                                 turn.approval_policy.value(),
                             )
                             .await
@@ -194,8 +194,8 @@ pub(crate) async fn intercept_apply_patch(
     command: &[String],
     cwd: &Path,
     timeout_ms: Option<u64>,
-    session: &Arc<Session>,
-    turn: &Arc<TurnContext>,
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
     tracker: Option<&SharedTurnDiffTracker>,
     call_id: &str,
     tool_name: &str,
@@ -204,8 +204,10 @@ pub(crate) async fn intercept_apply_patch(
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
                 .record_model_warning(
-                    format!("apply_patch was requested via {tool_name}. Use the apply_patch tool instead of exec_command."),
-                    turn,
+                    format!(
+                        "apply_patch was requested via {tool_name}. Use the apply_patch tool instead of exec_command."
+                    ),
+                    turn.as_ref(),
                 )
                 .await;
             match apply_patch::apply_patch(turn.as_ref(), changes).await {
@@ -240,8 +242,8 @@ pub(crate) async fn intercept_apply_patch(
                     let mut orchestrator = ToolOrchestrator::new();
                     let mut runtime = ApplyPatchRuntime::new();
                     let tool_ctx = ToolCtx {
-                        session: Arc::clone(session),
-                        turn: Arc::clone(turn),
+                        session: session.clone(),
+                        turn: turn.clone(),
                         call_id: call_id.to_string(),
                         tool_name: tool_name.to_string(),
                     };
@@ -250,7 +252,7 @@ pub(crate) async fn intercept_apply_patch(
                             &mut runtime,
                             &req,
                             &tool_ctx,
-                            turn,
+                            turn.as_ref(),
                             turn.approval_policy.value(),
                         )
                         .await
