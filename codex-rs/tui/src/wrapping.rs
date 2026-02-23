@@ -111,45 +111,58 @@ fn map_owned_wrapped_line_to_range(text: &str, cursor: usize, wrapped: &str) -> 
         start += ch.len_utf8();
     }
 
-    let mut end = start;
-    let mut saw_source_char = false;
-    let mut chars = wrapped.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if end < text.len() {
-            let Some(src) = text[end..].chars().next() else {
-                unreachable!("checked end < text.len()");
-            };
-            if ch == src {
-                end += src.len_utf8();
-                saw_source_char = true;
+    let mut best_end = start;
+    let mut best_had_mismatch_after_source = false;
+    for wrapped_start in wrapped
+        .char_indices()
+        .map(|(idx, _)| idx)
+        .chain(std::iter::once(wrapped.len()))
+    {
+        let mut end = start;
+        let mut saw_source_char = false;
+        let mut had_mismatch_after_source = false;
+        let mut chars = wrapped[wrapped_start..].chars().peekable();
+        while let Some(ch) = chars.next() {
+            if end < text.len() {
+                let Some(src) = text[end..].chars().next() else {
+                    unreachable!("checked end < text.len()");
+                };
+                if ch == src {
+                    end += src.len_utf8();
+                    saw_source_char = true;
+                    continue;
+                }
+            }
+
+            // textwrap can materialize owned lines when penalties are inserted.
+            // The default penalty is a trailing '-'; it does not correspond to
+            // source bytes, so we skip it while keeping byte ranges in source text.
+            if ch == '-' && chars.peek().is_none() {
                 continue;
             }
+
+            had_mismatch_after_source = saw_source_char;
+            break;
         }
 
-        // textwrap can materialize owned lines when penalties are inserted.
-        // The default penalty is a trailing '-'; it does not correspond to
-        // source bytes, so we skip it while keeping byte ranges in source text.
-        if ch == '-' && chars.peek().is_none() {
-            continue;
+        if end > best_end
+            || (end == best_end && best_had_mismatch_after_source && !had_mismatch_after_source)
+        {
+            best_end = end;
+            best_had_mismatch_after_source = had_mismatch_after_source;
         }
+    }
 
-        // Non-source chars can be synthesized by textwrap in owned output
-        // (e.g. non-space indent prefixes). Keep going and map the source bytes
-        // we can confidently match instead of crashing the app.
-        if !saw_source_char {
-            continue;
-        }
-
+    if best_had_mismatch_after_source {
         tracing::warn!(
             wrapped = %wrapped,
             cursor,
-            end,
+            end = best_end,
             "wrap_ranges: could not fully map owned line; returning partial source range"
         );
-        break;
     }
 
-    start..end
+    start..best_end
 }
 
 /// Returns `true` if any whitespace-delimited token in `line` looks like a URL.
@@ -1250,6 +1263,50 @@ them."#
         // The function should recover and return the mapped prefix range.
         let range = map_owned_wrapped_line_to_range("hello world", 0, "helloX");
         assert_eq!(range, 0..5);
+    }
+
+    #[test]
+    fn map_owned_wrapped_line_to_range_indent_coincides_with_source() {
+        // When the synthetic indent prefix starts with a character that also
+        // appears at the current source position, the mapper must not confuse
+        // the indent char for a source match.  Here the indent is "- " and the
+        // source text also starts with "-", so a naive char-by-char match would
+        // consume the source "-" for the indent "-", set saw_source_char too
+        // early, then break on the space — returning 0..1 instead of the full
+        // first word.
+        let text = "- item one and some more words";
+        // Simulate what textwrap would produce for the first continuation line
+        // when subsequent_indent = "- ": it prepends "- " to the source slice.
+        let range = map_owned_wrapped_line_to_range(text, 0, "- - item one");
+        // The mapper should skip the synthetic "- " prefix and map "- item one"
+        // back to source bytes 0..10.
+        assert_eq!(range, 0..10);
+    }
+
+    #[test]
+    fn wrap_ranges_indent_prefix_coincides_with_source_char() {
+        // End-to-end: source text starts with the same character as the indent
+        // prefix.  wrap_ranges must still reconstruct the full source.
+        let text = "- first item is long enough to wrap around";
+        let opts = || {
+            textwrap::Options::new(16)
+                .initial_indent("- ")
+                .subsequent_indent("- ")
+        };
+        let ranges = wrap_ranges(text, opts());
+        assert!(!ranges.is_empty());
+
+        let mut rebuilt = String::new();
+        let mut cursor = 0usize;
+        for range in ranges {
+            let start = range.start.max(cursor).min(text.len());
+            let end = range.end.min(text.len());
+            if start < end {
+                rebuilt.push_str(&text[start..end]);
+            }
+            cursor = cursor.max(end);
+        }
+        assert_eq!(rebuilt, text);
     }
 
     #[test]
