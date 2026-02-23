@@ -9,8 +9,11 @@ use crate::session_prefix::format_subagent_notification_message;
 use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
@@ -20,10 +23,12 @@ use std::sync::Weak;
 use tokio::sync::watch;
 
 const AGENT_NAMES: &str = include_str!("agent_names.txt");
+const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_thread: bool,
+    pub(crate) fork_parent_spawn_call_id: Option<String>,
 }
 
 fn agent_nickname_list() -> Vec<&'static str> {
@@ -124,11 +129,23 @@ impl AgentControl {
                             "parent thread rollout unavailable for fork: {parent_thread_id}"
                         ))
                     })?;
-                    let initial_history = InitialHistory::Forked(
+                    let mut forked_rollout_items =
                         RolloutRecorder::get_rollout_history(&rollout_path)
                             .await?
-                            .get_rollout_items(),
-                    );
+                            .get_rollout_items();
+                    if let Some(call_id) = options.fork_parent_spawn_call_id.as_ref() {
+                        let mut output = FunctionCallOutputPayload::from_text(
+                            FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string(),
+                        );
+                        output.success = Some(true);
+                        forked_rollout_items.push(RolloutItem::ResponseItem(
+                            ResponseItem::FunctionCallOutput {
+                                call_id: call_id.clone(),
+                                output,
+                            },
+                        ));
+                    }
+                    let initial_history = InitialHistory::Forked(forked_rollout_items);
                     state
                         .fork_thread_with_source(
                             config,
@@ -772,6 +789,7 @@ mod tests {
                 })),
                 SpawnAgentOptions {
                     fork_parent_thread: true,
+                    fork_parent_spawn_call_id: None,
                 },
             )
             .await
@@ -805,6 +823,82 @@ mod tests {
             .into_iter()
             .find(|entry| *entry == expected);
         assert_eq!(captured, Some(expected));
+
+        let _ = harness
+            .control
+            .shutdown_agent(child_thread_id)
+            .await
+            .expect("child shutdown should submit");
+        let _ = parent_thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("parent shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_fork_injects_output_for_parent_spawn_call() {
+        let harness = AgentControlHarness::new().await;
+        let (parent_thread_id, parent_thread) = harness.start_thread().await;
+        let turn_context = parent_thread.codex.session.new_default_turn().await;
+        let parent_spawn_call_id = "spawn-call-1".to_string();
+        let parent_spawn_call = ResponseItem::FunctionCall {
+            id: None,
+            name: "spawn_agent".to_string(),
+            arguments: "{}".to_string(),
+            call_id: parent_spawn_call_id.clone(),
+        };
+        parent_thread
+            .codex
+            .session
+            .record_conversation_items(turn_context.as_ref(), &[parent_spawn_call])
+            .await;
+        parent_thread
+            .codex
+            .session
+            .ensure_rollout_materialized()
+            .await;
+        parent_thread.codex.session.flush_rollout().await;
+
+        let child_thread_id = harness
+            .control
+            .spawn_agent_with_options(
+                harness.config.clone(),
+                text_input("child task"),
+                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth: 1,
+                    agent_nickname: None,
+                    agent_role: None,
+                })),
+                SpawnAgentOptions {
+                    fork_parent_thread: true,
+                    fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
+                },
+            )
+            .await
+            .expect("forked spawn should succeed");
+
+        let child_thread = harness
+            .manager
+            .get_thread(child_thread_id)
+            .await
+            .expect("child thread should be registered");
+        let history = child_thread.codex.session.clone_history().await;
+        let injected_output = history.raw_items().iter().find_map(|item| match item {
+            ResponseItem::FunctionCallOutput { call_id, output }
+                if call_id == &parent_spawn_call_id =>
+            {
+                Some(output)
+            }
+            _ => None,
+        });
+        let injected_output =
+            injected_output.expect("forked child should contain synthetic tool output");
+        assert_eq!(
+            injected_output.text_content(),
+            Some(FORKED_SPAWN_AGENT_OUTPUT_MESSAGE)
+        );
+        assert_eq!(injected_output.success, Some(true));
 
         let _ = harness
             .control

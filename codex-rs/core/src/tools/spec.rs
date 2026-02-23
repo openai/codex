@@ -553,10 +553,10 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             },
         ),
         (
-            "fork_current_thread".to_string(),
+            "fork_mode".to_string(),
             JsonSchema::Boolean {
                 description: Some(
-                    "When true, fork the current thread history into the new agent before sending the initial prompt."
+                    "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you."
                         .to_string(),
                 ),
             },
