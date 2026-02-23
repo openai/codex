@@ -609,6 +609,39 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_catalog_models_omit_builtin_presets_in_listing() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let auth = CodexAuth::from_api_key("Test API Key");
+    let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
+    let manager = ModelsManager::new(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        Some(ModelsResponse {
+            models: vec![test_remote_model(
+                "oca/gpt-5.2-codex",
+                ModelVisibility::List,
+                0,
+            )],
+        }),
+    );
+
+    let available = manager.list_models(RefreshStrategy::Offline).await;
+
+    assert!(
+        available
+            .iter()
+            .any(|model| model.model == "oca/gpt-5.2-codex"),
+        "custom catalog model should be listed"
+    );
+    assert!(
+        !available.iter().any(|model| model.model == "gpt-5.2-codex"),
+        "builtin presets should be omitted when custom catalog is provided"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_merge_adds_new_high_priority_first() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
