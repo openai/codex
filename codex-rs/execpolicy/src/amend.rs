@@ -78,23 +78,7 @@ pub fn blocking_append_allow_prefix_rule(
         .map_err(|source| AmendError::SerializePrefix { source })?;
     let pattern = format!("[{}]", tokens.join(", "));
     let rule = format!(r#"prefix_rule(pattern={pattern}, decision="allow")"#);
-
-    let dir = policy_path
-        .parent()
-        .ok_or_else(|| AmendError::MissingParent {
-            path: policy_path.to_path_buf(),
-        })?;
-    match std::fs::create_dir(dir) {
-        Ok(()) => {}
-        Err(ref source) if source.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(source) => {
-            return Err(AmendError::CreatePolicyDir {
-                dir: dir.to_path_buf(),
-                source,
-            });
-        }
-    }
-    append_locked_line(policy_path, &rule)
+    append_rule_line(policy_path, &rule)
 }
 
 /// Note this function uses advisory file locking and performs blocking I/O, so it should be used
@@ -138,7 +122,10 @@ pub fn blocking_append_network_rule(
         args.push(format!("justification={justification}"));
     }
     let rule = format!("network_rule({})", args.join(", "));
+    append_rule_line(policy_path, &rule)
+}
 
+fn append_rule_line(policy_path: &Path, rule: &str) -> Result<(), AmendError> {
     let dir = policy_path
         .parent()
         .ok_or_else(|| AmendError::MissingParent {
@@ -154,7 +141,8 @@ pub fn blocking_append_network_rule(
             });
         }
     }
-    append_locked_line(policy_path, &rule)
+
+    append_locked_line(policy_path, rule)
 }
 
 fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> {
@@ -301,6 +289,31 @@ prefix_rule(pattern=["echo", "Hello, world!"], decision="allow")
         assert_eq!(
             contents,
             r#"network_rule(host="api.github.com", protocol="https", decision="allow", justification="Allow https_connect access to api.github.com")
+"#
+        );
+    }
+
+    #[test]
+    fn appends_prefix_and_network_rules() {
+        let tmp = tempdir().expect("create temp dir");
+        let policy_path = tmp.path().join("rules").join("default.rules");
+
+        blocking_append_allow_prefix_rule(&policy_path, &[String::from("curl")])
+            .expect("append prefix rule");
+        blocking_append_network_rule(
+            &policy_path,
+            "api.github.com",
+            NetworkRuleProtocol::Https,
+            Decision::Allow,
+            Some("Allow https_connect access to api.github.com"),
+        )
+        .expect("append network rule");
+
+        let contents = std::fs::read_to_string(&policy_path).expect("read policy");
+        assert_eq!(
+            contents,
+            r#"prefix_rule(pattern=["curl"], decision="allow")
+network_rule(host="api.github.com", protocol="https", decision="allow", justification="Allow https_connect access to api.github.com")
 "#
         );
     }

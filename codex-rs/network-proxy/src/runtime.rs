@@ -526,7 +526,7 @@ impl NetworkProxyState {
             };
 
             let mut candidate = previous_cfg.clone();
-            let (target_entries, opposite_entries) = target.split_lists(&mut candidate);
+            let (target_entries, opposite_entries) = candidate.split_domain_lists_mut(target);
             let target_contains = target_entries
                 .iter()
                 .any(|entry| normalize_host(entry) == normalized_host);
@@ -610,16 +610,21 @@ impl DomainListKind {
             Self::Deny => "network.denied_domains",
         }
     }
+}
 
-    fn split_lists(self, config: &mut NetworkProxyConfig) -> (&mut Vec<String>, &mut Vec<String>) {
-        match self {
-            Self::Allow => (
-                &mut config.network.allowed_domains,
-                &mut config.network.denied_domains,
+impl NetworkProxyConfig {
+    fn split_domain_lists_mut(
+        &mut self,
+        target: DomainListKind,
+    ) -> (&mut Vec<String>, &mut Vec<String>) {
+        match target {
+            DomainListKind::Allow => (
+                &mut self.network.allowed_domains,
+                &mut self.network.denied_domains,
             ),
-            Self::Deny => (
-                &mut config.network.denied_domains,
-                &mut config.network.allowed_domains,
+            DomainListKind::Deny => (
+                &mut self.network.denied_domains,
+                &mut self.network.allowed_domains,
             ),
         }
     }
