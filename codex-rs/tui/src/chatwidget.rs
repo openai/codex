@@ -255,6 +255,7 @@ use crate::tui::FrameRequester;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
+use self::agent::ChatWidgetOpSenders;
 use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 pub(crate) use self::agent::spawn_op_forwarder;
@@ -530,6 +531,7 @@ enum RealtimeConversationUiState {
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
+    realtime_audio_op_tx: tokio::sync::mpsc::Sender<Op>,
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
@@ -2704,7 +2706,10 @@ impl ChatWidget {
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
+        let ChatWidgetOpSenders {
+            codex_op_tx,
+            realtime_audio_op_tx,
+        } = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
 
         let model_override = model.as_deref();
         let model_for_header = model
@@ -2736,6 +2741,7 @@ impl ChatWidget {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
+            realtime_audio_op_tx,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -2853,10 +2859,7 @@ impl ChatWidget {
         widget
     }
 
-    pub(crate) fn new_with_op_sender(
-        common: ChatWidgetInit,
-        codex_op_tx: UnboundedSender<Op>,
-    ) -> Self {
+    pub(crate) fn new_with_op_sender(common: ChatWidgetInit, senders: ChatWidgetOpSenders) -> Self {
         let ChatWidgetInit {
             config,
             frame_requester,
@@ -2878,6 +2881,10 @@ impl ChatWidget {
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
+        let ChatWidgetOpSenders {
+            codex_op_tx,
+            realtime_audio_op_tx,
+        } = senders;
 
         let model_override = model.as_deref();
         let model_for_header = model
@@ -2909,6 +2916,7 @@ impl ChatWidget {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
+            realtime_audio_op_tx,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -3051,8 +3059,10 @@ impl ChatWidget {
             .unwrap_or(header_model);
 
         let current_cwd = Some(session_configured.cwd.clone());
-        let codex_op_tx =
-            spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+        let ChatWidgetOpSenders {
+            codex_op_tx,
+            realtime_audio_op_tx,
+        } = spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
         let fallback_default = Settings {
             model: header_model.clone(),
@@ -3071,6 +3081,7 @@ impl ChatWidget {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
+            realtime_audio_op_tx,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -3409,7 +3420,7 @@ impl ChatWidget {
             return;
         }
 
-        match RealtimeAudioController::start(self.codex_op_tx.clone()) {
+        match RealtimeAudioController::start(self.realtime_audio_op_tx.clone()) {
             Ok(controller) => {
                 self.realtime_audio_controller = Some(controller);
                 self.realtime_conversation_state = RealtimeConversationUiState::Working;

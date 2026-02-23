@@ -7,11 +7,21 @@ use codex_core::config::Config;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::channel;
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+
+const REALTIME_MIC_AUDIO_QUEUE_CAPACITY: usize = 64;
+
+pub(crate) struct ChatWidgetOpSenders {
+    pub(crate) codex_op_tx: UnboundedSender<Op>,
+    pub(crate) realtime_audio_op_tx: Sender<Op>,
+}
 
 /// Spawn the agent bootstrapper and op forwarding loop, returning the
 /// `UnboundedSender<Op>` used by the UI to submit operations.
@@ -19,8 +29,10 @@ pub(crate) fn spawn_agent(
     config: Config,
     app_event_tx: AppEventSender,
     server: Arc<ThreadManager>,
-) -> UnboundedSender<Op> {
+) -> ChatWidgetOpSenders {
     let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
+    let (realtime_audio_op_tx, realtime_audio_op_rx) =
+        channel::<Op>(REALTIME_MIC_AUDIO_QUEUE_CAPACITY);
 
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
@@ -52,6 +64,7 @@ pub(crate) fn spawn_agent(
         app_event_tx_clone.send(AppEvent::CodexEvent(ev));
 
         let thread_clone = thread.clone();
+        spawn_bounded_op_forwarder(thread.clone(), realtime_audio_op_rx);
         tokio::spawn(async move {
             while let Some(op) = codex_op_rx.recv().await {
                 let id = thread_clone.submit(op).await;
@@ -72,7 +85,10 @@ pub(crate) fn spawn_agent(
         }
     });
 
-    codex_op_tx
+    ChatWidgetOpSenders {
+        codex_op_tx,
+        realtime_audio_op_tx,
+    }
 }
 
 /// Spawn agent loops for an existing thread (e.g., a forked thread).
@@ -82,8 +98,10 @@ pub(crate) fn spawn_agent_from_existing(
     thread: std::sync::Arc<CodexThread>,
     session_configured: codex_protocol::protocol::SessionConfiguredEvent,
     app_event_tx: AppEventSender,
-) -> UnboundedSender<Op> {
+) -> ChatWidgetOpSenders {
     let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
+    let (realtime_audio_op_tx, realtime_audio_op_rx) =
+        channel::<Op>(REALTIME_MIC_AUDIO_QUEUE_CAPACITY);
 
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
@@ -95,6 +113,7 @@ pub(crate) fn spawn_agent_from_existing(
         app_event_tx_clone.send(AppEvent::CodexEvent(ev));
 
         let thread_clone = thread.clone();
+        spawn_bounded_op_forwarder(thread.clone(), realtime_audio_op_rx);
         tokio::spawn(async move {
             while let Some(op) = codex_op_rx.recv().await {
                 let id = thread_clone.submit(op).await;
@@ -115,13 +134,19 @@ pub(crate) fn spawn_agent_from_existing(
         }
     });
 
-    codex_op_tx
+    ChatWidgetOpSenders {
+        codex_op_tx,
+        realtime_audio_op_tx,
+    }
 }
 
 /// Spawn an op-forwarding loop for an existing thread without subscribing to events.
-pub(crate) fn spawn_op_forwarder(thread: std::sync::Arc<CodexThread>) -> UnboundedSender<Op> {
+pub(crate) fn spawn_op_forwarder(thread: std::sync::Arc<CodexThread>) -> ChatWidgetOpSenders {
     let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
+    let (realtime_audio_op_tx, realtime_audio_op_rx) =
+        channel::<Op>(REALTIME_MIC_AUDIO_QUEUE_CAPACITY);
 
+    spawn_bounded_op_forwarder(thread.clone(), realtime_audio_op_rx);
     tokio::spawn(async move {
         while let Some(op) = codex_op_rx.recv().await {
             if let Err(e) = thread.submit(op).await {
@@ -130,5 +155,18 @@ pub(crate) fn spawn_op_forwarder(thread: std::sync::Arc<CodexThread>) -> Unbound
         }
     });
 
-    codex_op_tx
+    ChatWidgetOpSenders {
+        codex_op_tx,
+        realtime_audio_op_tx,
+    }
+}
+
+fn spawn_bounded_op_forwarder(thread: std::sync::Arc<CodexThread>, mut op_rx: Receiver<Op>) {
+    tokio::spawn(async move {
+        while let Some(op) = op_rx.recv().await {
+            if let Err(e) = thread.submit(op).await {
+                tracing::error!("failed to submit realtime audio op: {e}");
+            }
+        }
+    });
 }

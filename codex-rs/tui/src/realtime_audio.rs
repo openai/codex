@@ -1,14 +1,15 @@
 use anyhow::Result;
+use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
+#[cfg(not(test))]
+use tokio::sync::mpsc::error::TrySendError;
 
 #[cfg(not(test))]
 use anyhow::Context;
 #[cfg(not(test))]
 use base64::Engine;
-#[cfg(not(test))]
-use codex_protocol::protocol::ConversationAudioParams;
 #[cfg(not(test))]
 use cpal::traits::DeviceTrait;
 #[cfg(not(test))]
@@ -32,6 +33,9 @@ const PLAYBACK_BUFFER_SECONDS: usize = 5;
 const MAX_AUDIO_FRAME_DECODED_BYTES: usize = 128 * 1024;
 #[cfg(not(test))]
 const MAX_AUDIO_FRAME_ENCODED_BYTES: usize = 192 * 1024;
+const MIN_REALTIME_PLAYBACK_SAMPLE_RATE: u32 = 8_000;
+const MAX_REALTIME_PLAYBACK_SAMPLE_RATE: u32 = 192_000;
+const MAX_RESAMPLED_MONO_SAMPLES_PER_FRAME: usize = 480_000;
 
 pub(crate) struct RealtimeAudioController {
     backend: RealtimeAudioBackend,
@@ -52,10 +56,10 @@ struct LiveRealtimeAudioController {
 }
 
 impl RealtimeAudioController {
-    pub(crate) fn start(codex_op_tx: UnboundedSender<Op>) -> Result<Self> {
+    pub(crate) fn start(realtime_audio_op_tx: Sender<Op>) -> Result<Self> {
         #[cfg(test)]
         {
-            let _ = codex_op_tx;
+            let _ = realtime_audio_op_tx;
             Ok(Self {
                 backend: RealtimeAudioBackend::Stub,
             })
@@ -91,7 +95,7 @@ impl RealtimeAudioController {
                 output_config.channels,
             )));
             let mic_state = Arc::new(Mutex::new(MicCaptureState::new(
-                codex_op_tx,
+                realtime_audio_op_tx,
                 input_config.sample_rate.0,
                 input_config.channels,
             )));
@@ -152,7 +156,7 @@ impl RealtimeAudioController {
 #[cfg(not(test))]
 #[derive(Debug)]
 struct MicCaptureState {
-    codex_op_tx: UnboundedSender<Op>,
+    realtime_audio_op_tx: Sender<Op>,
     source_sample_rate: u32,
     source_channels: u16,
     source_mono: Vec<f32>,
@@ -163,12 +167,12 @@ struct MicCaptureState {
 #[cfg(not(test))]
 impl MicCaptureState {
     fn new(
-        codex_op_tx: UnboundedSender<Op>,
+        realtime_audio_op_tx: Sender<Op>,
         source_sample_rate: u32,
         source_channels: u16,
     ) -> Self {
         Self {
-            codex_op_tx,
+            realtime_audio_op_tx,
             source_sample_rate,
             source_channels,
             source_mono: Vec::new(),
@@ -247,9 +251,15 @@ impl MicCaptureState {
                     samples_per_channel: Some(TARGET_SAMPLES_PER_CHANNEL),
                 },
             });
-            if let Err(err) = self.codex_op_tx.send(op) {
-                warn!("failed to send realtime microphone frame: {err}");
-                break;
+            match self.realtime_audio_op_tx.try_send(op) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    warn!("dropping realtime microphone frame due to full TUI audio queue");
+                }
+                Err(TrySendError::Closed(_)) => {
+                    warn!("failed to send realtime microphone frame: channel closed");
+                    break;
+                }
             }
         }
     }
@@ -317,9 +327,27 @@ impl PlaybackState {
             warn!("dropping realtime audio frame with zero sample rate");
             return Ok(());
         }
+        if !is_supported_realtime_playback_sample_rate(frame.sample_rate) {
+            warn!(
+                sample_rate = frame.sample_rate,
+                min_sample_rate = MIN_REALTIME_PLAYBACK_SAMPLE_RATE,
+                max_sample_rate = MAX_REALTIME_PLAYBACK_SAMPLE_RATE,
+                "dropping realtime audio frame with unsupported sample rate"
+            );
+            return Ok(());
+        }
 
-        let resampled =
-            resample_linear_mono(&mono, frame.sample_rate, self.output_sample_rate.max(1));
+        let Some(resampled) =
+            resample_linear_mono(&mono, frame.sample_rate, self.output_sample_rate.max(1))
+        else {
+            warn!(
+                src_rate = frame.sample_rate,
+                dst_rate = self.output_sample_rate.max(1),
+                max_samples = MAX_RESAMPLED_MONO_SAMPLES_PER_FRAME,
+                "dropping realtime audio frame due to oversized resampled output"
+            );
+            return Ok(());
+        };
         for sample in resampled {
             for _ in 0..self.output_channels {
                 self.queue.push_back(sample);
@@ -353,18 +381,23 @@ fn interleaved_i16_to_mono_f32(samples: &[i16], num_channels: u16) -> Vec<f32> {
     mono
 }
 
-fn resample_linear_mono(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+fn is_supported_realtime_playback_sample_rate(sample_rate: u32) -> bool {
+    (MIN_REALTIME_PLAYBACK_SAMPLE_RATE..=MAX_REALTIME_PLAYBACK_SAMPLE_RATE).contains(&sample_rate)
+}
+
+fn resample_linear_mono(input: &[f32], src_rate: u32, dst_rate: u32) -> Option<Vec<f32>> {
     if input.is_empty() || src_rate == 0 || dst_rate == 0 {
-        return Vec::new();
+        return Some(Vec::new());
     }
     if src_rate == dst_rate || input.len() == 1 {
-        return input.to_vec();
+        return Some(input.to_vec());
     }
 
-    let out_len = ((input.len() as u64 * dst_rate as u64) / src_rate as u64)
-        .max(1)
-        .try_into()
-        .unwrap_or(usize::MAX);
+    let out_len = ((input.len() as u64 * dst_rate as u64) / src_rate as u64).max(1);
+    if out_len > MAX_RESAMPLED_MONO_SAMPLES_PER_FRAME as u64 {
+        return None;
+    }
+    let out_len = usize::try_from(out_len).ok()?;
     let step = src_rate as f64 / dst_rate as f64;
     let mut pos = 0.0f64;
     let mut out = Vec::with_capacity(out_len);
@@ -380,7 +413,7 @@ fn resample_linear_mono(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32>
         }
         pos += step;
     }
-    out
+    Some(out)
 }
 
 #[cfg(not(test))]
@@ -515,12 +548,30 @@ fn fill_output_buffer<T>(
 
 #[cfg(test)]
 mod tests {
+    use super::MAX_RESAMPLED_MONO_SAMPLES_PER_FRAME;
+    use super::is_supported_realtime_playback_sample_rate;
     use super::resample_linear_mono;
     use pretty_assertions::assert_eq;
 
     #[test]
     fn resample_linear_passthrough_when_same_rate() {
         let input = vec![0.1, -0.2, 0.3];
-        assert_eq!(resample_linear_mono(&input, 24_000, 24_000), input);
+        assert_eq!(resample_linear_mono(&input, 24_000, 24_000), Some(input));
+    }
+
+    #[test]
+    fn playback_sample_rate_validation_rejects_unrealistic_rates() {
+        assert!(!is_supported_realtime_playback_sample_rate(1));
+        assert!(!is_supported_realtime_playback_sample_rate(7_999));
+        assert!(is_supported_realtime_playback_sample_rate(8_000));
+        assert!(is_supported_realtime_playback_sample_rate(24_000));
+        assert!(is_supported_realtime_playback_sample_rate(192_000));
+        assert!(!is_supported_realtime_playback_sample_rate(192_001));
+    }
+
+    #[test]
+    fn resample_linear_returns_none_when_output_would_exceed_cap() {
+        let input = vec![0.0; (MAX_RESAMPLED_MONO_SAMPLES_PER_FRAME / 2) + 1];
+        assert_eq!(resample_linear_mono(&input, 1, 2), None);
     }
 }
