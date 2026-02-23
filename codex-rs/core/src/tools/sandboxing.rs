@@ -214,12 +214,9 @@ pub(crate) fn approval_requirement_for_sandbox_permissions(
                 proposed_execpolicy_amendment: None,
             }
         }
-        ExecApprovalRequirement::Skip {
-            bypass_sandbox,
-            proposed_execpolicy_amendment,
-        } => ExecApprovalRequirement::Skip {
-            bypass_sandbox,
-            proposed_execpolicy_amendment,
+        ExecApprovalRequirement::Skip { .. } => ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
         },
     }
 }
@@ -452,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn additional_permissions_preserve_allow_including_bypass() {
+    fn additional_permissions_force_approval_even_when_execpolicy_skips() {
         assert_eq!(
             approval_requirement_for_sandbox_permissions(
                 SandboxPermissions::WithAdditionalPermissions,
@@ -465,12 +462,9 @@ mod tests {
                 },
                 Some("need file access".to_string()),
             ),
-            ExecApprovalRequirement::Skip {
-                bypass_sandbox: true,
-                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                    "git".to_string(),
-                    "status".to_string(),
-                ])),
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
             }
         );
     }
