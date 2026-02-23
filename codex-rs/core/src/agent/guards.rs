@@ -1,5 +1,6 @@
 use crate::error::CodexErr;
 use crate::error::Result;
+use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -20,6 +21,7 @@ use std::sync::atomic::Ordering;
 #[derive(Default)]
 pub(crate) struct Guards {
     active_agents: Mutex<ActiveAgents>,
+    otel_manager: Option<Arc<OtelManager>>,
     total_count: AtomicUsize,
 }
 
@@ -118,6 +120,9 @@ impl Guards {
             } else {
                 active_agents.used_agent_nicknames.clear();
                 active_agents.nickname_reset_count += 1;
+                if let Some(metrics) = codex_otel::metrics::global() {
+                    let _ = metrics.counter("codex.multi_agent.nickname_pool_reset", 1, &[]);
+                }
                 names.choose(&mut rand::rng())?.to_string()
             }
         };

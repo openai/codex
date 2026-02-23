@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 use toml::Value as TomlValue;
 
-const DEFAULT_ROLE_NAME: &str = "default";
+pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
 /// Applies a role config layer to a mutable config and preserves unspecified keys.

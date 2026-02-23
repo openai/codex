@@ -93,6 +93,7 @@ impl ToolHandler for MultiAgentHandler {
 
 mod spawn {
     use super::*;
+    use crate::agent::role::DEFAULT_ROLE_NAME;
     use crate::agent::role::apply_role_to_config;
 
     use crate::agent::exceeds_thread_spawn_depth_limit;
@@ -201,6 +202,9 @@ mod spawn {
             )
             .await;
         let new_thread_id = result?;
+        let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+        turn.otel_manager
+            .counter("codex.multi_agent.spawn", 1, &[("role", role_tag)]);
 
         let content = serde_json::to_string(&SpawnAgentResult {
             agent_id: new_thread_id.to_string(),
@@ -409,6 +413,8 @@ mod resume_agent {
         if let Some(err) = error {
             return Err(err);
         }
+        turn.otel_manager
+            .counter("codex.mutli_agent.resume", 1, &[]);
 
         let content = serde_json::to_string(&ResumeAgentResult { status }).map_err(|err| {
             FunctionCallError::Fatal(format!("failed to serialize resume_agent result: {err}"))
