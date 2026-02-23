@@ -785,8 +785,8 @@ pub fn new_approval_decision_cell(
     command: Vec<String>,
     decision: codex_protocol::protocol::ReviewDecision,
 ) -> Box<dyn HistoryCell> {
-    use codex_protocol::protocol::ReviewDecision::*;
     use codex_protocol::protocol::NetworkPolicyRuleAction;
+    use codex_protocol::protocol::ReviewDecision::*;
 
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
         Approved => {
