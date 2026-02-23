@@ -4,7 +4,9 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -97,6 +99,7 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
+use tokio::fs;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
@@ -211,6 +214,7 @@ use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
 use crate::rollout::policy::EventPersistenceMode;
+use crate::rollout::truncation;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
@@ -268,6 +272,37 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
+
+const ROOT_AGENT_PROMPT_FALLBACK: &str = include_str!("../root_agent_prompt.md");
+const SUBAGENT_PROMPT_FALLBACK: &str = include_str!("../subagent_prompt.md");
+const WATCHDOG_PROMPT_FALLBACK: &str = include_str!("../watchdog_agent_prompt.md");
+
+async fn load_agent_prompt_fallback(
+    codex_home: &Path,
+    fallback: &str,
+    override_filename: &str,
+) -> String {
+    let override_path = codex_home.join(override_filename);
+    if let Ok(contents) = fs::read_to_string(&override_path).await
+        && !contents.trim().is_empty()
+    {
+        return contents;
+    }
+
+    fallback.to_string()
+}
+
+async fn load_root_agent_prompt(codex_home: &Path) -> String {
+    load_agent_prompt_fallback(codex_home, ROOT_AGENT_PROMPT_FALLBACK, "AGENTS.root.md").await
+}
+
+async fn load_subagent_prompt(codex_home: &Path) -> String {
+    load_agent_prompt_fallback(codex_home, SUBAGENT_PROMPT_FALLBACK, "AGENTS.subagent.md").await
+}
+
+pub(crate) async fn load_watchdog_prompt(codex_home: &Path) -> String {
+    load_agent_prompt_fallback(codex_home, WATCHDOG_PROMPT_FALLBACK, "AGENTS.watchdog.md").await
+}
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -348,6 +383,21 @@ impl Codex {
             )
             .await;
 
+        let role_prompt = if config.features.enabled(Feature::Collab) {
+            if let SessionSource::SubAgent(_) = session_source {
+                Some(load_subagent_prompt(&config.codex_home).await)
+            } else {
+                Some(load_root_agent_prompt(&config.codex_home).await)
+            }
+        } else {
+            None
+        };
+        let developer_instructions = match (role_prompt, config.developer_instructions.clone()) {
+            (Some(prompt), Some(existing)) => Some(format!("{prompt}\n\n{existing}")),
+            (Some(prompt), None) => Some(prompt),
+            (None, existing) => existing,
+        };
+
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
@@ -402,7 +452,7 @@ impl Codex {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
-            developer_instructions: config.developer_instructions.clone(),
+            developer_instructions,
             user_instructions,
             personality: config.personality,
             base_instructions,
@@ -517,6 +567,14 @@ impl Codex {
     pub(crate) fn enabled(&self, feature: Feature) -> bool {
         self.session.enabled(feature)
     }
+
+    pub(crate) async fn has_active_turn(&self) -> bool {
+        self.session.has_active_turn().await
+    }
+
+    pub(crate) fn last_completed_turn_used_collab_send_input(&self) -> bool {
+        self.session.last_completed_turn_used_collab_send_input()
+    }
 }
 
 /// Context for an initialized model agent
@@ -536,6 +594,10 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+    /// Tracks whether the current turn delivered a collab inbox message via send_input.
+    turn_used_collab_send_input: AtomicBool,
+    /// Snapshots whether the last completed turn used collab send_input.
+    last_completed_turn_used_collab_send_input: AtomicBool,
 }
 
 /// The context needed for a single turn of the thread.
@@ -769,6 +831,7 @@ impl SessionConfiguration {
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
             session_source: self.session_source.clone(),
+            collab_inbox_delivery_role: self.original_config_do_not_use.collab_inbox_delivery_role,
         }
     }
 
@@ -1370,6 +1433,8 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            turn_used_collab_send_input: AtomicBool::new(false),
+            last_completed_turn_used_collab_send_input: AtomicBool::new(false),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -1485,6 +1550,43 @@ impl Session {
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.services.state_db.clone()
+    }
+
+    pub(crate) async fn has_active_turn(&self) -> bool {
+        self.active_turn.lock().await.is_some()
+    }
+
+    pub(crate) async fn parent_thread_id(&self) -> Option<ThreadId> {
+        let state = self.state.lock().await;
+        match &state.session_configuration.session_source {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            }) => Some(*parent_thread_id),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn mark_turn_used_collab_send_input(&self) {
+        self.turn_used_collab_send_input
+            .store(true, Ordering::Release);
+    }
+
+    pub(crate) fn reset_turn_collab_send_input_flag(&self) {
+        self.turn_used_collab_send_input
+            .store(false, Ordering::Release);
+    }
+
+    pub(crate) fn snapshot_collab_send_input_on_turn_complete(&self) {
+        let used_collab_send_input = self
+            .turn_used_collab_send_input
+            .swap(false, Ordering::AcqRel);
+        self.last_completed_turn_used_collab_send_input
+            .store(used_collab_send_input, Ordering::Release);
+    }
+
+    pub(crate) fn last_completed_turn_used_collab_send_input(&self) -> bool {
+        self.last_completed_turn_used_collab_send_input
+            .load(Ordering::Acquire)
     }
 
     /// Ensure all rollout writes are durably flushed.
@@ -1689,6 +1791,15 @@ impl Session {
                 let previous_model =
                     previous_regular_turn_context_item.map(|ctx| ctx.model.clone());
                 self.set_previous_model(previous_model).await;
+                let mut rollout_items = rollout_items;
+                let fork_reference = rollout_items.iter().find_map(|item| match item {
+                    RolloutItem::ForkReference(_) => Some(item.clone()),
+                    _ => None,
+                });
+                // During the initial fork startup we already have inherited rollout items in
+                // memory; keep fork references for on-disk resume, but do not recurse into them
+                // during this startup reconstruction.
+                rollout_items.retain(|item| !matches!(item, RolloutItem::ForkReference(_)));
 
                 // Always add response items to conversation history
                 let reconstructed_history = self
@@ -1709,8 +1820,12 @@ impl Session {
                     self.set_mcp_tool_selection(selected_tools).await;
                 }
 
-                // If persisting, persist all rollout items as-is (recorder filters)
-                if !rollout_items.is_empty() {
+                // For forks, persist only a compact fork reference marker instead of copying all
+                // inherited rollout items into the child rollout file.
+                if let Some(reference) = fork_reference {
+                    self.persist_rollout_items(&[reference]).await;
+                } else if !rollout_items.is_empty() {
+                    // Fallback for older forks that do not include a fork reference marker.
                     self.persist_rollout_items(&rollout_items).await;
                 }
 
@@ -2596,34 +2711,89 @@ impl Session {
         rollout_items: &[RolloutItem],
     ) -> Vec<ResponseItem> {
         let mut history = ContextManager::new();
-        for item in rollout_items {
-            match item {
-                RolloutItem::ResponseItem(response_item) => {
-                    history.record_items(
-                        std::iter::once(response_item),
-                        turn_context.truncation_policy,
-                    );
-                }
-                RolloutItem::Compacted(compacted) => {
-                    if let Some(replacement) = &compacted.replacement_history {
-                        history.replace(replacement.clone());
-                    } else {
-                        let user_messages = collect_user_messages(history.raw_items());
-                        let rebuilt = compact::build_compacted_history(
-                            self.build_initial_context(turn_context).await,
-                            &user_messages,
-                            &compacted.message,
-                        );
-                        history.replace(rebuilt);
+        self.apply_rollout_items_to_history(&mut history, turn_context, rollout_items, 0)
+            .await;
+        history.raw_items().to_vec()
+    }
+
+    async fn apply_rollout_items_to_history(
+        &self,
+        history: &mut ContextManager,
+        turn_context: &TurnContext,
+        rollout_items: &[RolloutItem],
+        initial_depth: usize,
+    ) {
+        const MAX_FORK_REFERENCE_DEPTH: usize = 8;
+
+        let mut stack: Vec<(Vec<RolloutItem>, usize, usize)> =
+            vec![(rollout_items.to_vec(), 0, initial_depth)];
+
+        while let Some((items, mut idx, depth)) = stack.pop() {
+            while idx < items.len() {
+                match &items[idx] {
+                    RolloutItem::ForkReference(reference) => {
+                        if depth >= MAX_FORK_REFERENCE_DEPTH {
+                            warn!(
+                                "skipping fork reference recursion at depth {} for {:?}",
+                                depth, reference.rollout_path
+                            );
+                            idx += 1;
+                            continue;
+                        }
+
+                        let parent_history =
+                            match RolloutRecorder::get_rollout_history(&reference.rollout_path)
+                                .await
+                            {
+                                Ok(history) => history,
+                                Err(err) => {
+                                    warn!(
+                                        "failed to load fork reference rollout {:?}: {err}",
+                                        reference.rollout_path
+                                    );
+                                    idx += 1;
+                                    continue;
+                                }
+                            };
+                        let parent_items = parent_history.get_rollout_items();
+                        let parent_items =
+                            truncation::truncate_rollout_before_nth_user_message_from_start(
+                                &parent_items,
+                                reference.nth_user_message,
+                            );
+
+                        // Process referenced parent items before continuing with the current list.
+                        stack.push((items, idx + 1, depth));
+                        stack.push((parent_items, 0, depth + 1));
+                        break;
                     }
+                    RolloutItem::ResponseItem(response_item) => {
+                        history.record_items(
+                            std::iter::once(response_item),
+                            turn_context.truncation_policy,
+                        );
+                    }
+                    RolloutItem::Compacted(compacted) => {
+                        if let Some(replacement) = &compacted.replacement_history {
+                            history.replace(replacement.clone());
+                        } else {
+                            let user_messages = collect_user_messages(history.raw_items());
+                            let rebuilt = compact::build_compacted_history(
+                                self.build_initial_context(turn_context).await,
+                                &user_messages,
+                                &compacted.message,
+                            );
+                            history.replace(rebuilt);
+                        }
+                    }
+                    RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                        history.drop_last_n_user_turns(rollback.num_turns);
+                    }
+                    _ => {}
                 }
-                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
-                    history.drop_last_n_user_turns(rollback.num_turns);
-                }
-                _ => {}
+                idx += 1;
             }
         }
-        history.raw_items().to_vec()
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -3356,6 +3526,10 @@ impl Session {
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
+    // Seed with context in case the first op changes settings or injects response items before a
+    // normal user turn starts.
+    let mut previous_context = Some(sess.new_default_turn().await.to_turn_context_item());
+
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
@@ -3427,7 +3601,17 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 .await;
             }
             Op::UserInput { .. } | Op::UserTurn { .. } => {
-                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
+                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
+                    .await;
+            }
+            Op::InjectResponseItems { items } => {
+                handlers::inject_response_items(
+                    &sess,
+                    sub.id.clone(),
+                    items,
+                    &mut previous_context,
+                )
+                .await;
             }
             Op::ExecApproval {
                 id: approval_id,
@@ -3504,7 +3688,13 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::set_thread_name(&sess, sub.id.clone(), name).await;
             }
             Op::RunUserShellCommand { command } => {
-                handlers::run_user_shell_command(&sess, sub.id.clone(), command).await;
+                handlers::run_user_shell_command(
+                    &sess,
+                    sub.id.clone(),
+                    command,
+                    &mut previous_context,
+                )
+                .await;
             }
             Op::ResolveElicitation {
                 server_name,
@@ -3532,7 +3722,6 @@ mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::SteerInputError;
-
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
 
@@ -3566,15 +3755,20 @@ mod handlers {
     use codex_protocol::protocol::ThreadNameUpdatedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnContextItem;
     use codex_protocol::protocol::WarningEvent;
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
+    use crate::parse_turn_item;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
+    use codex_protocol::items::TurnItem;
     use codex_protocol::mcp::RequestId as ProtocolRequestId;
+    use codex_protocol::models::ResponseInputItem;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
@@ -3608,7 +3802,12 @@ mod handlers {
         }
     }
 
-    pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
+    pub async fn user_input_or_turn(
+        sess: &Arc<Session>,
+        sub_id: String,
+        op: Op,
+        previous_context: &mut Option<TurnContextItem>,
+    ) {
         let (items, updates) = match op {
             Op::UserTurn {
                 cwd,
@@ -3669,15 +3868,112 @@ mod handlers {
 
         // Attempt to inject input into current task.
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
+            let previous_model = sess.previous_model().await;
+            let update_items = sess.build_settings_update_items(
+                previous_context.as_ref(),
+                previous_model.as_deref(),
+                &current_context,
+            );
+            if !update_items.is_empty() {
+                sess.record_conversation_items(&current_context, &update_items)
+                    .await;
+            }
+
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
             sess.spawn_task(Arc::clone(&current_context), items, regular_task)
                 .await;
+            *previous_context = Some(current_context.to_turn_context_item());
         }
     }
 
-    pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command: String) {
+    pub async fn inject_response_items(
+        sess: &Arc<Session>,
+        sub_id: String,
+        items: Vec<ResponseInputItem>,
+        previous_context: &mut Option<TurnContextItem>,
+    ) {
+        const MAX_TURN_RESTART_ATTEMPTS: usize = 3;
+
+        let mut pending_items = items;
+        let mut attempts = 0usize;
+        loop {
+            match sess.inject_response_items(pending_items).await {
+                Ok(()) => return,
+                Err(items_without_active_turn) => {
+                    pending_items = items_without_active_turn;
+                }
+            }
+
+            if attempts >= MAX_TURN_RESTART_ATTEMPTS {
+                warn!(
+                    attempts,
+                    remaining_items = pending_items.len(),
+                    "dropping response items after repeated turn restart failures"
+                );
+                return;
+            }
+            attempts += 1;
+
+            let mut turn_input =
+                pop_leading_user_message_input(&mut pending_items).unwrap_or_default();
+            if turn_input.is_empty() {
+                turn_input.push(UserInput::Text {
+                    text: String::new(),
+                    text_elements: Vec::new(),
+                });
+            }
+
+            let turn_sub_id = if attempts == 1 {
+                sub_id.clone()
+            } else {
+                format!("{sub_id}-retry-{attempts}")
+            };
+            let current_context = sess.new_default_turn_with_sub_id(turn_sub_id).await;
+            current_context.otel_manager.user_prompt(&turn_input);
+            let previous_model = sess.previous_model().await;
+            let update_items = sess.build_settings_update_items(
+                previous_context.as_ref(),
+                previous_model.as_deref(),
+                &current_context,
+            );
+            if !update_items.is_empty() {
+                sess.record_conversation_items(&current_context, &update_items)
+                    .await;
+            }
+
+            sess.refresh_mcp_servers_if_requested(&current_context)
+                .await;
+            let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
+            sess.spawn_task(Arc::clone(&current_context), turn_input, regular_task)
+                .await;
+            *previous_context = Some(current_context.to_turn_context_item());
+
+            if pending_items.is_empty() {
+                return;
+            }
+        }
+    }
+
+    fn pop_leading_user_message_input(
+        items: &mut Vec<ResponseInputItem>,
+    ) -> Option<Vec<UserInput>> {
+        let first_item = items.first().cloned()?;
+        let response_item: ResponseItem = first_item.into();
+        let TurnItem::UserMessage(user_message) = parse_turn_item(&response_item)? else {
+            return None;
+        };
+        let _ = items.remove(0);
+        Some(user_message.content)
+    }
+
+    pub async fn run_user_shell_command(
+        sess: &Arc<Session>,
+        sub_id: String,
+        command: String,
+        previous_context: &mut Option<TurnContextItem>,
+    ) {
         if let Some((turn_context, cancellation_token)) =
             sess.active_turn_context_and_cancellation_token().await
         {
@@ -3702,6 +3998,7 @@ mod handlers {
             UserShellCommandTask::new(command),
         )
         .await;
+        *previous_context = Some(turn_context.to_turn_context_item());
     }
 
     pub async fn resolve_elicitation(
@@ -4345,12 +4642,9 @@ async fn spawn_review_thread(
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
-        let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(
             error = %err,
-            ?review_web_search_mode,
-            ?fallback_value,
-            "review web_search_mode is disallowed by requirements; keeping constrained value"
+            "failed to force review web_search_mode=disabled; keeping constrained value"
         );
     }
 
@@ -7959,6 +8253,8 @@ mod tests {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            turn_used_collab_send_input: AtomicBool::new(false),
+            last_completed_turn_used_collab_send_input: AtomicBool::new(false),
         };
 
         (session, turn_context)
@@ -8112,6 +8408,8 @@ mod tests {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            turn_used_collab_send_input: AtomicBool::new(false),
+            last_completed_turn_used_collab_send_input: AtomicBool::new(false),
         });
 
         (session, turn_context, rx_event)
@@ -8332,9 +8630,15 @@ mod tests {
             let mut state = session.state.lock().await;
             state.set_reference_context_item(None);
         }
+        let mut previous_context = None;
 
-        handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
-            .await;
+        handlers::run_user_shell_command(
+            &session,
+            "sub-id".to_string(),
+            "echo shell".to_string(),
+            &mut previous_context,
+        )
+        .await;
 
         let deadline = StdDuration::from_secs(5);
         let start = std::time::Instant::now();
@@ -8493,6 +8797,111 @@ mod tests {
             history.raw_items().iter().any(|item| item == &expected),
             "expected pending input to be persisted into history on turn completion"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn inject_response_items_handler_adds_pending_input_for_active_turn() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+        let mut previous_context = None;
+        let injected_item = ResponseInputItem::Message {
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "collab inbox test".to_string(),
+            }],
+        };
+        handlers::inject_response_items(
+            &sess,
+            "inject-active-turn".to_string(),
+            vec![injected_item.clone()],
+            &mut previous_context,
+        )
+        .await;
+
+        let pending = sess.get_pending_input().await;
+        assert_eq!(pending, vec![injected_item]);
+
+        sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn submission_loop_handles_inject_response_items_op() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+        let config = sess.get_config().await;
+        let (tx_sub, rx_sub) = async_channel::bounded(4);
+        let session = Arc::clone(&sess);
+        let loop_handle = tokio::spawn(async move {
+            submission_loop(session, config, rx_sub).await;
+        });
+
+        let injected_item = ResponseInputItem::Message {
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "submission-loop collab inbox".to_string(),
+            }],
+        };
+        tx_sub
+            .send(Submission {
+                id: "inject-op".to_string(),
+                op: Op::InjectResponseItems {
+                    items: vec![injected_item.clone()],
+                },
+            })
+            .await
+            .expect("submit inject op");
+
+        let pending = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let pending = sess.get_pending_input().await;
+                if !pending.is_empty() {
+                    break pending;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("inject op should be routed to pending input");
+        assert_eq!(pending, vec![injected_item]);
+
+        tx_sub
+            .send(Submission {
+                id: "shutdown-op".to_string(),
+                op: Op::Shutdown,
+            })
+            .await
+            .expect("submit shutdown op");
+        loop_handle
+            .await
+            .expect("submission loop task should exit cleanly");
+
+        sess.abort_all_tasks(TurnAbortReason::Replaced).await;
     }
 
     #[tokio::test]

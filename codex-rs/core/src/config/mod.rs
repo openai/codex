@@ -2,6 +2,7 @@ use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppsConfigToml;
+use crate::config::types::CollabInboxDeliveryRole;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -339,6 +340,9 @@ pub struct Config {
 
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
+
+    /// How inbound collaboration messages are delivered to non-subagent threads.
+    pub collab_inbox_delivery_role: CollabInboxDeliveryRole,
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
@@ -1155,6 +1159,9 @@ pub struct ConfigToml {
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
 
+    /// How inbound collaboration messages are delivered to non-subagent threads.
+    pub agent_delivery_role: Option<CollabInboxDeliveryRole>,
+
     /// Memories subsystem settings.
     pub memories: Option<MemoriesToml>,
 
@@ -1763,6 +1770,7 @@ impl Config {
             .as_ref()
             .and_then(|agents| agents.max_threads)
             .or(DEFAULT_AGENT_MAX_THREADS);
+        let collab_inbox_delivery_role = cfg.agent_delivery_role.unwrap_or_default();
         if agent_max_threads == Some(0) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -2043,6 +2051,7 @@ impl Config {
             agent_max_depth,
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
+            collab_inbox_delivery_role,
             codex_home,
             log_dir,
             config_layer_stack,
@@ -2429,6 +2438,16 @@ phase_2_model = "gpt-5"
                 phase_1_model: Some("gpt-5-mini".to_string()),
                 phase_2_model: Some("gpt-5".to_string()),
             }
+        );
+
+        let agent_delivery_role = r#"
+agent_delivery_role = "assistant"
+"#;
+        let agent_delivery_role_cfg = toml::from_str::<ConfigToml>(agent_delivery_role)
+            .expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(CollabInboxDeliveryRole::Assistant),
+            agent_delivery_role_cfg.agent_delivery_role
         );
     }
 
@@ -4625,6 +4644,7 @@ model_verbosity = "high"
                 agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
                 agent_roles: BTreeMap::new(),
                 memories: MemoriesConfig::default(),
+                collab_inbox_delivery_role: CollabInboxDeliveryRole::Tool,
                 codex_home: fixture.codex_home(),
                 log_dir: fixture.codex_home().join("log"),
                 config_layer_stack: Default::default(),
@@ -4748,6 +4768,7 @@ model_verbosity = "high"
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
+            collab_inbox_delivery_role: CollabInboxDeliveryRole::Tool,
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
@@ -4869,6 +4890,7 @@ model_verbosity = "high"
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
+            collab_inbox_delivery_role: CollabInboxDeliveryRole::Tool,
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
@@ -4976,6 +4998,7 @@ model_verbosity = "high"
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
+            collab_inbox_delivery_role: CollabInboxDeliveryRole::Tool,
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
@@ -5066,8 +5089,8 @@ model_verbosity = "high"
             ]),
             mcp_servers: None,
             rules: None,
-            enforce_residency: None,
             network: None,
+            enforce_residency: None,
         };
         let requirement_source = crate::config_loader::RequirementSource::Unknown;
         let requirement_source_for_error = requirement_source.clone();
@@ -5670,8 +5693,8 @@ mcp_oauth_callback_url = "https://example.com/callback"
             allowed_web_search_modes: None,
             mcp_servers: None,
             rules: None,
-            enforce_residency: None,
             network: None,
+            enforce_residency: None,
         };
 
         let config = ConfigBuilder::default()

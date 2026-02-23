@@ -480,7 +480,7 @@ fn create_view_image_tool() -> ToolSpec {
     })
 }
 
-fn create_collab_input_items_schema() -> JsonSchema {
+fn create_multi_agent_input_items_schema() -> JsonSchema {
     let properties = BTreeMap::from([
         (
             "type".to_string(),
@@ -533,31 +533,47 @@ fn create_collab_input_items_schema() -> JsonSchema {
 }
 
 fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "message".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Initial plain-text task for the new agent. Use either message or items."
-                        .to_string(),
-                ),
-            },
-        ),
-        ("items".to_string(), create_collab_input_items_schema()),
-        (
-            "agent_type".to_string(),
-            JsonSchema::String {
-                description: Some(crate::agent::role::spawn_tool_spec::build(
-                    &config.agent_roles,
-                )),
-            },
-        ),
-    ]);
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "message".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Initial plain-text task for the new agent. Use either message or items."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert("items".to_string(), create_multi_agent_input_items_schema());
+    properties.insert(
+        "agent_type".to_string(),
+        JsonSchema::String {
+            description: Some(crate::agent::role::spawn_tool_spec::build(
+                &config.agent_roles,
+            )),
+        },
+    );
+    properties.insert(
+        "spawn_mode".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Spawn behavior: spawn (default), fork (preserve history), or watchdog (idle-time check-ins). Watchdog mode returns a virtual handle, not a conversational worker. Watchdog check-ins are asynchronous and cannot occur until after the current turn ends and the owner thread is idle."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "interval_s".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Watchdog interval in seconds; used only when spawn_mode = watchdog.".to_string(),
+            ),
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
         description:
-            "Spawn a sub-agent for a well-scoped task. Returns the agent id to use to communicate with this agent."
+            "Spawn a sub-agent for a well-scoped task. Returns the agent id to use to communicate with this agent. Watchdog mode returns a control handle (not a conversational agent); watchdog check-ins are asynchronous and can only arrive after the current turn ends and the owner thread becomes idle. Do not wait/sleep/poll to force a watchdog check-in."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -569,33 +585,35 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 }
 
 fn create_send_input_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "id".to_string(),
-            JsonSchema::String {
-                description: Some("Agent id to message (from spawn_agent).".to_string()),
-            },
-        ),
-        (
-            "message".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Legacy plain-text message to send to the agent. Use either message or items."
-                        .to_string(),
-                ),
-            },
-        ),
-        ("items".to_string(), create_collab_input_items_schema()),
-        (
-            "interrupt".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Agent id to message (from spawn_agent). Optional: omit (or use \"parent\"/\"root\") to message the parent thread when available."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "message".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Legacy plain-text message to send to the agent. Use either message or items."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert("items".to_string(), create_multi_agent_input_items_schema());
+    properties.insert(
+        "interrupt".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
+                    .to_string(),
+            ),
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_input".to_string(),
@@ -605,7 +623,7 @@ fn create_send_input_tool() -> ToolSpec {
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["id".to_string()]),
+            required: None,
             additional_properties: Some(false.into()),
         },
     })
@@ -634,6 +652,83 @@ fn create_resume_agent_tool() -> ToolSpec {
     })
 }
 
+fn create_compact_parent_context_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "reason".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional short reason describing why the parent appears stuck (for example, repeated non-progress loop)."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "evidence".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional concrete evidence of non-progress (for example, repeated identical replies with no tool/file actions)."
+                    .to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "compact_parent_context".to_string(),
+        description: "Watchdog-only: request context compaction for the watchdog's parent thread when it is idle and appears stuck in a non-progress loop."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_list_agents_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Identifier of the parent agent whose spawned agents to list. Defaults to the current agent."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "recursive".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true (default), include all descendants recursively. When false, include only direct children."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "all".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, ignore id/recursive and return all tracked open agents that currently count toward this session's agent limit."
+                    .to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_agents".to_string(),
+        description: "List agents spawned by an agent, optionally recursively. This is a status view, not a way to trigger watchdog check-ins; polling `list_agents` during the same turn will not make a watchdog fire."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_wait_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -641,7 +736,7 @@ fn create_wait_tool() -> ToolSpec {
         JsonSchema::Array {
             items: Box::new(JsonSchema::String { description: None }),
             description: Some(
-                "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
+                "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first. Watchdog handle ids cannot be waited on for new check-ins. If all ids are watchdog handles, wait returns an immediate correction instead of blocking. If mixed with normal agent ids, wait still waits on normal agents and includes current watchdog handle statuses. Do not use `list_agents` or shell `sleep` to poll for same-turn watchdog check-ins."
                     .to_string(),
             ),
         },
@@ -657,7 +752,7 @@ fn create_wait_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "wait".to_string(),
-        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches his final status, a notification message will be received containing the same completed status."
+        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Watchdog handles are status-only in this tool: wait cannot block for watchdog check-ins. If only watchdog handles are provided, wait returns an immediate correction; if mixed with normal agents, wait includes current watchdog handle statuses while waiting on normal agents. Sleeping or polling cannot make a watchdog check-in happen while the current turn is active."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -1602,11 +1697,15 @@ pub(crate) fn build_specs(
         builder.push_spec(create_spawn_agent_tool(config));
         builder.push_spec(create_send_input_tool());
         builder.push_spec(create_resume_agent_tool());
+        builder.push_spec(create_compact_parent_context_tool());
+        builder.push_spec(create_list_agents_tool());
         builder.push_spec(create_wait_tool());
         builder.push_spec(create_close_agent_tool());
         builder.register_handler("spawn_agent", multi_agent_handler.clone());
         builder.register_handler("send_input", multi_agent_handler.clone());
         builder.register_handler("resume_agent", multi_agent_handler.clone());
+        builder.register_handler("compact_parent_context", multi_agent_handler.clone());
+        builder.register_handler("list_agents", multi_agent_handler.clone());
         builder.register_handler("wait", multi_agent_handler.clone());
         builder.register_handler("close_agent", multi_agent_handler);
     }

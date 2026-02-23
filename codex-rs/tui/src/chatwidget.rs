@@ -79,7 +79,9 @@ use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AgentMessageDeltaEvent;
@@ -90,7 +92,10 @@ use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
+use codex_protocol::protocol::COLLAB_INBOX_KIND;
+use codex_protocol::protocol::COLLAB_INBOX_MESSAGE_PREFIX;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::CollabInboxPayload;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::ErrorEvent;
@@ -113,6 +118,7 @@ use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -229,6 +235,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::SubagentStatusCell;
 use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -242,6 +249,7 @@ use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
+use crate::text_formatting::extract_first_bold;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod interrupts;
@@ -339,6 +347,37 @@ fn is_unified_exec_source(source: ExecCommandSource) -> bool {
         source,
         ExecCommandSource::UnifiedExecStartup | ExecCommandSource::UnifiedExecInteraction
     )
+}
+
+fn collab_inbox_message_from_item(item: &ResponseItem) -> Option<(Option<String>, String)> {
+    match item {
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            let text = output.body.to_text()?;
+            let payload: CollabInboxPayload = serde_json::from_str(&text).ok()?;
+            if !payload.injected || payload.kind != COLLAB_INBOX_KIND {
+                return None;
+            }
+            Some((Some(payload.sender_thread_id.to_string()), payload.message))
+        }
+        ResponseItem::Message { content, .. } => {
+            let text = content.iter().find_map(|item| match item {
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    Some(text.as_str())
+                }
+                _ => None,
+            })?;
+            let rest = text.strip_prefix(COLLAB_INBOX_MESSAGE_PREFIX)?;
+            let (sender, message) = rest.split_once(']')?;
+            let message = message.trim_start().to_string();
+            let sender = sender.trim().to_string();
+            if sender.is_empty() {
+                Some((None, message))
+            } else {
+                Some((Some(sender), message))
+            }
+        }
+        _ => None,
+    }
 }
 
 fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
@@ -1225,6 +1264,23 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         self.handle_stream_finished();
         self.request_redraw();
+    }
+
+    fn on_collab_event(&mut self, cell: PlainHistoryCell) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(cell);
+        self.request_redraw();
+    }
+
+    fn on_raw_response_item(&mut self, event: RawResponseItemEvent) {
+        if let Some((sender, message)) = collab_inbox_message_from_item(&event.item) {
+            let hint = sender.map(|sender| format!("from {sender}"));
+            self.add_to_history(history_cell::new_info_event(
+                format!("Agent message: {message}"),
+                hint,
+            ));
+            self.request_redraw();
+        }
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -2142,12 +2198,6 @@ impl ChatWidget {
         self.had_work_activity = true;
     }
 
-    fn on_collab_event(&mut self, cell: PlainHistoryCell) {
-        self.flush_answer_stream_with_separator();
-        self.add_to_history(cell);
-        self.request_redraw();
-    }
-
     fn on_get_history_entry_response(
         &mut self,
         event: codex_protocol::protocol::GetHistoryEntryResponseEvent,
@@ -2235,6 +2285,53 @@ impl ChatWidget {
     /// catch-up mode drains larger batches to reduce queue lag.
     pub(crate) fn on_commit_tick(&mut self) {
         self.run_commit_tick();
+    }
+
+    pub(crate) fn on_subagent_panel_updated(&mut self, panel: Arc<SubagentStatusCell>) {
+        let state_handle = panel.state_handle();
+
+        if let Some(active) = self.active_cell.as_mut()
+            && let Some(existing) = active.as_any_mut().downcast_mut::<SubagentStatusCell>()
+        {
+            if existing.matches_state(&state_handle) {
+                self.bump_active_cell_revision();
+                self.request_redraw();
+                return;
+            }
+            *existing = panel.as_ref().clone();
+            self.bump_active_cell_revision();
+            self.request_redraw();
+            return;
+        }
+
+        if self.active_cell.is_none() {
+            self.active_cell = Some(Box::new(panel.as_ref().clone()));
+            self.bump_active_cell_revision();
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn clear_subagent_panel(&mut self) {
+        if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<SubagentStatusCell>())
+        {
+            self.active_cell = None;
+            self.bump_active_cell_revision();
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn on_subagent_tick(&mut self) {
+        if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<SubagentStatusCell>())
+        {
+            self.bump_active_cell_revision();
+            self.request_redraw();
+        }
     }
 
     /// Runs a regular periodic commit tick.
@@ -3780,6 +3877,12 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
+            // Subagent status is a transient panel, not transcript history. If we
+            // flush it into history every time another cell is inserted, the
+            // transcript gets spammed with repeated identical "Subagents ..." blocks.
+            if active.as_any().is::<SubagentStatusCell>() {
+                return;
+            }
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
@@ -4276,8 +4379,8 @@ impl ChatWidget {
                     });
                 }
             }
-            EventMsg::RawResponseItem(_)
-            | EventMsg::ItemStarted(_)
+            EventMsg::RawResponseItem(ev) => self.on_raw_response_item(ev),
+            EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
@@ -7604,36 +7707,6 @@ const PLACEHOLDERS: [&str; 8] = [
     "Run /review on my current changes",
     "Use /skills to list available skills",
 ];
-
-// Extract the first bold (Markdown) element in the form **...** from `s`.
-// Returns the inner text if found; otherwise `None`.
-fn extract_first_bold(s: &str) -> Option<String> {
-    let bytes = s.as_bytes();
-    let mut i = 0usize;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'*' && bytes[i + 1] == b'*' {
-            let start = i + 2;
-            let mut j = start;
-            while j + 1 < bytes.len() {
-                if bytes[j] == b'*' && bytes[j + 1] == b'*' {
-                    // Found closing **
-                    let inner = &s[start..j];
-                    let trimmed = inner.trim();
-                    if !trimmed.is_empty() {
-                        return Some(trimmed.to_string());
-                    } else {
-                        return None;
-                    }
-                }
-                j += 1;
-            }
-            // No closing; stop searching (wait for more deltas)
-            return None;
-        }
-        i += 1;
-    }
-    None
-}
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSnapshot> {
     match BackendClient::from_auth(base_url, &auth) {

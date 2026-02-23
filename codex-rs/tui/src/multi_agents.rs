@@ -18,9 +18,9 @@ use ratatui::text::Span;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-const COLLAB_PROMPT_PREVIEW_GRAPHEMES: usize = 160;
-const COLLAB_AGENT_ERROR_PREVIEW_GRAPHEMES: usize = 160;
-const COLLAB_AGENT_RESPONSE_PREVIEW_GRAPHEMES: usize = 240;
+const MULTI_AGENT_PROMPT_PREVIEW_GRAPHEMES: usize = 160;
+const MULTI_AGENT_ERROR_PREVIEW_GRAPHEMES: usize = 160;
+const MULTI_AGENT_RESPONSE_PREVIEW_GRAPHEMES: usize = 240;
 
 #[derive(Clone, Copy)]
 struct AgentLabel<'a> {
@@ -38,6 +38,7 @@ pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {
         new_agent_role,
         prompt,
         status: _,
+        ..
     } = ev;
 
     let title = match new_thread_id {
@@ -133,7 +134,6 @@ pub(crate) fn close_end(ev: CollabCloseEndEvent) -> PlainHistoryCell {
         receiver_agent_role,
         status: _,
     } = ev;
-
     collab_event(
         title_with_agent(
             "Closed",
@@ -155,7 +155,6 @@ pub(crate) fn resume_begin(ev: CollabResumeBeginEvent) -> PlainHistoryCell {
         receiver_agent_nickname,
         receiver_agent_role,
     } = ev;
-
     collab_event(
         title_with_agent(
             "Resuming",
@@ -178,7 +177,6 @@ pub(crate) fn resume_end(ev: CollabResumeEndEvent) -> PlainHistoryCell {
         receiver_agent_role,
         status,
     } = ev;
-
     collab_event(
         title_with_agent(
             "Resumed",
@@ -260,7 +258,7 @@ fn prompt_line(prompt: &str) -> Option<Line<'static>> {
     } else {
         Some(Line::from(Span::from(truncate_text(
             trimmed,
-            COLLAB_PROMPT_PREVIEW_GRAPHEMES,
+            MULTI_AGENT_PROMPT_PREVIEW_GRAPHEMES,
         ))))
     }
 }
@@ -371,7 +369,7 @@ fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
             if let Some(message) = message.as_ref() {
                 let message_preview = truncate_text(
                     &message.split_whitespace().collect::<Vec<_>>().join(" "),
-                    COLLAB_AGENT_RESPONSE_PREVIEW_GRAPHEMES,
+                    MULTI_AGENT_RESPONSE_PREVIEW_GRAPHEMES,
                 );
                 if !message_preview.is_empty() {
                     spans.push(Span::from(" - ").dim());
@@ -384,7 +382,7 @@ fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
             let mut spans = vec![Span::from("Error").red()];
             let error_preview = truncate_text(
                 &error.split_whitespace().collect::<Vec<_>>().join(" "),
-                COLLAB_AGENT_ERROR_PREVIEW_GRAPHEMES,
+                MULTI_AGENT_ERROR_PREVIEW_GRAPHEMES,
             );
             if !error_preview.is_empty() {
                 spans.push(Span::from(" - ").dim());
@@ -401,6 +399,7 @@ fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
 mod tests {
     use super::*;
     use crate::history_cell::HistoryCell;
+    use codex_protocol::protocol::CollabAgentSpawnMode;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::style::Color;
@@ -422,6 +421,7 @@ mod tests {
             new_agent_nickname: Some("Robie".to_string()),
             new_agent_role: Some("explorer".to_string()),
             prompt: "Compute 11! and reply with just the integer result.".to_string(),
+            spawn_mode: CollabAgentSpawnMode::Spawn,
             status: AgentStatus::PendingInit,
         });
 
@@ -502,6 +502,7 @@ mod tests {
             new_agent_nickname: Some("Robie".to_string()),
             new_agent_role: Some("explorer".to_string()),
             prompt: String::new(),
+            spawn_mode: CollabAgentSpawnMode::Spawn,
             status: AgentStatus::PendingInit,
         });
 

@@ -1061,6 +1061,9 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::Compacted(_) => {
                 // Not included in `head`; skip.
             }
+            RolloutItem::ForkReference(_) => {
+                // Not included in `head`; skip.
+            }
             RolloutItem::EventMsg(ev) => {
                 if let EventMsg::UserMessage(user) = ev {
                     summary.saw_user_event = true;
@@ -1112,6 +1115,7 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
                         head.push(value);
                     }
                 }
+                RolloutItem::ForkReference(_) => {}
                 RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::EventMsg(_) => {}
@@ -1240,6 +1244,63 @@ async fn find_thread_path_by_id_str_in_subdir(
     Ok(found)
 }
 
+async fn try_unarchive_thread_path_by_id_str(
+    codex_home: &Path,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    let Some(archived_path) =
+        find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str).await?
+    else {
+        return Ok(None);
+    };
+
+    let Some(file_name) = archived_path.file_name().map(OsStr::to_owned) else {
+        tracing::error!(
+            "archived rollout path for thread {id_str} missing file name: {}",
+            archived_path.display()
+        );
+        return Ok(None);
+    };
+    let Some((year, month, day)) = rollout_date_parts(&file_name) else {
+        tracing::error!(
+            "archived rollout path for thread {id_str} missing filename timestamp: {}",
+            archived_path.display()
+        );
+        return Ok(None);
+    };
+
+    let restored_dir = codex_home
+        .join(SESSIONS_SUBDIR)
+        .join(year)
+        .join(month)
+        .join(day);
+    tokio::fs::create_dir_all(&restored_dir).await?;
+    let restored_path = restored_dir.join(&file_name);
+    match tokio::fs::rename(&archived_path, &restored_path).await {
+        Ok(()) => {}
+        Err(err) => {
+            if tokio::fs::try_exists(&restored_path).await.unwrap_or(false) {
+                tracing::debug!(
+                    "archived rollout for thread {id_str} already restored concurrently to {}",
+                    restored_path.display()
+                );
+            } else {
+                return Err(err);
+            }
+        }
+    }
+
+    if let Some(state_db_ctx) = state_db::open_if_present(codex_home, "").await
+        && let Ok(thread_id) = ThreadId::from_string(id_str)
+    {
+        let _ = state_db_ctx
+            .mark_unarchived(thread_id, restored_path.as_path())
+            .await;
+    }
+
+    Ok(Some(restored_path))
+}
+
 /// Locate a recorded thread rollout file by its UUID string using the existing
 /// paginated listing implementation. Returns `Ok(Some(path))` if found, `Ok(None)` if not present
 /// or the id is invalid.
@@ -1247,7 +1308,12 @@ pub async fn find_thread_path_by_id_str(
     codex_home: &Path,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
-    find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str).await
+    if let Some(active_path) =
+        find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str).await?
+    {
+        return Ok(Some(active_path));
+    }
+    try_unarchive_thread_path_by_id_str(codex_home, id_str).await
 }
 
 /// Locate an archived thread rollout file by its UUID string.

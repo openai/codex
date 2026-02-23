@@ -33,6 +33,7 @@ use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::MessagePhase;
+use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
@@ -68,6 +69,27 @@ pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
 pub const COLLABORATION_MODE_OPEN_TAG: &str = "<collaboration_mode>";
 pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
+pub const COLLAB_INBOX_KIND: &str = "collab_inbox";
+pub const COLLAB_INBOX_MESSAGE_PREFIX: &str = "[collab_inbox:";
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+pub struct CollabInboxPayload {
+    pub injected: bool,
+    pub kind: String,
+    pub sender_thread_id: ThreadId,
+    pub message: String,
+}
+
+impl CollabInboxPayload {
+    pub fn new(sender_thread_id: ThreadId, message: String) -> Self {
+        Self {
+            injected: true,
+            kind: COLLAB_INBOX_KIND.to_string(),
+            sender_thread_id,
+            message,
+        }
+    }
+}
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -155,6 +177,14 @@ pub enum Op {
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
+    },
+
+    /// Inject non-user input items (tool output or assistant/developer messages).
+    ///
+    /// Used for agent-to-agent inbox delivery without re-encoding as a user message.
+    InjectResponseItems {
+        /// Response input items to inject and optionally run.
+        items: Vec<ResponseInputItem>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -2052,9 +2082,16 @@ pub struct SessionMetaLine {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+pub struct ForkReferenceItem {
+    pub rollout_path: PathBuf,
+    pub nth_user_message: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
+    ForkReference(ForkReferenceItem),
     ResponseItem(ResponseItem),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
@@ -2823,6 +2860,16 @@ pub struct CollabAgentSpawnBeginEvent {
     pub prompt: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Default)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum CollabAgentSpawnMode {
+    #[default]
+    Spawn,
+    Fork,
+    Watchdog,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct CollabAgentRef {
     /// Thread ID of the receiver/new agent.
@@ -2866,6 +2913,9 @@ pub struct CollabAgentSpawnEndEvent {
     /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
     /// beginning.
     pub prompt: String,
+    /// Spawn mode used for this agent.
+    #[serde(default)]
+    pub spawn_mode: CollabAgentSpawnMode,
     /// Last known status of the new agent reported to the sender agent.
     pub status: AgentStatus,
 }

@@ -220,6 +220,16 @@ pub(crate) fn last_assistant_message_from_item(
 
 pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Option<ResponseItem> {
     match input {
+        ResponseInputItem::FunctionCall {
+            name,
+            arguments,
+            call_id,
+        } => Some(ResponseItem::FunctionCall {
+            id: None,
+            name: name.clone(),
+            arguments: arguments.clone(),
+            call_id: call_id.clone(),
+        }),
         ResponseInputItem::FunctionCallOutput { call_id, output } => {
             Some(ResponseItem::FunctionCallOutput {
                 call_id: call_id.clone(),

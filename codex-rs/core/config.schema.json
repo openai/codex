@@ -271,6 +271,14 @@
         }
       ]
     },
+    "CollabInboxDeliveryRole": {
+      "enum": [
+        "developer",
+        "tool",
+        "assistant"
+      ],
+      "type": "string"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -1477,6 +1485,14 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "agent_delivery_role": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CollabInboxDeliveryRole"
+        }
+      ],
+      "description": "How inbound collaboration messages are delivered to non-subagent threads."
+    },
     "agents": {
       "allOf": [
         {
