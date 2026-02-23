@@ -3184,6 +3184,15 @@ impl ChatWidget {
             }
             KeyEvent {
                 code: KeyCode::Char(c),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } if c.eq_ignore_ascii_case(&'l') => {
+                self.dispatch_command(SlashCommand::Clear);
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
