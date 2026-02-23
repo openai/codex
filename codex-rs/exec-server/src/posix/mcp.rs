@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,6 +31,7 @@ use tokio::sync::RwLock;
 
 use crate::posix::escalate_server::EscalateServer;
 use crate::posix::escalate_server::{self};
+use crate::posix::escalation_policy::EscalationPolicy;
 use crate::posix::mcp_escalation_policy::McpEscalationPolicy;
 use crate::posix::stopwatch::Stopwatch;
 
@@ -85,6 +87,30 @@ pub struct ExecTool {
     sandbox_state: Arc<RwLock<Option<SandboxState>>>,
 }
 
+trait EscalationPolicyFactory {
+    type Policy: EscalationPolicy + Send + Sync + 'static;
+
+    fn create_policy(&self, policy: Arc<RwLock<Policy>>, stopwatch: Stopwatch) -> Self::Policy;
+}
+
+struct McpEscalationPolicyFactory {
+    context: RequestContext<RoleServer>,
+    preserve_program_paths: bool,
+}
+
+impl EscalationPolicyFactory for McpEscalationPolicyFactory {
+    type Policy = McpEscalationPolicy;
+
+    fn create_policy(&self, policy: Arc<RwLock<Policy>>, stopwatch: Stopwatch) -> Self::Policy {
+        McpEscalationPolicy::new(
+            policy,
+            self.context.clone(),
+            stopwatch,
+            self.preserve_program_paths,
+        )
+    }
+}
+
 #[tool_router]
 impl ExecTool {
     pub fn new(
@@ -115,8 +141,6 @@ impl ExecTool {
                 .timeout_ms
                 .unwrap_or(codex_core::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
         );
-        let stopwatch = Stopwatch::new(effective_timeout);
-        let cancel_token = stopwatch.cancellation_token();
         let sandbox_state =
             self.sandbox_state
                 .read()
@@ -128,25 +152,66 @@ impl ExecTool {
                     sandbox_cwd: PathBuf::from(&params.workdir),
                     use_linux_sandbox_bwrap: false,
                 });
-        let escalate_server = EscalateServer::new(
-            self.bash_path.clone(),
-            self.execve_wrapper.clone(),
-            McpEscalationPolicy::new(
-                self.policy.clone(),
+        let result = run_escalate_server(
+            params,
+            sandbox_state,
+            &self.bash_path,
+            &self.execve_wrapper,
+            self.policy.clone(),
+            McpEscalationPolicyFactory {
                 context,
-                stopwatch.clone(),
-                self.preserve_program_paths,
-            ),
-        );
-
-        let result = escalate_server
-            .exec(params, cancel_token, &sandbox_state)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                preserve_program_paths: self.preserve_program_paths,
+            },
+            effective_timeout,
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::json(
             ExecResult::from(result),
         )?]))
     }
+}
+
+/// Runs the escalate server to execute a shell command with potential
+/// escalation of execve calls.
+///
+/// - `exec_params` defines the shell command to run
+/// - `sandbox_state` is the sandbox to use to run the shell program
+/// - `shell_program` is the path to the shell program to run (e.g. /bin/bash)
+/// - `execve_wrapper` is the path to the execve wrapper binary to use for
+///   handling execve calls from the shell program. This is likely a symlink to
+///   Codex using a special name.
+/// - `policy` is the exec policy to use for deciding whether to allow or deny
+///   execve calls from the shell program.
+/// - `escalation_policy_factory` is a factory for creating an
+///   `EscalationPolicy` to use for deciding whether to allow, deny, or prompt
+///   the user for execve calls from the shell program. We use a factory here
+///   because the `EscalationPolicy` may need to capture request-specific
+///   context (e.g. the MCP request context) that is not available at the time
+///   we create the `ExecTool`.
+/// - `effective_timeout` is the timeout to use for running the shell command.
+///   Implementations are encouraged to excludeany time spent prompting the
+///   user.
+async fn run_escalate_server(
+    exec_params: ExecParams,
+    sandbox_state: SandboxState,
+    shell_program: impl AsRef<Path>,
+    execve_wrapper: impl AsRef<Path>,
+    policy: Arc<RwLock<Policy>>,
+    escalation_policy_factory: impl EscalationPolicyFactory,
+    effective_timeout: Duration,
+) -> anyhow::Result<crate::posix::escalate_server::ExecResult> {
+    let stopwatch = Stopwatch::new(effective_timeout);
+    let cancel_token = stopwatch.cancellation_token();
+    let escalate_server = EscalateServer::new(
+        shell_program.as_ref().to_path_buf(),
+        execve_wrapper.as_ref().to_path_buf(),
+        escalation_policy_factory.create_policy(policy, stopwatch),
+    );
+
+    escalate_server
+        .exec(exec_params, cancel_token, &sandbox_state)
+        .await
 }
 
 #[derive(Default)]
