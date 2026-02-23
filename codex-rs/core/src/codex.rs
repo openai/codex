@@ -2753,7 +2753,7 @@ impl Session {
 
         #[derive(Debug)]
         enum RolloutReplayMetaSegment {
-            Turn(ReplayedRolloutTurn),
+            Turn(Box<ReplayedRolloutTurn>),
             CompactionOutsideTurn,
         }
 
@@ -2826,13 +2826,13 @@ impl Session {
                         .is_some_and(|turn| turn.turn_id == event.turn_id)
                         && let Some(active_turn) = active_turn.take()
                     {
-                        replayed_segments.push(RolloutReplayMetaSegment::Turn(
+                        replayed_segments.push(RolloutReplayMetaSegment::Turn(Box::new(
                             ReplayedRolloutTurn {
                                 saw_user_message: active_turn.saw_user_message,
                                 turn_context_item: active_turn.turn_context_item,
                                 contains_compaction: active_turn.contains_compaction,
                             },
-                        ));
+                        )));
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
@@ -2843,13 +2843,13 @@ impl Session {
                             .is_some_and(|turn| turn.turn_id == aborted_turn_id)
                         && let Some(active_turn) = active_turn.take()
                     {
-                        replayed_segments.push(RolloutReplayMetaSegment::Turn(
+                        replayed_segments.push(RolloutReplayMetaSegment::Turn(Box::new(
                             ReplayedRolloutTurn {
                                 saw_user_message: active_turn.saw_user_message,
                                 turn_context_item: active_turn.turn_context_item,
                                 contains_compaction: active_turn.contains_compaction,
                             },
-                        ));
+                        )));
                     } else if let Some(active_turn) = active_turn.take()
                         && active_turn.contains_compaction
                     {
