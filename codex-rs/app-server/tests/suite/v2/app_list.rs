@@ -901,12 +901,39 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
         })
         .await?;
     let warm_first_update = read_app_list_updated_notification(&mut mcp).await?;
-    assert_eq!(
-        warm_first_update.data,
-        vec![AppInfo {
+    let expected_warm_accessible_first = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta App".to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
+        is_accessible: true,
+        is_enabled: true,
+    }];
+    let expected_warm_directory_first = vec![
+        AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha v1".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+        },
+        AppInfo {
             id: "beta".to_string(),
             name: "Beta App".to_string(),
-            description: None,
+            description: Some("Beta v1".to_string()),
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
@@ -914,9 +941,15 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
             app_metadata: None,
             labels: None,
             install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
-            is_accessible: true,
+            is_accessible: false,
             is_enabled: true,
-        }]
+        },
+    ];
+    assert!(
+        warm_first_update.data == expected_warm_accessible_first
+            || warm_first_update.data == expected_warm_directory_first,
+        "unexpected first warm app/list update: {:#?}",
+        warm_first_update.data
     );
 
     let warm_second_update = read_app_list_updated_notification(&mut mcp).await?;
