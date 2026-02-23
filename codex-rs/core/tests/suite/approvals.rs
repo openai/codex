@@ -42,6 +42,8 @@ use serde_json::json;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -2120,6 +2122,14 @@ async fn denying_network_policy_amendment_persists_policy_and_skips_future_promp
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"[permissions.network]
+enabled = true
+allow_local_binding = true
+"#,
+    )?;
     let approval_policy = AskForApproval::OnFailure;
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
@@ -2129,45 +2139,33 @@ async fn denying_network_policy_amendment_persists_policy_and_skips_future_promp
         exclude_slash_tmp: false,
     };
     let sandbox_policy_for_config = sandbox_policy.clone();
-    let mut builder = test_codex()
-        .with_pre_build_hook(|home| {
-            fs::write(
-                home.join("config.toml"),
-                r#"[permissions.network]
-enabled = true
-allow_local_binding = true
-"#,
-            )
-            .expect("write test config.toml");
-        })
-        .with_config(move |config| {
-            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
-            config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-            let layers = config
-                .config_layer_stack
-                .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
-                .into_iter()
-                .cloned()
-                .collect();
-            let mut requirements = config.config_layer_stack.requirements().clone();
-            requirements.network = Some(Sourced::new(
-                NetworkConstraints {
-                    enabled: Some(true),
-                    allow_local_binding: Some(true),
-                    ..Default::default()
-                },
-                RequirementSource::CloudRequirements,
-            ));
-            let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
-            requirements_toml.network = Some(NetworkRequirementsToml {
+    let mut builder = test_codex().with_home(home).with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        let layers = config
+            .config_layer_stack
+            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+            .into_iter()
+            .cloned()
+            .collect();
+        let mut requirements = config.config_layer_stack.requirements().clone();
+        requirements.network = Some(Sourced::new(
+            NetworkConstraints {
                 enabled: Some(true),
                 allow_local_binding: Some(true),
                 ..Default::default()
-            });
-            config.config_layer_stack =
-                ConfigLayerStack::new(layers, requirements, requirements_toml)
-                    .expect("rebuild config layer stack with network requirements");
+            },
+            RequirementSource::CloudRequirements,
+        ));
+        let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+        requirements_toml.network = Some(NetworkRequirementsToml {
+            enabled: Some(true),
+            allow_local_binding: Some(true),
+            ..Default::default()
         });
+        config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
+            .expect("rebuild config layer stack with network requirements");
+    });
     let test = builder.build(&server).await?;
     assert!(
         test.config.managed_network_requirements_enabled(),
