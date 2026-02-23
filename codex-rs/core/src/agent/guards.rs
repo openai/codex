@@ -1,6 +1,5 @@
 use crate::error::CodexErr;
 use crate::error::Result;
-use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -21,7 +20,6 @@ use std::sync::atomic::Ordering;
 #[derive(Default)]
 pub(crate) struct Guards {
     active_agents: Mutex<ActiveAgents>,
-    otel_manager: Option<Arc<OtelManager>>,
     total_count: AtomicUsize,
 }
 
