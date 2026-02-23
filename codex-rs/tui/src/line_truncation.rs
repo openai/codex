@@ -71,6 +71,7 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
 /// Intended for short UI rows. This preserves a fast no-overflow path (width
 /// pre-scan + return original line unchanged) and uses `truncate_line_to_width`
 /// for the overflow case.
+/// Performance should be reevaluated if using this method in loops/over larger content in the future.
 pub(crate) fn truncate_line_with_ellipsis_if_overflow(
     line: Line<'static>,
     max_width: usize,
