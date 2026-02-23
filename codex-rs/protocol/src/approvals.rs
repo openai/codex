@@ -104,10 +104,13 @@ pub struct ElicitationRequestEvent {
     pub id: RequestId,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub requested_schema: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub elicitation_id: Option<String>,
 }
 

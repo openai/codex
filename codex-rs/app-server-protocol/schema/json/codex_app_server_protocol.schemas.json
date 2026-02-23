@@ -2818,6 +2818,12 @@
         },
         {
           "properties": {
+            "elicitation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "id": {
               "$ref": "#/definitions/RequestId"
             },
@@ -2836,12 +2842,6 @@
               "type": "string"
             },
             "url": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "elicitation_id": {
               "type": [
                 "string",
                 "null"
