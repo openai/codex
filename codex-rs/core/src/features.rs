@@ -499,7 +499,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::MemoryTool,
-        key: "memory_tool",
+        key: "memories",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
