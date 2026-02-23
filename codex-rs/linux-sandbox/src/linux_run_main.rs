@@ -90,6 +90,22 @@ pub fn run_main() -> ! {
     }
     ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_bwrap_sandbox);
 
+    let disable_nested_managed_proxy = should_disable_managed_proxy_for_nested_bwrap(
+        allow_network_for_proxy,
+        apply_seccomp_then_exec,
+    );
+    if disable_nested_managed_proxy {
+        eprintln!(
+            "codex-linux-sandbox: nested Codex bubblewrap sandbox detected; \
+             skipping inner managed-proxy network namespace setup and relying on outer sandbox network restrictions"
+        );
+    }
+    let allow_network_for_proxy = if disable_nested_managed_proxy {
+        false
+    } else {
+        allow_network_for_proxy
+    };
+
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.
     if apply_seccomp_then_exec {
@@ -173,6 +189,63 @@ fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_bwrap_san
     if apply_seccomp_then_exec && !use_bwrap_sandbox {
         panic!("--apply-seccomp-then-exec requires --use-bwrap-sandbox");
     }
+}
+
+fn should_disable_managed_proxy_for_nested_bwrap(
+    allow_network_for_proxy: bool,
+    apply_seccomp_then_exec: bool,
+) -> bool {
+    should_disable_managed_proxy_for_nested_bwrap_with_ancestor_bwrap(
+        allow_network_for_proxy,
+        apply_seccomp_then_exec,
+        has_bwrap_ancestor(),
+    )
+}
+
+fn should_disable_managed_proxy_for_nested_bwrap_with_ancestor_bwrap(
+    allow_network_for_proxy: bool,
+    apply_seccomp_then_exec: bool,
+    has_bwrap_ancestor: bool,
+) -> bool {
+    allow_network_for_proxy && !apply_seccomp_then_exec && has_bwrap_ancestor
+}
+
+fn has_bwrap_ancestor() -> bool {
+    const MAX_ANCESTOR_DEPTH: usize = 32;
+    let mut pid = match parent_pid_of(std::process::id()) {
+        Some(parent_pid) => parent_pid,
+        None => return false,
+    };
+
+    for _ in 0..MAX_ANCESTOR_DEPTH {
+        if pid == 0 {
+            return false;
+        }
+        if process_comm(pid).as_deref() == Some("bwrap") {
+            return true;
+        }
+        pid = match parent_pid_of(pid) {
+            Some(parent_pid) if parent_pid != pid => parent_pid,
+            _ => return false,
+        };
+    }
+
+    false
+}
+
+fn process_comm(pid: u32) -> Option<String> {
+    let path = format!("/proc/{pid}/comm");
+    let comm = std::fs::read_to_string(path).ok()?;
+    Some(comm.trim().to_string())
+}
+
+fn parent_pid_of(pid: u32) -> Option<u32> {
+    let path = format!("/proc/{pid}/status");
+    let status = std::fs::read_to_string(path).ok()?;
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("PPid:"))
+        .and_then(|value| value.trim().parse::<u32>().ok())
 }
 
 fn run_bwrap_with_proc_fallback(

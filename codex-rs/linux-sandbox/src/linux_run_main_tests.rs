@@ -157,3 +157,23 @@ fn valid_inner_stage_modes_do_not_panic() {
     ensure_inner_stage_mode_is_valid(false, true);
     ensure_inner_stage_mode_is_valid(true, true);
 }
+
+#[test]
+fn nested_managed_proxy_fallback_only_applies_to_outer_stage() {
+    assert_eq!(
+        should_disable_managed_proxy_for_nested_bwrap_with_ancestor_bwrap(true, false, true),
+        true
+    );
+    assert_eq!(
+        should_disable_managed_proxy_for_nested_bwrap_with_ancestor_bwrap(true, true, true),
+        false
+    );
+    assert_eq!(
+        should_disable_managed_proxy_for_nested_bwrap_with_ancestor_bwrap(true, false, false),
+        false
+    );
+    assert_eq!(
+        should_disable_managed_proxy_for_nested_bwrap_with_ancestor_bwrap(false, false, true),
+        false
+    );
+}
