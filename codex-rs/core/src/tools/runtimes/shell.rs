@@ -60,7 +60,7 @@ impl ShellRuntime {
         Self
     }
 
-    fn stdout_stream(ctx: &ToolCtx<'_>) -> Option<crate::exec::StdoutStream> {
+    fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
         Some(crate::exec::StdoutStream {
             sub_id: ctx.turn.sub_id.clone(),
             call_id: ctx.call_id.clone(),
@@ -150,7 +150,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
     fn network_approval_spec(
         &self,
         req: &ShellRequest,
-        _ctx: &ToolCtx<'_>,
+        _ctx: &ToolCtx,
     ) -> Option<NetworkApprovalSpec> {
         req.network.as_ref()?;
         Some(NetworkApprovalSpec {
@@ -163,7 +163,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         &mut self,
         req: &ShellRequest,
         attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx<'_>,
+        ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
@@ -207,7 +207,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
                 .session
                 .services
                 .zsh_exec_bridge
-                .execute_shell_request(&env, ctx.session, ctx.turn, &ctx.call_id)
+                .execute_shell_request(&env, &ctx.session, &ctx.turn, &ctx.call_id)
                 .await;
         }
 

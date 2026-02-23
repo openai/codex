@@ -217,7 +217,8 @@ pub(crate) async fn handle_start(
                 _ => None,
             };
             if let Some(text) = maybe_routed_text {
-                sess_clone.route_realtime_text_input(text).await;
+                let sess_for_routed_text = Arc::clone(&sess_clone);
+                sess_for_routed_text.route_realtime_text_input(text).await;
             }
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
@@ -252,16 +253,25 @@ pub(crate) async fn handle_audio(
 }
 
 fn realtime_text_from_conversation_item(item: &Value) -> Option<String> {
-    if item.get("type").and_then(Value::as_str) != Some("message") {
-        return None;
+    match item.get("type").and_then(Value::as_str) {
+        Some("message") => {
+            if item.get("role").and_then(Value::as_str) != Some("assistant") {
+                return None;
+            }
+            let content = item.get("content")?.as_array()?;
+            let text = content
+                .iter()
+                .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|entry| entry.get("text").and_then(Value::as_str))
+                .collect::<String>();
+            if text.is_empty() { None } else { Some(text) }
+        }
+        Some("spawn_transcript") => item
+            .get("delta_user_transcript")
+            .and_then(Value::as_str)
+            .and_then(|text| (!text.is_empty()).then(|| text.to_string())),
+        Some(_) | None => None,
     }
-    let content = item.get("content")?.as_array()?;
-    let text = content
-        .iter()
-        .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("text"))
-        .filter_map(|entry| entry.get("text").and_then(Value::as_str))
-        .collect::<String>();
-    if text.is_empty() { None } else { Some(text) }
 }
 
 pub(crate) async fn handle_text(
@@ -301,7 +311,6 @@ fn spawn_realtime_input_task(
     tokio::spawn(async move {
         loop {
             tokio::select! {
-                biased;
                 text = text_rx.recv() => {
                     match text {
                         Ok(text) => {
@@ -388,7 +397,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn extracts_text_from_message_items_ignoring_role() {
+    fn extracts_text_from_assistant_message_items_only() {
         let assistant = json!({
             "type": "message",
             "role": "assistant",
@@ -404,16 +413,14 @@ mod tests {
             "role": "user",
             "content": [{"type": "text", "text": "world"}],
         });
-        assert_eq!(
-            realtime_text_from_conversation_item(&user),
-            Some("world".to_string())
-        );
+        assert_eq!(realtime_text_from_conversation_item(&user), None);
     }
 
     #[test]
     fn extracts_and_concatenates_text_entries_only() {
         let item = json!({
             "type": "message",
+            "role": "assistant",
             "content": [
                 {"type": "text", "text": "a"},
                 {"type": "ignored", "text": "x"},
@@ -436,8 +443,31 @@ mod tests {
 
         let no_text = json!({
             "type": "message",
+            "role": "assistant",
             "content": [{"type": "other", "value": 1}],
         });
         assert_eq!(realtime_text_from_conversation_item(&no_text), None);
+
+        let empty_spawn_transcript = json!({
+            "type": "spawn_transcript",
+            "delta_user_transcript": "",
+        });
+        assert_eq!(
+            realtime_text_from_conversation_item(&empty_spawn_transcript),
+            None
+        );
+    }
+
+    #[test]
+    fn extracts_text_from_spawn_transcript_items() {
+        let item = json!({
+            "type": "spawn_transcript",
+            "delta_user_transcript": "delegate from transcript",
+            "backend_prompt_messages": [{"role": "user", "content": "delegate from transcript"}],
+        });
+        assert_eq!(
+            realtime_text_from_conversation_item(&item),
+            Some("delegate from transcript".to_string())
+        );
     }
 }
