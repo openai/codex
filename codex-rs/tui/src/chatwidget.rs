@@ -3258,7 +3258,14 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
                     };
-                    if self.is_session_configured() && !self.is_plan_streaming_in_tui() {
+                    // Steer submissions during active final-answer streaming can race with turn
+                    // completion and strand the UI in a running state. Queue those inputs instead
+                    // of injecting immediately; `on_task_complete()` drains this FIFO via
+                    // `maybe_send_next_queued_input()`, so no typed prompt is dropped.
+                    let should_submit_now = self.is_session_configured()
+                        && !self.is_plan_streaming_in_tui()
+                        && self.stream_controller.is_none();
+                    if should_submit_now {
                         // Submitted is only emitted when steer is enabled.
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
