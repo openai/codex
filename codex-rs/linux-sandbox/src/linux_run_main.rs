@@ -1,4 +1,5 @@
 use clap::Parser;
+use procfs::process::Process;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::Read;
@@ -213,18 +214,17 @@ fn has_bwrap_ancestor() -> bool {
 }
 
 fn process_comm(pid: u32) -> Option<String> {
-    let path = format!("/proc/{pid}/comm");
-    let comm = std::fs::read_to_string(path).ok()?;
-    Some(comm.trim().to_string())
+    let pid = i32::try_from(pid).ok()?;
+    let process = Process::new(pid).ok()?;
+    let stat = process.stat().ok()?;
+    Some(stat.comm)
 }
 
 fn parent_pid_of(pid: u32) -> Option<u32> {
-    let path = format!("/proc/{pid}/status");
-    let status = std::fs::read_to_string(path).ok()?;
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix("PPid:"))
-        .and_then(|value| value.trim().parse::<u32>().ok())
+    let pid = i32::try_from(pid).ok()?;
+    let process = Process::new(pid).ok()?;
+    let stat = process.stat().ok()?;
+    u32::try_from(stat.ppid).ok()
 }
 
 fn run_bwrap_with_proc_fallback(
