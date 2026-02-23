@@ -1,8 +1,8 @@
 [package]
 name = "codex-exec-server"
-version.workspace = true
 edition.workspace = true
 license.workspace = true
+version.workspace = true
 
 [[bin]]
 name = "codex-execve-wrapper"
@@ -19,6 +19,11 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
+[package.metadata.cargo-shear]
+# This appears to be due to #[derive(rmcp::schemars::JsonSchema)], which
+# requires use of schemars via a macro that shear cannot detect.
+ignored = ["schemars"]
+
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -27,8 +32,7 @@ codex-core = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
-libc = { workspace = true }
-path-absolutize = { workspace = true }
+codex-shell-escalation = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
     "auth",
     "elicitation",
@@ -42,25 +46,18 @@ rmcp = { workspace = true, default-features = false, features = [
     "transport-streamable-http-server",
     "transport-io",
 ] }
+schemars = { version = "1.2.1" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 shlex = { workspace = true }
-socket2 = { workspace = true }
-tokio = { workspace = true, features = [
-    "io-std",
-    "macros",
-    "process",
-    "rt-multi-thread",
-    "signal",
-] }
-tokio-util = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
-core_test_support = { workspace = true }
-codex-utils-cargo-bin = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
+core_test_support = { workspace = true }
 exec_server_test_support = { workspace = true }
 maplit = { workspace = true }
 pretty_assertions = { workspace = true }
