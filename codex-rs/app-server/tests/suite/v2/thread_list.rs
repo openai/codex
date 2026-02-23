@@ -38,6 +38,7 @@ use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
+use tokio::time::sleep;
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -554,6 +555,19 @@ sqlite = true
     )?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;
+    // Wait for the DB to be ready.
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            if codex_core::state_db::open_if_present(codex_home.path(), "mock_provider")
+                .await
+                .is_some()
+            {
+                break;
+            }
+            sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
             cursor: None,
