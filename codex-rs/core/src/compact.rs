@@ -32,8 +32,35 @@ pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
+/// Controls whether compaction replacement history must include initial context.
+///
+/// Pre-turn/manual compaction variants use `DoNotInject`: they replace history with a summary and
+/// clear `reference_context_item`, so the next regular turn will fully reinject initial context
+/// after compaction.
+///
+/// Mid-turn compaction must use `BeforeLastUserMessage` because the model is trained to see the
+/// compaction summary as the last item in history after mid-turn compaction; we therefore inject
+/// initial context into the replacement history just above the last real user message.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InitialContextInjection {
+    BeforeLastUserMessage,
+    DoNotInject,
+}
+
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
     provider.is_openai()
+}
+
+fn is_model_switch_developer_message(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { role, content, .. } if role == "developer" => {
+            matches!(
+                content.as_slice(),
+                [ContentItem::InputText { text }] if text.starts_with("<model_switch>\n")
+            )
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn extract_trailing_model_switch_update_for_compaction_request(
@@ -49,7 +76,7 @@ pub(crate) fn extract_trailing_model_switch_update_for_compaction_request(
         .rev()
         .find_map(|(i, item)| {
             let is_trailing = last_user_turn_boundary_index.is_none_or(|boundary| i > boundary);
-            if is_trailing && Session::is_model_switch_developer_message(item) {
+            if is_trailing && is_model_switch_developer_message(item) {
                 Some(i)
             } else {
                 None
@@ -64,6 +91,7 @@ pub(crate) fn extract_trailing_model_switch_update_for_compaction_request(
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
@@ -72,7 +100,7 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(sess, turn_context, input).await?;
+    run_compact_task_inner(sess, turn_context, input, initial_context_injection).await?;
     Ok(())
 }
 
@@ -87,13 +115,20 @@ pub(crate) async fn run_compact_task(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
-    run_compact_task_inner(sess.clone(), turn_context, input).await
+    run_compact_task_inner(
+        sess.clone(),
+        turn_context,
+        input,
+        InitialContextInjection::DoNotInject,
+    )
+    .await
 }
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
+    initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -117,9 +152,6 @@ async fn run_compact_task_inner(
     let mut client_session = sess.services.model_client.new_session();
     // Reuse one client session so turn-scoped state (sticky routing, websocket append tracking)
     // survives retries within this compact turn.
-
-    let rollout_item = RolloutItem::TurnContext(turn_context.to_turn_context_item());
-    sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
         // Clone is required because of the loop
@@ -202,8 +234,16 @@ async fn run_compact_task_inner(
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let user_messages = collect_user_messages(history_items);
 
-    let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
-    let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
+    let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
+
+    if matches!(
+        initial_context_injection,
+        InitialContextInjection::BeforeLastUserMessage
+    ) {
+        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+        new_history =
+            insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
+    }
     // Reattach the stripped model-switch update only after successful compaction so the model
     // still sees the switch instructions on the next real sampling request.
     if let Some(model_switch_item) = stripped_model_switch_item {
@@ -215,12 +255,17 @@ async fn run_compact_task_inner(
         .cloned()
         .collect();
     new_history.extend(ghost_snapshots);
-    sess.replace_history(new_history).await;
+    let reference_context_item = match initial_context_injection {
+        InitialContextInjection::DoNotInject => None,
+        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+    };
+    sess.replace_history(new_history.clone(), reference_context_item)
+        .await;
     sess.recompute_token_usage(&turn_context).await;
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
-        replacement_history: None,
+        replacement_history: Some(new_history),
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 
@@ -272,53 +317,55 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
     message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
 }
 
-pub(crate) fn process_compacted_history(
+/// Inserts canonical initial context into compacted replacement history at the
+/// model-expected boundary.
+///
+/// Placement rules:
+/// - Prefer immediately before the last real user message.
+/// - If no real user messages remain, insert before the compaction summary so
+///   the summary stays last.
+/// - If there are no user messages, insert before the last compaction item so
+///   that item remains last (remote compaction may return only compaction items).
+/// - If there are no user messages or compaction items, append the context.
+pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
     mut compacted_history: Vec<ResponseItem>,
-    initial_context: &[ResponseItem],
+    initial_context: Vec<ResponseItem>,
 ) -> Vec<ResponseItem> {
-    compacted_history.retain(should_keep_compacted_history_item);
-
-    let initial_context = initial_context.to_vec();
+    let mut last_user_or_summary_index = None;
+    let mut last_real_user_index = None;
+    for (i, item) in compacted_history.iter().enumerate().rev() {
+        let Some(TurnItem::UserMessage(user)) = crate::event_mapping::parse_turn_item(item) else {
+            continue;
+        };
+        // Compaction summaries are encoded as user messages, so track both:
+        // the last real user message (preferred insertion point) and the last
+        // user-message-like item (fallback summary insertion point).
+        last_user_or_summary_index.get_or_insert(i);
+        if !is_summary_message(&user.message()) {
+            last_real_user_index = Some(i);
+            break;
+        }
+    }
+    let last_compaction_index = compacted_history
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, item)| matches!(item, ResponseItem::Compaction { .. }).then_some(i));
+    let insertion_index = last_real_user_index
+        .or(last_user_or_summary_index)
+        .or(last_compaction_index);
 
     // Re-inject canonical context from the current session since we stripped it
-    // from the pre-compaction history. Keep it right before the last user
-    // message so older user messages remain earlier in the transcript.
-    if let Some(last_user_index) = compacted_history.iter().rposition(|item| {
-        matches!(
-            crate::event_mapping::parse_turn_item(item),
-            Some(TurnItem::UserMessage(_))
-        )
-    }) {
-        compacted_history.splice(last_user_index..last_user_index, initial_context);
+    // from the pre-compaction history. Prefer placing it before the last real
+    // user message; if there is no real user message left, place it before the
+    // summary or compaction item so the compaction item remains last.
+    if let Some(insertion_index) = insertion_index {
+        compacted_history.splice(insertion_index..insertion_index, initial_context);
     } else {
         compacted_history.extend(initial_context);
     }
 
     compacted_history
-}
-
-/// Returns whether an item from remote compaction output should be preserved.
-///
-/// Called while processing the model-provided compacted transcript, before we
-/// append fresh canonical context from the current session.
-///
-/// We drop:
-/// - `developer` messages because remote output can include stale/duplicated
-///   instruction content.
-/// - non-user-content `user` messages (session prefix/instruction wrappers),
-///   keeping only real user messages as parsed by `parse_turn_item`.
-///
-/// This intentionally keeps `user`-role warnings and compaction-generated
-/// summary messages because they parse as `TurnItem::UserMessage`.
-fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
-    match item {
-        ResponseItem::Message { role, .. } if role == "developer" => false,
-        ResponseItem::Message { role, .. } if role == "user" => matches!(
-            crate::event_mapping::parse_turn_item(item),
-            Some(TurnItem::UserMessage(_))
-        ),
-        _ => true,
-    }
 }
 
 pub(crate) fn build_compacted_history(
@@ -442,6 +489,21 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    async fn process_compacted_history_with_test_session(
+        compacted_history: Vec<ResponseItem>,
+    ) -> (Vec<ResponseItem>, Vec<ResponseItem>) {
+        let (session, turn_context) = crate::codex::make_session_and_context().await;
+        let initial_context = session.build_initial_context(&turn_context).await;
+        let refreshed = crate::compact_remote::process_compacted_history(
+            &session,
+            &turn_context,
+            compacted_history,
+            InitialContextInjection::BeforeLastUserMessage,
+        )
+        .await;
+        (refreshed, initial_context)
+    }
+
     #[test]
     fn content_items_to_text_joins_non_empty_segments() {
         let items = vec![
@@ -514,7 +576,7 @@ mod tests {
             history
                 .raw_items()
                 .iter()
-                .all(|item| !Session::is_model_switch_developer_message(item))
+                .all(|item| !is_model_switch_developer_message(item))
         );
     }
 
@@ -569,7 +631,7 @@ mod tests {
             history
                 .raw_items()
                 .iter()
-                .any(Session::is_model_switch_developer_message)
+                .any(is_model_switch_developer_message)
         );
     }
 
@@ -708,8 +770,8 @@ do things
         assert_eq!(summary, summary_text);
     }
 
-    #[test]
-    fn process_compacted_history_replaces_developer_messages() {
+    #[tokio::test]
+    async fn process_compacted_history_replaces_developer_messages() {
         let compacted_history = vec![
             ResponseItem::Message {
                 id: None,
@@ -739,88 +801,22 @@ do things
                 phase: None,
             },
         ];
-        let initial_context = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "fresh permissions".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: r#"<environment_context>
-  <cwd>/tmp</cwd>
-  <shell>zsh</shell>
-</environment_context>"#
-                        .to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "fresh personality".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-        ];
-
-        let refreshed = process_compacted_history(compacted_history, &initial_context);
-        let expected = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "fresh permissions".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: r#"<environment_context>
-  <cwd>/tmp</cwd>
-  <shell>zsh</shell>
-</environment_context>"#
-                        .to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "fresh personality".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "summary".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-        ];
+        let (refreshed, mut expected) =
+            process_compacted_history_with_test_session(compacted_history).await;
+        expected.push(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "summary".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        });
         assert_eq!(refreshed, expected);
     }
 
-    #[test]
-    fn process_compacted_history_reinjects_full_initial_context() {
+    #[tokio::test]
+    async fn process_compacted_history_reinjects_full_initial_context() {
         let compacted_history = vec![ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -830,124 +826,22 @@ do things
             end_turn: None,
             phase: None,
         }];
-        let initial_context = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "fresh permissions".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: r#"# AGENTS.md instructions for /repo
-
-<INSTRUCTIONS>
-keep me updated
-</INSTRUCTIONS>"#
-                        .to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: r#"<environment_context>
-  <cwd>/repo</cwd>
-  <shell>zsh</shell>
-</environment_context>"#
-                        .to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: r#"<turn_aborted>
-  <turn_id>turn-1</turn_id>
-  <reason>interrupted</reason>
-</turn_aborted>"#
-                        .to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-        ];
-
-        let refreshed = process_compacted_history(compacted_history, &initial_context);
-        let expected = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "fresh permissions".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: r#"# AGENTS.md instructions for /repo
-
-<INSTRUCTIONS>
-keep me updated
-</INSTRUCTIONS>"#
-                        .to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: r#"<environment_context>
-  <cwd>/repo</cwd>
-  <shell>zsh</shell>
-</environment_context>"#
-                        .to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: r#"<turn_aborted>
-  <turn_id>turn-1</turn_id>
-  <reason>interrupted</reason>
-</turn_aborted>"#
-                        .to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "summary".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-        ];
+        let (refreshed, mut expected) =
+            process_compacted_history_with_test_session(compacted_history).await;
+        expected.push(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "summary".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        });
         assert_eq!(refreshed, expected);
     }
 
-    #[test]
-    fn process_compacted_history_drops_non_user_content_messages() {
+    #[tokio::test]
+    async fn process_compacted_history_drops_non_user_content_messages() {
         let compacted_history = vec![
             ResponseItem::Message {
                 id: None,
@@ -1008,42 +902,22 @@ keep me updated
                 phase: None,
             },
         ];
-        let initial_context = vec![ResponseItem::Message {
+        let (refreshed, mut expected) =
+            process_compacted_history_with_test_session(compacted_history).await;
+        expected.push(ResponseItem::Message {
             id: None,
-            role: "developer".to_string(),
+            role: "user".to_string(),
             content: vec![ContentItem::InputText {
-                text: "fresh developer instructions".to_string(),
+                text: "summary".to_string(),
             }],
             end_turn: None,
             phase: None,
-        }];
-
-        let refreshed = process_compacted_history(compacted_history, &initial_context);
-        let expected = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "fresh developer instructions".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "summary".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-        ];
+        });
         assert_eq!(refreshed, expected);
     }
 
-    #[test]
-    fn process_compacted_history_inserts_context_before_last_real_user_message_only() {
+    #[tokio::test]
+    async fn process_compacted_history_inserts_context_before_last_real_user_message_only() {
         let compacted_history = vec![
             ResponseItem::Message {
                 id: None,
@@ -1073,18 +947,10 @@ keep me updated
                 phase: None,
             },
         ];
-        let initial_context = vec![ResponseItem::Message {
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "fresh permissions".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }];
 
-        let refreshed = process_compacted_history(compacted_history, &initial_context);
-        let expected = vec![
+        let (refreshed, initial_context) =
+            process_compacted_history_with_test_session(compacted_history).await;
+        let mut expected = vec![
             ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
@@ -1099,6 +965,75 @@ keep me updated
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: format!("{SUMMARY_PREFIX}\nsummary text"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        expected.extend(initial_context);
+        expected.push(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "latest user".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        });
+        assert_eq!(refreshed, expected);
+    }
+
+    #[test]
+    fn insert_initial_context_before_last_real_user_or_summary_keeps_summary_last() {
+        let compacted_history = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "older user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "latest user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nsummary text"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        let initial_context = vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "fresh permissions".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let refreshed = insert_initial_context_before_last_real_user_or_summary(
+            compacted_history,
+            initial_context,
+        );
+        let expected = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "older user".to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -1120,6 +1055,51 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nsummary text"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        assert_eq!(refreshed, expected);
+    }
+
+    #[test]
+    fn insert_initial_context_before_last_real_user_or_summary_keeps_compaction_last() {
+        let compacted_history = vec![ResponseItem::Compaction {
+            encrypted_content: "encrypted".to_string(),
+        }];
+        let initial_context = vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "fresh permissions".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let refreshed = insert_initial_context_before_last_real_user_or_summary(
+            compacted_history,
+            initial_context,
+        );
+        let expected = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "fresh permissions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Compaction {
+                encrypted_content: "encrypted".to_string(),
             },
         ];
         assert_eq!(refreshed, expected);

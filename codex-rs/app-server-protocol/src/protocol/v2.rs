@@ -20,7 +20,7 @@ use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
-use codex_protocol::models::MessagePhase as CoreMessagePhase;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -2277,6 +2277,8 @@ pub struct Thread {
     pub agent_role: Option<String>,
     /// Optional Git metadata captured when the thread was created.
     pub git_info: Option<GitInfo>,
+    /// Optional user-facing thread title.
+    pub name: Option<String>,
     /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
     /// (when `includeTurns` is true) responses.
     /// For all other responses and notifications returning a Thread,
@@ -2665,24 +2667,6 @@ impl From<CoreUserInput> for UserInput {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum MessagePhase {
-    Commentary,
-    FinalAnswer,
-}
-
-impl From<CoreMessagePhase> for MessagePhase {
-    fn from(value: CoreMessagePhase) -> Self {
-        match value {
-            CoreMessagePhase::Commentary => Self::Commentary,
-            CoreMessagePhase::FinalAnswer => Self::FinalAnswer,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
@@ -2871,7 +2855,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 ThreadItem::AgentMessage {
                     id: agent.id,
                     text,
-                    phase: agent.phase.map(Into::into),
+                    phase: agent.phase,
                 }
             }
             CoreTurnItem::Plan(plan) => ThreadItem::Plan {
@@ -3690,7 +3674,6 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::items::WebSearchItem;
-    use codex_protocol::models::MessagePhase as CoreMessagePhase;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
@@ -3900,7 +3883,7 @@ mod tests {
             content: vec![AgentMessageContent::Text {
                 text: "final".to_string(),
             }],
-            phase: Some(CoreMessagePhase::FinalAnswer),
+            phase: Some(MessagePhase::FinalAnswer),
         });
 
         assert_eq!(

@@ -4,7 +4,7 @@
     "ApplyPatchApprovalParams": {
       "properties": {
         "callId": {
-          "description": "Use to correlate this with [codex_core::protocol::PatchApplyBeginEvent] and [codex_core::protocol::PatchApplyEndEvent].",
+          "description": "Use to correlate this with [codex_protocol::protocol::PatchApplyBeginEvent] and [codex_protocol::protocol::PatchApplyEndEvent].",
           "type": "string"
         },
         "conversationId": {
@@ -290,7 +290,7 @@
           ]
         },
         "callId": {
-          "description": "Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent] and [codex_core::protocol::ExecCommandEndEvent].",
+          "description": "Use to correlate this with [codex_protocol::protocol::ExecCommandBeginEvent] and [codex_protocol::protocol::ExecCommandEndEvent].",
           "type": "string"
         },
         "command": {

@@ -349,6 +349,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "memories": {
+              "type": "boolean"
+            },
             "memory_tool": {
               "type": "boolean"
             },
@@ -443,6 +446,14 @@
         "model": {
           "type": "string"
         },
+        "model_catalog_json": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional path to a JSON model catalog (applied on startup only)."
+        },
         "model_instructions_file": {
           "allOf": [
             {
@@ -469,6 +480,9 @@
         },
         "personality": {
           "$ref": "#/definitions/Personality"
+        },
+        "plan_mode_reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
         },
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
@@ -1392,6 +1406,11 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "theme": {
+          "default": null,
+          "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -1501,7 +1520,7 @@
       "default": null,
       "description": "Settings for app-specific controls."
     },
-    "background_terminal_timeout": {
+    "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
       "format": "uint64",
       "minimum": 0.0,
@@ -1543,6 +1562,14 @@
     },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
+    },
+    "experimental_realtime_ws_backend_prompt": {
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport backend prompt (the `Op::RealtimeConversation` `/ws` session.create backend_prompt) without changing normal prompts.",
+      "type": "string"
+    },
+    "experimental_realtime_ws_base_url": {
+      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/ws` connection) without changing normal provider HTTP requests.",
+      "type": "string"
     },
     "experimental_use_freeform_apply_patch": {
       "type": "boolean"
@@ -1604,6 +1631,9 @@
           "type": "boolean"
         },
         "js_repl_tools_only": {
+          "type": "boolean"
+        },
+        "memories": {
           "type": "boolean"
         },
         "memory_tool": {
@@ -1902,6 +1932,9 @@
         }
       ],
       "description": "Optionally specify a personality for the model"
+    },
+    "plan_mode_reasoning_effort": {
+      "$ref": "#/definitions/ReasoningEffort"
     },
     "profile": {
       "description": "Profile to use from the `profiles` map.",

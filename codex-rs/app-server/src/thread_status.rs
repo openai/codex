@@ -239,6 +239,22 @@ impl ThreadWatchManager {
     }
 }
 
+pub(crate) fn resolve_thread_status(
+    status: ThreadStatus,
+    has_in_progress_turn: bool,
+) -> ThreadStatus {
+    // Running-turn events can arrive before the watch runtime state is observed by
+    // the listener loop. In that window we prefer to reflect a real active turn as
+    // `Active` instead of `Idle`/`NotLoaded`.
+    if has_in_progress_turn && matches!(status, ThreadStatus::Idle | ThreadStatus::NotLoaded) {
+        return ThreadStatus::Active {
+            active_flags: Vec::new(),
+        };
+    }
+
+    status
+}
+
 #[derive(Default)]
 struct ThreadWatchState {
     runtime_by_thread_id: HashMap<String, RuntimeFacts>,
@@ -459,6 +475,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn resolves_in_progress_turn_to_active_status() {
+        let status = resolve_thread_status(ThreadStatus::Idle, true);
+        assert_eq!(
+            status,
+            ThreadStatus::Active {
+                active_flags: Vec::new(),
+            }
+        );
+
+        let status = resolve_thread_status(ThreadStatus::NotLoaded, true);
+        assert_eq!(
+            status,
+            ThreadStatus::Active {
+                active_flags: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn keeps_status_when_no_in_progress_turn() {
+        assert_eq!(
+            resolve_thread_status(ThreadStatus::Idle, false),
+            ThreadStatus::Idle
+        );
+        assert_eq!(
+            resolve_thread_status(ThreadStatus::SystemError, false),
+            ThreadStatus::SystemError
+        );
+    }
+
     #[tokio::test]
     async fn system_error_sets_idle_flag_until_next_turn() {
         let manager = ThreadWatchManager::new();
@@ -626,6 +673,7 @@ mod tests {
             agent_role: None,
             source,
             git_info: None,
+            name: None,
             turns: Vec::new(),
         }
     }

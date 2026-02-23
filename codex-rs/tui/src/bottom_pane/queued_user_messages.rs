@@ -8,7 +8,7 @@ use ratatui::widgets::Paragraph;
 use crate::key_hint;
 use crate::render::renderable::Renderable;
 use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_lines;
+use crate::wrapping::adaptive_wrap_lines;
 
 /// Widget that displays a list of user messages queued while a turn is in progress.
 ///
@@ -46,7 +46,7 @@ impl QueuedUserMessages {
         let mut lines = vec![];
 
         for message in &self.messages {
-            let wrapped = word_wrap_lines(
+            let wrapped = adaptive_wrap_lines(
                 message.lines().map(|line| line.dim().italic()),
                 RtOptions::new(width as usize)
                     .initial_indent(Line::from("  ↳ ".dim()))
@@ -169,5 +169,37 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         queue.render(Rect::new(0, 0, width, height), &mut buf);
         assert_snapshot!("render_many_line_message", format!("{buf:?}"));
+    }
+
+    #[test]
+    fn long_url_like_message_does_not_expand_into_wrapped_ellipsis_rows() {
+        let mut queue = QueuedUserMessages::new();
+        queue.messages.push(
+            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/session_id=abc123def456ghi789"
+                .to_string(),
+        );
+
+        let width = 36;
+        let height = queue.desired_height(width);
+        assert_eq!(
+            height, 2,
+            "expected one message row plus hint row for URL-like token"
+        );
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        queue.render(Rect::new(0, 0, width, height), &mut buf);
+
+        let rendered_rows = (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            !rendered_rows.iter().any(|row| row.contains('…')),
+            "expected no wrapped-ellipsis row for URL-like token, got rows: {rendered_rows:?}"
+        );
     }
 }

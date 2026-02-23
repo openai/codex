@@ -576,8 +576,8 @@ impl UnifiedExecProcessManager {
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &request.command,
-                approval_policy: context.turn.approval_policy,
-                sandbox_policy: &context.turn.sandbox_policy,
+                approval_policy: context.turn.approval_policy.value(),
+                sandbox_policy: context.turn.sandbox_policy.get(),
                 sandbox_permissions: request.sandbox_permissions,
                 prefix_rule: request.prefix_rule.clone(),
             })
@@ -605,7 +605,7 @@ impl UnifiedExecProcessManager {
                 &req,
                 &tool_ctx,
                 context.turn.as_ref(),
-                context.turn.approval_policy,
+                context.turn.approval_policy.value(),
             )
             .await
             .map(|result| (result.output, result.deferred_network_approval))

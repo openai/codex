@@ -557,6 +557,73 @@
           "type": "object"
         },
         {
+          "description": "Realtime conversation lifecycle start event.",
+          "properties": {
+            "session_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "realtime_conversation_started"
+              ],
+              "title": "RealtimeConversationStartedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RealtimeConversationStartedEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Realtime conversation streaming payload event.",
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/RealtimeEvent"
+            },
+            "type": {
+              "enum": [
+                "realtime_conversation_realtime"
+              ],
+              "title": "RealtimeConversationRealtimeEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "payload",
+            "type"
+          ],
+          "title": "RealtimeConversationRealtimeEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Realtime conversation lifecycle close event.",
+          "properties": {
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "realtime_conversation_closed"
+              ],
+              "title": "RealtimeConversationClosedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RealtimeConversationClosedEventMsg",
+          "type": "object"
+        },
+        {
           "description": "Model routing changed from the requested model to a different model.",
           "properties": {
             "from_model": {
@@ -3452,7 +3519,7 @@
           "required": [
             "state"
           ],
-          "title": "StateMcpStartupStatus",
+          "title": "StartingMcpStartupStatus",
           "type": "object"
         },
         {
@@ -3467,7 +3534,7 @@
           "required": [
             "state"
           ],
-          "title": "StateMcpStartupStatus2",
+          "title": "ReadyMcpStartupStatus",
           "type": "object"
         },
         {
@@ -3500,7 +3567,7 @@
           "required": [
             "state"
           ],
-          "title": "StateMcpStartupStatus3",
+          "title": "CancelledMcpStartupStatus",
           "type": "object"
         }
       ]
@@ -3852,6 +3919,120 @@
             "type"
           ],
           "title": "FullAccessReadOnlyAccess",
+          "type": "object"
+        }
+      ]
+    },
+    "RealtimeAudioFrame": {
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "num_channels": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "sample_rate": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "samples_per_channel": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data",
+        "num_channels",
+        "sample_rate"
+      ],
+      "type": "object"
+    },
+    "RealtimeEvent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SessionCreated": {
+              "properties": {
+                "session_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "session_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "SessionCreated"
+          ],
+          "title": "SessionCreatedRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SessionUpdated": {
+              "properties": {
+                "backend_prompt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "SessionUpdated"
+          ],
+          "title": "SessionUpdatedRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "AudioOut": {
+              "$ref": "#/definitions/RealtimeAudioFrame"
+            }
+          },
+          "required": [
+            "AudioOut"
+          ],
+          "title": "AudioOutRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ConversationItemAdded": true
+          },
+          "required": [
+            "ConversationItemAdded"
+          ],
+          "title": "ConversationItemAddedRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Error"
+          ],
+          "title": "ErrorRealtimeEvent",
           "type": "object"
         }
       ]
@@ -5618,6 +5799,73 @@
         "type"
       ],
       "title": "WarningEventMsg",
+      "type": "object"
+    },
+    {
+      "description": "Realtime conversation lifecycle start event.",
+      "properties": {
+        "session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "enum": [
+            "realtime_conversation_started"
+          ],
+          "title": "RealtimeConversationStartedEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "RealtimeConversationStartedEventMsg",
+      "type": "object"
+    },
+    {
+      "description": "Realtime conversation streaming payload event.",
+      "properties": {
+        "payload": {
+          "$ref": "#/definitions/RealtimeEvent"
+        },
+        "type": {
+          "enum": [
+            "realtime_conversation_realtime"
+          ],
+          "title": "RealtimeConversationRealtimeEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "payload",
+        "type"
+      ],
+      "title": "RealtimeConversationRealtimeEventMsg",
+      "type": "object"
+    },
+    {
+      "description": "Realtime conversation lifecycle close event.",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "enum": [
+            "realtime_conversation_closed"
+          ],
+          "title": "RealtimeConversationClosedEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "RealtimeConversationClosedEventMsg",
       "type": "object"
     },
     {
