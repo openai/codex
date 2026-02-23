@@ -117,6 +117,7 @@ fn load_or_create_ca() -> Result<(String, String)> {
                 key_path.display()
             ));
         }
+        validate_existing_ca_key_file(&key_path)?;
         let cert_pem = fs::read_to_string(&cert_path)
             .with_context(|| format!("failed to read CA cert {}", cert_path.display()))?;
         let key_pem = fs::read_to_string(&key_path)
@@ -238,6 +239,41 @@ fn write_atomic_create_new(path: &Path, contents: &[u8], mode: u32) -> Result<()
 }
 
 #[cfg(unix)]
+fn validate_existing_ca_key_file(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to stat CA key {}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(anyhow!(
+            "refusing to use symlink for managed MITM CA key {}",
+            path.display()
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(anyhow!(
+            "managed MITM CA key is not a regular file: {}",
+            path.display()
+        ));
+    }
+
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(anyhow!(
+            "managed MITM CA key {} must not be group/world accessible (mode={mode:o}; expected <= 600)",
+            path.display()
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_existing_ca_key_file(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
 fn open_create_new_with_mode(path: &Path, mode: u32) -> Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -256,4 +292,53 @@ fn open_create_new_with_mode(path: &Path, _mode: u32) -> Result<File> {
         .create_new(true)
         .open(path)
         .with_context(|| format!("failed to create {}", path.display()))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::tempdir;
+
+    #[test]
+    fn validate_existing_ca_key_file_rejects_group_world_permissions() {
+        let dir = tempdir().unwrap();
+        let key_path = dir.path().join("ca.key");
+        fs::write(&key_path, "key").unwrap();
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let err = validate_existing_ca_key_file(&key_path).unwrap_err();
+        assert!(
+            err.to_string().contains("group/world accessible"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn validate_existing_ca_key_file_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("real.key");
+        let link = dir.path().join("ca.key");
+        fs::write(&target, "key").unwrap();
+        symlink(&target, &link).unwrap();
+
+        let err = validate_existing_ca_key_file(&link).unwrap_err();
+        assert!(
+            err.to_string().contains("symlink"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn validate_existing_ca_key_file_allows_private_permissions() {
+        let dir = tempdir().unwrap();
+        let key_path = dir.path().join("ca.key");
+        fs::write(&key_path, "key").unwrap();
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        validate_existing_ca_key_file(&key_path).unwrap();
+    }
 }

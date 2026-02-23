@@ -5,6 +5,8 @@ use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::responses::blocked_text_response;
 use crate::responses::text_response;
+use crate::runtime::HostBlockDecision;
+use crate::runtime::HostBlockReason;
 use crate::state::BlockedRequest;
 use crate::state::BlockedRequestArgs;
 use crate::state::NetworkProxyState;
@@ -50,6 +52,20 @@ pub struct MitmState {
     upstream: UpstreamClient,
     inspect: bool,
     max_body_bytes: usize,
+}
+
+#[derive(Clone)]
+struct MitmPolicyContext {
+    target_host: String,
+    target_port: u16,
+    mode: NetworkMode,
+    app_state: Arc<NetworkProxyState>,
+}
+
+#[derive(Clone)]
+struct MitmRequestContext {
+    policy: MitmPolicyContext,
+    mitm: Arc<MitmState>,
 }
 
 const MITM_INSPECT_BODIES: bool = false;
@@ -101,19 +117,39 @@ impl MitmState {
 
 /// Terminate the upgraded CONNECT stream with a generated leaf cert and proxy inner HTTPS traffic.
 pub(crate) async fn mitm_tunnel(upgraded: Upgraded) -> Result<()> {
-    let state = upgraded
+    let mitm = upgraded
         .extensions()
         .get::<Arc<MitmState>>()
         .cloned()
         .context("missing MITM state")?;
+    let app_state = upgraded
+        .extensions()
+        .get::<Arc<NetworkProxyState>>()
+        .cloned()
+        .context("missing app state")?;
     let target = upgraded
         .extensions()
         .get::<ProxyTarget>()
         .context("missing proxy target")?
         .0
         .clone();
-    let host = normalize_host(&target.host.to_string());
-    let acceptor_data = state.tls_acceptor_data_for_host(&host)?;
+    let target_host = normalize_host(&target.host.to_string());
+    let target_port = target.port;
+    let acceptor_data = mitm.tls_acceptor_data_for_host(&target_host)?;
+    let mode = upgraded
+        .extensions()
+        .get::<NetworkMode>()
+        .copied()
+        .unwrap_or(NetworkMode::Full);
+    let request_ctx = Arc::new(MitmRequestContext {
+        policy: MitmPolicyContext {
+            target_host,
+            target_port,
+            mode,
+            app_state,
+        },
+        mitm,
+    });
 
     let executor = upgraded
         .extensions()
@@ -126,7 +162,13 @@ pub(crate) async fn mitm_tunnel(upgraded: Upgraded) -> Result<()> {
             RemoveResponseHeaderLayer::hop_by_hop(),
             RemoveRequestHeaderLayer::hop_by_hop(),
         )
-            .into_layer(service_fn(handle_mitm_request)),
+            .into_layer(service_fn({
+                let request_ctx = request_ctx.clone();
+                move |req| {
+                    let request_ctx = request_ctx.clone();
+                    async move { handle_mitm_request(req, request_ctx).await }
+                }
+            })),
     );
 
     let https_service = TlsAcceptorLayer::new(acceptor_data)
@@ -140,84 +182,32 @@ pub(crate) async fn mitm_tunnel(upgraded: Upgraded) -> Result<()> {
     Ok(())
 }
 
-async fn handle_mitm_request(req: Request) -> Result<Response, std::convert::Infallible> {
-    let response = match forward_request(req).await {
+async fn handle_mitm_request(
+    req: Request,
+    request_ctx: Arc<MitmRequestContext>,
+) -> Result<Response, std::convert::Infallible> {
+    let response = match forward_request(req, &request_ctx).await {
         Ok(resp) => resp,
         Err(err) => {
-            warn!("MITM upstream request failed: {err}");
+            warn!("MITM request handling failed: {err}");
             text_response(StatusCode::BAD_GATEWAY, "mitm upstream error")
         }
     };
     Ok(response)
 }
 
-async fn forward_request(req: Request) -> Result<Response> {
-    let target = req
-        .extensions()
-        .get::<ProxyTarget>()
-        .context("missing proxy target")?
-        .0
-        .clone();
-
-    let target_host = normalize_host(&target.host.to_string());
-    let target_port = target.port;
-    let mode = req
-        .extensions()
-        .get::<NetworkMode>()
-        .copied()
-        .unwrap_or(NetworkMode::Full);
-    let mitm = req
-        .extensions()
-        .get::<Arc<MitmState>>()
-        .cloned()
-        .context("missing MITM state")?;
-    let app_state = req
-        .extensions()
-        .get::<Arc<NetworkProxyState>>()
-        .cloned()
-        .context("missing app state")?;
-
-    if req.method().as_str() == "CONNECT" {
-        return Ok(text_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "CONNECT not supported inside MITM",
-        ));
+async fn forward_request(req: Request, request_ctx: &MitmRequestContext) -> Result<Response> {
+    if let Some(response) = mitm_blocking_response(&req, &request_ctx.policy).await? {
+        return Ok(response);
     }
+
+    let target_host = request_ctx.policy.target_host.clone();
+    let target_port = request_ctx.policy.target_port;
+    let mitm = request_ctx.mitm.clone();
 
     let method = req.method().as_str().to_string();
     let path = path_and_query(req.uri());
-    let client = req
-        .extensions()
-        .get::<SocketInfo>()
-        .map(|info| info.peer_addr().to_string());
-
-    if let Some(request_host) = extract_request_host(&req) {
-        let normalized = normalize_host(&request_host);
-        if !normalized.is_empty() && normalized != target_host {
-            warn!("MITM host mismatch (target={target_host}, request_host={normalized})");
-            return Ok(text_response(StatusCode::BAD_REQUEST, "host mismatch"));
-        }
-    }
-
-    if !mode.allows_method(&method) {
-        let _ = app_state
-            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
-                host: target_host.clone(),
-                reason: REASON_METHOD_NOT_ALLOWED.to_string(),
-                client: client.clone(),
-                method: Some(method.clone()),
-                mode: Some(mode),
-                protocol: "https".to_string(),
-                decision: None,
-                source: None,
-                port: Some(target_port),
-            }))
-            .await;
-        warn!(
-            "MITM blocked by method policy (host={target_host}, method={method}, path={path}, mode={mode:?}, allowed_methods=GET, HEAD, OPTIONS)"
-        );
-        return Ok(blocked_text_response(REASON_METHOD_NOT_ALLOWED));
-    }
+    let log_path = path_for_log(req.uri());
 
     let (mut parts, body) = req.into_parts();
     let authority = authority_header_value(&target_host, target_port);
@@ -235,7 +225,7 @@ async fn forward_request(req: Request) -> Result<Response> {
             RequestLogContext {
                 host: authority.clone(),
                 method: method.clone(),
-                path: path.clone(),
+                path: log_path.clone(),
             },
         )
     } else {
@@ -249,9 +239,97 @@ async fn forward_request(req: Request) -> Result<Response> {
         inspect,
         max_body_bytes,
         &method,
-        &path,
+        &log_path,
         &authority,
     )
+}
+
+async fn mitm_blocking_response(
+    req: &Request,
+    policy: &MitmPolicyContext,
+) -> Result<Option<Response>> {
+    if req.method().as_str() == "CONNECT" {
+        return Ok(Some(text_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "CONNECT not supported inside MITM",
+        )));
+    }
+
+    let method = req.method().as_str().to_string();
+    let log_path = path_for_log(req.uri());
+    let client = req
+        .extensions()
+        .get::<SocketInfo>()
+        .map(|info| info.peer_addr().to_string());
+
+    if let Some(request_host) = extract_request_host(req) {
+        let normalized = normalize_host(&request_host);
+        if !normalized.is_empty() && normalized != policy.target_host {
+            warn!(
+                "MITM host mismatch (target={}, request_host={normalized})",
+                policy.target_host
+            );
+            return Ok(Some(text_response(
+                StatusCode::BAD_REQUEST,
+                "host mismatch",
+            )));
+        }
+    }
+
+    // CONNECT already handled allowlist/denylist + decider policy. Re-check local/private
+    // resolution here to defend against DNS rebinding between CONNECT and inner HTTPS requests.
+    if matches!(
+        policy
+            .app_state
+            .host_blocked(&policy.target_host, policy.target_port)
+            .await?,
+        HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
+    ) {
+        let reason = HostBlockReason::NotAllowedLocal.as_str();
+        let _ = policy
+            .app_state
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: policy.target_host.clone(),
+                reason: reason.to_string(),
+                client: client.clone(),
+                method: Some(method.clone()),
+                mode: Some(policy.mode),
+                protocol: "https".to_string(),
+                decision: None,
+                source: None,
+                port: Some(policy.target_port),
+            }))
+            .await;
+        warn!(
+            "MITM blocked local/private target after CONNECT (host={}, port={}, method={method}, path={log_path})",
+            policy.target_host, policy.target_port
+        );
+        return Ok(Some(blocked_text_response(reason)));
+    }
+
+    if !policy.mode.allows_method(&method) {
+        let _ = policy
+            .app_state
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: policy.target_host.clone(),
+                reason: REASON_METHOD_NOT_ALLOWED.to_string(),
+                client: client.clone(),
+                method: Some(method.clone()),
+                mode: Some(policy.mode),
+                protocol: "https".to_string(),
+                decision: None,
+                source: None,
+                port: Some(policy.target_port),
+            }))
+            .await;
+        warn!(
+            "MITM blocked by method policy (host={}, method={method}, path={log_path}, mode={:?}, allowed_methods=GET, HEAD, OPTIONS)",
+            policy.target_host, policy.mode
+        );
+        return Ok(Some(blocked_text_response(REASON_METHOD_NOT_ALLOWED)));
+    }
+
+    Ok(None)
 }
 
 fn respond_with_inspection(
@@ -259,7 +337,7 @@ fn respond_with_inspection(
     inspect: bool,
     max_body_bytes: usize,
     method: &str,
-    path: &str,
+    log_path: &str,
     authority: &str,
 ) -> Result<Response> {
     if !inspect {
@@ -273,7 +351,7 @@ fn respond_with_inspection(
         ResponseLogContext {
             host: authority.to_string(),
             method: method.to_string(),
-            path: path.to_string(),
+            path: log_path.to_string(),
             status: parts.status,
         },
     );
@@ -396,3 +474,10 @@ fn path_and_query(uri: &Uri) -> String {
         .unwrap_or("/")
         .to_string()
 }
+
+fn path_for_log(uri: &Uri) -> String {
+    uri.path().to_string()
+}
+
+#[cfg(test)]
+mod tests;
