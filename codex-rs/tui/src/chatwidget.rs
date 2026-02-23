@@ -49,6 +49,7 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
+use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
 use codex_core::config::types::WindowsSandboxModeToml;
@@ -1076,6 +1077,27 @@ impl ChatWidget {
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.clone());
+        self.config.cwd = event.cwd.clone();
+        if let Err(err) = self
+            .config
+            .permissions
+            .approval_policy
+            .set(event.approval_policy)
+        {
+            tracing::warn!(%err, "failed to sync approval_policy from SessionConfigured");
+            self.config.permissions.approval_policy =
+                Constrained::allow_only(event.approval_policy);
+        }
+        if let Err(err) = self
+            .config
+            .permissions
+            .sandbox_policy
+            .set(event.sandbox_policy.clone())
+        {
+            tracing::warn!(%err, "failed to sync sandbox_policy from SessionConfigured");
+            self.config.permissions.sandbox_policy =
+                Constrained::allow_only(event.sandbox_policy.clone());
+        }
         let initial_messages = event.initial_messages.clone();
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
