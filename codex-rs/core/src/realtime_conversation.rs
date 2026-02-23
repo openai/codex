@@ -218,9 +218,7 @@ pub(crate) async fn handle_start(
             };
             if let Some(text) = maybe_routed_text {
                 let sess_for_routed_text = Arc::clone(&sess_clone);
-                tokio::spawn(async move {
-                    sess_for_routed_text.route_realtime_text_input(text).await;
-                });
+                sess_for_routed_text.route_realtime_text_input(text).await;
             }
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
