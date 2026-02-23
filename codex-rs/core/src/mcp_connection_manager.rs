@@ -62,6 +62,7 @@ use rmcp::model::RequestId;
 use rmcp::model::Resource;
 use rmcp::model::ResourceTemplate;
 use rmcp::model::Tool;
+use rmcp::model::UrlElicitationCapability;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -249,14 +250,16 @@ fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
 #[derive(Clone)]
 struct ElicitationRequestManager {
     requests: Arc<Mutex<ResponderMap>>,
+    mcp_elicitations_enabled: bool,
     approval_policy: Arc<StdMutex<AskForApproval>>,
 }
 
 impl ElicitationRequestManager {
-    fn new(approval_policy: AskForApproval) -> Self {
+    fn new(approval_policy: AskForApproval, mcp_elicitations_enabled: bool) -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
+            mcp_elicitations_enabled,
         }
     }
 
@@ -278,6 +281,7 @@ impl ElicitationRequestManager {
     fn make_sender(&self, server_name: String, tx_event: Sender<Event>) -> SendElicitation {
         let elicitation_requests = self.requests.clone();
         let approval_policy = self.approval_policy.clone();
+        let mcp_elicitations_enabled = self.mcp_elicitations_enabled;
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
             let tx_event = tx_event.clone();
@@ -299,29 +303,49 @@ impl ElicitationRequestManager {
                     let mut lock = elicitation_requests.lock().await;
                     lock.insert((server_name.clone(), id.clone()), tx);
                 }
+                let request_id = match id.clone() {
+                    rmcp::model::NumberOrString::String(value) => {
+                        ProtocolRequestId::String(value.to_string())
+                    }
+                    rmcp::model::NumberOrString::Number(value) => ProtocolRequestId::Integer(value),
+                };
+                let (message, requested_schema, url, elicitation_id) = match elicitation {
+                    CreateElicitationRequestParams::FormElicitationParams {
+                        message,
+                        requested_schema,
+                        ..
+                    } => (
+                        message,
+                        if mcp_elicitations_enabled {
+                            serde_json::to_value(requested_schema).ok()
+                        } else {
+                            None
+                        },
+                        None,
+                        None,
+                    ),
+                    CreateElicitationRequestParams::UrlElicitationParams {
+                        message,
+                        url,
+                        elicitation_id,
+                        ..
+                    } => (
+                        message,
+                        None,
+                        mcp_elicitations_enabled.then_some(url),
+                        mcp_elicitations_enabled.then_some(elicitation_id),
+                    ),
+                };
                 let _ = tx_event
                     .send(Event {
                         id: "mcp_elicitation_request".to_string(),
                         msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
                             server_name,
-                            id: match id.clone() {
-                                rmcp::model::NumberOrString::String(value) => {
-                                    ProtocolRequestId::String(value.to_string())
-                                }
-                                rmcp::model::NumberOrString::Number(value) => {
-                                    ProtocolRequestId::Integer(value)
-                                }
-                            },
-                            message: match elicitation {
-                                CreateElicitationRequestParams::FormElicitationParams {
-                                    message,
-                                    ..
-                                }
-                                | CreateElicitationRequestParams::UrlElicitationParams {
-                                    message,
-                                    ..
-                                } => message,
-                            },
+                            id: request_id,
+                            message,
+                            requested_schema,
+                            url,
+                            elicitation_id,
                         }),
                     })
                     .await;
@@ -513,11 +537,17 @@ pub(crate) struct McpConnectionManager {
 }
 
 impl McpConnectionManager {
-    pub(crate) fn new_uninitialized(approval_policy: &Constrained<AskForApproval>) -> Self {
+    pub(crate) fn new_uninitialized(
+        approval_policy: &Constrained<AskForApproval>,
+        mcp_elicitations_enabled: bool,
+    ) -> Self {
         Self {
             clients: HashMap::new(),
             server_origins: HashMap::new(),
-            elicitation_requests: ElicitationRequestManager::new(approval_policy.value()),
+            elicitation_requests: ElicitationRequestManager::new(
+                approval_policy.value(),
+                mcp_elicitations_enabled,
+            ),
         }
     }
 
@@ -525,7 +555,7 @@ impl McpConnectionManager {
     pub(crate) fn new_mcp_connection_manager_for_tests(
         approval_policy: &Constrained<AskForApproval>,
     ) -> Self {
-        Self::new_uninitialized(approval_policy)
+        Self::new_uninitialized(approval_policy, false)
     }
 
     pub(crate) fn has_servers(&self) -> bool {
@@ -549,6 +579,7 @@ impl McpConnectionManager {
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         approval_policy: &Constrained<AskForApproval>,
         tx_event: Sender<Event>,
+        mcp_elicitations_enabled: bool,
         initial_sandbox_state: SandboxState,
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
@@ -557,7 +588,8 @@ impl McpConnectionManager {
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
-        let elicitation_requests = ElicitationRequestManager::new(approval_policy.value());
+        let elicitation_requests =
+            ElicitationRequestManager::new(approval_policy.value(), mcp_elicitations_enabled);
         let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             if let Some(origin) = transport_origin(&cfg.transport) {
@@ -683,6 +715,24 @@ impl McpConnectionManager {
             .await
     }
 
+    pub async fn complete_url_elicitation(
+        &self,
+        server_name: String,
+        elicitation_id: String,
+    ) -> Result<()> {
+        let managed_client = self.client_by_name(&server_name).await?;
+        managed_client
+            .client
+            .send_custom_notification(
+                "notifications/elicitation/complete",
+                Some(serde_json::json!({ "elicitationId": elicitation_id })),
+            )
+            .await
+            .with_context(|| {
+                format!("failed sending url elicitation completion for `{server_name}`")
+            })
+    }
+
     pub(crate) async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
         let Some(async_managed_client) = self.clients.get(server_name) else {
             return false;
@@ -752,6 +802,7 @@ impl McpConnectionManager {
             CODEX_APPS_MCP_SERVER_NAME,
             &managed_client.client,
             managed_client.tool_timeout,
+            self.elicitation_requests.mcp_elicitations_enabled,
         )
         .await
         .with_context(|| {
@@ -1206,7 +1257,10 @@ impl From<anyhow::Error> for StartupOutcomeError {
     }
 }
 
-fn elicitation_capability_for_server(server_name: &str) -> Option<ElicitationCapability> {
+fn elicitation_capability_for_server(
+    server_name: &str,
+    mcp_elicitations_enabled: bool,
+) -> Option<ElicitationCapability> {
     if server_name == CODEX_APPS_MCP_SERVER_NAME {
         // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
         // indicates this should be an empty object.
@@ -1214,7 +1268,7 @@ fn elicitation_capability_for_server(server_name: &str) -> Option<ElicitationCap
             form: Some(FormElicitationCapability {
                 schema_validation: None,
             }),
-            url: None,
+            url: mcp_elicitations_enabled.then_some(UrlElicitationCapability {}),
         })
     } else {
         None
@@ -1234,7 +1288,10 @@ async fn start_server_task(
         elicitation_requests,
         codex_apps_tools_cache_context,
     } = params;
-    let elicitation = elicitation_capability_for_server(&server_name);
+    let elicitation = elicitation_capability_for_server(
+        &server_name,
+        elicitation_requests.mcp_elicitations_enabled,
+    );
     let params = InitializeRequestParams {
         meta: None,
         capabilities: ClientCapabilities {
@@ -1265,9 +1322,14 @@ async fn start_server_task(
 
     let list_start = Instant::now();
     let fetch_start = Instant::now();
-    let tools = list_tools_for_client_uncached(&server_name, &client, startup_timeout)
-        .await
-        .map_err(StartupOutcomeError::from)?;
+    let tools = list_tools_for_client_uncached(
+        &server_name,
+        &client,
+        startup_timeout,
+        elicitation_requests.mcp_elicitations_enabled,
+    )
+    .await
+    .map_err(StartupOutcomeError::from)?;
     emit_duration(
         MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
         fetch_start.elapsed(),
@@ -1474,10 +1536,38 @@ async fn list_tools_for_client_uncached(
     server_name: &str,
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
+    mcp_elicitations_enabled: bool,
 ) -> Result<Vec<ToolInfo>> {
-    let resp = client.list_tools_with_connector_ids(None, timeout).await?;
-    let tools = resp
-        .tools
+    // If MCP elicitations + codex_apps, paginate tools to avoid partial list
+    let paginate_tools = mcp_elicitations_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME;
+    let raw_tools = if paginate_tools {
+        let mut collected = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let params = cursor.as_ref().map(|next| PaginatedRequestParams {
+                meta: None,
+                cursor: Some(next.clone()),
+            });
+            let response = client
+                .list_tools_with_connector_ids(params, timeout)
+                .await?;
+            collected.extend(response.tools);
+            match response.next_cursor {
+                Some(next) => {
+                    if cursor.as_ref() == Some(&next) {
+                        return Err(anyhow!("tools/list returned duplicate cursor"));
+                    }
+                    cursor = Some(next);
+                }
+                None => break collected,
+            }
+        }
+    } else {
+        let resp = client.list_tools_with_connector_ids(None, timeout).await?;
+        resp.tools
+    };
+
+    let tools = raw_tools
         .into_iter()
         .map(|tool| {
             let connector_name = tool.connector_name;
@@ -1984,7 +2074,7 @@ mod tests {
                 .boxed()
                 .shared();
         let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
+        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, false);
         manager.clients.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             AsyncManagedClient {
@@ -2009,7 +2099,7 @@ mod tests {
                 .boxed()
                 .shared();
         let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
+        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, false);
         manager.clients.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             AsyncManagedClient {
@@ -2031,7 +2121,7 @@ mod tests {
                 .boxed()
                 .shared();
         let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
+        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, false);
         manager.clients.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             AsyncManagedClient {
@@ -2061,7 +2151,7 @@ mod tests {
         .boxed()
         .shared();
         let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
-        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
+        let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, false);
         let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
         manager.clients.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
@@ -2082,9 +2172,22 @@ mod tests {
 
     #[test]
     fn elicitation_capability_enabled_only_for_codex_apps() {
-        let codex_apps_capability = elicitation_capability_for_server(CODEX_APPS_MCP_SERVER_NAME);
+        let codex_apps_capability =
+            elicitation_capability_for_server(CODEX_APPS_MCP_SERVER_NAME, true);
         assert!(matches!(
             codex_apps_capability,
+            Some(ElicitationCapability {
+                form: Some(FormElicitationCapability {
+                    schema_validation: None
+                }),
+                url: Some(UrlElicitationCapability {}),
+            })
+        ));
+
+        let codex_apps_without_feature =
+            elicitation_capability_for_server(CODEX_APPS_MCP_SERVER_NAME, false);
+        assert!(matches!(
+            codex_apps_without_feature,
             Some(ElicitationCapability {
                 form: Some(FormElicitationCapability {
                     schema_validation: None
@@ -2093,7 +2196,7 @@ mod tests {
             })
         ));
 
-        assert!(elicitation_capability_for_server("custom_mcp").is_none());
+        assert!(elicitation_capability_for_server("custom_mcp", true).is_none());
     }
 
     #[test]

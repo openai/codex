@@ -31,6 +31,8 @@ pub use multi_agents::MultiAgentHandler;
 pub use plan::PlanHandler;
 pub use read_file::ReadFileHandler;
 pub use request_user_input::RequestUserInputHandler;
+pub(crate) use request_user_input::build_mcp_elicitation_request_user_input_args;
+pub(crate) use request_user_input::build_mcp_elicitation_response_from_user_input;
 pub(crate) use request_user_input::request_user_input_tool_description;
 pub(crate) use search_tool_bm25::DEFAULT_LIMIT as SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 pub(crate) use search_tool_bm25::SEARCH_TOOL_BM25_TOOL_NAME;

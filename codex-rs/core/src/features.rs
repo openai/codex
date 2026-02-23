@@ -125,7 +125,7 @@ pub enum Feature {
     Collab,
     /// Enable apps.
     Apps,
-    /// Route apps MCP calls through the configured gateway.
+    /// Route apps MCP calls through the new gateway and enable elicitation flows.
     AppsMcpGateway,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,

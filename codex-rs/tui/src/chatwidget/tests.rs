@@ -31,6 +31,8 @@ use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
+use codex_protocol::approvals::ElicitationAction;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -38,6 +40,8 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::RequestId;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -65,9 +69,12 @@ use codex_protocol::protocol::ExecPolicyAmendment;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_protocol::protocol::McpToolCallBeginEvent;
+use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
@@ -3235,6 +3242,173 @@ async fn streaming_final_answer_keeps_task_running_state() {
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+}
+
+#[tokio::test]
+async fn mcp_tool_call_begin_elicitation_end_deferred_during_active_stream() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("Generating search response...\n".to_string());
+    chat.on_commit_tick();
+    let _ = drain_insert_history(&mut rx);
+
+    let call_id = "mcp-call-1".to_string();
+    let invocation = McpInvocation {
+        server: "mcp-test".to_string(),
+        tool: "search".to_string(),
+        arguments: Some(serde_json::json!({ "query": "foo" })),
+    };
+    chat.handle_codex_event(Event {
+        id: "mcp-begin".into(),
+        msg: EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: call_id.clone(),
+            invocation: invocation.clone(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "elicitation".into(),
+        msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
+            server_name: "mcp-test".to_string(),
+            id: RequestId::String("elicitation-1".to_string()),
+            message: "Need search details".to_string(),
+            requested_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {},
+            })),
+            url: Some("https://example.com/elicitation".to_string()),
+            elicitation_id: Some("elicitation-url-1".to_string()),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "mcp-end".into(),
+        msg: EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+            call_id,
+            invocation,
+            duration: std::time::Duration::from_millis(25),
+            result: Ok(CallToolResult {
+                content: vec![serde_json::json!({"type":"text","text":"ok"})],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        }),
+    });
+
+    assert_eq!(drain_insert_history(&mut rx).len(), 0);
+    assert!(!chat.interrupts.is_empty());
+
+    chat.handle_codex_event(Event {
+        id: "final".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: String::new(),
+            phase: None,
+        }),
+    });
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected queued MCP cell after stream flush"
+    );
+    let final_blob = lines_to_single_string(cells.last().unwrap());
+    assert!(final_blob.contains("Called"));
+    assert!(final_blob.contains("mcp-test.search"));
+    assert!(chat.interrupts.is_empty());
+    assert!(chat.active_cell.is_none());
+}
+
+#[tokio::test]
+async fn mcp_tool_call_elicitation_can_be_resolved_after_stream_queue_flush() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("Running through tool request...\n".to_string());
+    chat.on_commit_tick();
+    let _ = drain_insert_history(&mut rx);
+
+    let call_id = "mcp-call-2".to_string();
+    let invocation = McpInvocation {
+        server: "mcp-test".to_string(),
+        tool: "search".to_string(),
+        arguments: Some(serde_json::json!({ "query": "bar" })),
+    };
+    chat.handle_codex_event(Event {
+        id: "mcp-begin-2".into(),
+        msg: EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: call_id.clone(),
+            invocation: invocation.clone(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "elicitation-2".into(),
+        msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
+            server_name: "mcp-test".to_string(),
+            id: RequestId::String("elicitation-2".to_string()),
+            message: "Need search details".to_string(),
+            requested_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {},
+            })),
+            url: None,
+            elicitation_id: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "mcp-end-2".into(),
+        msg: EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+            call_id,
+            invocation,
+            duration: std::time::Duration::from_millis(33),
+            result: Ok(CallToolResult {
+                content: vec![serde_json::json!({"type":"text","text":"ok"})],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "final-2".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: String::new(),
+            phase: None,
+        }),
+    });
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected queued MCP cell after stream flush"
+    );
+    let final_blob = lines_to_single_string(cells.last().unwrap());
+    assert!(final_blob.contains("Called"));
+    assert!(final_blob.contains("mcp-test.search"));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(popup.contains("mcp-test needs your approval."));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+    let mut found_op = None;
+    while let Ok(app_ev) = rx.try_recv() {
+        if let AppEvent::CodexOp(op) = app_ev {
+            found_op = Some(op);
+            break;
+        }
+    }
+    let Op::ResolveElicitation {
+        server_name,
+        request_id,
+        decision,
+        ..
+    } = found_op.expect("expected ResolveElicitation op")
+    else {
+        panic!("unexpected op after resolving elicitation");
+    };
+    assert_eq!(server_name, "mcp-test");
+    assert_eq!(request_id, RequestId::String("elicitation-2".to_string()));
+    assert_eq!(decision, ElicitationAction::Accept);
 }
 
 #[tokio::test]

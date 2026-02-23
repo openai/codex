@@ -1757,12 +1757,19 @@
         },
         {
           "properties": {
+            "elicitation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "id": {
               "$ref": "#/definitions/RequestId"
             },
             "message": {
               "type": "string"
             },
+            "requested_schema": true,
             "server_name": {
               "type": "string"
             },
@@ -1772,6 +1779,12 @@
               ],
               "title": "ElicitationRequestEventMsgType",
               "type": "string"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
@@ -7002,12 +7015,19 @@
     },
     {
       "properties": {
+        "elicitation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "$ref": "#/definitions/RequestId"
         },
         "message": {
           "type": "string"
         },
+        "requested_schema": true,
         "server_name": {
           "type": "string"
         },
@@ -7017,6 +7037,12 @@
           ],
           "title": "ElicitationRequestEventMsgType",
           "type": "string"
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

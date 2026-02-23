@@ -157,6 +157,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         auth_status_entries,
         &config.permissions.approval_policy,
         tx_event,
+        config.features.enabled(Feature::AppsMcpGateway),
         sandbox_state,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth.as_ref()),
