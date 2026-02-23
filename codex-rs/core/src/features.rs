@@ -134,6 +134,7 @@ pub enum Feature {
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Default).
+    /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
     /// Enable personality selection in the TUI.
     Personality,
@@ -494,12 +495,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Sqlite,
         key: "sqlite",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::MemoryTool,
-        key: "memory_tool",
+        key: "memories",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -617,7 +618,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CollaborationModes,
         key: "collaboration_modes",
-        stage: Stage::Stable,
+        stage: Stage::Removed,
         default_enabled: true,
     },
     FeatureSpec {
@@ -728,10 +729,9 @@ mod tests {
     fn default_enabled_features_are_stable() {
         for spec in FEATURES {
             if spec.default_enabled {
-                assert_eq!(
-                    spec.stage,
-                    Stage::Stable,
-                    "feature `{}` is enabled by default but is not stable ({:?})",
+                assert!(
+                    matches!(spec.stage, Stage::Stable | Stage::Removed),
+                    "feature `{}` is enabled by default but is not stable/removed ({:?})",
                     spec.key,
                     spec.stage
                 );

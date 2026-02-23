@@ -457,15 +457,16 @@ where
 
     /// Hard-reset scrollback + visible screen using an explicit ANSI sequence.
     ///
-    /// This is a compatibility fallback for terminals that misbehave when purge
-    /// and full-screen clear are issued as separate backend commands.
+    /// Some terminals behave more reliably when purge + clear are emitted as a
+    /// single ANSI sequence instead of separate backend commands.
     pub fn clear_scrollback_and_visible_screen_ansi(&mut self) -> io::Result<()> {
         if self.viewport_area.is_empty() {
             return Ok(());
         }
 
-        // Reset scroll region + style state, purge scrollback, clear screen, home cursor.
-        write!(self.backend, "\x1b[r\x1b[0m\x1b[3J\x1b[2J\x1b[H")?;
+        // Reset scroll region + style state, home cursor, clear screen, purge scrollback.
+        // The order matches the common shell `clear && printf '\\e[3J'` behavior.
+        write!(self.backend, "\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H")?;
         std::io::Write::flush(&mut self.backend)?;
         self.last_known_cursor_pos = Position { x: 0, y: 0 };
         self.visible_history_rows = 0;

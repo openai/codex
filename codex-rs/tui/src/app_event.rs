@@ -54,7 +54,8 @@ pub(crate) enum AppEvent {
     /// Start a new session.
     NewSession,
 
-    /// Clear the terminal UI (screen + scrollback) without changing session state.
+    /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
+    /// previous chat resumable.
     ClearUi,
 
     /// Open the resume picker inside the running TUI session.

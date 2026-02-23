@@ -166,6 +166,10 @@ impl ZshExecBridge {
         })?;
 
         let mut cmd = tokio::process::Command::new(&command[0]);
+        #[cfg(unix)]
+        if let Some(arg0) = &req.arg0 {
+            cmd.arg0(arg0);
+        }
         if command.len() > 1 {
             cmd.args(&command[1..]);
         }
@@ -459,7 +463,6 @@ fn run_exec_wrapper_mode() -> anyhow::Result<()> {
             argv: argv.clone(),
             cwd,
         };
-
         let mut stream = StdUnixStream::connect(&socket_path)
             .with_context(|| format!("connect to wrapper socket at {socket_path}"))?;
         let encoded = serde_json::to_string(&request).context("serialize wrapper request")?;
