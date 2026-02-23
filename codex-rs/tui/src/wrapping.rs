@@ -44,7 +44,7 @@ where
     let opts = width_or_options.into();
     let mut lines: Vec<Range<usize>> = Vec::new();
     let mut cursor = 0usize;
-    for line in textwrap::wrap(text, opts).iter() {
+    for (line_index, line) in textwrap::wrap(text, &opts).iter().enumerate() {
         match line {
             std::borrow::Cow::Borrowed(slice) => {
                 let start = unsafe { slice.as_ptr().offset_from(text.as_ptr()) as usize };
@@ -54,7 +54,12 @@ where
                 cursor = end + trailing_spaces;
             }
             std::borrow::Cow::Owned(slice) => {
-                let mapped = map_owned_wrapped_line_to_range(text, cursor, slice);
+                let synthetic_prefix = if line_index == 0 {
+                    opts.initial_indent
+                } else {
+                    opts.subsequent_indent
+                };
+                let mapped = map_owned_wrapped_line_to_range(text, cursor, slice, synthetic_prefix);
                 let trailing_spaces = text[mapped.end..].chars().take_while(|c| *c == ' ').count();
                 lines.push(mapped.start..mapped.end + trailing_spaces + 1);
                 cursor = mapped.end + trailing_spaces;
@@ -74,7 +79,7 @@ where
     let opts = width_or_options.into();
     let mut lines: Vec<Range<usize>> = Vec::new();
     let mut cursor = 0usize;
-    for line in textwrap::wrap(text, opts).iter() {
+    for (line_index, line) in textwrap::wrap(text, &opts).iter().enumerate() {
         match line {
             std::borrow::Cow::Borrowed(slice) => {
                 let start = unsafe { slice.as_ptr().offset_from(text.as_ptr()) as usize };
@@ -83,7 +88,12 @@ where
                 cursor = end;
             }
             std::borrow::Cow::Owned(slice) => {
-                let mapped = map_owned_wrapped_line_to_range(text, cursor, slice);
+                let synthetic_prefix = if line_index == 0 {
+                    opts.initial_indent
+                } else {
+                    opts.subsequent_indent
+                };
+                let mapped = map_owned_wrapped_line_to_range(text, cursor, slice, synthetic_prefix);
                 lines.push(mapped.clone());
                 cursor = mapped.end;
             }
@@ -99,7 +109,18 @@ where
 /// function walks the owned string character-by-character against the
 /// source, skipping trailing penalty chars, and returns the
 /// corresponding source byte range starting from `cursor`.
-fn map_owned_wrapped_line_to_range(text: &str, cursor: usize, wrapped: &str) -> Range<usize> {
+fn map_owned_wrapped_line_to_range(
+    text: &str,
+    cursor: usize,
+    wrapped: &str,
+    synthetic_prefix: &str,
+) -> Range<usize> {
+    let wrapped = if synthetic_prefix.is_empty() {
+        wrapped
+    } else {
+        wrapped.strip_prefix(synthetic_prefix).unwrap_or(wrapped)
+    };
+
     let mut start = cursor;
     while start < text.len() && !wrapped.starts_with(' ') {
         let Some(ch) = text[start..].chars().next() else {
@@ -111,58 +132,45 @@ fn map_owned_wrapped_line_to_range(text: &str, cursor: usize, wrapped: &str) -> 
         start += ch.len_utf8();
     }
 
-    let mut best_end = start;
-    let mut best_had_mismatch_after_source = false;
-    for wrapped_start in wrapped
-        .char_indices()
-        .map(|(idx, _)| idx)
-        .chain(std::iter::once(wrapped.len()))
-    {
-        let mut end = start;
-        let mut saw_source_char = false;
-        let mut had_mismatch_after_source = false;
-        let mut chars = wrapped[wrapped_start..].chars().peekable();
-        while let Some(ch) = chars.next() {
-            if end < text.len() {
-                let Some(src) = text[end..].chars().next() else {
-                    unreachable!("checked end < text.len()");
-                };
-                if ch == src {
-                    end += src.len_utf8();
-                    saw_source_char = true;
-                    continue;
-                }
-            }
-
-            // textwrap can materialize owned lines when penalties are inserted.
-            // The default penalty is a trailing '-'; it does not correspond to
-            // source bytes, so we skip it while keeping byte ranges in source text.
-            if ch == '-' && chars.peek().is_none() {
+    let mut end = start;
+    let mut saw_source_char = false;
+    let mut chars = wrapped.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if end < text.len() {
+            let Some(src) = text[end..].chars().next() else {
+                unreachable!("checked end < text.len()");
+            };
+            if ch == src {
+                end += src.len_utf8();
+                saw_source_char = true;
                 continue;
             }
-
-            had_mismatch_after_source = saw_source_char;
-            break;
         }
 
-        if end > best_end
-            || (end == best_end && best_had_mismatch_after_source && !had_mismatch_after_source)
-        {
-            best_end = end;
-            best_had_mismatch_after_source = had_mismatch_after_source;
+        // textwrap can materialize owned lines when penalties are inserted.
+        // The default penalty is a trailing '-'; it does not correspond to
+        // source bytes, so we skip it while keeping byte ranges in source text.
+        if ch == '-' && chars.peek().is_none() {
+            continue;
         }
-    }
 
-    if best_had_mismatch_after_source {
+        // Non-source chars can be synthesized by textwrap in owned output
+        // (e.g. non-space indent prefixes). Keep going and map the source bytes
+        // we can confidently match instead of crashing the app.
+        if !saw_source_char {
+            continue;
+        }
+
         tracing::warn!(
             wrapped = %wrapped,
             cursor,
-            end = best_end,
+            end,
             "wrap_ranges: could not fully map owned line; returning partial source range"
         );
+        break;
     }
 
-    start..best_end
+    start..end
 }
 
 /// Returns `true` if any whitespace-delimited token in `line` looks like a URL.
@@ -1261,7 +1269,7 @@ them."#
     fn map_owned_wrapped_line_to_range_recovers_on_non_prefix_mismatch() {
         // Match source chars first, then introduce a non-penalty mismatch.
         // The function should recover and return the mapped prefix range.
-        let range = map_owned_wrapped_line_to_range("hello world", 0, "helloX");
+        let range = map_owned_wrapped_line_to_range("hello world", 0, "helloX", "");
         assert_eq!(range, 0..5);
     }
 
@@ -1277,7 +1285,7 @@ them."#
         let text = "- item one and some more words";
         // Simulate what textwrap would produce for the first continuation line
         // when subsequent_indent = "- ": it prepends "- " to the source slice.
-        let range = map_owned_wrapped_line_to_range(text, 0, "- - item one");
+        let range = map_owned_wrapped_line_to_range(text, 0, "- - item one", "- ");
         // The mapper should skip the synthetic "- " prefix and map "- item one"
         // back to source bytes 0..10.
         assert_eq!(range, 0..10);
@@ -1307,6 +1315,32 @@ them."#
             cursor = cursor.max(end);
         }
         assert_eq!(rebuilt, text);
+    }
+
+    #[test]
+    fn map_owned_wrapped_line_to_range_repro_overconsumes_repeated_prefix_patterns() {
+        let text = "- - foo";
+        let opts = textwrap::Options::new(3)
+            .initial_indent("- ")
+            .subsequent_indent("- ")
+            .word_separator(textwrap::WordSeparator::AsciiSpace)
+            .break_words(false);
+        let wrapped = textwrap::wrap(text, opts);
+        let Some(line) = wrapped.first() else {
+            panic!("expected at least one wrapped line");
+        };
+
+        let mapped = map_owned_wrapped_line_to_range(text, 0, line.as_ref(), "- ");
+        let expected_len = line
+            .as_ref()
+            .strip_prefix("- ")
+            .unwrap_or(line.as_ref())
+            .len();
+        let mapped_len = mapped.end.saturating_sub(mapped.start);
+        assert!(
+            mapped_len <= expected_len,
+            "overconsumed source: text={text:?} line={line:?} mapped={mapped:?} expected_len={expected_len}"
+        );
     }
 
     #[test]
