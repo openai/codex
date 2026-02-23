@@ -51,7 +51,7 @@ pub use mcp_connection_manager::SandboxState;
 mod mcp_tool_call;
 mod memories;
 mod mentions;
-mod message_history;
+pub mod message_history;
 mod model_provider_info;
 pub mod path_utils;
 pub mod personality_migration;

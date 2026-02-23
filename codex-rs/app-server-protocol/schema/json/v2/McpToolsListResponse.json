@@ -1,0 +1,179 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "McpAuthStatus": {
+      "enum": [
+        "unsupported",
+        "not_logged_in",
+        "bearer_token",
+        "o_auth"
+      ],
+      "type": "string"
+    },
+    "Resource": {
+      "description": "A known resource that the server is capable of reading.",
+      "properties": {
+        "_meta": true,
+        "annotations": true,
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "uri"
+      ],
+      "type": "object"
+    },
+    "ResourceTemplate": {
+      "description": "A template description for resources available on the server.",
+      "properties": {
+        "annotations": true,
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uriTemplate": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "uriTemplate"
+      ],
+      "type": "object"
+    },
+    "Tool": {
+      "description": "Definition for a tool the client can call.",
+      "properties": {
+        "_meta": true,
+        "annotations": true,
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "inputSchema": true,
+        "name": {
+          "type": "string"
+        },
+        "outputSchema": true,
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "inputSchema",
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "authStatuses": {
+      "additionalProperties": {
+        "$ref": "#/definitions/McpAuthStatus"
+      },
+      "description": "Authentication status for each configured MCP server.",
+      "type": "object"
+    },
+    "resourceTemplates": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/definitions/ResourceTemplate"
+        },
+        "type": "array"
+      },
+      "description": "Known resource templates grouped by server name.",
+      "type": "object"
+    },
+    "resources": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/definitions/Resource"
+        },
+        "type": "array"
+      },
+      "description": "Known resources grouped by server name.",
+      "type": "object"
+    },
+    "tools": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Tool"
+      },
+      "description": "Fully qualified tool name -> tool definition.",
+      "type": "object"
+    }
+  },
+  "required": [
+    "authStatuses",
+    "resourceTemplates",
+    "resources",
+    "tools"
+  ],
+  "title": "McpToolsListResponse",
+  "type": "object"
+}

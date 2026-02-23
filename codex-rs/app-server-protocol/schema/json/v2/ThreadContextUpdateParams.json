@@ -1,0 +1,409 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
+    "AskForApproval": {
+      "oneOf": [
+        {
+          "enum": [
+            "untrusted",
+            "on-failure",
+            "on-request",
+            "never"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "reject": {
+              "properties": {
+                "mcp_elicitations": {
+                  "type": "boolean"
+                },
+                "rules": {
+                  "type": "boolean"
+                },
+                "sandbox_approval": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "mcp_elicitations",
+                "rules",
+                "sandbox_approval"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reject"
+          ],
+          "title": "RejectAskForApproval",
+          "type": "object"
+        }
+      ]
+    },
+    "CollaborationMode": {
+      "description": "Collaboration mode for a Codex session.",
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/ModeKind"
+        },
+        "settings": {
+          "$ref": "#/definitions/Settings"
+        }
+      },
+      "required": [
+        "mode",
+        "settings"
+      ],
+      "type": "object"
+    },
+    "ModeKind": {
+      "description": "Initial collaboration mode to use when the TUI starts.",
+      "enum": [
+        "plan",
+        "default"
+      ],
+      "type": "string"
+    },
+    "NetworkAccess": {
+      "enum": [
+        "restricted",
+        "enabled"
+      ],
+      "type": "string"
+    },
+    "Personality": {
+      "enum": [
+        "none",
+        "friendly",
+        "pragmatic"
+      ],
+      "type": "string"
+    },
+    "ReadOnlyAccess": {
+      "oneOf": [
+        {
+          "properties": {
+            "includePlatformDefaults": {
+              "default": true,
+              "type": "boolean"
+            },
+            "readableRoots": {
+              "default": [],
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restricted"
+              ],
+              "title": "RestrictedReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadOnlyAccess",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "fullAccess"
+              ],
+              "title": "FullAccessReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullAccessReadOnlyAccess",
+          "type": "object"
+        }
+      ]
+    },
+    "ReasoningEffort": {
+      "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
+    },
+    "ReasoningSummary": {
+      "description": "A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
+      "oneOf": [
+        {
+          "enum": [
+            "auto",
+            "concise",
+            "detailed"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Option to disable reasoning summaries.",
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "SandboxPolicy": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "dangerFullAccess"
+              ],
+              "title": "DangerFullAccessSandboxPolicyType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "DangerFullAccessSandboxPolicy",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "default": {
+                "type": "fullAccess"
+              }
+            },
+            "type": {
+              "enum": [
+                "readOnly"
+              ],
+              "title": "ReadOnlySandboxPolicyType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ReadOnlySandboxPolicy",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "networkAccess": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/NetworkAccess"
+                }
+              ],
+              "default": "restricted"
+            },
+            "type": {
+              "enum": [
+                "externalSandbox"
+              ],
+              "title": "ExternalSandboxSandboxPolicyType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ExternalSandboxSandboxPolicy",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "excludeSlashTmp": {
+              "default": false,
+              "type": "boolean"
+            },
+            "excludeTmpdirEnvVar": {
+              "default": false,
+              "type": "boolean"
+            },
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
+            },
+            "readOnlyAccess": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "default": {
+                "type": "fullAccess"
+              }
+            },
+            "type": {
+              "enum": [
+                "workspaceWrite"
+              ],
+              "title": "WorkspaceWriteSandboxPolicyType",
+              "type": "string"
+            },
+            "writableRoots": {
+              "default": [],
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "WorkspaceWriteSandboxPolicy",
+          "type": "object"
+        }
+      ]
+    },
+    "Settings": {
+      "description": "Settings for a collaboration mode.",
+      "properties": {
+        "developer_instructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
+    },
+    "WindowsSandboxLevel": {
+      "enum": [
+        "disabled",
+        "restricted-token",
+        "elevated"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "approvalPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AskForApproval"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cwd": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "effort": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "personality": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Personality"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sandboxPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SandboxPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "summary": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ReasoningSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "windowsSandboxLevel": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/WindowsSandboxLevel"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "threadId"
+  ],
+  "title": "ThreadContextUpdateParams",
+  "type": "object"
+}

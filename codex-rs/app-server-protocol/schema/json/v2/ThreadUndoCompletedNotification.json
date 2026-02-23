@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "message": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "success",
+    "threadId",
+    "turnId"
+  ],
+  "title": "ThreadUndoCompletedNotification",
+  "type": "object"
+}

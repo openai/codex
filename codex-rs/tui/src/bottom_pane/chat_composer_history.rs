@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::agent_command::AgentCommand;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::MentionBinding;
 use crate::mention_codec::decode_history_mentions;
-use codex_protocol::protocol::Op;
 use codex_protocol::user_input::TextElement;
 
 /// A composer history entry that can rehydrate draft state.
@@ -278,11 +278,11 @@ impl ChatComposerHistory {
             self.last_history_text = Some(entry.text.clone());
             return Some(entry);
         } else if let Some(log_id) = self.history_log_id {
-            let op = Op::GetHistoryEntryRequest {
+            let op = AgentCommand::GetHistoryEntryRequest {
                 offset: global_idx,
                 log_id,
             };
-            app_event_tx.send(AppEvent::CodexOp(op));
+            app_event_tx.send(AppEvent::AgentCommand(op));
         }
         None
     }
@@ -291,8 +291,8 @@ impl ChatComposerHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_command::AgentCommand;
     use crate::app_event::AppEvent;
-    use codex_protocol::protocol::Op;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -340,11 +340,11 @@ mod tests {
 
         // Verify that an AppEvent::CodexOp with the correct GetHistoryEntryRequest was sent.
         let event = rx.try_recv().expect("expected AppEvent to be sent");
-        let AppEvent::CodexOp(history_request1) = event else {
+        let AppEvent::AgentCommand(history_request1) = event else {
             panic!("unexpected event variant");
         };
         assert_eq!(
-            Op::GetHistoryEntryRequest {
+            AgentCommand::GetHistoryEntryRequest {
                 log_id: 1,
                 offset: 2
             },
@@ -362,11 +362,11 @@ mod tests {
 
         // Verify second CodexOp event for offset 1.
         let event2 = rx.try_recv().expect("expected second event");
-        let AppEvent::CodexOp(history_request_2) = event2 else {
+        let AppEvent::AgentCommand(history_request_2) = event2 else {
             panic!("unexpected event variant");
         };
         assert_eq!(
-            Op::GetHistoryEntryRequest {
+            AgentCommand::GetHistoryEntryRequest {
                 log_id: 1,
                 offset: 1
             },

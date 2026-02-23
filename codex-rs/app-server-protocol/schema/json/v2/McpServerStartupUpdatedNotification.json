@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "McpServerStartupStatus": {
+      "oneOf": [
+        {
+          "properties": {
+            "state": {
+              "enum": [
+                "starting"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "title": "StartingMcpServerStartupStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "state": {
+              "enum": [
+                "ready"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "title": "ReadyMcpServerStartupStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "failed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "state": {
+              "enum": [
+                "cancelled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "title": "CancelledMcpServerStartupStatus",
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "properties": {
+    "server": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/definitions/McpServerStartupStatus"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "server",
+    "status",
+    "threadId"
+  ],
+  "title": "McpServerStartupUpdatedNotification",
+  "type": "object"
+}

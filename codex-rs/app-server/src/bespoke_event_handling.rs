@@ -40,6 +40,11 @@ use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::McpElicitationDecision;
+use codex_app_server_protocol::McpElicitationRequestParams;
+use codex_app_server_protocol::McpElicitationRequestResponse;
+use codex_app_server_protocol::McpServerStartupCompletedNotification;
+use codex_app_server_protocol::McpServerStartupUpdatedNotification;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
@@ -51,14 +56,20 @@ use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::SkillsUpdatedNotification;
+use codex_app_server_protocol::StreamErrorNotification;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadShutdownCompletedNotification;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use codex_app_server_protocol::ThreadUndoCompletedNotification;
+use codex_app_server_protocol::ThreadUndoStartedNotification;
 use codex_app_server_protocol::ToolRequestUserInputOption;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
@@ -71,6 +82,7 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WarningNotification;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_app_server_protocol::convert_patch_changes;
 use codex_core::CodexThread;
@@ -79,6 +91,7 @@ use codex_core::find_thread_name_by_id;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -151,7 +164,18 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             handle_turn_complete(conversation_id, event_turn_id, &outgoing, &thread_state).await;
         }
-        EventMsg::Warning(_warning_event) => {}
+        EventMsg::Warning(warning_event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = WarningNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    message: warning_event.message,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::Warning(notification))
+                    .await;
+            }
+        }
         EventMsg::ModelReroute(event) => {
             if let ApiVersion::V2 = api_version {
                 let notification = ModelReroutedNotification {
@@ -359,6 +383,43 @@ pub(crate) async fn apply_bespoke_event_handling(
                         .await;
                     });
                 }
+            }
+        }
+        EventMsg::ElicitationRequest(ElicitationRequestEvent {
+            server_name,
+            id,
+            message,
+        }) => {
+            if matches!(api_version, ApiVersion::V2) {
+                let permission_guard = thread_watch_manager
+                    .note_permission_requested(&conversation_id.to_string())
+                    .await;
+                let params = McpElicitationRequestParams {
+                    thread_id: conversation_id.to_string(),
+                    server_name: server_name.clone(),
+                    request_id: match id.clone() {
+                        codex_protocol::mcp::RequestId::String(value) => {
+                            AppServerRequestId::String(value)
+                        }
+                        codex_protocol::mcp::RequestId::Integer(value) => {
+                            AppServerRequestId::Integer(value)
+                        }
+                    },
+                    message,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::McpElicitationRequest(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_mcp_elicitation_response(
+                        server_name,
+                        id,
+                        rx,
+                        conversation,
+                        permission_guard,
+                    )
+                    .await;
+                });
             }
         }
         EventMsg::RequestUserInput(request) => {
@@ -863,12 +924,101 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
-                    error: turn_error,
+                    error: turn_error.clone(),
                     will_retry: true,
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                 }))
                 .await;
+            if let ApiVersion::V2 = api_version {
+                outgoing
+                    .send_server_notification(ServerNotification::StreamError(
+                        StreamErrorNotification {
+                            thread_id: conversation_id.to_string(),
+                            turn_id: event_turn_id.clone(),
+                            error: turn_error,
+                        },
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::McpStartupUpdate(ev) => {
+            if let ApiVersion::V2 = api_version {
+                outgoing
+                    .send_server_notification(ServerNotification::McpServerStartupUpdated(
+                        McpServerStartupUpdatedNotification {
+                            thread_id: conversation_id.to_string(),
+                            server: ev.server,
+                            status: ev.status.into(),
+                        },
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::McpStartupComplete(ev) => {
+            if let ApiVersion::V2 = api_version {
+                outgoing
+                    .send_server_notification(ServerNotification::McpServerStartupCompleted(
+                        McpServerStartupCompletedNotification {
+                            thread_id: conversation_id.to_string(),
+                            ready: ev.ready,
+                            failed: ev.failed.into_iter().map(Into::into).collect(),
+                            cancelled: ev.cancelled,
+                        },
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::BackgroundEvent(ev) => {
+            if let ApiVersion::V2 = api_version {
+                outgoing
+                    .send_server_notification(ServerNotification::BackgroundEvent(
+                        codex_app_server_protocol::BackgroundEventNotification {
+                            thread_id: conversation_id.to_string(),
+                            turn_id: event_turn_id.clone(),
+                            message: ev.message,
+                        },
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::UndoStarted(ev) => {
+            if let ApiVersion::V2 = api_version {
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadUndoStarted(
+                        ThreadUndoStartedNotification {
+                            thread_id: conversation_id.to_string(),
+                            turn_id: event_turn_id.clone(),
+                            message: ev.message,
+                        },
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::UndoCompleted(ev) => {
+            if let ApiVersion::V2 = api_version {
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadUndoCompleted(
+                        ThreadUndoCompletedNotification {
+                            thread_id: conversation_id.to_string(),
+                            turn_id: event_turn_id.clone(),
+                            success: ev.success,
+                            message: ev.message,
+                        },
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::SkillsUpdateAvailable => {
+            if let ApiVersion::V2 = api_version {
+                outgoing
+                    .send_server_notification(ServerNotification::SkillsUpdated(
+                        SkillsUpdatedNotification {
+                            thread_id: conversation_id.to_string(),
+                        },
+                    ))
+                    .await;
+            }
         }
         EventMsg::ViewImageToolCall(view_image_event) => {
             let item = ThreadItem::ImageView {
@@ -1306,6 +1456,15 @@ pub(crate) async fn apply_bespoke_event_handling(
             thread_watch_manager
                 .note_thread_shutdown(&conversation_id.to_string())
                 .await;
+            if let ApiVersion::V2 = api_version {
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadShutdownCompleted(
+                        ThreadShutdownCompletedNotification {
+                            thread_id: conversation_id.to_string(),
+                        },
+                    ))
+                    .await;
+            }
         }
 
         _ => {}
@@ -1731,6 +1890,45 @@ async fn on_request_user_input_response(
         .await
     {
         error!("failed to submit UserInputAnswer: {err}");
+    }
+}
+
+async fn on_mcp_elicitation_response(
+    server_name: String,
+    request_id: codex_protocol::mcp::RequestId,
+    receiver: oneshot::Receiver<ClientRequestResult>,
+    conversation: Arc<CodexThread>,
+    permission_guard: ThreadWatchActiveGuard,
+) {
+    let response = receiver.await;
+    drop(permission_guard);
+
+    let decision = match response {
+        Ok(Ok(value)) => serde_json::from_value::<McpElicitationRequestResponse>(value)
+            .map(|response| response.decision)
+            .unwrap_or_else(|err| {
+                error!("failed to deserialize McpElicitationRequestResponse: {err}");
+                McpElicitationDecision::Cancel
+            }),
+        Ok(Err(err)) => {
+            error!("elicitation request failed with client error: {err:?}");
+            McpElicitationDecision::Cancel
+        }
+        Err(err) => {
+            error!("elicitation request failed: {err:?}");
+            McpElicitationDecision::Cancel
+        }
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::ResolveElicitation {
+            server_name,
+            request_id,
+            decision: decision.to_core(),
+        })
+        .await
+    {
+        error!("failed to submit ResolveElicitation: {err}");
     }
 }
 

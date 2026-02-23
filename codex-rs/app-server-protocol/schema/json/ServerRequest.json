@@ -430,6 +430,29 @@
       ],
       "type": "object"
     },
+    "McpElicitationRequestParams": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "serverName": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "requestId",
+        "serverName",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "NetworkApprovalContext": {
       "properties": {
         "host": {
@@ -735,6 +758,31 @@
         "params"
       ],
       "title": "Item/tool/requestUserInputRequest",
+      "type": "object"
+    },
+    {
+      "description": "Request the user to resolve an MCP elicitation prompt.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "item/mcpElicitation/requestDecision"
+          ],
+          "title": "Item/mcpElicitation/requestDecisionRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpElicitationRequestParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Item/mcpElicitation/requestDecisionRequest",
       "type": "object"
     },
     {

@@ -39,6 +39,8 @@ use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
+use codex_app_server_protocol::CustomPromptListParams;
+use codex_app_server_protocol::CustomPromptListResponse;
 use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::ExperimentalFeature as ApiExperimentalFeature;
@@ -69,6 +71,10 @@ use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::HazelnutScope as ApiHazelnutScope;
+use codex_app_server_protocol::HistoryAppendParams;
+use codex_app_server_protocol::HistoryAppendResponse;
+use codex_app_server_protocol::HistoryEntryReadParams;
+use codex_app_server_protocol::HistoryEntryReadResponse;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -89,6 +95,8 @@ use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::McpToolsListParams;
+use codex_app_server_protocol::McpToolsListResponse;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
@@ -129,6 +137,11 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadConfigReloadParams;
+use codex_app_server_protocol::ThreadConfigReloadResponse;
+use codex_app_server_protocol::ThreadContextSnapshot;
+use codex_app_server_protocol::ThreadContextUpdateParams;
+use codex_app_server_protocol::ThreadContextUpdateResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -143,6 +156,8 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
+use codex_app_server_protocol::ThreadShutdownParams;
+use codex_app_server_protocol::ThreadShutdownResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
@@ -152,6 +167,10 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnarchivedNotification;
+use codex_app_server_protocol::ThreadUndoParams;
+use codex_app_server_protocol::ThreadUndoResponse;
+use codex_app_server_protocol::ThreadUserShellCommandRunParams;
+use codex_app_server_protocol::ThreadUserShellCommandRunResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
@@ -208,6 +227,7 @@ use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
+use codex_core::message_history;
 use codex_core::parse_cursor;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
@@ -574,6 +594,34 @@ impl CodexMessageProcessor {
                 self.thread_rollback(to_connection_request_id(request_id), params)
                     .await;
             }
+            ClientRequest::ThreadContextUpdate { request_id, params } => {
+                self.thread_context_update(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadShutdown { request_id, params } => {
+                self.thread_shutdown(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadUndo { request_id, params } => {
+                self.thread_undo(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadConfigReload { request_id, params } => {
+                self.thread_config_reload(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadMemoriesDrop { request_id, params } => {
+                self.thread_memories_drop(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadMemoriesUpdate { request_id, params } => {
+                self.thread_memories_update(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadUserShellCommandRun { request_id, params } => {
+                self.thread_user_shell_command_run(to_connection_request_id(request_id), params)
+                    .await;
+            }
             ClientRequest::ThreadList { request_id, params } => {
                 self.thread_list(to_connection_request_id(request_id), params)
                     .await;
@@ -584,6 +632,22 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadRead { request_id, params } => {
                 self.thread_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::CustomPromptList { request_id, params } => {
+                self.custom_prompt_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::McpToolsList { request_id, params } => {
+                self.mcp_tools_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::HistoryAppend { request_id, params } => {
+                self.history_append(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::HistoryEntryRead { request_id, params } => {
+                self.history_entry_read(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::SkillsList { request_id, params } => {
@@ -2069,6 +2133,12 @@ impl CodexMessageProcessor {
                     approval_policy: config_snapshot.approval_policy.into(),
                     sandbox: config_snapshot.sandbox_policy.into(),
                     reasoning_effort: config_snapshot.reasoning_effort,
+                    history_log_id: session_configured.history_log_id,
+                    history_entry_count: session_configured.history_entry_count,
+                    forked_from_thread_id: session_configured
+                        .forked_from_id
+                        .map(|thread_id| thread_id.to_string()),
+                    network_proxy: session_configured.network_proxy.map(Into::into),
                 };
 
                 self.outgoing.send_response(request_id, response).await;
@@ -2452,6 +2522,337 @@ impl CodexMessageProcessor {
             self.send_internal_error(request, format!("failed to start rollback: {err}"))
                 .await;
         }
+    }
+
+    async fn thread_context_update(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadContextUpdateParams,
+    ) {
+        let ThreadContextUpdateParams {
+            thread_id,
+            cwd,
+            approval_policy,
+            sandbox_policy,
+            windows_sandbox_level,
+            model,
+            effort,
+            summary,
+            personality,
+            collaboration_mode,
+        } = params;
+        let (thread_id, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let collaboration_mode = collaboration_mode.map(|mode| {
+            // Reuse the same normalization logic as `turn/start`.
+            self.normalize_turn_start_collaboration_mode(mode)
+        });
+
+        let submit_result = thread
+            .submit(Op::OverrideTurnContext {
+                cwd,
+                approval_policy: approval_policy.map(AskForApproval::to_core),
+                sandbox_policy: sandbox_policy.map(|policy| policy.to_core()),
+                windows_sandbox_level,
+                model,
+                effort,
+                summary,
+                collaboration_mode,
+                personality,
+            })
+            .await;
+        if let Err(err) = submit_result {
+            self.send_internal_error(
+                request_id,
+                format!("failed to update thread context: {err}"),
+            )
+            .await;
+            return;
+        }
+
+        let config_snapshot = thread.config_snapshot().await;
+        let ThreadConfigSnapshot {
+            model,
+            model_provider_id,
+            approval_policy,
+            sandbox_policy,
+            cwd,
+            reasoning_effort,
+            ..
+        } = config_snapshot;
+        let response = ThreadContextUpdateResponse {
+            context: ThreadContextSnapshot {
+                thread_id: thread_id.to_string(),
+                model,
+                model_provider: model_provider_id,
+                cwd,
+                approval_policy: approval_policy.into(),
+                sandbox: sandbox_policy.into(),
+                reasoning_effort,
+            },
+        };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn thread_shutdown(&self, request_id: ConnectionRequestId, params: ThreadShutdownParams) {
+        let ThreadShutdownParams { thread_id } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match thread.submit(Op::Shutdown).await {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadShutdownResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to shut down thread: {err}"))
+                    .await;
+            }
+        }
+    }
+
+    async fn thread_undo(&self, request_id: ConnectionRequestId, params: ThreadUndoParams) {
+        let ThreadUndoParams { thread_id } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match thread.submit(Op::Undo).await {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, ThreadUndoResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to start undo: {err}"))
+                    .await;
+            }
+        }
+    }
+
+    async fn thread_config_reload(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadConfigReloadParams,
+    ) {
+        let ThreadConfigReloadParams { thread_id } = params;
+        let (thread_id, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let submit_result = thread.submit(Op::ReloadUserConfig).await;
+        if let Err(err) = submit_result {
+            self.send_internal_error(request_id, format!("failed to reload thread config: {err}"))
+                .await;
+            return;
+        }
+
+        let config_snapshot = thread.config_snapshot().await;
+        let ThreadConfigSnapshot {
+            model,
+            model_provider_id,
+            approval_policy,
+            sandbox_policy,
+            cwd,
+            reasoning_effort,
+            ..
+        } = config_snapshot;
+        let response = ThreadConfigReloadResponse {
+            context: ThreadContextSnapshot {
+                thread_id: thread_id.to_string(),
+                model,
+                model_provider: model_provider_id,
+                cwd,
+                approval_policy: approval_policy.into(),
+                sandbox: sandbox_policy.into(),
+                reasoning_effort,
+            },
+        };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn thread_memories_drop(
+        &self,
+        request_id: ConnectionRequestId,
+        params: codex_app_server_protocol::ThreadMemoriesDropParams,
+    ) {
+        let codex_app_server_protocol::ThreadMemoriesDropParams { thread_id } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        match thread.submit(Op::DropMemories).await {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        codex_app_server_protocol::ThreadMemoriesDropResponse {},
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to drop memories: {err}"))
+                    .await;
+            }
+        }
+    }
+
+    async fn thread_memories_update(
+        &self,
+        request_id: ConnectionRequestId,
+        params: codex_app_server_protocol::ThreadMemoriesUpdateParams,
+    ) {
+        let codex_app_server_protocol::ThreadMemoriesUpdateParams { thread_id } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        match thread.submit(Op::UpdateMemories).await {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        codex_app_server_protocol::ThreadMemoriesUpdateResponse {},
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to update memories: {err}"))
+                    .await;
+            }
+        }
+    }
+
+    async fn thread_user_shell_command_run(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadUserShellCommandRunParams,
+    ) {
+        let ThreadUserShellCommandRunParams { thread_id, command } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match thread.submit(Op::RunUserShellCommand { command }).await {
+            Ok(turn_id) => {
+                self.outgoing
+                    .send_response(request_id, ThreadUserShellCommandRunResponse { turn_id })
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to run user shell command: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn custom_prompt_list(
+        &self,
+        request_id: ConnectionRequestId,
+        _params: CustomPromptListParams,
+    ) {
+        let data = if let Some(dir) = codex_core::custom_prompts::default_prompts_dir() {
+            codex_core::custom_prompts::discover_prompts_in(&dir)
+                .await
+                .into_iter()
+                .map(Into::into)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.outgoing
+            .send_response(request_id, CustomPromptListResponse { data })
+            .await;
+    }
+
+    async fn mcp_tools_list(&self, request_id: ConnectionRequestId, _params: McpToolsListParams) {
+        let snapshot = collect_mcp_snapshot(self.config.as_ref()).await;
+        self.outgoing
+            .send_response(request_id, McpToolsListResponse::from(snapshot))
+            .await;
+    }
+
+    async fn history_append(&self, request_id: ConnectionRequestId, params: HistoryAppendParams) {
+        let HistoryAppendParams { thread_id, text } = params;
+        let thread_id = match ThreadId::from_string(&thread_id) {
+            Ok(thread_id) => thread_id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        match message_history::append_entry(&text, &thread_id, self.config.as_ref()).await {
+            Ok(()) => {
+                self.outgoing
+                    .send_response(request_id, HistoryAppendResponse {})
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to append history: {err}"))
+                    .await;
+            }
+        }
+    }
+
+    async fn history_entry_read(
+        &self,
+        request_id: ConnectionRequestId,
+        params: HistoryEntryReadParams,
+    ) {
+        let HistoryEntryReadParams { log_id, offset } = params;
+
+        let entry = message_history::lookup(log_id, offset, self.config.as_ref()).map(|entry| {
+            codex_app_server_protocol::HistoryEntry {
+                conversation_id: entry.session_id,
+                ts: entry.ts,
+                text: entry.text,
+            }
+        });
+        self.outgoing
+            .send_response(
+                request_id,
+                HistoryEntryReadResponse {
+                    log_id,
+                    offset,
+                    entry,
+                },
+            )
+            .await;
     }
 
     async fn thread_compact_start(
@@ -2971,6 +3372,12 @@ impl CodexMessageProcessor {
                     approval_policy: session_configured.approval_policy.into(),
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
+                    history_log_id: session_configured.history_log_id,
+                    history_entry_count: session_configured.history_entry_count,
+                    forked_from_thread_id: session_configured
+                        .forked_from_id
+                        .map(|thread_id| thread_id.to_string()),
+                    network_proxy: session_configured.network_proxy.map(Into::into),
                 };
 
                 self.outgoing.send_response(request_id, response).await;
@@ -3499,6 +3906,12 @@ impl CodexMessageProcessor {
             approval_policy: session_configured.approval_policy.into(),
             sandbox: session_configured.sandbox_policy.into(),
             reasoning_effort: session_configured.reasoning_effort,
+            history_log_id: session_configured.history_log_id,
+            history_entry_count: session_configured.history_entry_count,
+            forked_from_thread_id: session_configured
+                .forked_from_id
+                .map(|thread_id| thread_id.to_string()),
+            network_proxy: session_configured.network_proxy.map(Into::into),
         };
 
         self.outgoing.send_response(request_id, response).await;
@@ -5872,6 +6285,7 @@ impl CodexMessageProcessor {
         let fallback_model_provider = self.config.model_provider_id.clone();
         let single_client_mode = self.single_client_mode;
         let codex_home = self.config.codex_home.clone();
+        let config_for_task = self.config.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -5888,30 +6302,6 @@ impl CodexMessageProcessor {
                             }
                         };
 
-                        // For now, we send a notification for every event,
-                        // JSON-serializing the `Event` as-is, but these should
-                        // be migrated to be variants of `ServerNotification`
-                        // instead.
-                        let event_formatted = match &event.msg {
-                            EventMsg::TurnStarted(_) => "task_started",
-                            EventMsg::TurnComplete(_) => "task_complete",
-                            _ => &event.msg.to_string(),
-                        };
-                        let mut params = match serde_json::to_value(event.clone()) {
-                            Ok(serde_json::Value::Object(map)) => map,
-                            Ok(_) => {
-                                error!("event did not serialize to an object");
-                                continue;
-                            }
-                            Err(err) => {
-                                error!("failed to serialize event: {err}");
-                                continue;
-                            }
-                        };
-                        params.insert(
-                            "conversationId".to_string(),
-                            conversation_id.to_string().into(),
-                        );
                         let (subscribed_connection_ids, raw_events_enabled) = {
                             let mut thread_state = thread_state.lock().await;
                             if !single_client_mode {
@@ -5927,6 +6317,26 @@ impl CodexMessageProcessor {
                         }
 
                         if !subscribed_connection_ids.is_empty() {
+                            let event_formatted = match &event.msg {
+                                EventMsg::TurnStarted(_) => "task_started",
+                                EventMsg::TurnComplete(_) => "task_complete",
+                                _ => &event.msg.to_string(),
+                            };
+                            let mut params = match serde_json::to_value(event.clone()) {
+                                Ok(serde_json::Value::Object(map)) => map,
+                                Ok(_) => {
+                                    error!("event did not serialize to an object");
+                                    continue;
+                                }
+                                Err(err) => {
+                                    error!("failed to serialize event: {err}");
+                                    continue;
+                                }
+                            };
+                            params.insert(
+                                "conversationId".to_string(),
+                                conversation_id.to_string().into(),
+                            );
                             outgoing_for_task
                                 .send_notification_to_connections(
                                     &subscribed_connection_ids,
@@ -5966,6 +6376,7 @@ impl CodexMessageProcessor {
                             ) => {
                                 handle_pending_thread_resume_request(
                                     conversation_id,
+                                    config_for_task.as_ref(),
                                     codex_home.as_path(),
                                     &thread_state,
                                     &thread_watch_manager,
@@ -6286,6 +6697,7 @@ impl CodexMessageProcessor {
 
 async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
+    config: &Config,
     codex_home: &Path,
     thread_state: &Arc<Mutex<ThreadState>>,
     thread_watch_manager: &ThreadWatchManager,
@@ -6352,6 +6764,7 @@ async fn handle_pending_thread_resume_request(
         Ok(thread_name) => thread.name = thread_name,
         Err(err) => warn!("Failed to read thread name for {conversation_id}: {err}"),
     }
+    let (history_log_id, history_entry_count) = message_history::history_metadata(config).await;
 
     let ThreadConfigSnapshot {
         model,
@@ -6370,6 +6783,10 @@ async fn handle_pending_thread_resume_request(
         approval_policy: approval_policy.into(),
         sandbox: sandbox_policy.into(),
         reasoning_effort,
+        history_log_id,
+        history_entry_count,
+        forked_from_thread_id: None,
+        network_proxy: None,
     };
     outgoing.send_response(request_id, response).await;
     thread_state.lock().await.add_connection(connection_id);

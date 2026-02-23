@@ -1,6 +1,8 @@
+use crate::agent_command::AgentCommand;
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
+use crate::app_event::ThreadBootstrap;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -32,6 +34,10 @@ use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
+use codex_app_server::EmbeddedSessionClient;
+use codex_app_server::EmbeddedSessionClientArgs;
+use codex_app_server::EmbeddedSessionMessage;
+use codex_app_server_protocol as app_proto;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
@@ -54,18 +60,12 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
-use codex_protocol::protocol::ListSkillsResponseEvent;
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
@@ -81,7 +81,6 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
@@ -158,13 +157,248 @@ fn session_summary(
     })
 }
 
-fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
+fn errors_for_cwd_v2(cwd: &Path, response: &app_proto::SkillsListResponse) -> Vec<SkillErrorInfo> {
     response
-        .skills
+        .data
         .iter()
         .find(|entry| entry.cwd.as_path() == cwd)
-        .map(|entry| entry.errors.clone())
+        .and_then(|entry| convert_via_serde(entry.errors.clone()).ok())
         .unwrap_or_default()
+}
+
+fn convert_via_serde<T, U>(value: T) -> std::result::Result<U, serde_json::Error>
+where
+    T: serde::Serialize,
+    U: serde::de::DeserializeOwned,
+{
+    serde_json::from_value(serde_json::to_value(value)?)
+}
+
+fn sandbox_mode_from_policy(policy: &SandboxPolicy) -> Option<app_proto::SandboxMode> {
+    match policy {
+        SandboxPolicy::ReadOnly { .. } => Some(app_proto::SandboxMode::ReadOnly),
+        SandboxPolicy::WorkspaceWrite { .. } => Some(app_proto::SandboxMode::WorkspaceWrite),
+        SandboxPolicy::DangerFullAccess => Some(app_proto::SandboxMode::DangerFullAccess),
+        SandboxPolicy::ExternalSandbox { .. } => None,
+    }
+}
+
+fn network_proxy_from_app_proto(
+    network_proxy: Option<app_proto::SessionNetworkProxyRuntime>,
+) -> Option<codex_protocol::protocol::SessionNetworkProxyRuntime> {
+    network_proxy.map(
+        |network_proxy| codex_protocol::protocol::SessionNetworkProxyRuntime {
+            http_addr: network_proxy.http_addr,
+            socks_addr: network_proxy.socks_addr,
+            admin_addr: network_proxy.admin_addr,
+        },
+    )
+}
+
+struct ThreadOpenParamsCommon {
+    path: PathBuf,
+    model: Option<String>,
+    model_provider: String,
+    cwd: String,
+    approval_policy: app_proto::AskForApproval,
+    sandbox: Option<app_proto::SandboxMode>,
+}
+
+fn thread_open_params_common(path: PathBuf, config: &Config) -> ThreadOpenParamsCommon {
+    ThreadOpenParamsCommon {
+        path,
+        model: config.model.clone(),
+        model_provider: config.model_provider_id.clone(),
+        cwd: config.cwd.to_string_lossy().to_string(),
+        approval_policy: app_proto::AskForApproval::from(*config.permissions.approval_policy.get()),
+        sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
+    }
+}
+
+fn thread_bootstrap_from_response_parts(
+    thread: app_proto::Thread,
+    model: String,
+    model_provider: String,
+    cwd: PathBuf,
+    approval_policy: app_proto::AskForApproval,
+    sandbox: app_proto::SandboxPolicy,
+    reasoning_effort: Option<ReasoningEffortConfig>,
+    history_log_id: u64,
+    history_entry_count: usize,
+    forked_from_thread_id: Option<String>,
+    network_proxy: Option<app_proto::SessionNetworkProxyRuntime>,
+) -> Result<ThreadBootstrap> {
+    let thread_id = ThreadId::try_from(thread.id.clone())
+        .map_err(|err| color_eyre::eyre::eyre!("invalid thread id {}: {err}", thread.id))?;
+    let forked_from_id = match forked_from_thread_id {
+        Some(thread_id) => Some(ThreadId::try_from(thread_id.clone()).map_err(|err| {
+            color_eyre::eyre::eyre!("invalid forked thread id {thread_id}: {err}")
+        })?),
+        None => None,
+    };
+    Ok(ThreadBootstrap {
+        rollout_path: thread.path.clone(),
+        thread,
+        thread_id,
+        model,
+        model_provider_id: model_provider,
+        approval_policy: approval_policy.to_core(),
+        sandbox_policy: sandbox.to_core(),
+        cwd,
+        reasoning_effort,
+        history_log_id,
+        history_entry_count,
+        forked_from_id,
+        network_proxy: network_proxy_from_app_proto(network_proxy),
+    })
+}
+
+fn thread_bootstrap_from_resume_response(
+    response: app_proto::ThreadResumeResponse,
+) -> Result<ThreadBootstrap> {
+    let app_proto::ThreadResumeResponse {
+        thread,
+        model,
+        model_provider,
+        cwd,
+        approval_policy,
+        sandbox,
+        reasoning_effort,
+        history_log_id,
+        history_entry_count,
+        forked_from_thread_id,
+        network_proxy,
+    } = response;
+    thread_bootstrap_from_response_parts(
+        thread,
+        model,
+        model_provider,
+        cwd,
+        approval_policy,
+        sandbox,
+        reasoning_effort,
+        history_log_id,
+        history_entry_count,
+        forked_from_thread_id,
+        network_proxy,
+    )
+}
+
+fn thread_bootstrap_from_fork_response(
+    response: app_proto::ThreadForkResponse,
+) -> Result<ThreadBootstrap> {
+    let app_proto::ThreadForkResponse {
+        thread,
+        model,
+        model_provider,
+        cwd,
+        approval_policy,
+        sandbox,
+        reasoning_effort,
+        history_log_id,
+        history_entry_count,
+        forked_from_thread_id,
+        network_proxy,
+    } = response;
+    thread_bootstrap_from_response_parts(
+        thread,
+        model,
+        model_provider,
+        cwd,
+        approval_policy,
+        sandbox,
+        reasoning_effort,
+        history_log_id,
+        history_entry_count,
+        forked_from_thread_id,
+        network_proxy,
+    )
+}
+
+fn thread_resume_params_from_config(
+    path: PathBuf,
+    config: &Config,
+) -> app_proto::ThreadResumeParams {
+    let common = thread_open_params_common(path, config);
+    app_proto::ThreadResumeParams {
+        thread_id: String::new(),
+        path: Some(common.path),
+        model: common.model,
+        model_provider: Some(common.model_provider),
+        cwd: Some(common.cwd),
+        approval_policy: Some(common.approval_policy),
+        sandbox: common.sandbox,
+        personality: config.personality,
+        ..Default::default()
+    }
+}
+
+fn thread_fork_params_from_config(path: PathBuf, config: &Config) -> app_proto::ThreadForkParams {
+    let common = thread_open_params_common(path, config);
+    app_proto::ThreadForkParams {
+        thread_id: String::new(),
+        path: Some(common.path),
+        model: common.model,
+        model_provider: Some(common.model_provider),
+        cwd: Some(common.cwd),
+        approval_policy: Some(common.approval_policy),
+        sandbox: common.sandbox,
+        ..Default::default()
+    }
+}
+
+fn notification_thread_id(notification: &app_proto::ServerNotification) -> Option<ThreadId> {
+    let thread_id = match notification {
+        app_proto::ServerNotification::ThreadStatusChanged(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ThreadArchived(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ThreadUnarchived(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ThreadNameUpdated(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ThreadTokenUsageUpdated(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ThreadShutdownCompleted(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ThreadUndoStarted(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ThreadUndoCompleted(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::TurnStarted(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::TurnCompleted(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::StreamError(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::TurnDiffUpdated(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::TurnPlanUpdated(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ItemStarted(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ItemCompleted(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::RawResponseItemCompleted(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::AgentMessageDelta(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::PlanDelta(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::CommandExecutionOutputDelta(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::TerminalInteraction(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::FileChangeOutputDelta(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::McpToolCallProgress(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::McpServerStartupUpdated(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::McpServerStartupCompleted(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::SkillsUpdated(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ReasoningSummaryTextDelta(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ReasoningSummaryPartAdded(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ReasoningTextDelta(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ContextCompacted(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ModelRerouted(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::Warning(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::Error(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::BackgroundEvent(ev) => ev.thread_id.as_str(),
+        app_proto::ServerNotification::ThreadStarted(ev) => ev.thread.id.as_str(),
+        app_proto::ServerNotification::McpServerOauthLoginCompleted(_)
+        | app_proto::ServerNotification::AccountUpdated(_)
+        | app_proto::ServerNotification::AccountRateLimitsUpdated(_)
+        | app_proto::ServerNotification::AppListUpdated(_)
+        | app_proto::ServerNotification::DeprecationNotice(_)
+        | app_proto::ServerNotification::ConfigWarning(_)
+        | app_proto::ServerNotification::FuzzyFileSearchSessionUpdated(_)
+        | app_proto::ServerNotification::FuzzyFileSearchSessionCompleted(_)
+        | app_proto::ServerNotification::WindowsWorldWritableWarning(_)
+        | app_proto::ServerNotification::WindowsSandboxSetupCompleted(_)
+        | app_proto::ServerNotification::AuthStatusChange(_)
+        | app_proto::ServerNotification::LoginChatGptComplete(_)
+        | app_proto::ServerNotification::SessionConfigured(_)
+        | app_proto::ServerNotification::AccountLoginCompleted(_) => return None,
+    };
+    ThreadId::try_from(thread_id.to_string()).ok()
 }
 
 fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorInfo]) {
@@ -239,15 +473,21 @@ struct SessionSummary {
 
 #[derive(Debug, Clone)]
 struct ThreadEventSnapshot {
-    session_configured: Option<Event>,
-    events: Vec<Event>,
+    bootstrap: Option<ThreadBootstrap>,
+    notifications: Vec<app_proto::ServerNotification>,
+}
+
+#[derive(Debug, Clone)]
+enum ThreadUiEvent {
+    Bootstrap(ThreadBootstrap),
+    Notification(app_proto::ServerNotification),
+    ServerRequest(app_proto::ServerRequest),
 }
 
 #[derive(Debug)]
 struct ThreadEventStore {
-    session_configured: Option<Event>,
-    buffer: VecDeque<Event>,
-    user_message_ids: HashSet<String>,
+    bootstrap: Option<ThreadBootstrap>,
+    buffer: VecDeque<app_proto::ServerNotification>,
     capacity: usize,
     active: bool,
 }
@@ -255,74 +495,42 @@ struct ThreadEventStore {
 impl ThreadEventStore {
     fn new(capacity: usize) -> Self {
         Self {
-            session_configured: None,
+            bootstrap: None,
             buffer: VecDeque::new(),
-            user_message_ids: HashSet::new(),
             capacity,
             active: false,
         }
     }
 
-    fn new_with_session_configured(capacity: usize, event: Event) -> Self {
+    fn new_with_bootstrap(capacity: usize, bootstrap: ThreadBootstrap) -> Self {
         let mut store = Self::new(capacity);
-        store.session_configured = Some(event);
+        store.bootstrap = Some(bootstrap);
         store
     }
 
-    fn push_event(&mut self, event: Event) {
-        match &event.msg {
-            EventMsg::SessionConfigured(_) => {
-                self.session_configured = Some(event);
-                return;
-            }
-            EventMsg::ItemCompleted(completed) => {
-                if let TurnItem::UserMessage(item) = &completed.item {
-                    if !event.id.is_empty() && self.user_message_ids.contains(&event.id) {
-                        return;
-                    }
-                    let legacy = Event {
-                        id: event.id,
-                        msg: item.as_legacy_event(),
-                    };
-                    self.push_legacy_event(legacy);
-                    return;
-                }
-            }
-            _ => {}
-        }
-
-        self.push_legacy_event(event);
+    fn set_bootstrap(&mut self, bootstrap: ThreadBootstrap) {
+        self.bootstrap = Some(bootstrap);
     }
 
-    fn push_legacy_event(&mut self, event: Event) {
-        if let EventMsg::UserMessage(_) = &event.msg
-            && !event.id.is_empty()
-            && !self.user_message_ids.insert(event.id.clone())
-        {
-            return;
-        }
-        self.buffer.push_back(event);
-        if self.buffer.len() > self.capacity
-            && let Some(removed) = self.buffer.pop_front()
-            && matches!(removed.msg, EventMsg::UserMessage(_))
-            && !removed.id.is_empty()
-        {
-            self.user_message_ids.remove(&removed.id);
+    fn push_notification(&mut self, notification: app_proto::ServerNotification) {
+        self.buffer.push_back(notification);
+        if self.buffer.len() > self.capacity {
+            let _ = self.buffer.pop_front();
         }
     }
 
     fn snapshot(&self) -> ThreadEventSnapshot {
         ThreadEventSnapshot {
-            session_configured: self.session_configured.clone(),
-            events: self.buffer.iter().cloned().collect(),
+            bootstrap: self.bootstrap.clone(),
+            notifications: self.buffer.iter().cloned().collect(),
         }
     }
 }
 
 #[derive(Debug)]
 struct ThreadEventChannel {
-    sender: mpsc::Sender<Event>,
-    receiver: Option<mpsc::Receiver<Event>>,
+    sender: mpsc::Sender<ThreadUiEvent>,
+    receiver: Option<mpsc::Receiver<ThreadUiEvent>>,
     store: Arc<Mutex<ThreadEventStore>>,
 }
 
@@ -336,13 +544,13 @@ impl ThreadEventChannel {
         }
     }
 
-    fn new_with_session_configured(capacity: usize, event: Event) -> Self {
+    fn new_with_bootstrap(capacity: usize, bootstrap: ThreadBootstrap) -> Self {
         let (sender, receiver) = mpsc::channel(capacity);
         Self {
             sender,
             receiver: Some(receiver),
-            store: Arc::new(Mutex::new(ThreadEventStore::new_with_session_configured(
-                capacity, event,
+            store: Arc::new(Mutex::new(ThreadEventStore::new_with_bootstrap(
+                capacity, bootstrap,
             ))),
         }
     }
@@ -517,6 +725,7 @@ async fn handle_model_migration_prompt_if_needed(
 
 pub(crate) struct App {
     pub(crate) server: Arc<ThreadManager>,
+    app_server_client: Arc<EmbeddedSessionClient>,
     pub(crate) otel_manager: OtelManager,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
@@ -577,10 +786,9 @@ pub(crate) struct App {
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     active_thread_id: Option<ThreadId>,
-    active_thread_rx: Option<mpsc::Receiver<Event>>,
+    active_thread_rx: Option<mpsc::Receiver<ThreadUiEvent>>,
     primary_thread_id: Option<ThreadId>,
-    primary_session_configured: Option<SessionConfiguredEvent>,
-    pending_primary_events: VecDeque<Event>,
+    pending_primary_events: VecDeque<ThreadUiEvent>,
 }
 
 #[derive(Default)]
@@ -629,6 +837,25 @@ impl App {
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
         }
+    }
+
+    fn append_session_summary_lines(&mut self, summary: Option<SessionSummary>) {
+        let Some(summary) = summary else {
+            return;
+        };
+        let mut lines: Vec<Line<'static>> = vec![summary.usage_line.into()];
+        if let Some(command) = summary.resume_command {
+            lines.push(vec!["To continue this session, run ".into(), command.cyan()].into());
+        }
+        self.chat_widget.add_plain_history_lines(lines);
+    }
+
+    async fn switch_to_existing_thread(&mut self, tui: &mut tui::Tui, bootstrap: ThreadBootstrap) {
+        self.shutdown_current_thread().await;
+        let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+        self.chat_widget =
+            ChatWidget::new_from_existing(init, bootstrap, self.app_server_client.clone());
+        self.reset_thread_event_state();
     }
 
     async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
@@ -745,7 +972,7 @@ impl App {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
             self.suppress_shutdown_complete = true;
-            self.chat_widget.submit_op(Op::Shutdown);
+            self.chat_widget.submit_op(AgentCommand::Shutdown);
             self.server.remove_thread(&thread_id).await;
         }
     }
@@ -794,7 +1021,7 @@ impl App {
     async fn activate_thread_for_replay(
         &mut self,
         thread_id: ThreadId,
-    ) -> Option<(mpsc::Receiver<Event>, ThreadEventSnapshot)> {
+    ) -> Option<(mpsc::Receiver<ThreadUiEvent>, ThreadEventSnapshot)> {
         let channel = self.thread_event_channels.get_mut(&thread_id)?;
         let receiver = channel.receiver.take()?;
         let mut store = channel.store.lock().await;
@@ -810,7 +1037,11 @@ impl App {
         self.active_thread_rx = None;
     }
 
-    async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
+    async fn enqueue_thread_ui_event(
+        &mut self,
+        thread_id: ThreadId,
+        event: ThreadUiEvent,
+    ) -> Result<()> {
         let (sender, store) = {
             let channel = self.ensure_thread_channel(thread_id);
             (channel.sender.clone(), Arc::clone(&channel.store))
@@ -818,14 +1049,24 @@ impl App {
 
         let should_send = {
             let mut guard = store.lock().await;
-            guard.push_event(event.clone());
-            guard.active
+            match event.clone() {
+                ThreadUiEvent::Bootstrap(bootstrap) => {
+                    guard.set_bootstrap(bootstrap);
+                    guard.active
+                }
+                ThreadUiEvent::Notification(notification) => {
+                    guard.push_notification(notification);
+                    guard.active
+                }
+                ThreadUiEvent::ServerRequest(_) => true,
+            }
         };
 
         if should_send {
             // Never await a bounded channel send on the main TUI loop: if the receiver falls behind,
             // `send().await` can block and the UI stops drawing. If the channel is full, wait in a
-            // spawned task instead.
+            // spawned task instead. `ServerRequest` events always queue to the thread channel even
+            // when the thread is inactive so approvals stay scoped to the right thread.
             match sender.try_send(event) {
                 Ok(()) => {}
                 Err(TrySendError::Full(event)) => {
@@ -843,26 +1084,61 @@ impl App {
         Ok(())
     }
 
-    async fn enqueue_primary_event(&mut self, event: Event) -> Result<()> {
+    async fn enqueue_thread_bootstrap(&mut self, bootstrap: ThreadBootstrap) -> Result<()> {
+        self.enqueue_thread_ui_event(bootstrap.thread_id, ThreadUiEvent::Bootstrap(bootstrap))
+            .await
+    }
+
+    async fn enqueue_thread_notification(
+        &mut self,
+        thread_id: ThreadId,
+        notification: app_proto::ServerNotification,
+    ) -> Result<()> {
+        self.enqueue_thread_ui_event(thread_id, ThreadUiEvent::Notification(notification))
+            .await
+    }
+
+    async fn enqueue_thread_server_request(
+        &mut self,
+        thread_id: ThreadId,
+        request: app_proto::ServerRequest,
+    ) -> Result<()> {
+        self.enqueue_thread_ui_event(thread_id, ThreadUiEvent::ServerRequest(request))
+            .await
+    }
+
+    async fn enqueue_primary_bootstrap(&mut self, bootstrap: ThreadBootstrap) -> Result<()> {
         if let Some(thread_id) = self.primary_thread_id {
-            return self.enqueue_thread_event(thread_id, event).await;
+            let _ = thread_id;
+            return self.enqueue_thread_bootstrap(bootstrap).await;
         }
 
-        if let EventMsg::SessionConfigured(session) = &event.msg {
-            let thread_id = session.session_id;
-            self.primary_thread_id = Some(thread_id);
-            self.primary_session_configured = Some(session.clone());
-            self.ensure_thread_channel(thread_id);
-            self.activate_thread_channel(thread_id).await;
+        let thread_id = bootstrap.thread_id;
+        self.primary_thread_id = Some(thread_id);
+        self.ensure_thread_channel(thread_id);
+        self.activate_thread_channel(thread_id).await;
 
-            let pending = std::mem::take(&mut self.pending_primary_events);
-            for pending_event in pending {
-                self.enqueue_thread_event(thread_id, pending_event).await?;
-            }
-            self.enqueue_thread_event(thread_id, event).await?;
-        } else {
-            self.pending_primary_events.push_back(event);
+        let pending = std::mem::take(&mut self.pending_primary_events);
+        for pending_event in pending {
+            self.enqueue_thread_ui_event(thread_id, pending_event)
+                .await?;
         }
+        self.enqueue_thread_bootstrap(bootstrap).await?;
+        Ok(())
+    }
+
+    async fn enqueue_primary_notification(
+        &mut self,
+        notification: app_proto::ServerNotification,
+    ) -> Result<()> {
+        if let Some(thread_id) = self.primary_thread_id {
+            return self
+                .enqueue_thread_notification(thread_id, notification)
+                .await;
+        }
+
+        self.pending_primary_events
+            .push_back(ThreadUiEvent::Notification(notification));
         Ok(())
     }
 
@@ -939,15 +1215,12 @@ impl App {
             return Ok(());
         }
 
-        let thread = match self.server.get_thread(thread_id).await {
-            Ok(thread) => thread,
-            Err(err) => {
-                self.chat_widget.add_error_message(format!(
-                    "Failed to attach to agent thread {thread_id}: {err}"
-                ));
-                return Ok(());
-            }
-        };
+        if let Err(err) = self.server.get_thread(thread_id).await {
+            self.chat_widget.add_error_message(format!(
+                "Failed to attach to agent thread {thread_id}: {err}"
+            ));
+            return Ok(());
+        }
 
         let previous_thread_id = self.active_thread_id;
         self.store_active_thread_receiver().await;
@@ -965,7 +1238,11 @@ impl App {
         self.active_thread_rx = Some(receiver);
 
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
-        let codex_op_tx = crate::chatwidget::spawn_op_forwarder(thread);
+        let codex_op_tx = crate::chatwidget::spawn_op_forwarder(
+            self.app_event_tx.clone(),
+            thread_id,
+            self.app_server_client.clone(),
+        );
         self.chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
 
         self.reset_for_thread_switch(tui)?;
@@ -1003,7 +1280,7 @@ impl App {
         let mut disconnected = false;
         loop {
             match rx.try_recv() {
-                Ok(event) => self.handle_codex_event_now(event),
+                Ok(event) => self.handle_thread_ui_event_now(event),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     disconnected = true;
@@ -1035,8 +1312,14 @@ impl App {
     /// 1. the event is `ShutdownComplete`;
     /// 2. the active thread differs from the primary thread;
     /// 3. the active thread is not the pending shutdown-exit thread.
-    fn active_non_primary_shutdown_target(&self, msg: &EventMsg) -> Option<(ThreadId, ThreadId)> {
-        if !matches!(msg, EventMsg::ShutdownComplete) {
+    fn active_non_primary_shutdown_target(
+        &self,
+        event: &ThreadUiEvent,
+    ) -> Option<(ThreadId, ThreadId)> {
+        if !matches!(
+            event,
+            ThreadUiEvent::Notification(app_proto::ServerNotification::ThreadShutdownCompleted(_))
+        ) {
             return None;
         }
         let active_thread_id = self.active_thread_id?;
@@ -1048,11 +1331,11 @@ impl App {
     }
 
     fn replay_thread_snapshot(&mut self, snapshot: ThreadEventSnapshot) {
-        if let Some(event) = snapshot.session_configured {
-            self.handle_codex_event_replay(event);
+        if let Some(bootstrap) = snapshot.bootstrap {
+            self.handle_thread_bootstrap_replay(bootstrap);
         }
-        for event in snapshot.events {
-            self.handle_codex_event_replay(event);
+        for notification in snapshot.notifications {
+            self.handle_server_notification_replay(notification);
         }
         self.refresh_status_line();
     }
@@ -1107,6 +1390,13 @@ impl App {
             SessionSource::Cli,
             config.model_catalog.clone(),
         ));
+        let app_server_client = Arc::new(EmbeddedSessionClient::new(EmbeddedSessionClientArgs {
+            auth_manager: auth_manager.clone(),
+            thread_manager: thread_manager.clone(),
+            config: config.clone(),
+            cli_overrides: cli_kv_overrides.clone(),
+            feedback: feedback.clone(),
+        }));
         let mut model = thread_manager
             .get_models_manager()
             .get_default_model(&config.model, RefreshStrategy::Offline)
@@ -1193,16 +1483,19 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
-                ChatWidget::new(init, thread_manager.clone())
+                ChatWidget::new(init, app_server_client.clone())
             }
             SessionSelection::Resume(path) => {
-                let resumed = thread_manager
-                    .resume_thread_from_rollout(config.clone(), path.clone(), auth_manager.clone())
+                let resumed = app_server_client
+                    .thread_resume(thread_resume_params_from_config(path.clone(), &config))
                     .await
-                    .wrap_err_with(|| {
+                    .map_err(|err| {
                         let path_display = path.display();
-                        format!("Failed to resume session from {path_display}")
+                        color_eyre::eyre::eyre!(
+                            "Failed to resume session from {path_display}: {err:?}"
+                        )
                     })?;
+                let resumed = thread_bootstrap_from_resume_response(resumed)?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -1223,17 +1516,20 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
-                ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
+                ChatWidget::new_from_existing(init, resumed, app_server_client.clone())
             }
             SessionSelection::Fork(path) => {
                 otel_manager.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
-                let forked = thread_manager
-                    .fork_thread(usize::MAX, config.clone(), path.clone(), false)
+                let forked = app_server_client
+                    .thread_fork(thread_fork_params_from_config(path.clone(), &config))
                     .await
-                    .wrap_err_with(|| {
+                    .map_err(|err| {
                         let path_display = path.display();
-                        format!("Failed to fork session from {path_display}")
+                        color_eyre::eyre::eyre!(
+                            "Failed to fork session from {path_display}: {err:?}"
+                        )
                     })?;
+                let forked = thread_bootstrap_from_fork_response(forked)?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -1254,7 +1550,7 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
-                ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
+                ChatWidget::new_from_existing(init, forked, app_server_client.clone())
             }
         };
 
@@ -1267,6 +1563,7 @@ impl App {
 
         let mut app = Self {
             server: thread_manager.clone(),
+            app_server_client: app_server_client.clone(),
             otel_manager: otel_manager.clone(),
             app_event_tx,
             chat_widget,
@@ -1297,7 +1594,6 @@ impl App {
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
-            primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         };
 
@@ -1353,8 +1649,8 @@ impl App {
 
         tui.frame_requester().schedule_frame();
 
-        let mut thread_created_rx = thread_manager.subscribe_thread_created();
-        let mut listen_for_threads = true;
+        let mut app_server_messages_rx = app_server_client.subscribe();
+        let mut listen_for_app_server = true;
         let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
 
         let exit_reason = loop {
@@ -1382,17 +1678,17 @@ impl App {
                 Some(event) = tui_events.next() => {
                     app.handle_tui_event(tui, event).await?
                 }
-                // Listen on new thread creation due to collab tools.
-                created = thread_created_rx.recv(), if listen_for_threads => {
-                    match created {
-                        Ok(thread_id) => {
-                            app.handle_thread_created(thread_id).await?;
+                app_server_message = app_server_messages_rx.recv(), if listen_for_app_server => {
+                    match app_server_message {
+                        Ok(EmbeddedSessionMessage::Notification(notification)) => {
+                            app.handle_app_server_notification(notification).await?;
                         }
+                        Ok(EmbeddedSessionMessage::Request(_)) => {}
                         Err(broadcast::error::RecvError::Lagged(_)) => {
-                            tracing::warn!("thread_created receiver lagged; skipping resync");
+                            tracing::warn!("app-server notification receiver lagged");
                         }
                         Err(broadcast::error::RecvError::Closed) => {
-                            listen_for_threads = false;
+                            listen_for_app_server = false;
                         }
                     }
                     AppRunControl::Continue
@@ -1507,16 +1803,9 @@ impl App {
                     status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
                     otel_manager: self.otel_manager.clone(),
                 };
-                self.chat_widget = ChatWidget::new(init, self.server.clone());
+                self.chat_widget = ChatWidget::new(init, self.app_server_client.clone());
                 self.reset_thread_event_state();
-                if let Some(summary) = summary {
-                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
-                    if let Some(command) = summary.resume_command {
-                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
-                        lines.push(spans.into());
-                    }
-                    self.chat_widget.add_plain_history_lines(lines);
-                }
+                self.append_session_summary_lines(summary);
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ClearUi => {
@@ -1563,46 +1852,34 @@ impl App {
                             self.chat_widget.thread_name(),
                         );
                         match self
-                            .server
-                            .resume_thread_from_rollout(
-                                resume_config.clone(),
+                            .app_server_client
+                            .thread_resume(thread_resume_params_from_config(
                                 path.clone(),
-                                self.auth_manager.clone(),
-                            )
+                                &resume_config,
+                            ))
                             .await
                         {
-                            Ok(resumed) => {
-                                self.shutdown_current_thread().await;
-                                self.config = resume_config;
-                                tui.set_notification_method(self.config.tui_notification_method);
-                                self.file_search.update_search_dir(self.config.cwd.clone());
-                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
-                                    tui,
-                                    self.config.clone(),
-                                );
-                                self.chat_widget = ChatWidget::new_from_existing(
-                                    init,
-                                    resumed.thread,
-                                    resumed.session_configured,
-                                );
-                                self.reset_thread_event_state();
-                                if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
-                                    if let Some(command) = summary.resume_command {
-                                        let spans = vec![
-                                            "To continue this session, run ".into(),
-                                            command.cyan(),
-                                        ];
-                                        lines.push(spans.into());
-                                    }
-                                    self.chat_widget.add_plain_history_lines(lines);
+                            Ok(resumed) => match thread_bootstrap_from_resume_response(resumed) {
+                                Ok(resumed) => {
+                                    self.config = resume_config;
+                                    tui.set_notification_method(
+                                        self.config.tui_notification_method,
+                                    );
+                                    self.file_search.update_search_dir(self.config.cwd.clone());
+                                    self.switch_to_existing_thread(tui, resumed).await;
+                                    self.append_session_summary_lines(summary);
                                 }
-                            }
+                                Err(err) => {
+                                    let path_display = path.display();
+                                    self.chat_widget.add_error_message(format!(
+                                        "Failed to resume session from {path_display}: {err:?}"
+                                    ));
+                                }
+                            },
                             Err(err) => {
                                 let path_display = path.display();
                                 self.chat_widget.add_error_message(format!(
-                                    "Failed to resume session from {path_display}: {err}"
+                                    "Failed to resume session from {path_display}: {err:?}"
                                 ));
                             }
                         }
@@ -1630,39 +1907,26 @@ impl App {
                     // materialized lazily on first user message.
                     if path.exists() {
                         match self
-                            .server
-                            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false)
+                            .app_server_client
+                            .thread_fork(thread_fork_params_from_config(path.clone(), &self.config))
                             .await
                         {
-                            Ok(forked) => {
-                                self.shutdown_current_thread().await;
-                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
-                                    tui,
-                                    self.config.clone(),
-                                );
-                                self.chat_widget = ChatWidget::new_from_existing(
-                                    init,
-                                    forked.thread,
-                                    forked.session_configured,
-                                );
-                                self.reset_thread_event_state();
-                                if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
-                                    if let Some(command) = summary.resume_command {
-                                        let spans = vec![
-                                            "To continue this session, run ".into(),
-                                            command.cyan(),
-                                        ];
-                                        lines.push(spans.into());
-                                    }
-                                    self.chat_widget.add_plain_history_lines(lines);
+                            Ok(forked) => match thread_bootstrap_from_fork_response(forked) {
+                                Ok(forked) => {
+                                    self.switch_to_existing_thread(tui, forked).await;
+                                    self.append_session_summary_lines(summary);
                                 }
-                            }
+                                Err(err) => {
+                                    let path_display = path.display();
+                                    self.chat_widget.add_error_message(format!(
+                                        "Failed to fork current session from {path_display}: {err:?}"
+                                    ));
+                                }
+                            },
                             Err(err) => {
                                 let path_display = path.display();
                                 self.chat_widget.add_error_message(format!(
-                                    "Failed to fork current session from {path_display}: {err}"
+                                    "Failed to fork current session from {path_display}: {err:?}"
                                 ));
                             }
                         }
@@ -1712,6 +1976,15 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
             }
+            AppEvent::ThreadRollbackCompleted {
+                thread_id,
+                num_turns,
+            } => {
+                self.handle_backtrack_rollback_completed(thread_id, num_turns);
+                if self.backtrack_render_pending {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
             AppEvent::StartCommitAnimation => {
                 if self
                     .commit_anim_running
@@ -1734,8 +2007,27 @@ impl App {
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
             }
-            AppEvent::CodexEvent(event) => {
-                self.enqueue_primary_event(event).await?;
+            AppEvent::ThreadBootstrapped(bootstrap) => {
+                self.enqueue_primary_bootstrap(bootstrap).await?;
+            }
+            AppEvent::AppServerRequest { thread_id, request } => {
+                self.enqueue_thread_server_request(thread_id, request)
+                    .await?;
+            }
+            AppEvent::HistoryEntryReadResponse(response) => {
+                self.chat_widget.on_get_history_entry_response_v2(response);
+            }
+            AppEvent::McpToolsListResponse(response) => {
+                self.chat_widget.on_list_mcp_tools_v2(response);
+            }
+            AppEvent::CustomPromptListResponse(response) => {
+                self.chat_widget.on_list_custom_prompts_v2(response);
+            }
+            AppEvent::SkillsListResponse(response) => {
+                let cwd = self.chat_widget.config_ref().cwd.clone();
+                let errors = errors_for_cwd_v2(&cwd, &response);
+                emit_skill_load_warnings(&self.app_event_tx, &errors);
+                self.chat_widget.on_list_skills_v2(response);
             }
             AppEvent::Exit(mode) => match mode {
                 ExitMode::ShutdownFirst => {
@@ -1743,7 +2035,7 @@ impl App {
                     // its shutdown completion does not trigger agent failover.
                     self.pending_shutdown_exit_thread_id =
                         self.active_thread_id.or(self.chat_widget.thread_id());
-                    self.chat_widget.submit_op(Op::Shutdown);
+                    self.chat_widget.submit_op(AgentCommand::Shutdown);
                 }
                 ExitMode::Immediate => {
                     self.pending_shutdown_exit_thread_id = None;
@@ -1753,7 +2045,7 @@ impl App {
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
-            AppEvent::CodexOp(op) => {
+            AppEvent::AgentCommand(op) => {
                 self.chat_widget.submit_op(op);
             }
             AppEvent::DiffResult(text) => {
@@ -2108,8 +2400,8 @@ impl App {
                             if let Some((sample_paths, extra_count, failed_scan)) =
                                 self.chat_widget.world_writable_warning_details()
                             {
-                                self.app_event_tx.send(AppEvent::CodexOp(
-                                    Op::OverrideTurnContext {
+                                self.app_event_tx.send(AppEvent::AgentCommand(
+                                    AgentCommand::OverrideTurnContext {
                                         cwd: None,
                                         approval_policy: None,
                                         sandbox_policy: None,
@@ -2130,8 +2422,8 @@ impl App {
                                     },
                                 );
                             } else {
-                                self.app_event_tx.send(AppEvent::CodexOp(
-                                    Op::OverrideTurnContext {
+                                self.app_event_tx.send(AppEvent::AgentCommand(
+                                    AgentCommand::OverrideTurnContext {
                                         cwd: None,
                                         approval_policy: Some(preset.approval),
                                         sandbox_policy: Some(preset.sandbox.clone()),
@@ -2353,8 +2645,8 @@ impl App {
                     #[cfg(target_os = "windows")]
                     {
                         let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-                        self.app_event_tx
-                            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        self.app_event_tx.send(AppEvent::AgentCommand(
+                            AgentCommand::OverrideTurnContext {
                                 cwd: None,
                                 approval_policy: None,
                                 sandbox_policy: None,
@@ -2364,7 +2656,8 @@ impl App {
                                 summary: None,
                                 collaboration_mode: None,
                                 personality: None,
-                            }));
+                            },
+                        ));
                     }
                 }
                 if let Err(err) = builder.apply().await {
@@ -2576,7 +2869,7 @@ impl App {
                         if let Err(err) = self.refresh_in_memory_config_from_disk().await {
                             tracing::warn!(error = %err, "failed to refresh config after app toggle");
                         }
-                        self.chat_widget.submit_op(Op::ReloadUserConfig);
+                        self.chat_widget.submit_op(AgentCommand::ReloadUserConfig);
                     }
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(
@@ -2701,33 +2994,51 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
-    fn handle_codex_event_now(&mut self, event: Event) {
-        let needs_refresh = matches!(
-            event.msg,
-            EventMsg::SessionConfigured(_) | EventMsg::TokenCount(_)
-        );
-        // This guard is only for intentional thread-switch shutdowns.
-        // App-exit shutdowns are tracked by `pending_shutdown_exit_thread_id`
-        // and resolved in `handle_active_thread_event`.
-        if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
-            self.suppress_shutdown_complete = false;
-            return;
-        }
-        if let EventMsg::ListSkillsResponse(response) = &event.msg {
-            let cwd = self.chat_widget.config_ref().cwd.clone();
-            let errors = errors_for_cwd(&cwd, response);
-            emit_skill_load_warnings(&self.app_event_tx, &errors);
-        }
-        self.handle_backtrack_event(&event.msg);
-        self.chat_widget.handle_codex_event(event);
-
-        if needs_refresh {
-            self.refresh_status_line();
+    fn handle_thread_ui_event_now(&mut self, event: ThreadUiEvent) {
+        match event {
+            ThreadUiEvent::Bootstrap(bootstrap) => {
+                self.chat_widget.handle_thread_bootstrap(bootstrap)
+            }
+            ThreadUiEvent::Notification(notification) => {
+                self.handle_server_notification_now(notification)
+            }
+            ThreadUiEvent::ServerRequest(request) => {
+                self.chat_widget.handle_app_server_request(request)
+            }
         }
     }
 
-    fn handle_codex_event_replay(&mut self, event: Event) {
-        self.chat_widget.handle_codex_event_replay(event);
+    fn handle_thread_bootstrap_replay(&mut self, bootstrap: ThreadBootstrap) {
+        self.chat_widget.handle_thread_bootstrap_replay(bootstrap);
+    }
+
+    fn handle_server_notification_replay(&mut self, notification: app_proto::ServerNotification) {
+        self.chat_widget
+            .handle_server_notification_replay(notification);
+    }
+
+    fn handle_server_notification_now(&mut self, notification: app_proto::ServerNotification) {
+        if self.suppress_shutdown_complete
+            && matches!(
+                notification,
+                app_proto::ServerNotification::ThreadShutdownCompleted(_)
+            )
+        {
+            self.suppress_shutdown_complete = false;
+            return;
+        }
+
+        if let app_proto::ServerNotification::Error(error) = &notification
+            && error
+                .error
+                .codex_error_info
+                .as_ref()
+                .is_some_and(|info| matches!(info, app_proto::CodexErrorInfo::ThreadRollbackFailed))
+        {
+            self.handle_backtrack_rollback_failed();
+        }
+
+        self.chat_widget.handle_server_notification(notification);
     }
 
     /// Handles an event emitted by the currently active thread.
@@ -2735,11 +3046,18 @@ impl App {
     /// This function enforces shutdown intent routing: unexpected non-primary
     /// thread shutdowns fail over to the primary thread, while user-requested
     /// app exits consume only the tracked shutdown completion and then proceed.
-    async fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+    async fn handle_active_thread_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        event: ThreadUiEvent,
+    ) -> Result<()> {
         // Capture this before any potential thread switch: we only want to clear
         // the exit marker when the currently active thread acknowledges shutdown.
-        let pending_shutdown_exit_completed = matches!(&event.msg, EventMsg::ShutdownComplete)
-            && self.pending_shutdown_exit_thread_id == self.active_thread_id;
+        let pending_shutdown_exit_completed = matches!(
+            &event,
+            ThreadUiEvent::Notification(app_proto::ServerNotification::ThreadShutdownCompleted(_))
+        ) && self.pending_shutdown_exit_thread_id
+            == self.active_thread_id;
 
         // Processing order matters:
         //
@@ -2750,7 +3068,7 @@ impl App {
         // This preserves the mental model that user-requested exits do not trigger
         // failover, while true sub-agent deaths still do.
         if let Some((closed_thread_id, primary_thread_id)) =
-            self.active_non_primary_shutdown_target(&event.msg)
+            self.active_non_primary_shutdown_target(&event)
         {
             self.thread_event_channels.remove(&closed_thread_id);
             self.select_agent_thread(tui, primary_thread_id).await?;
@@ -2775,69 +3093,83 @@ impl App {
             // thread, so unrelated shutdowns cannot consume this marker.
             self.pending_shutdown_exit_thread_id = None;
         }
-        self.handle_codex_event_now(event);
+        self.handle_thread_ui_event_now(event);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }
         Ok(())
     }
 
-    async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
+    async fn handle_thread_started_notification(
+        &mut self,
+        notification: app_proto::ThreadStartedNotification,
+    ) -> Result<()> {
+        let Some(thread_id) = ThreadId::try_from(notification.thread.id.clone()).ok() else {
+            tracing::warn!(
+                "failed to attach listener for invalid thread id {}",
+                notification.thread.id
+            );
+            return Ok(());
+        };
         if self.thread_event_channels.contains_key(&thread_id) {
             return Ok(());
         }
         let thread = match self.server.get_thread(thread_id).await {
             Ok(thread) => thread,
             Err(err) => {
-                tracing::warn!("failed to attach listener for thread {thread_id}: {err}");
+                tracing::warn!("failed to attach thread {thread_id}: {err}");
                 return Ok(());
             }
         };
         let config_snapshot = thread.config_snapshot().await;
-        let event = Event {
-            id: String::new(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: config_snapshot.model,
-                model_provider_id: config_snapshot.model_provider_id,
-                approval_policy: config_snapshot.approval_policy,
-                sandbox_policy: config_snapshot.sandbox_policy,
-                cwd: config_snapshot.cwd,
-                reasoning_effort: config_snapshot.reasoning_effort,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: thread.rollout_path(),
-            }),
+        let bootstrap = ThreadBootstrap {
+            thread: notification.thread,
+            thread_id,
+            model: config_snapshot.model,
+            model_provider_id: config_snapshot.model_provider_id,
+            approval_policy: config_snapshot.approval_policy,
+            sandbox_policy: config_snapshot.sandbox_policy,
+            cwd: config_snapshot.cwd,
+            reasoning_effort: config_snapshot.reasoning_effort,
+            history_log_id: 0,
+            history_entry_count: 0,
+            forked_from_id: None,
+            network_proxy: None,
+            rollout_path: thread.rollout_path(),
         };
         let channel =
-            ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
-        let sender = channel.sender.clone();
-        let store = Arc::clone(&channel.store);
+            ThreadEventChannel::new_with_bootstrap(THREAD_EVENT_CHANNEL_CAPACITY, bootstrap);
         self.thread_event_channels.insert(thread_id, channel);
-        tokio::spawn(async move {
-            loop {
-                let event = match thread.next_event().await {
-                    Ok(event) => event,
-                    Err(err) => {
-                        tracing::debug!("external thread {thread_id} listener stopped: {err}");
-                        break;
-                    }
-                };
-                let should_send = {
-                    let mut guard = store.lock().await;
-                    guard.push_event(event.clone());
-                    guard.active
-                };
-                if should_send && let Err(err) = sender.send(event).await {
-                    tracing::debug!("external thread {thread_id} channel closed: {err}");
-                    break;
-                }
+        Ok(())
+    }
+
+    async fn handle_app_server_notification(
+        &mut self,
+        notification: app_proto::ServerNotification,
+    ) -> Result<()> {
+        if let app_proto::ServerNotification::ThreadStarted(thread_started) = notification {
+            self.handle_thread_started_notification(thread_started)
+                .await?;
+            return Ok(());
+        }
+
+        if let app_proto::ServerNotification::AccountRateLimitsUpdated(rate_limits) = &notification
+            && let Ok(snapshot) = convert_via_serde(rate_limits.rate_limits.clone())
+        {
+            self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+        }
+
+        if let Some(thread_id) = notification_thread_id(&notification) {
+            if self.primary_thread_id.is_some() {
+                self.enqueue_thread_notification(thread_id, notification)
+                    .await?;
+            } else {
+                self.enqueue_primary_notification(notification).await?;
             }
-        });
+        } else {
+            self.chat_widget
+                .handle_global_server_notification(notification);
+        }
         Ok(())
     }
 
@@ -3234,18 +3566,21 @@ mod tests {
             .insert(thread_id, ThreadEventChannel::new(1));
         app.set_thread_active(thread_id, true).await;
 
-        let event = Event {
-            id: String::new(),
-            msg: EventMsg::ShutdownComplete,
-        };
+        let event =
+            ThreadUiEvent::Notification(app_proto::ServerNotification::ThreadShutdownCompleted(
+                app_proto::ThreadShutdownCompletedNotification {
+                    thread_id: thread_id.to_string(),
+                },
+            ));
 
-        app.enqueue_thread_event(thread_id, event.clone()).await?;
+        app.enqueue_thread_ui_event(thread_id, event.clone())
+            .await?;
         time::timeout(
             Duration::from_millis(50),
-            app.enqueue_thread_event(thread_id, event),
+            app.enqueue_thread_ui_event(thread_id, event),
         )
         .await
-        .expect("enqueue_thread_event blocked on a full channel")?;
+        .expect("enqueue_thread_ui_event blocked on a full channel")?;
 
         let mut rx = app
             .thread_event_channels
@@ -3323,7 +3658,13 @@ mod tests {
         app.primary_thread_id = Some(ThreadId::new());
 
         assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::SkillsUpdateAvailable),
+            app.active_non_primary_shutdown_target(&ThreadUiEvent::Notification(
+                app_proto::ServerNotification::SkillsUpdated(
+                    app_proto::SkillsUpdatedNotification {
+                        thread_id: ThreadId::new().to_string(),
+                    }
+                ),
+            )),
             None
         );
         Ok(())
@@ -3338,7 +3679,13 @@ mod tests {
         app.primary_thread_id = Some(thread_id);
 
         assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            app.active_non_primary_shutdown_target(&ThreadUiEvent::Notification(
+                app_proto::ServerNotification::ThreadShutdownCompleted(
+                    app_proto::ThreadShutdownCompletedNotification {
+                        thread_id: thread_id.to_string(),
+                    },
+                ),
+            )),
             None
         );
         Ok(())
@@ -3354,7 +3701,13 @@ mod tests {
         app.primary_thread_id = Some(primary_thread_id);
 
         assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            app.active_non_primary_shutdown_target(&ThreadUiEvent::Notification(
+                app_proto::ServerNotification::ThreadShutdownCompleted(
+                    app_proto::ThreadShutdownCompletedNotification {
+                        thread_id: active_thread_id.to_string(),
+                    },
+                ),
+            )),
             Some((active_thread_id, primary_thread_id))
         );
         Ok(())
@@ -3371,7 +3724,13 @@ mod tests {
         app.pending_shutdown_exit_thread_id = Some(active_thread_id);
 
         assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            app.active_non_primary_shutdown_target(&ThreadUiEvent::Notification(
+                app_proto::ServerNotification::ThreadShutdownCompleted(
+                    app_proto::ThreadShutdownCompletedNotification {
+                        thread_id: active_thread_id.to_string(),
+                    },
+                ),
+            )),
             None
         );
         Ok(())
@@ -3388,7 +3747,13 @@ mod tests {
         app.pending_shutdown_exit_thread_id = Some(ThreadId::new());
 
         assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            app.active_non_primary_shutdown_target(&ThreadUiEvent::Notification(
+                app_proto::ServerNotification::ThreadShutdownCompleted(
+                    app_proto::ThreadShutdownCompletedNotification {
+                        thread_id: active_thread_id.to_string(),
+                    },
+                ),
+            )),
             Some((active_thread_id, primary_thread_id))
         );
         Ok(())
@@ -3515,12 +3880,20 @@ mod tests {
         let auth_manager = codex_core::test_support::auth_manager_from_auth(
             CodexAuth::from_api_key("Test API Key"),
         );
+        let app_server_client = Arc::new(EmbeddedSessionClient::new(EmbeddedSessionClientArgs {
+            auth_manager: auth_manager.clone(),
+            thread_manager: server.clone(),
+            config: config.clone(),
+            cli_overrides: Vec::new(),
+            feedback: codex_feedback::CodexFeedback::new(),
+        }));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
         App {
             server,
+            app_server_client,
             otel_manager,
             app_event_tx,
             chat_widget,
@@ -3551,7 +3924,6 @@ mod tests {
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
-            primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         }
     }
@@ -3559,7 +3931,7 @@ mod tests {
     async fn make_test_app_with_channels() -> (
         App,
         tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-        tokio::sync::mpsc::UnboundedReceiver<Op>,
+        tokio::sync::mpsc::UnboundedReceiver<AgentCommand>,
     ) {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -3572,6 +3944,13 @@ mod tests {
         let auth_manager = codex_core::test_support::auth_manager_from_auth(
             CodexAuth::from_api_key("Test API Key"),
         );
+        let app_server_client = Arc::new(EmbeddedSessionClient::new(EmbeddedSessionClientArgs {
+            auth_manager: auth_manager.clone(),
+            thread_manager: server.clone(),
+            config: config.clone(),
+            cli_overrides: Vec::new(),
+            feedback: codex_feedback::CodexFeedback::new(),
+        }));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
@@ -3579,6 +3958,7 @@ mod tests {
         (
             App {
                 server,
+                app_server_client,
                 otel_manager,
                 app_event_tx,
                 chat_widget,
@@ -3609,7 +3989,6 @@ mod tests {
                 active_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
-                primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
             },
             rx,
@@ -4014,7 +4393,7 @@ mod tests {
 
         let mut rollback_turns = None;
         while let Ok(op) = op_rx.try_recv() {
-            if let Op::ThreadRollback { num_turns } = op {
+            if let AgentCommand::ThreadRollback { num_turns } = op {
                 rollback_turns = Some(num_turns);
             }
         }
@@ -4049,7 +4428,7 @@ mod tests {
 
         let mut rollback_turns = None;
         while let Ok(op) = op_rx.try_recv() {
-            if let Op::ThreadRollback { num_turns } = op {
+            if let AgentCommand::ThreadRollback { num_turns } = op {
                 rollback_turns = Some(num_turns);
             }
         }
@@ -4104,8 +4483,8 @@ mod tests {
         let mut submitted_items: Option<Vec<UserInput>> = None;
         while let Ok(op) = op_rx.try_recv() {
             match op {
-                Op::ThreadRollback { .. } => saw_rollback = true,
-                Op::UserTurn { items, .. } => submitted_items = Some(items),
+                AgentCommand::ThreadRollback { .. } => saw_rollback = true,
+                AgentCommand::UserTurn { items, .. } => submitted_items = Some(items),
                 _ => {}
             }
         }
@@ -4125,7 +4504,7 @@ mod tests {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
         let session_id = ThreadId::new();
-        app.handle_codex_event_replay(Event {
+        app.chat_widget.handle_codex_event_replay(Event {
             id: String::new(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id,
@@ -4204,7 +4583,7 @@ mod tests {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
         let session_id = ThreadId::new();
-        app.handle_codex_event_replay(Event {
+        app.chat_widget.handle_codex_event_replay(Event {
             id: String::new(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id,
@@ -4237,11 +4616,8 @@ mod tests {
             }),
         });
 
-        // Simulate a live rollback arriving before queued replay inserts are drained.
-        app.handle_codex_event_now(Event {
-            id: "live-rollback".to_string(),
-            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
-        });
+        // Simulate a live rollback completion arriving before queued replay inserts are drained.
+        app.handle_backtrack_rollback_completed(session_id, 1);
 
         let mut saw_rollback = false;
         while let Ok(event) = app_event_rx.try_recv() {
@@ -4360,8 +4736,8 @@ mod tests {
         app.shutdown_current_thread().await;
 
         match op_rx.try_recv() {
-            Ok(Op::Shutdown) => {}
-            Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
+            Ok(AgentCommand::Shutdown) => {}
+            Ok(other) => panic!("expected AgentCommand::Shutdown, got {other:?}"),
             Err(_) => panic!("expected shutdown op to be sent"),
         }
     }

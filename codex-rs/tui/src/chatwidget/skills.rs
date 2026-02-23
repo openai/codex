@@ -12,6 +12,7 @@ use crate::bottom_pane::SkillsToggleView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
+use codex_app_server_protocol as app_proto;
 use codex_chatgpt::connectors::AppInfo;
 use codex_core::connectors::connector_mention_slug;
 use codex_core::skills::model::SkillDependencies;
@@ -140,6 +141,22 @@ impl ChatWidget {
         let skills = skills_for_cwd(&self.config.cwd, &response.skills);
         self.skills_all = skills;
         self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
+    }
+
+    pub(crate) fn set_skills_from_app_server_response(
+        &mut self,
+        response: &app_proto::SkillsListResponse,
+    ) {
+        match super::convert_via_serde::<_, Vec<SkillsListEntry>>(response.data.clone()) {
+            Ok(entries) => {
+                let skills = skills_for_cwd(&self.config.cwd, &entries);
+                self.skills_all = skills;
+                self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
+            }
+            Err(err) => {
+                tracing::error!("failed to convert skills response: {err}");
+            }
+        }
     }
 }
 

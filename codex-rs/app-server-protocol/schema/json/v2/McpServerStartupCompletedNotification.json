@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "McpServerStartupFailure": {
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "server": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "server"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "cancelled": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "failed": {
+      "items": {
+        "$ref": "#/definitions/McpServerStartupFailure"
+      },
+      "type": "array"
+    },
+    "ready": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cancelled",
+    "failed",
+    "ready",
+    "threadId"
+  ],
+  "title": "McpServerStartupCompletedNotification",
+  "type": "object"
+}

@@ -373,7 +373,7 @@ impl BottomPane {
                 && !self.composer.popup_active()
                 && let Some(status) = &self.status
             {
-                // Send Op::Interrupt
+                // Send AgentCommand::Interrupt
                 status.interrupt();
                 self.request_redraw();
                 return InputResult::None;
@@ -981,8 +981,8 @@ impl Renderable for BottomPane {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_command::AgentCommand;
     use crate::app_event::AppEvent;
-    use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
@@ -1432,8 +1432,8 @@ mod tests {
 
         while let Ok(ev) = rx.try_recv() {
             assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
-                "expected Esc to not send Op::Interrupt when dismissing skill popup"
+                !matches!(ev, AppEvent::AgentCommand(AgentCommand::Interrupt)),
+                "expected Esc to not send AgentCommand::Interrupt when dismissing skill popup"
             );
         }
         assert!(
@@ -1470,8 +1470,8 @@ mod tests {
 
         while let Ok(ev) = rx.try_recv() {
             assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
-                "expected Esc to not send Op::Interrupt while command popup is active"
+                !matches!(ev, AppEvent::AgentCommand(AgentCommand::Interrupt)),
+                "expected Esc to not send AgentCommand::Interrupt while command popup is active"
             );
         }
         assert_eq!(pane.composer_text(), "/");
@@ -1497,8 +1497,11 @@ mod tests {
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
-            "expected Esc to send Op::Interrupt while a task is running"
+            matches!(
+                rx.try_recv(),
+                Ok(AppEvent::AgentCommand(AgentCommand::Interrupt))
+            ),
+            "expected Esc to send AgentCommand::Interrupt while a task is running"
         );
     }
 

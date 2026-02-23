@@ -686,6 +686,25 @@
         }
       ]
     },
+    "SessionNetworkProxyRuntime": {
+      "properties": {
+        "adminAddr": {
+          "type": "string"
+        },
+        "httpAddr": {
+          "type": "string"
+        },
+        "socksAddr": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "adminAddr",
+        "httpAddr",
+        "socksAddr"
+      ],
+      "type": "object"
+    },
     "SessionSource": {
       "oneOf": [
         {
@@ -1777,11 +1796,37 @@
     "cwd": {
       "type": "string"
     },
+    "forkedFromThreadId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "historyEntryCount": {
+      "format": "uint",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "historyLogId": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
     "model": {
       "type": "string"
     },
     "modelProvider": {
       "type": "string"
+    },
+    "networkProxy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SessionNetworkProxyRuntime"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "reasoningEffort": {
       "anyOf": [
@@ -1803,6 +1848,8 @@
   "required": [
     "approvalPolicy",
     "cwd",
+    "historyEntryCount",
+    "historyLogId",
     "model",
     "modelProvider",
     "sandbox",

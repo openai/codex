@@ -30,7 +30,7 @@ use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::history_cell;
 use crate::render::renderable::Renderable;
 
-use codex_protocol::protocol::Op;
+use crate::agent_command::AgentCommand;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -312,27 +312,14 @@ impl RequestUserInputOverlay {
     }
 
     pub(super) fn options_required_height(&self, width: u16) -> u16 {
-        if !self.has_options() {
-            return 0;
-        }
-
-        let rows = self.option_rows();
-        if rows.is_empty() {
-            return 1;
-        }
-
-        let mut state = self
-            .current_answer()
-            .map(|answer| answer.options_state)
-            .unwrap_or_default();
-        if state.selected_idx.is_none() {
-            state.selected_idx = Some(0);
-        }
-
-        measure_rows_height(&rows, &state, rows.len(), width.max(1))
+        self.options_height(width)
     }
 
     pub(super) fn options_preferred_height(&self, width: u16) -> u16 {
+        self.options_height(width)
+    }
+
+    fn options_height(&self, width: u16) -> u16 {
         if !self.has_options() {
             return 0;
         }
@@ -653,6 +640,24 @@ impl RequestUserInputOverlay {
         }
     }
 
+    fn move_option_selection(&mut self, next: bool) {
+        let options_len = self.options_len();
+        let moved = if let Some(answer) = self.current_answer_mut() {
+            if next {
+                answer.options_state.move_down_wrap(options_len);
+            } else {
+                answer.options_state.move_up_wrap(options_len);
+            }
+            answer.answer_committed = false;
+            true
+        } else {
+            false
+        };
+        if moved {
+            self.sync_composer_placeholder();
+        }
+    }
+
     /// Clear the current option selection and hide notes when empty.
     fn clear_selection(&mut self) {
         if !self.has_options() {
@@ -746,8 +751,8 @@ impl RequestUserInputOverlay {
             );
         }
         self.app_event_tx
-            .send(AppEvent::CodexOp(Op::UserInputAnswer {
-                id: self.request.turn_id.clone(),
+            .send(AppEvent::AgentCommand(AgentCommand::UserInputAnswer {
+                id: self.request.call_id.clone(),
                 response: RequestUserInputResponse {
                     answers: answers.clone(),
                 },
@@ -1007,7 +1012,8 @@ impl BottomPaneView for RequestUserInputOverlay {
             }
             // TODO: Emit interrupted request_user_input results (including committed answers)
             // once core supports persisting them reliably without follow-up turn issues.
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+            self.app_event_tx
+                .send(AppEvent::AgentCommand(AgentCommand::Interrupt));
             self.done = true;
             return;
         }
@@ -1077,32 +1083,13 @@ impl BottomPaneView for RequestUserInputOverlay {
 
         match self.focus {
             Focus::Options => {
-                let options_len = self.options_len();
                 // Keep selection synchronized as the user moves.
                 match key_event.code {
                     KeyCode::Up | KeyCode::Char('k') => {
-                        let moved = if let Some(answer) = self.current_answer_mut() {
-                            answer.options_state.move_up_wrap(options_len);
-                            answer.answer_committed = false;
-                            true
-                        } else {
-                            false
-                        };
-                        if moved {
-                            self.sync_composer_placeholder();
-                        }
+                        self.move_option_selection(false);
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        let moved = if let Some(answer) = self.current_answer_mut() {
-                            answer.options_state.move_down_wrap(options_len);
-                            answer.answer_committed = false;
-                            true
-                        } else {
-                            false
-                        };
-                        if moved {
-                            self.sync_composer_placeholder();
-                        }
+                        self.move_option_selection(true);
                     }
                     KeyCode::Char(' ') => {
                         self.select_current_option(true);
@@ -1165,34 +1152,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                     return;
                 }
                 if self.has_options() && matches!(key_event.code, KeyCode::Up | KeyCode::Down) {
-                    let options_len = self.options_len();
-                    match key_event.code {
-                        KeyCode::Up => {
-                            let moved = if let Some(answer) = self.current_answer_mut() {
-                                answer.options_state.move_up_wrap(options_len);
-                                answer.answer_committed = false;
-                                true
-                            } else {
-                                false
-                            };
-                            if moved {
-                                self.sync_composer_placeholder();
-                            }
-                        }
-                        KeyCode::Down => {
-                            let moved = if let Some(answer) = self.current_answer_mut() {
-                                answer.options_state.move_down_wrap(options_len);
-                                answer.answer_committed = false;
-                                true
-                            } else {
-                                false
-                            };
-                            if moved {
-                                self.sync_composer_placeholder();
-                            }
-                        }
-                        _ => {}
-                    }
+                    self.move_option_selection(matches!(key_event.code, KeyCode::Down));
                     return;
                 }
                 self.ensure_selected_for_notes();
@@ -1223,7 +1183,8 @@ impl BottomPaneView for RequestUserInputOverlay {
             self.close_unanswered_confirmation();
             // TODO: Emit interrupted request_user_input results (including committed answers)
             // once core supports persisting them reliably without follow-up turn issues.
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+            self.app_event_tx
+                .send(AppEvent::AgentCommand(AgentCommand::Interrupt));
             self.done = true;
             return CancellationEvent::Handled;
         }
@@ -1234,7 +1195,8 @@ impl BottomPaneView for RequestUserInputOverlay {
 
         // TODO: Emit interrupted request_user_input results (including committed answers)
         // once core supports persisting them reliably without follow-up turn issues.
-        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+        self.app_event_tx
+            .send(AppEvent::AgentCommand(AgentCommand::Interrupt));
         self.done = true;
         CancellationEvent::Handled
     }
@@ -1300,10 +1262,10 @@ mod tests {
 
     fn expect_interrupt_only(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) {
         let event = rx.try_recv().expect("expected interrupt AppEvent");
-        let AppEvent::CodexOp(op) = event else {
+        let AppEvent::AgentCommand(op) = event else {
             panic!("expected CodexOp");
         };
-        assert_eq!(op, Op::Interrupt);
+        assert_eq!(op, AgentCommand::Interrupt);
         assert!(
             rx.try_recv().is_err(),
             "unexpected AppEvents before interrupt completion"
@@ -1546,10 +1508,11 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { id, response, .. }) = event else {
+        let AppEvent::AgentCommand(AgentCommand::UserInputAnswer { id, response, .. }) = event
+        else {
             panic!("expected UserInputAnswer");
         };
-        assert_eq!(id, "turn-1");
+        assert_eq!(id, "call-1");
         let answer = response.answers.get("q1").expect("answer missing");
         assert_eq!(answer.answers, Vec::<String>::new());
     }
@@ -1568,7 +1531,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AgentCommand(AgentCommand::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -1604,7 +1567,7 @@ mod tests {
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AgentCommand(AgentCommand::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let mut expected = HashMap::new();
@@ -1637,7 +1600,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AgentCommand(AgentCommand::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -1887,7 +1850,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AgentCommand(AgentCommand::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2187,7 +2150,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AgentCommand(AgentCommand::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2212,7 +2175,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AgentCommand(AgentCommand::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2255,7 +2218,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AgentCommand(AgentCommand::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2291,7 +2254,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AgentCommand(AgentCommand::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
@@ -2376,7 +2339,7 @@ mod tests {
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+        let AppEvent::AgentCommand(AgentCommand::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");

@@ -364,6 +364,25 @@
         }
       ]
     },
+    "BackgroundEventNotification": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -995,6 +1014,139 @@
       ],
       "type": "object"
     },
+    "McpServerStartupCompletedNotification": {
+      "properties": {
+        "cancelled": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "failed": {
+          "items": {
+            "$ref": "#/definitions/McpServerStartupFailure"
+          },
+          "type": "array"
+        },
+        "ready": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cancelled",
+        "failed",
+        "ready",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "McpServerStartupFailure": {
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "server": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "server"
+      ],
+      "type": "object"
+    },
+    "McpServerStartupStatus": {
+      "oneOf": [
+        {
+          "properties": {
+            "state": {
+              "enum": [
+                "starting"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "title": "StartingMcpServerStartupStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "state": {
+              "enum": [
+                "ready"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "title": "ReadyMcpServerStartupStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "failed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "state": {
+              "enum": [
+                "cancelled"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "title": "CancelledMcpServerStartupStatus",
+          "type": "object"
+        }
+      ]
+    },
+    "McpServerStartupUpdatedNotification": {
+      "properties": {
+        "server": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/McpServerStartupStatus"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server",
+        "status",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -1396,6 +1548,36 @@
           "type": "object"
         }
       ]
+    },
+    "SkillsUpdatedNotification": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "StreamErrorNotification": {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/TurnError"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
     },
     "SubAgentSource": {
       "oneOf": [
@@ -2177,6 +2359,17 @@
       ],
       "type": "object"
     },
+    "ThreadShutdownCompletedNotification": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadStartedNotification": {
       "properties": {
         "thread": {
@@ -2327,6 +2520,52 @@
       },
       "required": [
         "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadUndoCompletedNotification": {
+      "properties": {
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "success",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "ThreadUndoStartedNotification": {
+      "properties": {
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId",
+        "turnId"
       ],
       "type": "object"
     },
@@ -2654,6 +2893,25 @@
         }
       ]
     },
+    "WarningNotification": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "WebSearchAction": {
       "oneOf": [
         {
@@ -2835,6 +3093,26 @@
       "properties": {
         "method": {
           "enum": [
+            "warning"
+          ],
+          "title": "WarningNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WarningNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "WarningNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "thread/started"
           ],
           "title": "Thread/startedNotificationMethod",
@@ -2955,6 +3233,66 @@
       "properties": {
         "method": {
           "enum": [
+            "thread/shutdown/completed"
+          ],
+          "title": "Thread/shutdown/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadShutdownCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/shutdown/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/undo/started"
+          ],
+          "title": "Thread/undo/startedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadUndoStartedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/undo/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/undo/completed"
+          ],
+          "title": "Thread/undo/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadUndoCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/undo/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "turn/started"
           ],
           "title": "Turn/startedNotificationMethod",
@@ -2989,6 +3327,26 @@
         "params"
       ],
       "title": "Turn/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "turn/streamError"
+          ],
+          "title": "Turn/streamErrorNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/StreamErrorNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Turn/streamErrorNotification",
       "type": "object"
     },
     {
@@ -3196,6 +3554,46 @@
       "properties": {
         "method": {
           "enum": [
+            "mcpServer/startup/updated"
+          ],
+          "title": "McpServer/startup/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpServerStartupUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "McpServer/startup/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "mcpServer/startup/completed"
+          ],
+          "title": "McpServer/startup/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpServerStartupCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "McpServer/startup/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "mcpServer/oauthLogin/completed"
           ],
           "title": "McpServer/oauthLogin/completedNotificationMethod",
@@ -3210,6 +3608,26 @@
         "params"
       ],
       "title": "McpServer/oauthLogin/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "skills/updated"
+          ],
+          "title": "Skills/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Skills/updatedNotification",
       "type": "object"
     },
     {
@@ -3391,6 +3809,26 @@
         "params"
       ],
       "title": "DeprecationNoticeNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "backgroundEvent"
+          ],
+          "title": "BackgroundEventNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/BackgroundEventNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "BackgroundEventNotification",
       "type": "object"
     },
     {

@@ -10,14 +10,17 @@
 
 use std::path::PathBuf;
 
+use codex_app_server_protocol as app_proto;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::protocol::Event;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use codex_utils_approval_presets::ApprovalPreset;
+use serde::Serialize;
 
+use crate::agent_command::AgentCommand;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
@@ -42,10 +45,39 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ThreadBootstrap {
+    pub(crate) thread: app_proto::Thread,
+    pub(crate) thread_id: ThreadId,
+    pub(crate) model: String,
+    pub(crate) model_provider_id: String,
+    pub(crate) approval_policy: AskForApproval,
+    pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) cwd: PathBuf,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
+    pub(crate) history_log_id: u64,
+    pub(crate) history_entry_count: usize,
+    pub(crate) forked_from_id: Option<ThreadId>,
+    pub(crate) network_proxy: Option<SessionNetworkProxyRuntime>,
+    pub(crate) rollout_path: Option<PathBuf>,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
-    CodexEvent(Event),
+    ThreadBootstrapped(ThreadBootstrap),
+    AppServerRequest {
+        thread_id: ThreadId,
+        request: app_proto::ServerRequest,
+    },
+    HistoryEntryReadResponse(app_proto::HistoryEntryReadResponse),
+    McpToolsListResponse(app_proto::McpToolsListResponse),
+    CustomPromptListResponse(app_proto::CustomPromptListResponse),
+    SkillsListResponse(app_proto::SkillsListResponse),
+    ThreadRollbackCompleted {
+        thread_id: ThreadId,
+        num_turns: u32,
+    },
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
@@ -74,9 +106,9 @@ pub(crate) enum AppEvent {
     /// Request to exit the application due to a fatal error.
     FatalExitRequest(String),
 
-    /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
+    /// Forward an agent command to the agent loop. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
-    CodexOp(codex_protocol::protocol::Op),
+    AgentCommand(AgentCommand),
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
@@ -381,7 +413,7 @@ pub(crate) enum ExitMode {
     ShutdownFirst,
     /// Exit the UI loop immediately without waiting for shutdown.
     ///
-    /// This skips `Op::Shutdown`, so any in-flight work may be dropped and
+    /// This skips `AgentCommand::Shutdown`, so any in-flight work may be dropped and
     /// cleanup that normally runs before `ShutdownComplete` can be missed.
     Immediate,
 }

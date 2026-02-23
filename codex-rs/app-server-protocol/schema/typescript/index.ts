@@ -239,4 +239,5 @@ export type { WebSearchBeginEvent } from "./WebSearchBeginEvent";
 export type { WebSearchEndEvent } from "./WebSearchEndEvent";
 export type { WebSearchItem } from "./WebSearchItem";
 export type { WebSearchMode } from "./WebSearchMode";
+export type { WindowsSandboxLevel } from "./WindowsSandboxLevel";
 export * as v2 from "./v2";

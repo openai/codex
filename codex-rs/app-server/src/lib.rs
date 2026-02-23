@@ -56,6 +56,7 @@ mod bespoke_event_handling;
 mod codex_message_processor;
 mod config_api;
 mod dynamic_tools;
+mod embedded_session;
 mod error_code;
 mod filters;
 mod fuzzy_file_search;
@@ -67,6 +68,9 @@ mod thread_status;
 mod transport;
 
 pub use crate::transport::AppServerTransport;
+pub use embedded_session::EmbeddedSessionClient;
+pub use embedded_session::EmbeddedSessionClientArgs;
+pub use embedded_session::EmbeddedSessionMessage;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
 

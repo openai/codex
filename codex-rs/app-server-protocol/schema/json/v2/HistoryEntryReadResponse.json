@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "HistoryEntry": {
+      "properties": {
+        "conversationId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "ts": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "conversationId",
+        "text",
+        "ts"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "entry": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/HistoryEntry"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "logId": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "offset": {
+      "format": "uint",
+      "minimum": 0.0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "logId",
+    "offset"
+  ],
+  "title": "HistoryEntryReadResponse",
+  "type": "object"
+}

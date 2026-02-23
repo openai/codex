@@ -5,6 +5,7 @@
 //! changes show up as stable, reviewable diffs.
 
 use super::*;
+use crate::agent_command::AgentCommand;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
@@ -68,7 +69,6 @@ use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
@@ -529,8 +529,8 @@ async fn submission_preserves_text_elements_and_local_images() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let items = match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => items,
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+        AgentCommand::UserTurn { items, .. } => items,
+        other => panic!("expected AgentCommand::UserTurn, got {other:?}"),
     };
     assert_eq!(items.len(), 2);
     assert_eq!(
@@ -615,8 +615,8 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let items = match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => items,
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+        AgentCommand::UserTurn { items, .. } => items,
+        other => panic!("expected AgentCommand::UserTurn, got {other:?}"),
     };
     assert_eq!(items.len(), 3);
     assert_eq!(
@@ -698,8 +698,8 @@ async fn enter_with_only_remote_images_submits_user_turn() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let items = match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => items,
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+        AgentCommand::UserTurn { items, .. } => items,
+        other => panic!("expected AgentCommand::UserTurn, got {other:?}"),
     };
     assert_eq!(
         items,
@@ -907,8 +907,8 @@ async fn submission_prefers_selected_duplicate_skill_path() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let items = match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => items,
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+        AgentCommand::UserTurn { items, .. } => items,
+        other => panic!("expected AgentCommand::UserTurn, got {other:?}"),
     };
     let selected_skill_paths = items
         .iter()
@@ -1197,13 +1197,13 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
+        AgentCommand::UserTurn {
             collaboration_mode: Some(CollaborationMode { mode, .. }),
             personality: None,
             ..
         } => assert_eq!(mode, expected_mode),
         other => {
-            panic!("expected Op::UserTurn with active mode, got {other:?}")
+            panic!("expected AgentCommand::UserTurn with active mode, got {other:?}")
         }
     }
     assert_eq!(chat.active_collaboration_mode_kind(), expected_mode);
@@ -1525,7 +1525,18 @@ async fn helpers_are_available_and_do_not_panic() {
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
-    let mut w = ChatWidget::new(init, thread_manager);
+    let app_server_client = Arc::new(codex_app_server::EmbeddedSessionClient::new(
+        codex_app_server::EmbeddedSessionClientArgs {
+            auth_manager: codex_core::test_support::auth_manager_from_auth(
+                CodexAuth::from_api_key("test"),
+            ),
+            thread_manager,
+            config: init.config.clone(),
+            cli_overrides: Vec::new(),
+            feedback: codex_feedback::CodexFeedback::new(),
+        },
+    ));
+    let mut w = ChatWidget::new(init, app_server_client);
     // Basic construction sanity.
     let _ = &mut w;
 }
@@ -1552,11 +1563,11 @@ async fn make_chatwidget_manual(
 ) -> (
     ChatWidget,
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-    tokio::sync::mpsc::UnboundedReceiver<Op>,
+    tokio::sync::mpsc::UnboundedReceiver<AgentCommand>,
 ) {
     let (tx_raw, rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(tx_raw);
-    let (op_tx, op_rx) = unbounded_channel::<Op>();
+    let (op_tx, op_rx) = unbounded_channel::<AgentCommand>();
     let mut cfg = test_config().await;
     let resolved_model = model_override
         .map(str::to_owned)
@@ -1673,12 +1684,12 @@ async fn make_chatwidget_manual(
     (widget, rx, op_rx)
 }
 
-// ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper
+// ChatWidget may emit other `AgentCommand`s (e.g. history/logging updates) on the same channel; this helper
 // filters until we see a submission op.
-fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
+fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentCommand>) -> AgentCommand {
     loop {
         match op_rx.try_recv() {
-            Ok(op @ Op::UserTurn { .. }) => return op,
+            Ok(op @ AgentCommand::UserTurn { .. }) => return op,
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected a submit op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),
@@ -1686,10 +1697,10 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
     }
 }
 
-fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
+fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentCommand>) {
     while let Ok(op) = op_rx.try_recv() {
         assert!(
-            !matches!(op, Op::UserTurn { .. }),
+            !matches!(op, AgentCommand::UserTurn { .. }),
             "unexpected submit op: {op:?}"
         );
     }
@@ -1736,7 +1747,7 @@ pub(crate) async fn make_chatwidget_manual_with_sender() -> (
     ChatWidget,
     AppEventSender,
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-    tokio::sync::mpsc::UnboundedReceiver<Op>,
+    tokio::sync::mpsc::UnboundedReceiver<AgentCommand>,
 ) {
     let (widget, rx, op_rx) = make_chatwidget_manual(None).await;
     let app_event_tx = widget.app_event_tx.clone();
@@ -2162,7 +2173,7 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
     chat.submit_user_message_with_mode("Implement the plan.".to_string(), default_mode);
 
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
+        AgentCommand::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
                     mode: ModeKind::Default,
@@ -2172,7 +2183,7 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with default collab mode, got {other:?}")
+            panic!("expected AgentCommand::UserTurn with default collab mode, got {other:?}")
         }
     }
 }
@@ -2459,7 +2470,7 @@ async fn submit_user_message_with_mode_allows_same_mode_during_running_turn() {
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert!(chat.queued_user_messages.is_empty());
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
+        AgentCommand::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
                     mode: ModeKind::Plan,
@@ -2469,7 +2480,7 @@ async fn submit_user_message_with_mode_allows_same_mode_during_running_turn() {
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with plan collab mode, got {other:?}")
+            panic!("expected AgentCommand::UserTurn with plan collab mode, got {other:?}")
         }
     }
 }
@@ -2494,13 +2505,13 @@ async fn submit_user_message_with_mode_submits_when_plan_stream_is_not_active() 
     assert_eq!(chat.active_collaboration_mode_kind(), expected_mode);
     assert!(chat.queued_user_messages.is_empty());
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
+        AgentCommand::UserTurn {
             collaboration_mode: Some(CollaborationMode { mode, .. }),
             personality: None,
             ..
         } => assert_eq!(mode, expected_mode),
         other => {
-            panic!("expected Op::UserTurn with default collab mode, got {other:?}")
+            panic!("expected AgentCommand::UserTurn with default collab mode, got {other:?}")
         }
     }
 }
@@ -3179,8 +3190,8 @@ async fn streaming_final_answer_keeps_task_running_state() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     match op_rx.try_recv() {
-        Ok(Op::Interrupt) => {}
-        other => panic!("expected Op::Interrupt, got {other:?}"),
+        Ok(AgentCommand::Interrupt) => {}
+        other => panic!("expected AgentCommand::Interrupt, got {other:?}"),
     }
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 }
@@ -3367,11 +3378,11 @@ async fn steer_enter_submits_when_plan_stream_is_not_active() {
 
     assert!(chat.queued_user_messages.is_empty());
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
+        AgentCommand::UserTurn {
             personality: Some(Personality::Pragmatic),
             ..
         } => {}
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+        other => panic!("expected AgentCommand::UserTurn, got {other:?}"),
     }
 }
 
@@ -4113,7 +4124,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
         .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
+        AgentCommand::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
                     mode: ModeKind::Default,
@@ -4123,7 +4134,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with code collab mode, got {other:?}")
+            panic!("expected AgentCommand::UserTurn with code collab mode, got {other:?}")
         }
     }
 
@@ -4131,7 +4142,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
         .set_composer_text("follow up".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
+        AgentCommand::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
                     mode: ModeKind::Default,
@@ -4141,7 +4152,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with code collab mode, got {other:?}")
+            panic!("expected AgentCommand::UserTurn with code collab mode, got {other:?}")
         }
     }
 }
@@ -4195,8 +4206,8 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let items = match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => items,
-        other => panic!("expected Op::UserTurn, got {other:?}"),
+        AgentCommand::UserTurn { items, .. } => items,
+        other => panic!("expected AgentCommand::UserTurn, got {other:?}"),
     };
     assert_eq!(items.len(), 1);
     assert_eq!(
@@ -4247,7 +4258,18 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         otel_manager,
     };
 
-    let chat = ChatWidget::new(init, thread_manager);
+    let app_server_client = Arc::new(codex_app_server::EmbeddedSessionClient::new(
+        codex_app_server::EmbeddedSessionClientArgs {
+            auth_manager: codex_core::test_support::auth_manager_from_auth(
+                CodexAuth::from_api_key("test"),
+            ),
+            thread_manager,
+            config: init.config.clone(),
+            cli_overrides: Vec::new(),
+            feedback: codex_feedback::CodexFeedback::new(),
+        },
+    ));
+    let chat = ChatWidget::new(init, app_server_client);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_model(), resolved_model);
 }
@@ -4296,7 +4318,18 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         otel_manager,
     };
 
-    let chat = ChatWidget::new(init, thread_manager);
+    let app_server_client = Arc::new(codex_app_server::EmbeddedSessionClient::new(
+        codex_app_server::EmbeddedSessionClientArgs {
+            auth_manager: codex_core::test_support::auth_manager_from_auth(
+                CodexAuth::from_api_key("test"),
+            ),
+            thread_manager,
+            config: init.config.clone(),
+            cli_overrides: Vec::new(),
+            feedback: codex_feedback::CodexFeedback::new(),
+        },
+    ));
+    let chat = ChatWidget::new(init, app_server_client);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_model(), resolved_model);
 }
@@ -4363,7 +4396,7 @@ async fn collab_mode_is_sent_after_enabling() {
         .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
+        AgentCommand::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
                     mode: ModeKind::Default,
@@ -4373,7 +4406,7 @@ async fn collab_mode_is_sent_after_enabling() {
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn, got {other:?}")
+            panic!("expected AgentCommand::UserTurn, got {other:?}")
         }
     }
 }
@@ -4387,12 +4420,14 @@ async fn collab_mode_toggle_on_applies_default_preset() {
         .set_composer_text("before toggle".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
+        AgentCommand::UserTurn {
             collaboration_mode: None,
             personality: Some(Personality::Pragmatic),
             ..
         } => {}
-        other => panic!("expected Op::UserTurn without collaboration_mode, got {other:?}"),
+        other => {
+            panic!("expected AgentCommand::UserTurn without collaboration_mode, got {other:?}")
+        }
     }
 
     chat.set_feature_enabled(Feature::CollaborationModes, true);
@@ -4401,7 +4436,7 @@ async fn collab_mode_toggle_on_applies_default_preset() {
         .set_composer_text("after toggle".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
+        AgentCommand::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
                     mode: ModeKind::Default,
@@ -4411,7 +4446,7 @@ async fn collab_mode_toggle_on_applies_default_preset() {
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with default collaboration_mode, got {other:?}")
+            panic!("expected AgentCommand::UserTurn with default collaboration_mode, got {other:?}")
         }
     }
 
@@ -4431,11 +4466,11 @@ async fn user_turn_includes_personality_from_config() {
         .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
+        AgentCommand::UserTurn {
             personality: Some(Personality::Friendly),
             ..
         } => {}
-        other => panic!("expected Op::UserTurn with friendly personality, got {other:?}"),
+        other => panic!("expected AgentCommand::UserTurn with friendly personality, got {other:?}"),
     }
 }
 
@@ -4463,7 +4498,7 @@ async fn slash_clean_submits_background_terminal_cleanup() {
 
     chat.dispatch_command(SlashCommand::Clean);
 
-    assert_matches!(op_rx.try_recv(), Ok(Op::CleanBackgroundTerminals));
+    assert_matches!(op_rx.try_recv(), Ok(AgentCommand::CleanBackgroundTerminals));
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected cleanup confirmation message");
     let rendered = lines_to_single_string(&cells[0]);
@@ -4509,7 +4544,7 @@ async fn slash_memory_drop_submits_drop_memories_op() {
 
     chat.dispatch_command(SlashCommand::MemoryDrop);
 
-    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
+    assert_matches!(op_rx.try_recv(), Ok(AgentCommand::DropMemories));
 }
 
 #[tokio::test]
@@ -4518,7 +4553,7 @@ async fn slash_memory_update_submits_update_memories_op() {
 
     chat.dispatch_command(SlashCommand::MemoryUpdate);
 
-    assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
+    assert_matches!(op_rx.try_recv(), Ok(AgentCommand::UpdateMemories));
 }
 
 #[tokio::test]
@@ -4727,7 +4762,7 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
     );
 }
 
-/// Submitting the custom prompt view sends Op::Review with the typed prompt
+/// Submitting the custom prompt view sends AgentCommand::Review with the typed prompt
 /// and uses the same text for the user-facing hint.
 #[tokio::test]
 async fn custom_prompt_submit_sends_review_op() {
@@ -4738,10 +4773,10 @@ async fn custom_prompt_submit_sends_review_op() {
     chat.handle_paste("  please audit dependencies  ".to_string());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    // Expect AppEvent::CodexOp(Op::Review { .. }) with trimmed prompt
+    // Expect AppEvent::AgentCommand(AgentCommand::Review { .. }) with trimmed prompt
     let evt = rx.try_recv().expect("expected one app event");
     match evt {
-        AppEvent::CodexOp(Op::Review { review_request }) => {
+        AppEvent::AgentCommand(AgentCommand::Review { review_request }) => {
             assert_eq!(
                 review_request,
                 ReviewRequest {
@@ -5615,7 +5650,7 @@ async fn server_overloaded_error_does_not_switch_models() {
     }
 
     while let Ok(event) = op_rx.try_recv() {
-        if let Op::OverrideTurnContext { model, .. } = event {
+        if let AgentCommand::OverrideTurnContext { model, .. } = event {
             assert!(
                 model.is_none(),
                 "did not expect OverrideTurnContext model update on server-overloaded error"
@@ -6061,7 +6096,7 @@ async fn approvals_popup_navigation_skips_disabled() {
     assert!(
         app_events.iter().any(|ev| matches!(
             ev,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
+            AppEvent::AgentCommand(AgentCommand::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::OnRequest),
                 personality: None,
                 ..
@@ -6072,7 +6107,7 @@ async fn approvals_popup_navigation_skips_disabled() {
     assert!(
         !app_events.iter().any(|ev| matches!(
             ev,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
+            AppEvent::AgentCommand(AgentCommand::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::Never),
                 personality: None,
                 ..
@@ -7115,7 +7150,7 @@ async fn apply_patch_approval_sends_op_with_call_id() {
     // Expect a CodexOp with PatchApproval carrying the call id.
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
-        if let AppEvent::CodexOp(Op::PatchApproval { id, decision }) = app_ev {
+        if let AppEvent::AgentCommand(AgentCommand::PatchApproval { id, decision }) = app_ev {
             assert_eq!(id, "call-999");
             assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
             found = true;
@@ -7148,9 +7183,9 @@ async fn apply_patch_full_flow_integration_like() {
 
     // 2) User approves via 'y' and App receives a CodexOp
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
-    let mut maybe_op: Option<Op> = None;
+    let mut maybe_op: Option<AgentCommand> = None;
     while let Ok(app_ev) = rx.try_recv() {
-        if let AppEvent::CodexOp(op) = app_ev {
+        if let AppEvent::AgentCommand(op) = app_ev {
             maybe_op = Some(op);
             break;
         }
@@ -7163,7 +7198,7 @@ async fn apply_patch_full_flow_integration_like() {
         .try_recv()
         .expect("expected op forwarded to codex channel");
     match forwarded {
-        Op::PatchApproval { id, decision } => {
+        AgentCommand::PatchApproval { id, decision } => {
             assert_eq!(id, "call-1");
             assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
         }

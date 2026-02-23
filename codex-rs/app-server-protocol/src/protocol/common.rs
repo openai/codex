@@ -223,6 +223,35 @@ client_request_definitions! {
         params: v2::ThreadRollbackParams,
         response: v2::ThreadRollbackResponse,
     },
+    ThreadContextUpdate => "thread/context/update" {
+        params: v2::ThreadContextUpdateParams,
+        inspect_params: true,
+        response: v2::ThreadContextUpdateResponse,
+    },
+    ThreadShutdown => "thread/shutdown" {
+        params: v2::ThreadShutdownParams,
+        response: v2::ThreadShutdownResponse,
+    },
+    ThreadUndo => "thread/undo" {
+        params: v2::ThreadUndoParams,
+        response: v2::ThreadUndoResponse,
+    },
+    ThreadConfigReload => "thread/config/reload" {
+        params: v2::ThreadConfigReloadParams,
+        response: v2::ThreadConfigReloadResponse,
+    },
+    ThreadMemoriesDrop => "thread/memories/drop" {
+        params: v2::ThreadMemoriesDropParams,
+        response: v2::ThreadMemoriesDropResponse,
+    },
+    ThreadMemoriesUpdate => "thread/memories/update" {
+        params: v2::ThreadMemoriesUpdateParams,
+        response: v2::ThreadMemoriesUpdateResponse,
+    },
+    ThreadUserShellCommandRun => "thread/userShellCommand/run" {
+        params: v2::ThreadUserShellCommandRunParams,
+        response: v2::ThreadUserShellCommandRunResponse,
+    },
     ThreadList => "thread/list" {
         params: v2::ThreadListParams,
         response: v2::ThreadListResponse,
@@ -234,6 +263,22 @@ client_request_definitions! {
     ThreadRead => "thread/read" {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
+    },
+    CustomPromptList => "customPrompt/list" {
+        params: v2::CustomPromptListParams,
+        response: v2::CustomPromptListResponse,
+    },
+    McpToolsList => "mcpTools/list" {
+        params: v2::McpToolsListParams,
+        response: v2::McpToolsListResponse,
+    },
+    HistoryAppend => "history/append" {
+        params: v2::HistoryAppendParams,
+        response: v2::HistoryAppendResponse,
+    },
+    HistoryEntryRead => "history/entry/read" {
+        params: v2::HistoryEntryReadParams,
+        response: v2::HistoryEntryReadResponse,
     },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
@@ -671,6 +716,12 @@ server_request_definitions! {
         response: v2::ToolRequestUserInputResponse,
     },
 
+    /// Request the user to resolve an MCP elicitation prompt.
+    McpElicitationRequest => "item/mcpElicitation/requestDecision" {
+        params: v2::McpElicitationRequestParams,
+        response: v2::McpElicitationRequestResponse,
+    },
+
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,
@@ -773,14 +824,19 @@ pub struct FuzzyFileSearchSessionCompletedNotification {
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
+    Warning => "warning" (v2::WarningNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
+    ThreadShutdownCompleted => "thread/shutdown/completed" (v2::ThreadShutdownCompletedNotification),
+    ThreadUndoStarted => "thread/undo/started" (v2::ThreadUndoStartedNotification),
+    ThreadUndoCompleted => "thread/undo/completed" (v2::ThreadUndoCompletedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
+    StreamError => "turn/streamError" (v2::StreamErrorNotification),
     TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
     TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
@@ -794,7 +850,10 @@ server_notification_definitions! {
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
     FileChangeOutputDelta => "item/fileChange/outputDelta" (v2::FileChangeOutputDeltaNotification),
     McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
+    McpServerStartupUpdated => "mcpServer/startup/updated" (v2::McpServerStartupUpdatedNotification),
+    McpServerStartupCompleted => "mcpServer/startup/completed" (v2::McpServerStartupCompletedNotification),
     McpServerOauthLoginCompleted => "mcpServer/oauthLogin/completed" (v2::McpServerOauthLoginCompletedNotification),
+    SkillsUpdated => "skills/updated" (v2::SkillsUpdatedNotification),
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     AppListUpdated => "app/list/updated" (v2::AppListUpdatedNotification),
@@ -805,6 +864,7 @@ server_notification_definitions! {
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
+    BackgroundEvent => "backgroundEvent" (v2::BackgroundEventNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
     FuzzyFileSearchSessionCompleted => "fuzzyFileSearch/sessionCompleted" (FuzzyFileSearchSessionCompletedNotification),

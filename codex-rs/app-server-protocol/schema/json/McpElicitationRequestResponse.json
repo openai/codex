@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "McpElicitationDecision": {
+      "enum": [
+        "accept",
+        "decline",
+        "cancel"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "decision": {
+      "$ref": "#/definitions/McpElicitationDecision"
+    }
+  },
+  "required": [
+    "decision"
+  ],
+  "title": "McpElicitationRequestResponse",
+  "type": "object"
+}

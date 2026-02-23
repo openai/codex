@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::RequestId;
 use crate::protocol::common::AuthMode;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::account::PlanType;
+use codex_protocol::approvals::ElicitationAction as CoreElicitationAction;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
@@ -15,11 +17,14 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::custom_prompts::CustomPrompt as CoreCustomPrompt;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
+use codex_protocol::message_history::HistoryEntry as CoreHistoryEntry;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
@@ -33,6 +38,10 @@ use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
+use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
+use codex_protocol::protocol::McpListToolsResponseEvent as CoreMcpListToolsResponseEvent;
+use codex_protocol::protocol::McpStartupFailure as CoreMcpStartupFailure;
+use codex_protocol::protocol::McpStartupStatus as CoreMcpStartupStatus;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
@@ -40,6 +49,7 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RejectConfig as CoreRejectConfig;
+use codex_protocol::protocol::SessionNetworkProxyRuntime as CoreSessionNetworkProxyRuntime;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
 use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
@@ -1616,6 +1626,12 @@ pub struct ThreadStartResponse {
     pub approval_policy: AskForApproval,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[ts(type = "number")]
+    pub history_log_id: u64,
+    #[ts(type = "number")]
+    pub history_entry_count: usize,
+    pub forked_from_thread_id: Option<String>,
+    pub network_proxy: Option<SessionNetworkProxyRuntime>,
 }
 
 #[derive(
@@ -1685,6 +1701,12 @@ pub struct ThreadResumeResponse {
     pub approval_policy: AskForApproval,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[ts(type = "number")]
+    pub history_log_id: u64,
+    #[ts(type = "number")]
+    pub history_entry_count: usize,
+    pub forked_from_thread_id: Option<String>,
+    pub network_proxy: Option<SessionNetworkProxyRuntime>,
 }
 
 #[derive(
@@ -1743,6 +1765,12 @@ pub struct ThreadForkResponse {
     pub approval_policy: AskForApproval,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[ts(type = "number")]
+    pub history_log_id: u64,
+    #[ts(type = "number")]
+    pub history_entry_count: usize,
+    pub forked_from_thread_id: Option<String>,
+    pub network_proxy: Option<SessionNetworkProxyRuntime>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1960,6 +1988,269 @@ pub struct ThreadReadParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadReadResponse {
     pub thread: Thread,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SessionNetworkProxyRuntime {
+    pub http_addr: String,
+    pub socks_addr: String,
+    pub admin_addr: String,
+}
+
+impl From<CoreSessionNetworkProxyRuntime> for SessionNetworkProxyRuntime {
+    fn from(value: CoreSessionNetworkProxyRuntime) -> Self {
+        Self {
+            http_addr: value.http_addr,
+            socks_addr: value.socks_addr,
+            admin_addr: value.admin_addr,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadContextSnapshot {
+    pub thread_id: String,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadContextUpdateParams {
+    pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
+    #[ts(optional = nullable)]
+    pub approval_policy: Option<AskForApproval>,
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<SandboxPolicy>,
+    #[ts(optional = nullable)]
+    pub windows_sandbox_level: Option<WindowsSandboxLevel>,
+    #[ts(optional = nullable)]
+    pub model: Option<String>,
+    #[ts(optional = nullable)]
+    pub effort: Option<Option<ReasoningEffort>>,
+    #[ts(optional = nullable)]
+    pub summary: Option<ReasoningSummary>,
+    #[ts(optional = nullable)]
+    pub personality: Option<Personality>,
+    #[experimental("thread/context/update.collaborationMode")]
+    #[ts(optional = nullable)]
+    pub collaboration_mode: Option<CollaborationMode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadContextUpdateResponse {
+    pub context: ThreadContextSnapshot,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadShutdownParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadShutdownResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUndoParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUndoResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadConfigReloadParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadConfigReloadResponse {
+    pub context: ThreadContextSnapshot,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoriesDropParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoriesDropResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoriesUpdateParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadMemoriesUpdateResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUserShellCommandRunParams {
+    pub thread_id: String,
+    pub command: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUserShellCommandRunResponse {
+    pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HistoryAppendParams {
+    pub thread_id: String,
+    pub text: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HistoryAppendResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HistoryEntryReadParams {
+    #[ts(type = "number")]
+    pub log_id: u64,
+    #[ts(type = "number")]
+    pub offset: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HistoryEntry {
+    pub conversation_id: String,
+    #[ts(type = "number")]
+    pub ts: u64,
+    pub text: String,
+}
+
+impl From<CoreHistoryEntry> for HistoryEntry {
+    fn from(value: CoreHistoryEntry) -> Self {
+        Self {
+            conversation_id: value.conversation_id,
+            ts: value.ts,
+            text: value.text,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct HistoryEntryReadResponse {
+    #[ts(type = "number")]
+    pub log_id: u64,
+    #[ts(type = "number")]
+    pub offset: usize,
+    pub entry: Option<HistoryEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CustomPromptListParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CustomPrompt {
+    pub name: String,
+    pub path: PathBuf,
+    pub content: String,
+    pub description: Option<String>,
+    pub argument_hint: Option<String>,
+}
+
+impl From<CoreCustomPrompt> for CustomPrompt {
+    fn from(value: CoreCustomPrompt) -> Self {
+        Self {
+            name: value.name,
+            path: value.path,
+            content: value.content,
+            description: value.description,
+            argument_hint: value.argument_hint,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CustomPromptListResponse {
+    pub data: Vec<CustomPrompt>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpToolsListParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpToolsListResponse {
+    /// Fully qualified tool name -> tool definition.
+    pub tools: HashMap<String, McpTool>,
+    /// Known resources grouped by server name.
+    pub resources: HashMap<String, Vec<McpResource>>,
+    /// Known resource templates grouped by server name.
+    pub resource_templates: HashMap<String, Vec<McpResourceTemplate>>,
+    /// Authentication status for each configured MCP server.
+    pub auth_statuses: HashMap<String, CoreMcpAuthStatus>,
+}
+
+impl From<CoreMcpListToolsResponseEvent> for McpToolsListResponse {
+    fn from(value: CoreMcpListToolsResponseEvent) -> Self {
+        Self {
+            tools: value.tools,
+            resources: value.resources,
+            resource_templates: value.resource_templates,
+            auth_statuses: value.auth_statuses,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3350,6 +3641,124 @@ pub struct WindowsSandboxSetupCompletedNotification {
     pub error: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WarningNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct BackgroundEventNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct StreamErrorNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub error: TurnError,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUndoStartedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub message: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUndoCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub success: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", tag = "state")]
+#[ts(rename_all = "camelCase", tag = "state")]
+#[ts(export_to = "v2/")]
+pub enum McpServerStartupStatus {
+    Starting,
+    Ready,
+    Failed { error: String },
+    Cancelled,
+}
+
+impl From<CoreMcpStartupStatus> for McpServerStartupStatus {
+    fn from(value: CoreMcpStartupStatus) -> Self {
+        match value {
+            CoreMcpStartupStatus::Starting => Self::Starting,
+            CoreMcpStartupStatus::Ready => Self::Ready,
+            CoreMcpStartupStatus::Failed { error } => Self::Failed { error },
+            CoreMcpStartupStatus::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerStartupFailure {
+    pub server: String,
+    pub error: String,
+}
+
+impl From<CoreMcpStartupFailure> for McpServerStartupFailure {
+    fn from(value: CoreMcpStartupFailure) -> Self {
+        Self {
+            server: value.server,
+            error: value.error,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerStartupUpdatedNotification {
+    pub thread_id: String,
+    pub server: String,
+    pub status: McpServerStartupStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerStartupCompletedNotification {
+    pub thread_id: String,
+    pub ready: Vec<String>,
+    pub failed: Vec<McpServerStartupFailure>,
+    pub cancelled: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsUpdatedNotification {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadShutdownCompletedNotification {
+    pub thread_id: String,
+}
+
 /// Deprecated: Use `ContextCompaction` item type instead.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -3523,6 +3932,54 @@ pub struct ToolRequestUserInputAnswer {
 /// EXPERIMENTAL. Response payload mapping question ids to answers.
 pub struct ToolRequestUserInputResponse {
     pub answers: HashMap<String, ToolRequestUserInputAnswer>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum McpElicitationDecision {
+    Accept,
+    Decline,
+    Cancel,
+}
+
+impl McpElicitationDecision {
+    pub fn to_core(self) -> CoreElicitationAction {
+        match self {
+            Self::Accept => CoreElicitationAction::Accept,
+            Self::Decline => CoreElicitationAction::Decline,
+            Self::Cancel => CoreElicitationAction::Cancel,
+        }
+    }
+}
+
+impl From<CoreElicitationAction> for McpElicitationDecision {
+    fn from(value: CoreElicitationAction) -> Self {
+        match value {
+            CoreElicitationAction::Accept => Self::Accept,
+            CoreElicitationAction::Decline => Self::Decline,
+            CoreElicitationAction::Cancel => Self::Cancel,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationRequestParams {
+    pub thread_id: String,
+    pub server_name: String,
+    #[ts(type = "string | number")]
+    pub request_id: RequestId,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationRequestResponse {
+    pub decision: McpElicitationDecision,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

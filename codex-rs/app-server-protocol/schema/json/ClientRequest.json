@@ -338,6 +338,9 @@
         }
       ]
     },
+    "CustomPromptListParams": {
+      "type": "object"
+    },
     "DynamicToolSpec": {
       "properties": {
         "description": {
@@ -562,6 +565,40 @@
         "personal"
       ],
       "type": "string"
+    },
+    "HistoryAppendParams": {
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "HistoryEntryReadParams": {
+      "properties": {
+        "logId": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "offset": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "logId",
+        "offset"
+      ],
+      "type": "object"
     },
     "InitializeCapabilities": {
       "description": "Client-declared capabilities negotiated during initialize.",
@@ -789,6 +826,9 @@
       "required": [
         "name"
       ],
+      "type": "object"
+    },
+    "McpToolsListParams": {
       "type": "object"
     },
     "MergeStrategy": {
@@ -1808,6 +1848,107 @@
       ],
       "type": "object"
     },
+    "ThreadConfigReloadParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadContextUpdateParams": {
+      "properties": {
+        "approvalPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AskForApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "personality": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Personality"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sandboxPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "windowsSandboxLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WindowsSandboxLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadForkParams": {
       "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
       "properties": {
@@ -1965,6 +2106,28 @@
       },
       "type": "object"
     },
+    "ThreadMemoriesDropParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadMemoriesUpdateParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadReadParams": {
       "properties": {
         "includeTurns": {
@@ -2094,6 +2257,17 @@
       ],
       "type": "object"
     },
+    "ThreadShutdownParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadSortKey": {
       "enum": [
         "created_at",
@@ -2201,6 +2375,32 @@
         }
       },
       "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadUndoParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadUserShellCommandRunParams": {
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
         "threadId"
       ],
       "type": "object"
@@ -2554,6 +2754,14 @@
         }
       ]
     },
+    "WindowsSandboxLevel": {
+      "enum": [
+        "disabled",
+        "restricted-token",
+        "elevated"
+      ],
+      "type": "string"
+    },
     "WindowsSandboxSetupMode": {
       "enum": [
         "elevated",
@@ -2799,6 +3007,174 @@
         },
         "method": {
           "enum": [
+            "thread/context/update"
+          ],
+          "title": "Thread/context/updateRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadContextUpdateParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/context/updateRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/shutdown"
+          ],
+          "title": "Thread/shutdownRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadShutdownParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/shutdownRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/undo"
+          ],
+          "title": "Thread/undoRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadUndoParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/undoRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/config/reload"
+          ],
+          "title": "Thread/config/reloadRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadConfigReloadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/config/reloadRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/memories/drop"
+          ],
+          "title": "Thread/memories/dropRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadMemoriesDropParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/memories/dropRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/memories/update"
+          ],
+          "title": "Thread/memories/updateRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadMemoriesUpdateParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/memories/updateRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/userShellCommand/run"
+          ],
+          "title": "Thread/userShellCommand/runRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadUserShellCommandRunParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/userShellCommand/runRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "thread/list"
           ],
           "title": "Thread/listRequestMethod",
@@ -2862,6 +3238,102 @@
         "params"
       ],
       "title": "Thread/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "customPrompt/list"
+          ],
+          "title": "CustomPrompt/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CustomPromptListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "CustomPrompt/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "mcpTools/list"
+          ],
+          "title": "McpTools/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpToolsListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "McpTools/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "history/append"
+          ],
+          "title": "History/appendRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/HistoryAppendParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "History/appendRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "history/entry/read"
+          ],
+          "title": "History/entry/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/HistoryEntryReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "History/entry/readRequest",
       "type": "object"
     },
     {

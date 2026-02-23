@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use crate::agent_command::AgentCommand;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
@@ -22,7 +24,6 @@ use codex_protocol::protocol::ElicitationAction;
 use codex_protocol::protocol::ExecPolicyAmendment;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkApprovalContext;
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -63,7 +64,7 @@ pub(crate) enum ApprovalRequest {
 pub(crate) struct ApprovalOverlay {
     current_request: Option<ApprovalRequest>,
     current_variant: Option<ApprovalVariant>,
-    queue: Vec<ApprovalRequest>,
+    queue: VecDeque<ApprovalRequest>,
     app_event_tx: AppEventSender,
     list: ListSelectionView,
     options: Vec<ApprovalOption>,
@@ -77,7 +78,7 @@ impl ApprovalOverlay {
         let mut view = Self {
             current_request: None,
             current_variant: None,
-            queue: Vec::new(),
+            queue: VecDeque::new(),
             app_event_tx: app_event_tx.clone(),
             list: ListSelectionView::new(Default::default(), app_event_tx),
             options: Vec::new(),
@@ -90,7 +91,7 @@ impl ApprovalOverlay {
     }
 
     pub fn enqueue_request(&mut self, req: ApprovalRequest) {
-        self.queue.push(req);
+        self.queue.push_back(req);
     }
 
     fn set_current(&mut self, request: ApprovalRequest) {
@@ -172,6 +173,27 @@ impl ApprovalOverlay {
         (options, params)
     }
 
+    fn dispatch_variant_decision(&self, variant: &ApprovalVariant, decision: ApprovalDecision) {
+        match (variant, decision) {
+            (ApprovalVariant::Exec { id, command, .. }, ApprovalDecision::Review(decision)) => {
+                self.handle_exec_decision(id, command, decision);
+            }
+            (ApprovalVariant::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
+                self.handle_patch_decision(id, decision);
+            }
+            (
+                ApprovalVariant::McpElicitation {
+                    server_name,
+                    request_id,
+                },
+                ApprovalDecision::McpElicitation(decision),
+            ) => {
+                self.handle_elicitation_decision(server_name, request_id, decision);
+            }
+            _ => {}
+        }
+    }
+
     fn apply_selection(&mut self, actual_idx: usize) {
         if self.current_complete {
             return;
@@ -180,24 +202,7 @@ impl ApprovalOverlay {
             return;
         };
         if let Some(variant) = self.current_variant.as_ref() {
-            match (variant, &option.decision) {
-                (ApprovalVariant::Exec { id, command, .. }, ApprovalDecision::Review(decision)) => {
-                    self.handle_exec_decision(id, command, decision.clone());
-                }
-                (ApprovalVariant::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
-                    self.handle_patch_decision(id, decision.clone());
-                }
-                (
-                    ApprovalVariant::McpElicitation {
-                        server_name,
-                        request_id,
-                    },
-                    ApprovalDecision::McpElicitation(decision),
-                ) => {
-                    self.handle_elicitation_decision(server_name, request_id, *decision);
-                }
-                _ => {}
-            }
+            self.dispatch_variant_decision(variant, option.decision.clone());
         }
 
         self.current_complete = true;
@@ -207,18 +212,20 @@ impl ApprovalOverlay {
     fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
         let cell = history_cell::new_approval_decision_cell(command.to_vec(), decision.clone());
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
-        self.app_event_tx.send(AppEvent::CodexOp(Op::ExecApproval {
-            id: id.to_string(),
-            turn_id: None,
-            decision,
-        }));
+        self.app_event_tx
+            .send(AppEvent::AgentCommand(AgentCommand::ExecApproval {
+                id: id.to_string(),
+                turn_id: None,
+                decision,
+            }));
     }
 
     fn handle_patch_decision(&self, id: &str, decision: ReviewDecision) {
-        self.app_event_tx.send(AppEvent::CodexOp(Op::PatchApproval {
-            id: id.to_string(),
-            decision,
-        }));
+        self.app_event_tx
+            .send(AppEvent::AgentCommand(AgentCommand::PatchApproval {
+                id: id.to_string(),
+                decision,
+            }));
     }
 
     fn handle_elicitation_decision(
@@ -228,7 +235,7 @@ impl ApprovalOverlay {
         decision: ElicitationAction,
     ) {
         self.app_event_tx
-            .send(AppEvent::CodexOp(Op::ResolveElicitation {
+            .send(AppEvent::AgentCommand(AgentCommand::ResolveElicitation {
                 server_name: server_name.to_string(),
                 request_id: request_id.clone(),
                 decision,
@@ -236,7 +243,7 @@ impl ApprovalOverlay {
     }
 
     fn advance_queue(&mut self) {
-        if let Some(next) = self.queue.pop() {
+        if let Some(next) = self.queue.pop_front() {
             self.set_current(next);
         } else {
             self.done = true;
@@ -293,24 +300,15 @@ impl BottomPaneView for ApprovalOverlay {
         if !self.current_complete
             && let Some(variant) = self.current_variant.as_ref()
         {
-            match &variant {
-                ApprovalVariant::Exec { id, command, .. } => {
-                    self.handle_exec_decision(id, command, ReviewDecision::Abort);
+            let decision = match variant {
+                ApprovalVariant::Exec { .. } | ApprovalVariant::ApplyPatch { .. } => {
+                    ApprovalDecision::Review(ReviewDecision::Abort)
                 }
-                ApprovalVariant::ApplyPatch { id, .. } => {
-                    self.handle_patch_decision(id, ReviewDecision::Abort);
+                ApprovalVariant::McpElicitation { .. } => {
+                    ApprovalDecision::McpElicitation(ElicitationAction::Cancel)
                 }
-                ApprovalVariant::McpElicitation {
-                    server_name,
-                    request_id,
-                } => {
-                    self.handle_elicitation_decision(
-                        server_name,
-                        request_id,
-                        ElicitationAction::Cancel,
-                    );
-                }
-            }
+            };
+            self.dispatch_variant_decision(variant, decision);
         }
         self.queue.clear();
         self.done = true;
@@ -611,7 +609,7 @@ mod tests {
         // We expect at least one CodexOp message in the queue.
         let mut saw_op = false;
         while let Ok(ev) = rx.try_recv() {
-            if matches!(ev, AppEvent::CodexOp(_)) {
+            if matches!(ev, AppEvent::AgentCommand(_)) {
                 saw_op = true;
                 break;
             }
@@ -639,7 +637,7 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
         let mut saw_op = false;
         while let Ok(ev) = rx.try_recv() {
-            if let AppEvent::CodexOp(Op::ExecApproval { decision, .. }) = ev {
+            if let AppEvent::AgentCommand(AgentCommand::ExecApproval { decision, .. }) = ev {
                 assert_eq!(
                     decision,
                     ReviewDecision::ApprovedExecpolicyAmendment {
@@ -796,7 +794,7 @@ mod tests {
 
         let mut decision = None;
         while let Ok(ev) = rx.try_recv() {
-            if let AppEvent::CodexOp(Op::ExecApproval { decision: d, .. }) = ev {
+            if let AppEvent::AgentCommand(AgentCommand::ExecApproval { decision: d, .. }) = ev {
                 decision = Some(d);
                 break;
             }
