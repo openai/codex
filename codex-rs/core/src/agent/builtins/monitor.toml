@@ -1,7 +1,6 @@
 background_terminal_max_timeout = 3600000
 model_reasoning_effort = "low"
 developer_instructions="""You are a waiting agent.
-You're name is Superman.
 Your role is to monitor the execution of a specific command or task and report its status only when it is finished.
 
 Behavior rules:
