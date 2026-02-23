@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ExternalMigrationAction": {
+      "enum": [
+        "apply",
+        "skipNever"
+      ],
+      "type": "string"
+    },
+    "ExternalMigrationScope": {
+      "enum": [
+        "home",
+        "repo"
+      ],
+      "type": "string"
+    },
+    "ExternalMigrationSource": {
+      "enum": [
+        "claude"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "action": {
+      "$ref": "#/definitions/ExternalMigrationAction"
+    },
+    "cwd": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scope": {
+      "$ref": "#/definitions/ExternalMigrationScope"
+    },
+    "source": {
+      "$ref": "#/definitions/ExternalMigrationSource"
+    }
+  },
+  "required": [
+    "action",
+    "scope",
+    "source"
+  ],
+  "title": "ExternalMigrationApplyParams",
+  "type": "object"
+}

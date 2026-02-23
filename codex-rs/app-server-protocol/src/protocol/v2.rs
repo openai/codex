@@ -563,8 +563,15 @@ pub struct NetworkRequirements {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum ClaudeMigrationScope {
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ExternalMigrationSource {
+    Claude,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ExternalMigrationScope {
     Home,
     Repo,
 }
@@ -572,7 +579,7 @@ pub enum ClaudeMigrationScope {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase", export_to = "v2/")]
-pub enum ClaudeMigrationState {
+pub enum ExternalMigrationState {
     Pending,
     Imported,
     Never,
@@ -581,7 +588,7 @@ pub enum ClaudeMigrationState {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ClaudeMigrationDetected {
+pub struct ExternalMigrationDetected {
     pub claude_home_exists: Option<bool>,
     pub settings_json: Option<bool>,
     pub claude_md: bool,
@@ -594,7 +601,7 @@ pub struct ClaudeMigrationDetected {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ClaudeMigrationProposed {
+pub struct ExternalMigrationProposed {
     pub config_keys: Vec<String>,
     pub copy_agents_md: bool,
     pub skills_to_copy: Vec<String>,
@@ -604,19 +611,30 @@ pub struct ClaudeMigrationProposed {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ClaudeMigrationAvailableNotification {
-    pub scope: ClaudeMigrationScope,
-    pub state: ClaudeMigrationState,
+pub struct ExternalMigrationAvailableNotification {
+    pub source: ExternalMigrationSource,
+    pub scope: ExternalMigrationScope,
+    pub state: ExternalMigrationState,
     pub repo_root: Option<String>,
-    pub detected: ClaudeMigrationDetected,
-    pub proposed: ClaudeMigrationProposed,
+    pub detected: ExternalMigrationDetected,
+    pub proposed: ExternalMigrationProposed,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ExternalMigrationAction {
+    Apply,
+    SkipNever,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ClaudeMigrationRunParams {
-    pub scope: ClaudeMigrationScope,
+pub struct ExternalMigrationApplyParams {
+    pub source: ExternalMigrationSource,
+    pub scope: ExternalMigrationScope,
+    pub action: ExternalMigrationAction,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
 }
@@ -624,30 +642,16 @@ pub struct ClaudeMigrationRunParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ClaudeMigrationRunResponse {
-    pub scope: ClaudeMigrationScope,
-    pub state: ClaudeMigrationState,
+pub struct ExternalMigrationApplyResponse {
+    pub source: ExternalMigrationSource,
+    pub scope: ExternalMigrationScope,
+    pub state: ExternalMigrationState,
     pub repo_root: Option<String>,
     pub imported_config_keys: Vec<String>,
     pub copied_skills: Vec<String>,
     pub copied_agents_md: bool,
     pub imported_mcp_servers: Vec<String>,
 }
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ClaudeMigrationSetStateParams {
-    pub scope: ClaudeMigrationScope,
-    pub state: ClaudeMigrationState,
-    #[ts(optional = nullable)]
-    pub cwd: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, Default)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ClaudeMigrationSetStateResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]

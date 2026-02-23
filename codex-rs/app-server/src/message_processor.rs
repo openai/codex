@@ -16,15 +16,6 @@ use async_trait::async_trait;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
-use codex_app_server_protocol::ClaudeMigrationAvailableNotification;
-use codex_app_server_protocol::ClaudeMigrationDetected;
-use codex_app_server_protocol::ClaudeMigrationProposed;
-use codex_app_server_protocol::ClaudeMigrationRunParams;
-use codex_app_server_protocol::ClaudeMigrationRunResponse;
-use codex_app_server_protocol::ClaudeMigrationScope;
-use codex_app_server_protocol::ClaudeMigrationSetStateParams;
-use codex_app_server_protocol::ClaudeMigrationSetStateResponse;
-use codex_app_server_protocol::ClaudeMigrationState;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -32,6 +23,15 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
+use codex_app_server_protocol::ExternalMigrationAction;
+use codex_app_server_protocol::ExternalMigrationApplyParams;
+use codex_app_server_protocol::ExternalMigrationApplyResponse;
+use codex_app_server_protocol::ExternalMigrationAvailableNotification;
+use codex_app_server_protocol::ExternalMigrationDetected;
+use codex_app_server_protocol::ExternalMigrationProposed;
+use codex_app_server_protocol::ExternalMigrationScope;
+use codex_app_server_protocol::ExternalMigrationSource;
+use codex_app_server_protocol::ExternalMigrationState;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -352,18 +352,8 @@ impl MessageProcessor {
         }
 
         match codex_request {
-            ClientRequest::ClaudeMigrationRun { request_id, params } => {
-                self.handle_claude_migration_run(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
-            }
-            ClientRequest::ClaudeMigrationSetState { request_id, params } => {
-                self.handle_claude_migration_set_state(
+            ClientRequest::ExternalMigrationApply { request_id, params } => {
+                self.handle_external_migration_apply(
                     ConnectionRequestId {
                         connection_id,
                         request_id,
@@ -446,36 +436,47 @@ impl MessageProcessor {
             }
         };
 
-        match codex_core::claude_migration::detect_claude_home_migration(
-            &self.config.codex_home,
-            &config_toml,
-            self.config.model_provider_id.as_str(),
-            codex_core::claude_migration::CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD,
+        match codex_core::external_migration::detect_external_migration(
+            codex_core::external_migration::ExternalMigrationSource::Claude,
+            codex_core::external_migration::ExternalMigrationScope::Home,
+            codex_core::external_migration::ExternalMigrationDetectContext {
+                codex_home: Some(&self.config.codex_home),
+                config_toml: Some(&config_toml),
+                default_provider: Some(self.config.model_provider_id.as_str()),
+                max_prior_threads: Some(
+                    codex_core::external_migration::EXTERNAL_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD,
+                ),
+                cwd: None,
+            },
         )
         .await
         {
             Ok(Some(available)) => {
-                let notification = ServerNotification::ClaudeMigrationAvailable(
-                    ClaudeMigrationAvailableNotification {
-                        scope: ClaudeMigrationScope::Home,
+                let notification = ServerNotification::ExternalMigrationAvailable(
+                    ExternalMigrationAvailableNotification {
+                        source: ExternalMigrationSource::Claude,
+                        scope: ExternalMigrationScope::Home,
                         state: core_marker_state_to_v2(available.marker_state),
-                        repo_root: None,
-                        detected: ClaudeMigrationDetected {
-                            claude_home_exists: Some(available.detected.claude_home_exists),
-                            settings_json: Some(available.detected.settings_json),
+                        repo_root: available
+                            .repo_root
+                            .map(|path| path.display().to_string()),
+                        detected: ExternalMigrationDetected {
+                            claude_home_exists: available.detected.claude_home_exists,
+                            settings_json: available.detected.settings_json,
                             claude_md: available.detected.claude_md,
-                            skills_count: Some(available.detected.skills_count as u32),
-                            agents_md_exists: None,
-                            mcp_json: None,
-                            prior_codex_thread_count: Some(
-                                available.prior_codex_thread_count as u32,
-                            ),
+                            skills_count: available.detected.skills_count.map(|count| count as u32),
+                            agents_md_exists: available.detected.agents_md_exists,
+                            mcp_json: available.detected.mcp_json,
+                            prior_codex_thread_count: available
+                                .detected
+                                .prior_codex_thread_count
+                                .map(|count| count as u32),
                         },
-                        proposed: ClaudeMigrationProposed {
-                            config_keys: available.proposed.imported_config_keys,
-                            copy_agents_md: available.proposed.imported_user_agents_md,
-                            skills_to_copy: available.proposed.imported_skills,
-                            mcp_servers_to_add: Vec::new(),
+                        proposed: ExternalMigrationProposed {
+                            config_keys: available.proposed.config_keys,
+                            copy_agents_md: available.proposed.copy_agents_md,
+                            skills_to_copy: available.proposed.skills_to_copy,
+                            mcp_servers_to_add: available.proposed.mcp_servers_to_add,
                         },
                     },
                 );
@@ -553,179 +554,73 @@ impl MessageProcessor {
         }
     }
 
-    async fn handle_claude_migration_run(
+    async fn handle_external_migration_apply(
         &self,
         request_id: ConnectionRequestId,
-        params: ClaudeMigrationRunParams,
+        params: ExternalMigrationApplyParams,
     ) {
-        let effective_toml = self.config.config_layer_stack.effective_config();
-        let config_toml: ConfigToml = match effective_toml.try_into() {
-            Ok(config_toml) => config_toml,
-            Err(err) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!("invalid config for Claude import: {err}"),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
+        let core_source = v2_source_to_core(params.source);
+        let core_scope = v2_scope_to_core(params.scope);
+        let core_action = v2_action_to_core(params.action);
+        let cwd = params.cwd.as_deref().map(PathBuf::from);
 
-        match params.scope {
-            ClaudeMigrationScope::Home => {
-                match codex_core::claude_migration::apply_claude_home_migration(
-                    &self.config.codex_home,
-                    &config_toml,
-                )
-                .await
-                {
-                    Ok(summary) => {
-                        self.outgoing
-                            .send_response(
-                                request_id,
-                                ClaudeMigrationRunResponse {
-                                    scope: ClaudeMigrationScope::Home,
-                                    state: ClaudeMigrationState::Imported,
-                                    repo_root: None,
-                                    imported_config_keys: summary.imported_config_keys,
-                                    copied_skills: summary.imported_skills,
-                                    copied_agents_md: summary.imported_user_agents_md,
-                                    imported_mcp_servers: Vec::new(),
-                                },
-                            )
-                            .await;
-                    }
-                    Err(err) => {
-                        self.outgoing
-                            .send_error(
-                                request_id,
-                                JSONRPCErrorError {
-                                    code: INVALID_REQUEST_ERROR_CODE,
-                                    message: format!("Claude home import failed: {err}"),
-                                    data: None,
-                                },
-                            )
-                            .await;
-                    }
-                }
-            }
-            ClaudeMigrationScope::Repo => {
-                let Some(cwd) = params.cwd.as_deref() else {
+        let config_toml = if matches!(
+            (params.source, params.scope, params.action),
+            (
+                ExternalMigrationSource::Claude,
+                ExternalMigrationScope::Home,
+                ExternalMigrationAction::Apply
+            )
+        ) {
+            let effective_toml = self.config.config_layer_stack.effective_config();
+            match effective_toml.try_into() {
+                Ok(config_toml) => Some(config_toml),
+                Err(err) => {
                     self.outgoing
                         .send_error(
                             request_id,
                             JSONRPCErrorError {
                                 code: INVALID_REQUEST_ERROR_CODE,
-                                message: "cwd is required for repo import".to_string(),
+                                message: format!("invalid config for external migration: {err}"),
                                 data: None,
                             },
                         )
                         .await;
                     return;
-                };
-                let cwd_path = PathBuf::from(cwd);
-                match codex_core::claude_migration::apply_claude_repo_migration(&cwd_path).await {
-                    Ok(summary) => {
-                        let repo_root = cwd_path
-                            .ancestors()
-                            .find(|ancestor| ancestor.join(".git").exists())
-                            .unwrap_or(cwd_path.as_path())
-                            .display()
-                            .to_string();
-                        self.outgoing
-                            .send_response(
-                                request_id,
-                                ClaudeMigrationRunResponse {
-                                    scope: ClaudeMigrationScope::Repo,
-                                    state: ClaudeMigrationState::Imported,
-                                    repo_root: Some(repo_root),
-                                    imported_config_keys: Vec::new(),
-                                    copied_skills: Vec::new(),
-                                    copied_agents_md: summary.copied_agents_md,
-                                    imported_mcp_servers: summary.imported_mcp_servers,
-                                },
-                            )
-                            .await;
-                    }
-                    Err(err) => {
-                        self.outgoing
-                            .send_error(
-                                request_id,
-                                JSONRPCErrorError {
-                                    code: INVALID_REQUEST_ERROR_CODE,
-                                    message: format!("Claude repo import failed: {err}"),
-                                    data: None,
-                                },
-                            )
-                            .await;
-                    }
                 }
             }
-        }
-    }
+        } else {
+            None
+        };
 
-    async fn handle_claude_migration_set_state(
-        &self,
-        request_id: ConnectionRequestId,
-        params: ClaudeMigrationSetStateParams,
-    ) {
-        let core_state = match v2_marker_state_to_core(params.state) {
-            Some(state) => state,
-            None => {
+        match codex_core::external_migration::apply_external_migration(
+            core_source,
+            core_scope,
+            core_action,
+            codex_core::external_migration::ExternalMigrationApplyContext {
+                codex_home: &self.config.codex_home,
+                config_toml: config_toml.as_ref(),
+                cwd: cwd.as_deref(),
+            },
+        )
+        .await
+        {
+            Ok(summary) => {
                 self.outgoing
-                    .send_error(
+                    .send_response(
                         request_id,
-                        JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: "pending is not writable via RPC".to_string(),
-                            data: None,
+                        ExternalMigrationApplyResponse {
+                            source: params.source,
+                            scope: params.scope,
+                            state: core_marker_state_to_v2(summary.state),
+                            repo_root: summary.repo_root.map(|path| path.display().to_string()),
+                            imported_config_keys: summary.imported_config_keys,
+                            copied_skills: summary.copied_skills,
+                            copied_agents_md: summary.copied_agents_md,
+                            imported_mcp_servers: summary.imported_mcp_servers,
                         },
                     )
                     .await;
-                return;
-            }
-        };
-
-        let result = match params.scope {
-            ClaudeMigrationScope::Home => {
-                codex_core::claude_migration::set_claude_home_migration_state(
-                    &self.config.codex_home,
-                    core_state,
-                )
-                .await
-            }
-            ClaudeMigrationScope::Repo => {
-                let Some(cwd) = params.cwd.as_deref() else {
-                    self.outgoing
-                        .send_error(
-                            request_id,
-                            JSONRPCErrorError {
-                                code: INVALID_REQUEST_ERROR_CODE,
-                                message: "cwd is required for repo state updates".to_string(),
-                                data: None,
-                            },
-                        )
-                        .await;
-                    return;
-                };
-                codex_core::claude_migration::set_claude_repo_migration_state(
-                    &PathBuf::from(cwd),
-                    core_state,
-                )
-                .await
-            }
-        };
-
-        match result {
-            Ok(()) => {
-                self.outgoing
-                    .send_response(request_id, ClaudeMigrationSetStateResponse::default())
-                    .await
             }
             Err(err) => {
                 self.outgoing
@@ -733,42 +628,64 @@ impl MessageProcessor {
                         request_id,
                         JSONRPCErrorError {
                             code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!("failed to update Claude import state: {err}"),
+                            message: format!("external migration apply failed: {err}"),
                             data: None,
                         },
                     )
-                    .await
+                    .await;
             }
         }
     }
 }
 
 fn core_marker_state_to_v2(
-    state: codex_core::claude_migration::ClaudeMigrationMarkerState,
-) -> ClaudeMigrationState {
+    state: codex_core::external_migration::ExternalMigrationMarkerState,
+) -> ExternalMigrationState {
     match state {
-        codex_core::claude_migration::ClaudeMigrationMarkerState::Pending => {
-            ClaudeMigrationState::Pending
+        codex_core::external_migration::ExternalMigrationMarkerState::Pending => {
+            ExternalMigrationState::Pending
         }
-        codex_core::claude_migration::ClaudeMigrationMarkerState::Imported => {
-            ClaudeMigrationState::Imported
+        codex_core::external_migration::ExternalMigrationMarkerState::Imported => {
+            ExternalMigrationState::Imported
         }
-        codex_core::claude_migration::ClaudeMigrationMarkerState::Never => {
-            ClaudeMigrationState::Never
+        codex_core::external_migration::ExternalMigrationMarkerState::Never => {
+            ExternalMigrationState::Never
         }
     }
 }
 
-fn v2_marker_state_to_core(
-    state: ClaudeMigrationState,
-) -> Option<codex_core::claude_migration::ClaudeMigrationMarkerState> {
-    match state {
-        ClaudeMigrationState::Pending => None,
-        ClaudeMigrationState::Imported => {
-            Some(codex_core::claude_migration::ClaudeMigrationMarkerState::Imported)
+fn v2_source_to_core(
+    source: ExternalMigrationSource,
+) -> codex_core::external_migration::ExternalMigrationSource {
+    match source {
+        ExternalMigrationSource::Claude => {
+            codex_core::external_migration::ExternalMigrationSource::Claude
         }
-        ClaudeMigrationState::Never => {
-            Some(codex_core::claude_migration::ClaudeMigrationMarkerState::Never)
+    }
+}
+
+fn v2_scope_to_core(
+    scope: ExternalMigrationScope,
+) -> codex_core::external_migration::ExternalMigrationScope {
+    match scope {
+        ExternalMigrationScope::Home => {
+            codex_core::external_migration::ExternalMigrationScope::Home
+        }
+        ExternalMigrationScope::Repo => {
+            codex_core::external_migration::ExternalMigrationScope::Repo
+        }
+    }
+}
+
+fn v2_action_to_core(
+    action: ExternalMigrationAction,
+) -> codex_core::external_migration::ExternalMigrationAction {
+    match action {
+        ExternalMigrationAction::Apply => {
+            codex_core::external_migration::ExternalMigrationAction::Apply
+        }
+        ExternalMigrationAction::SkipNever => {
+            codex_core::external_migration::ExternalMigrationAction::SkipNever
         }
     }
 }

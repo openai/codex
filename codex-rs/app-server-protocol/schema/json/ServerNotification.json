@@ -3769,6 +3769,143 @@
       ],
       "type": "string"
     },
+    "ExternalMigrationAvailableNotification": {
+      "properties": {
+        "detected": {
+          "$ref": "#/definitions/ExternalMigrationDetected"
+        },
+        "proposed": {
+          "$ref": "#/definitions/ExternalMigrationProposed"
+        },
+        "repoRoot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/definitions/ExternalMigrationScope"
+        },
+        "source": {
+          "$ref": "#/definitions/ExternalMigrationSource"
+        },
+        "state": {
+          "$ref": "#/definitions/ExternalMigrationState"
+        }
+      },
+      "required": [
+        "detected",
+        "proposed",
+        "scope",
+        "source",
+        "state"
+      ],
+      "type": "object"
+    },
+    "ExternalMigrationDetected": {
+      "properties": {
+        "agentsMdExists": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "claudeHomeExists": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "claudeMd": {
+          "type": "boolean"
+        },
+        "mcpJson": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "priorCodexThreadCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "settingsJson": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "skillsCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "claudeMd"
+      ],
+      "type": "object"
+    },
+    "ExternalMigrationProposed": {
+      "properties": {
+        "configKeys": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "copyAgentsMd": {
+          "type": "boolean"
+        },
+        "mcpServersToAdd": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skillsToCopy": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "configKeys",
+        "copyAgentsMd",
+        "mcpServersToAdd",
+        "skillsToCopy"
+      ],
+      "type": "object"
+    },
+    "ExternalMigrationScope": {
+      "enum": [
+        "home",
+        "repo"
+      ],
+      "type": "string"
+    },
+    "ExternalMigrationSource": {
+      "enum": [
+        "claude"
+      ],
+      "type": "string"
+    },
+    "ExternalMigrationState": {
+      "enum": [
+        "pending",
+        "imported",
+        "never"
+      ],
+      "type": "string"
+    },
     "FileChange": {
       "oneOf": [
         {
@@ -8838,6 +8975,26 @@
         "params"
       ],
       "title": "ConfigWarningNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "externalMigration/available"
+          ],
+          "title": "ExternalMigration/availableNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ExternalMigrationAvailableNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "ExternalMigration/availableNotification",
       "type": "object"
     },
     {

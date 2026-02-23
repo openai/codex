@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ExternalMigrationScope": {
+      "enum": [
+        "home",
+        "repo"
+      ],
+      "type": "string"
+    },
+    "ExternalMigrationSource": {
+      "enum": [
+        "claude"
+      ],
+      "type": "string"
+    },
+    "ExternalMigrationState": {
+      "enum": [
+        "pending",
+        "imported",
+        "never"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "copiedAgentsMd": {
+      "type": "boolean"
+    },
+    "copiedSkills": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "importedConfigKeys": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "importedMcpServers": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "repoRoot": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scope": {
+      "$ref": "#/definitions/ExternalMigrationScope"
+    },
+    "source": {
+      "$ref": "#/definitions/ExternalMigrationSource"
+    },
+    "state": {
+      "$ref": "#/definitions/ExternalMigrationState"
+    }
+  },
+  "required": [
+    "copiedAgentsMd",
+    "copiedSkills",
+    "importedConfigKeys",
+    "importedMcpServers",
+    "scope",
+    "source",
+    "state"
+  ],
+  "title": "ExternalMigrationApplyResponse",
+  "type": "object"
+}

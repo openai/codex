@@ -421,11 +421,11 @@ pub async fn run_main(
         .with(otel_tracing_layer)
         .try_init();
 
-    match codex_core::claude_migration::detect_claude_home_migration(
+    match codex_core::external_migration::detect_claude_home_migration(
         &codex_home,
         &config_toml,
         config.model_provider_id.as_str(),
-        codex_core::claude_migration::CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD,
+        codex_core::external_migration::CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD,
     )
     .await
     {
@@ -577,11 +577,11 @@ async fn run_ratatui_app(
         };
 
         if let Some(config_toml) = config_toml {
-            match codex_core::claude_migration::detect_claude_home_migration(
+            match codex_core::external_migration::detect_claude_home_migration(
                 &config.codex_home,
                 &config_toml,
                 config.model_provider_id.as_str(),
-                codex_core::claude_migration::CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD,
+                codex_core::external_migration::CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD,
             )
             .await
             {
@@ -598,7 +598,7 @@ async fn run_ratatui_app(
                     .await?;
                     match outcome {
                         claude_migration_prompt::ClaudeHomeMigrationPromptOutcome::ImportNow => {
-                            match codex_core::claude_migration::apply_claude_home_migration(
+                            match codex_core::external_migration::apply_claude_home_migration(
                                 &config.codex_home,
                                 &config_toml,
                             )
@@ -616,9 +616,9 @@ async fn run_ratatui_app(
                         claude_migration_prompt::ClaudeHomeMigrationPromptOutcome::SkipOnce => {}
                         claude_migration_prompt::ClaudeHomeMigrationPromptOutcome::Never => {
                             if let Err(err) =
-                                codex_core::claude_migration::set_claude_home_migration_state(
+                                codex_core::external_migration::set_claude_home_migration_state(
                                     &config.codex_home,
-                                    codex_core::claude_migration::ClaudeMigrationMarkerState::Never,
+                                    codex_core::external_migration::ClaudeMigrationMarkerState::Never,
                                 )
                                 .await
                             {

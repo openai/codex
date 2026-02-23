@@ -455,6 +455,51 @@
       },
       "type": "object"
     },
+    "ExternalMigrationAction": {
+      "enum": [
+        "apply",
+        "skipNever"
+      ],
+      "type": "string"
+    },
+    "ExternalMigrationApplyParams": {
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/ExternalMigrationAction"
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/definitions/ExternalMigrationScope"
+        },
+        "source": {
+          "$ref": "#/definitions/ExternalMigrationSource"
+        }
+      },
+      "required": [
+        "action",
+        "scope",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ExternalMigrationScope": {
+      "enum": [
+        "home",
+        "repo"
+      ],
+      "type": "string"
+    },
+    "ExternalMigrationSource": {
+      "enum": [
+        "claude"
+      ],
+      "type": "string"
+    },
     "FeedbackUploadParams": {
       "properties": {
         "classification": {
@@ -4194,6 +4239,30 @@
         "params"
       ],
       "title": "Config/batchWriteRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "externalMigration/apply"
+          ],
+          "title": "ExternalMigration/applyRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ExternalMigrationApplyParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ExternalMigration/applyRequest",
       "type": "object"
     },
     {

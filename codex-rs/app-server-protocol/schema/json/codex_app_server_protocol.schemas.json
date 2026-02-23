@@ -1305,6 +1305,30 @@
             },
             "method": {
               "enum": [
+                "externalMigration/apply"
+              ],
+              "title": "ExternalMigration/applyRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ExternalMigrationApplyParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ExternalMigration/applyRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "configRequirements/read"
               ],
               "title": "ConfigRequirements/readRequestMethod",
@@ -8695,6 +8719,26 @@
           "properties": {
             "method": {
               "enum": [
+                "externalMigration/available"
+              ],
+              "title": "ExternalMigration/availableNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ExternalMigrationAvailableNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "ExternalMigration/availableNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "fuzzyFileSearch/sessionUpdated"
               ],
               "title": "FuzzyFileSearch/sessionUpdatedNotificationMethod",
@@ -12201,6 +12245,231 @@
             "type": "string"
           }
         ]
+      },
+      "ExternalMigrationAction": {
+        "enum": [
+          "apply",
+          "skipNever"
+        ],
+        "type": "string"
+      },
+      "ExternalMigrationApplyParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "action": {
+            "$ref": "#/definitions/v2/ExternalMigrationAction"
+          },
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "$ref": "#/definitions/v2/ExternalMigrationScope"
+          },
+          "source": {
+            "$ref": "#/definitions/v2/ExternalMigrationSource"
+          }
+        },
+        "required": [
+          "action",
+          "scope",
+          "source"
+        ],
+        "title": "ExternalMigrationApplyParams",
+        "type": "object"
+      },
+      "ExternalMigrationApplyResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "copiedAgentsMd": {
+            "type": "boolean"
+          },
+          "copiedSkills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "importedConfigKeys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "importedMcpServers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "repoRoot": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "$ref": "#/definitions/v2/ExternalMigrationScope"
+          },
+          "source": {
+            "$ref": "#/definitions/v2/ExternalMigrationSource"
+          },
+          "state": {
+            "$ref": "#/definitions/v2/ExternalMigrationState"
+          }
+        },
+        "required": [
+          "copiedAgentsMd",
+          "copiedSkills",
+          "importedConfigKeys",
+          "importedMcpServers",
+          "scope",
+          "source",
+          "state"
+        ],
+        "title": "ExternalMigrationApplyResponse",
+        "type": "object"
+      },
+      "ExternalMigrationAvailableNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "detected": {
+            "$ref": "#/definitions/v2/ExternalMigrationDetected"
+          },
+          "proposed": {
+            "$ref": "#/definitions/v2/ExternalMigrationProposed"
+          },
+          "repoRoot": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "$ref": "#/definitions/v2/ExternalMigrationScope"
+          },
+          "source": {
+            "$ref": "#/definitions/v2/ExternalMigrationSource"
+          },
+          "state": {
+            "$ref": "#/definitions/v2/ExternalMigrationState"
+          }
+        },
+        "required": [
+          "detected",
+          "proposed",
+          "scope",
+          "source",
+          "state"
+        ],
+        "title": "ExternalMigrationAvailableNotification",
+        "type": "object"
+      },
+      "ExternalMigrationDetected": {
+        "properties": {
+          "agentsMdExists": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "claudeHomeExists": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "claudeMd": {
+            "type": "boolean"
+          },
+          "mcpJson": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "priorCodexThreadCount": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "settingsJson": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "skillsCount": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "claudeMd"
+        ],
+        "type": "object"
+      },
+      "ExternalMigrationProposed": {
+        "properties": {
+          "configKeys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "copyAgentsMd": {
+            "type": "boolean"
+          },
+          "mcpServersToAdd": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skillsToCopy": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "configKeys",
+          "copyAgentsMd",
+          "mcpServersToAdd",
+          "skillsToCopy"
+        ],
+        "type": "object"
+      },
+      "ExternalMigrationScope": {
+        "enum": [
+          "home",
+          "repo"
+        ],
+        "type": "string"
+      },
+      "ExternalMigrationSource": {
+        "enum": [
+          "claude"
+        ],
+        "type": "string"
+      },
+      "ExternalMigrationState": {
+        "enum": [
+          "pending",
+          "imported",
+          "never"
+        ],
+        "type": "string"
       },
       "FeedbackUploadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",

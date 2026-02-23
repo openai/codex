@@ -28,6 +28,87 @@ use toml_edit::value;
 
 pub const CLAUDE_MIGRATION_STATE_RELATIVE_PATH: &str = "state/claude_migration_state.json";
 pub const CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD: usize = 3;
+pub const EXTERNAL_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD: usize =
+    CLAUDE_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalMigrationSource {
+    Claude,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalMigrationScope {
+    Home,
+    Repo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalMigrationAction {
+    Apply,
+    SkipNever,
+}
+
+pub type ExternalMigrationMarkerState = ClaudeMigrationMarkerState;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalMigrationDetected {
+    pub claude_home_exists: Option<bool>,
+    pub settings_json: Option<bool>,
+    pub claude_md: bool,
+    pub skills_count: Option<usize>,
+    pub agents_md_exists: Option<bool>,
+    pub mcp_json: Option<bool>,
+    pub prior_codex_thread_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalMigrationProposed {
+    pub config_keys: Vec<String>,
+    pub copy_agents_md: bool,
+    pub skills_to_copy: Vec<String>,
+    pub mcp_servers_to_add: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalMigrationAvailable {
+    pub source: ExternalMigrationSource,
+    pub scope: ExternalMigrationScope,
+    pub marker_state: ExternalMigrationMarkerState,
+    pub repo_root: Option<PathBuf>,
+    pub detected: ExternalMigrationDetected,
+    pub proposed: ExternalMigrationProposed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalMigrationApplySummary {
+    pub source: ExternalMigrationSource,
+    pub scope: ExternalMigrationScope,
+    pub state: ExternalMigrationMarkerState,
+    pub repo_root: Option<PathBuf>,
+    pub imported_config_keys: Vec<String>,
+    pub copied_skills: Vec<String>,
+    pub copied_agents_md: bool,
+    pub imported_mcp_servers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExternalMigrationDetectContext<'a> {
+    pub codex_home: Option<&'a Path>,
+    pub config_toml: Option<&'a ConfigToml>,
+    pub default_provider: Option<&'a str>,
+    pub max_prior_threads: Option<usize>,
+    pub cwd: Option<&'a Path>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExternalMigrationApplyContext<'a> {
+    pub codex_home: &'a Path,
+    pub config_toml: Option<&'a ConfigToml>,
+    pub cwd: Option<&'a Path>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -242,6 +323,184 @@ pub async fn set_claude_repo_migration_state(
         None,
     )
     .await
+}
+
+pub async fn detect_external_migration(
+    source: ExternalMigrationSource,
+    scope: ExternalMigrationScope,
+    ctx: ExternalMigrationDetectContext<'_>,
+) -> io::Result<Option<ExternalMigrationAvailable>> {
+    match (source, scope) {
+        (ExternalMigrationSource::Claude, ExternalMigrationScope::Home) => {
+            let Some(codex_home) = ctx.codex_home else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "codex_home is required for home migration detection",
+                ));
+            };
+            let Some(config_toml) = ctx.config_toml else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "config_toml is required for home migration detection",
+                ));
+            };
+            let Some(default_provider) = ctx.default_provider else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "default_provider is required for home migration detection",
+                ));
+            };
+            let max_prior_threads = ctx
+                .max_prior_threads
+                .unwrap_or(EXTERNAL_MIGRATION_DEFAULT_NEW_USER_THREAD_THRESHOLD);
+            Ok(detect_claude_home_migration(
+                codex_home,
+                config_toml,
+                default_provider,
+                max_prior_threads,
+            )
+            .await?
+            .map(|available| ExternalMigrationAvailable {
+                source,
+                scope,
+                marker_state: available.marker_state,
+                repo_root: None,
+                detected: ExternalMigrationDetected {
+                    claude_home_exists: Some(available.detected.claude_home_exists),
+                    settings_json: Some(available.detected.settings_json),
+                    claude_md: available.detected.claude_md,
+                    skills_count: Some(available.detected.skills_count),
+                    agents_md_exists: None,
+                    mcp_json: None,
+                    prior_codex_thread_count: Some(available.prior_codex_thread_count),
+                },
+                proposed: ExternalMigrationProposed {
+                    config_keys: available.proposed.imported_config_keys,
+                    copy_agents_md: available.proposed.imported_user_agents_md,
+                    skills_to_copy: available.proposed.imported_skills,
+                    mcp_servers_to_add: Vec::new(),
+                },
+            }))
+        }
+        (ExternalMigrationSource::Claude, ExternalMigrationScope::Repo) => {
+            let Some(cwd) = ctx.cwd else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "cwd is required for repo migration detection",
+                ));
+            };
+            Ok(detect_claude_repo_migration(cwd).await?.map(|available| {
+                ExternalMigrationAvailable {
+                    source,
+                    scope,
+                    marker_state: available.marker_state,
+                    repo_root: Some(available.repo_root),
+                    detected: ExternalMigrationDetected {
+                        claude_home_exists: None,
+                        settings_json: None,
+                        claude_md: available.detected.claude_md,
+                        skills_count: None,
+                        agents_md_exists: Some(available.detected.agents_md_exists),
+                        mcp_json: Some(available.detected.mcp_json),
+                        prior_codex_thread_count: None,
+                    },
+                    proposed: ExternalMigrationProposed {
+                        config_keys: Vec::new(),
+                        copy_agents_md: available.proposed.copied_agents_md,
+                        skills_to_copy: Vec::new(),
+                        mcp_servers_to_add: available.proposed.imported_mcp_servers,
+                    },
+                }
+            }))
+        }
+    }
+}
+
+pub async fn apply_external_migration(
+    source: ExternalMigrationSource,
+    scope: ExternalMigrationScope,
+    action: ExternalMigrationAction,
+    ctx: ExternalMigrationApplyContext<'_>,
+) -> io::Result<ExternalMigrationApplySummary> {
+    match action {
+        ExternalMigrationAction::Apply => match (source, scope) {
+            (ExternalMigrationSource::Claude, ExternalMigrationScope::Home) => {
+                let Some(config_toml) = ctx.config_toml else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "config_toml is required for home migration apply",
+                    ));
+                };
+                let summary = apply_claude_home_migration(ctx.codex_home, config_toml).await?;
+                Ok(ExternalMigrationApplySummary {
+                    source,
+                    scope,
+                    state: ClaudeMigrationMarkerState::Imported,
+                    repo_root: None,
+                    imported_config_keys: summary.imported_config_keys,
+                    copied_skills: summary.imported_skills,
+                    copied_agents_md: summary.imported_user_agents_md,
+                    imported_mcp_servers: Vec::new(),
+                })
+            }
+            (ExternalMigrationSource::Claude, ExternalMigrationScope::Repo) => {
+                let Some(cwd) = ctx.cwd else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "cwd is required for repo migration apply",
+                    ));
+                };
+                let repo_root = find_project_root(cwd);
+                let summary = apply_claude_repo_migration(cwd).await?;
+                Ok(ExternalMigrationApplySummary {
+                    source,
+                    scope,
+                    state: ClaudeMigrationMarkerState::Imported,
+                    repo_root: Some(repo_root),
+                    imported_config_keys: Vec::new(),
+                    copied_skills: Vec::new(),
+                    copied_agents_md: summary.copied_agents_md,
+                    imported_mcp_servers: summary.imported_mcp_servers,
+                })
+            }
+        },
+        ExternalMigrationAction::SkipNever => match (source, scope) {
+            (ExternalMigrationSource::Claude, ExternalMigrationScope::Home) => {
+                set_claude_home_migration_state(ctx.codex_home, ClaudeMigrationMarkerState::Never)
+                    .await?;
+                Ok(ExternalMigrationApplySummary {
+                    source,
+                    scope,
+                    state: ClaudeMigrationMarkerState::Never,
+                    repo_root: None,
+                    imported_config_keys: Vec::new(),
+                    copied_skills: Vec::new(),
+                    copied_agents_md: false,
+                    imported_mcp_servers: Vec::new(),
+                })
+            }
+            (ExternalMigrationSource::Claude, ExternalMigrationScope::Repo) => {
+                let Some(cwd) = ctx.cwd else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "cwd is required for repo migration skipNever",
+                    ));
+                };
+                let repo_root = find_project_root(cwd);
+                set_claude_repo_migration_state(cwd, ClaudeMigrationMarkerState::Never).await?;
+                Ok(ExternalMigrationApplySummary {
+                    source,
+                    scope,
+                    state: ClaudeMigrationMarkerState::Never,
+                    repo_root: Some(repo_root),
+                    imported_config_keys: Vec::new(),
+                    copied_skills: Vec::new(),
+                    copied_agents_md: false,
+                    imported_mcp_servers: Vec::new(),
+                })
+            }
+        },
+    }
 }
 
 async fn maybe_migrate_claude_home_with_paths(

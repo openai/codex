@@ -32,11 +32,6 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
-use codex_app_server_protocol::ClaudeMigrationAvailableNotification;
-use codex_app_server_protocol::ClaudeMigrationDetected;
-use codex_app_server_protocol::ClaudeMigrationProposed;
-use codex_app_server_protocol::ClaudeMigrationScope;
-use codex_app_server_protocol::ClaudeMigrationState;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
@@ -49,6 +44,12 @@ use codex_app_server_protocol::ExperimentalFeature as ApiExperimentalFeature;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::ExperimentalFeatureListResponse;
 use codex_app_server_protocol::ExperimentalFeatureStage as ApiExperimentalFeatureStage;
+use codex_app_server_protocol::ExternalMigrationAvailableNotification;
+use codex_app_server_protocol::ExternalMigrationDetected;
+use codex_app_server_protocol::ExternalMigrationProposed;
+use codex_app_server_protocol::ExternalMigrationScope;
+use codex_app_server_protocol::ExternalMigrationSource;
+use codex_app_server_protocol::ExternalMigrationState;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::ForkConversationParams;
@@ -532,9 +533,8 @@ impl CodexMessageProcessor {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled in MessageProcessor");
             }
-            ClientRequest::ClaudeMigrationRun { .. }
-            | ClientRequest::ClaudeMigrationSetState { .. } => {
-                panic!("Claude import RPCs should be handled in MessageProcessor");
+            ClientRequest::ExternalMigrationApply { .. } => {
+                panic!("external migration RPCs should be handled in MessageProcessor");
             }
             // === v2 Thread/Turn APIs ===
             ClientRequest::ThreadStart { request_id, params } => {
@@ -2082,36 +2082,48 @@ impl CodexMessageProcessor {
 
                 let outgoing = self.outgoing.clone();
                 tokio::spawn(async move {
-                    match codex_core::claude_migration::detect_claude_repo_migration(
-                        thread_cwd.as_path(),
+                    match codex_core::external_migration::detect_external_migration(
+                        codex_core::external_migration::ExternalMigrationSource::Claude,
+                        codex_core::external_migration::ExternalMigrationScope::Repo,
+                        codex_core::external_migration::ExternalMigrationDetectContext {
+                            codex_home: None,
+                            config_toml: None,
+                            default_provider: None,
+                            max_prior_threads: None,
+                            cwd: Some(thread_cwd.as_path()),
+                        },
                     )
                     .await
                     {
                         Ok(Some(available)) => {
                             outgoing
-                                .send_server_notification(ServerNotification::ClaudeMigrationAvailable(
-                                    ClaudeMigrationAvailableNotification {
-                                        scope: ClaudeMigrationScope::Repo,
+                                .send_server_notification(ServerNotification::ExternalMigrationAvailable(
+                                    ExternalMigrationAvailableNotification {
+                                        source: ExternalMigrationSource::Claude,
+                                        scope: ExternalMigrationScope::Repo,
                                         state: match available.marker_state {
-                                            codex_core::claude_migration::ClaudeMigrationMarkerState::Pending => ClaudeMigrationState::Pending,
-                                            codex_core::claude_migration::ClaudeMigrationMarkerState::Imported => ClaudeMigrationState::Imported,
-                                            codex_core::claude_migration::ClaudeMigrationMarkerState::Never => ClaudeMigrationState::Never,
+                                            codex_core::external_migration::ExternalMigrationMarkerState::Pending => ExternalMigrationState::Pending,
+                                            codex_core::external_migration::ExternalMigrationMarkerState::Imported => ExternalMigrationState::Imported,
+                                            codex_core::external_migration::ExternalMigrationMarkerState::Never => ExternalMigrationState::Never,
                                         },
-                                        repo_root: Some(available.repo_root.display().to_string()),
-                                        detected: ClaudeMigrationDetected {
-                                            claude_home_exists: None,
-                                            settings_json: None,
+                                        repo_root: available.repo_root.map(|path| path.display().to_string()),
+                                        detected: ExternalMigrationDetected {
+                                            claude_home_exists: available.detected.claude_home_exists,
+                                            settings_json: available.detected.settings_json,
                                             claude_md: available.detected.claude_md,
-                                            skills_count: None,
-                                            agents_md_exists: Some(available.detected.agents_md_exists),
-                                            mcp_json: Some(available.detected.mcp_json),
-                                            prior_codex_thread_count: None,
+                                            skills_count: available.detected.skills_count.map(|count| count as u32),
+                                            agents_md_exists: available.detected.agents_md_exists,
+                                            mcp_json: available.detected.mcp_json,
+                                            prior_codex_thread_count: available
+                                                .detected
+                                                .prior_codex_thread_count
+                                                .map(|count| count as u32),
                                         },
-                                        proposed: ClaudeMigrationProposed {
-                                            config_keys: Vec::new(),
-                                            copy_agents_md: available.proposed.copied_agents_md,
-                                            skills_to_copy: Vec::new(),
-                                            mcp_servers_to_add: available.proposed.imported_mcp_servers,
+                                        proposed: ExternalMigrationProposed {
+                                            config_keys: available.proposed.config_keys,
+                                            copy_agents_md: available.proposed.copy_agents_md,
+                                            skills_to_copy: available.proposed.skills_to_copy,
+                                            mcp_servers_to_add: available.proposed.mcp_servers_to_add,
                                         },
                                     },
                                 ))
