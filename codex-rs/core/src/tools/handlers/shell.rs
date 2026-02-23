@@ -292,20 +292,20 @@ impl ShellHandler {
         }
 
         // Intercept apply_patch if present.
-        if let Some(output) = intercept_apply_patch(
-            &exec_params.command,
-            &exec_params.cwd,
-            exec_params.expiration.timeout_ms(),
-            session.as_ref(),
-            turn.as_ref(),
-            Some(&tracker),
-            &call_id,
-            tool_name.as_str(),
-        )
-        .await?
-        {
-            return Ok(output);
-        }
+                if let Some(output) = intercept_apply_patch(
+                    &exec_params.command,
+                    &exec_params.cwd,
+                    exec_params.expiration.timeout_ms(),
+                    session.clone(),
+                    turn.clone(),
+                    Some(&tracker),
+                    &call_id,
+                    tool_name.as_str(),
+                )
+                .await?
+                {
+                    return Ok(output);
+                }
 
         let source = ExecCommandSource::Agent;
         let emitter = ToolEmitter::shell(
@@ -343,8 +343,8 @@ impl ShellHandler {
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = ShellRuntime::new();
         let tool_ctx = ToolCtx {
-            session,
-            turn,
+            session: session.clone(),
+            turn: turn.clone(),
             call_id: call_id.clone(),
             tool_name,
         };
