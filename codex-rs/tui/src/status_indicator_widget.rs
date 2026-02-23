@@ -34,6 +34,12 @@ use crate::wrapping::word_wrap_lines;
 pub(crate) const STATUS_DETAILS_DEFAULT_MAX_LINES: usize = 3;
 const DETAILS_PREFIX: &str = "  └ ";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatusDetailsCapitalization {
+    CapitalizeFirst,
+    Preserve,
+}
+
 /// Displays a single-line in-progress status with optional wrapped details.
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
@@ -104,7 +110,7 @@ impl StatusIndicatorWidget {
     pub(crate) fn update_details(
         &mut self,
         details: Option<String>,
-        capitalize: bool,
+        capitalization: StatusDetailsCapitalization,
         max_lines: usize,
     ) {
         self.details_max_lines = max_lines.max(1);
@@ -112,10 +118,9 @@ impl StatusIndicatorWidget {
             .filter(|details| !details.is_empty())
             .map(|details| {
                 let trimmed = details.trim_start();
-                if capitalize {
-                    capitalize_first(trimmed)
-                } else {
-                    trimmed.to_string()
+                match capitalization {
+                    StatusDetailsCapitalization::CapitalizeFirst => capitalize_first(trimmed),
+                    StatusDetailsCapitalization::Preserve => trimmed.to_string(),
                 }
             });
     }
@@ -346,7 +351,7 @@ mod tests {
         let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), false);
         w.update_details(
             Some("A man a plan a canal panama".to_string()),
-            true,
+            StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
         w.set_interrupt_hint_visible(false);
@@ -393,7 +398,7 @@ mod tests {
         let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
         w.update_details(
             Some("abcd abcd abcd abcd".to_string()),
-            true,
+            StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
 
@@ -413,7 +418,7 @@ mod tests {
         let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
         w.update_details(
             Some("cargo test -p codex-core and then cargo test -p codex-tui".to_string()),
-            false,
+            StatusDetailsCapitalization::Preserve,
             1,
         );
 
