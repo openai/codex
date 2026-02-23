@@ -276,6 +276,42 @@ mod tests {
     }
 
     #[test]
+    fn rg_regexp_and_file_forms() {
+        assert_parsed(
+            &shlex_split_safe("rg -efoo src"),
+            vec![ParsedCommand::Search {
+                cmd: "rg -efoo src".to_string(),
+                query: Some("foo".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("rg --regexp=foo src"),
+            vec![ParsedCommand::Search {
+                cmd: "rg '--regexp=foo' src".to_string(),
+                query: Some("foo".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("rg -fpatterns.txt src"),
+            vec![ParsedCommand::Search {
+                cmd: "rg -fpatterns.txt src".to_string(),
+                query: Some("patterns.txt".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("rg --file=patterns.txt src"),
+            vec![ParsedCommand::Search {
+                cmd: "rg '--file=patterns.txt' src".to_string(),
+                query: Some("patterns.txt".to_string()),
+                path: Some("src".to_string()),
+            }],
+        );
+    }
+
+    #[test]
     fn supports_cat() {
         let inner = "cat webview/README.md";
         assert_parsed(
@@ -2190,12 +2226,50 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
         Some((head, tail)) if head == "rg" || head == "rga" || head == "ripgrep-all" => {
             let args_no_connector = trim_at_connector(tail);
             let has_files_flag = args_no_connector.iter().any(|a| a == "--files");
+            let mut pattern_override: Option<String> = None;
+            let mut i = 0;
+            while i < args_no_connector.len() {
+                let arg = &args_no_connector[i];
+                if matches!(arg.as_str(), "-e" | "--regexp" | "-f" | "--file") {
+                    if let Some(value) = args_no_connector.get(i + 1)
+                        && pattern_override.is_none()
+                    {
+                        pattern_override = Some(value.clone());
+                    }
+                    i += 2;
+                    continue;
+                }
+                if let Some(rest) = arg.strip_prefix("--regexp=")
+                    && pattern_override.is_none()
+                {
+                    pattern_override = Some(rest.to_string());
+                } else if let Some(rest) = arg.strip_prefix("--file=")
+                    && pattern_override.is_none()
+                {
+                    pattern_override = Some(rest.to_string());
+                } else if let Some(rest) = arg.strip_prefix("-e")
+                    && !rest.is_empty()
+                    && pattern_override.is_none()
+                {
+                    pattern_override = Some(rest.to_string());
+                } else if let Some(rest) = arg.strip_prefix("-f")
+                    && !rest.is_empty()
+                    && pattern_override.is_none()
+                {
+                    pattern_override = Some(rest.to_string());
+                }
+                i += 1;
+            }
             let candidates = skip_flag_values(
                 &args_no_connector,
                 &[
                     "-g",
                     "--glob",
                     "--iglob",
+                    "-e",
+                    "--regexp",
+                    "-f",
+                    "--file",
                     "-t",
                     "--type",
                     "--type-add",
@@ -2220,8 +2294,16 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                     path,
                 }
             } else {
-                let query = non_flags.first().cloned().map(String::from);
-                let path = non_flags.get(1).map(|s| short_display_path(s));
+                let (query, path) = if let Some(pattern) = pattern_override {
+                    (
+                        Some(pattern),
+                        non_flags.first().map(|s| short_display_path(s)),
+                    )
+                } else {
+                    let query = non_flags.first().cloned().map(String::from);
+                    let path = non_flags.get(1).map(|s| short_display_path(s));
+                    (query, path)
+                };
                 ParsedCommand::Search {
                     cmd: shlex_join(main_cmd),
                     query,
