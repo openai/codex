@@ -492,6 +492,28 @@ fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
     }
 }
 
+fn is_interrupt_droppable_stream_event(msg: &EventMsg) -> bool {
+    match msg {
+        EventMsg::AgentMessage(_)
+        | EventMsg::AgentMessageDelta(_)
+        | EventMsg::PlanDelta(_)
+        | EventMsg::AgentReasoning(_)
+        | EventMsg::AgentReasoningDelta(_)
+        | EventMsg::AgentReasoningRawContent(_)
+        | EventMsg::AgentReasoningRawContentDelta(_)
+        | EventMsg::AgentReasoningSectionBreak(_)
+        | EventMsg::AgentMessageContentDelta(_)
+        | EventMsg::ReasoningContentDelta(_)
+        | EventMsg::ReasoningRawContentDelta(_) => true,
+        EventMsg::ItemCompleted(event) => matches!(
+            &event.item,
+            codex_protocol::items::TurnItem::AgentMessage(_)
+                | codex_protocol::items::TurnItem::Plan(_)
+        ),
+        _ => false,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ExternalEditorState {
     #[default]
@@ -570,6 +592,11 @@ pub(crate) struct ChatWidget {
     /// bottom pane is treated as "running" while this is populated, even if no agent turn is
     /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
+    /// True once an interrupt was requested for the active turn.
+    ///
+    /// While this is set, inbound stream deltas are dropped locally so a large
+    /// queued backlog cannot keep rendering stale content after user interrupt.
+    interrupt_requested_for_turn: bool,
     connectors_cache: ConnectorsCacheState,
     connectors_prefetch_in_flight: bool,
     connectors_force_refetch_pending: bool,
@@ -868,23 +895,35 @@ impl ChatWidget {
     }
 
     fn flush_answer_stream_with_separator(&mut self) {
-        if let Some(mut controller) = self.stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
-            self.add_boxed_history(cell);
+        let had_stream_controller = self.stream_controller.is_some();
+        if let Some(mut controller) = self.stream_controller.take() {
+            self.clear_active_stream_tail();
+            let (cell, source) = controller.finalize();
+            if let Some(cell) = cell {
+                self.add_boxed_history(cell);
+            }
+            // Consolidate the run of streaming AgentMessageCells into a single AgentMarkdownCell
+            // that can re-render from source on resize.
+            if let Some(source) = source {
+                self.app_event_tx
+                    .send(AppEvent::ConsolidateAgentMessage(source));
+            }
         }
         self.adaptive_chunking.reset();
+        if had_stream_controller && self.stream_controllers_idle() {
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+        }
     }
 
     fn stream_controllers_idle(&self) -> bool {
         self.stream_controller
             .as_ref()
-            .map(|controller| controller.queued_lines() == 0)
+            .map(|controller| controller.queued_lines() == 0 && !controller.has_live_tail())
             .unwrap_or(true)
             && self
                 .plan_stream_controller
                 .as_ref()
-                .map(|controller| controller.queued_lines() == 0)
+                .map(|controller| controller.queued_lines() == 0 && !controller.has_live_tail())
                 .unwrap_or(true)
     }
 
@@ -1245,9 +1284,8 @@ impl ChatWidget {
         self.flush_active_cell();
 
         if self.plan_stream_controller.is_none() {
-            self.plan_stream_controller = Some(PlanStreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(4)),
-            ));
+            self.plan_stream_controller =
+                Some(PlanStreamController::new(self.current_stream_width(4)));
         }
         if let Some(controller) = self.plan_stream_controller.as_mut()
             && controller.push(&delta)
@@ -1271,18 +1309,25 @@ impl ChatWidget {
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.saw_plan_item_this_turn = true;
-        let finalized_streamed_cell =
+        let (finalized_streamed_cell, consolidated_plan_source) =
             if let Some(mut controller) = self.plan_stream_controller.take() {
                 controller.finalize()
             } else {
-                None
+                (None, None)
             };
         if let Some(cell) = finalized_streamed_cell {
             self.add_boxed_history(cell);
             // TODO: Replace streamed output with the final plan item text if plan streaming is
             // removed or if we need to reconcile mismatches between streamed and final content.
+            if let Some(source) = consolidated_plan_source {
+                self.app_event_tx
+                    .send(AppEvent::ConsolidateProposedPlan(source));
+            }
         } else if !plan_text.is_empty() {
             self.add_to_history(history_cell::new_proposed_plan(plan_text));
+        } else if let Some(source) = consolidated_plan_source {
+            self.app_event_tx
+                .send(AppEvent::ConsolidateProposedPlan(source));
         }
         if should_restore_after_stream {
             self.pending_status_indicator_restore = true;
@@ -1336,6 +1381,7 @@ impl ChatWidget {
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor.set_turn_running(true);
+        self.interrupt_requested_for_turn = false;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.plan_delta_buffer.clear();
@@ -1360,10 +1406,15 @@ impl ChatWidget {
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
-        if let Some(mut controller) = self.plan_stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
-            self.add_boxed_history(cell);
+        if let Some(mut controller) = self.plan_stream_controller.take() {
+            let (cell, source) = controller.finalize();
+            if let Some(cell) = cell {
+                self.add_boxed_history(cell);
+            }
+            if let Some(source) = source {
+                self.app_event_tx
+                    .send(AppEvent::ConsolidateProposedPlan(source));
+            }
         }
         self.flush_unified_exec_wait_streak();
         if !from_replay {
@@ -1394,6 +1445,7 @@ impl ChatWidget {
         self.pending_status_indicator_restore = false;
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor.set_turn_running(false);
+        self.interrupt_requested_for_turn = false;
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -1625,11 +1677,15 @@ impl ChatWidget {
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     fn finalize_turn(&mut self) {
+        // Drop preview-only stream tail content on any termination path before
+        // failed-cell finalization, so transient tail cells are never persisted.
+        self.clear_active_stream_tail();
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor.set_turn_running(false);
+        self.interrupt_requested_for_turn = false;
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -2266,6 +2322,7 @@ impl ChatWidget {
             self.bottom_pane.hide_status_indicator();
             self.add_boxed_history(cell);
         }
+        self.sync_active_stream_tail();
 
         if outcome.has_controller && outcome.all_idle {
             self.maybe_restore_status_indicator_after_stream_idle();
@@ -2310,11 +2367,11 @@ impl ChatWidget {
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
-        // Before streaming agent content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
-
         if self.stream_controller.is_none() {
+            // Before streaming agent content, flush any active exec cell group.
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
+
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
             // calls), render a separator before starting the next streamed assistant message.
             if self.needs_final_message_separator && self.had_work_activity {
@@ -2333,9 +2390,7 @@ impl ChatWidget {
                 // Reset the flag even if we don't show separator (no work was done)
                 self.needs_final_message_separator = false;
             }
-            self.stream_controller = Some(StreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
-            ));
+            self.stream_controller = Some(StreamController::new(self.current_stream_width(2)));
         }
         if let Some(controller) = self.stream_controller.as_mut()
             && controller.push(&delta)
@@ -2343,7 +2398,37 @@ impl ChatWidget {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
             self.run_catch_up_commit_tick();
         }
+        self.sync_active_stream_tail();
         self.request_redraw();
+    }
+
+    fn current_stream_width(&self, reserved_cols: usize) -> Option<usize> {
+        self.last_rendered_width.get().and_then(|w| {
+            if w == 0 {
+                None
+            } else {
+                // Keep a 1-column minimum for active stream controllers so they can
+                // continue accepting deltas on ultra-narrow layouts.
+                Some(crate::width::usable_content_width(w, reserved_cols).unwrap_or(1))
+            }
+        })
+    }
+
+    pub(crate) fn on_terminal_resize(&mut self, width: u16) {
+        let had_rendered_width = self.last_rendered_width.get().is_some();
+        self.last_rendered_width.set(Some(width as usize));
+        let stream_width = self.current_stream_width(2);
+        let plan_stream_width = self.current_stream_width(4);
+        if let Some(controller) = self.stream_controller.as_mut() {
+            controller.set_width(stream_width);
+        }
+        if let Some(controller) = self.plan_stream_controller.as_mut() {
+            controller.set_width(plan_stream_width);
+        }
+        self.sync_active_stream_tail();
+        if !had_rendered_width {
+            self.request_redraw();
+        }
     }
 
     fn worked_elapsed_from(&mut self, current_elapsed: u64) -> u64 {
@@ -2759,6 +2844,7 @@ impl ChatWidget {
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
+            interrupt_requested_for_turn: false,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
             connectors_force_refetch_pending: false,
@@ -2929,6 +3015,7 @@ impl ChatWidget {
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
+            interrupt_requested_for_turn: false,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
             connectors_force_refetch_pending: false,
@@ -3088,6 +3175,7 @@ impl ChatWidget {
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
+            interrupt_requested_for_turn: false,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_prefetch_in_flight: false,
             connectors_force_refetch_pending: false,
@@ -3258,7 +3346,7 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
                     };
-                    if self.is_session_configured() && !self.is_plan_streaming_in_tui() {
+                    if self.is_session_configured() && !self.has_active_plan_stream() {
                         // Submitted is only emitted when steer is enabled.
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
@@ -3779,6 +3867,16 @@ impl ChatWidget {
     }
 
     fn flush_active_cell(&mut self) {
+        if self.active_cell_is_stream_tail() {
+            if self.stream_controller.is_some() {
+                return;
+            }
+            // If stream cleanup already cleared the controller, drop the transient tail instead
+            // of committing preview-only content to transcript history.
+            self.active_cell.take();
+            return;
+        }
+
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
@@ -3800,10 +3898,45 @@ impl ChatWidget {
 
         if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
-            self.flush_active_cell();
+            let keep_stream_tail_active =
+                self.stream_controller.is_some() && self.active_cell_is_stream_tail();
+            if !keep_stream_tail_active {
+                self.flush_active_cell();
+            }
             self.needs_final_message_separator = true;
         }
+
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+    }
+
+    fn sync_active_stream_tail(&mut self) {
+        let Some((tail_lines, tail_starts_stream)) =
+            self.stream_controller.as_ref().map(|controller| {
+                (
+                    controller.current_tail_lines(),
+                    controller.tail_starts_stream(),
+                )
+            })
+        else {
+            return;
+        };
+
+        if tail_lines.is_empty() {
+            self.clear_active_stream_tail();
+            return;
+        }
+
+        self.bottom_pane.hide_status_indicator();
+        let tail_cell = history_cell::StreamingAgentTailCell::new(tail_lines, tail_starts_stream);
+        self.active_cell = Some(Box::new(tail_cell));
+        self.bump_active_cell_revision();
+    }
+
+    fn clear_active_stream_tail(&mut self) {
+        if self.active_cell_is_stream_tail() {
+            self.active_cell = None;
+            self.bump_active_cell_revision();
+        }
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
@@ -4110,6 +4243,15 @@ impl ChatWidget {
         let from_replay = replay_kind.is_some();
         let is_resume_initial_replay =
             matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
+
+        if !from_replay
+            && self.interrupt_requested_for_turn
+            && is_interrupt_droppable_stream_event(&msg)
+        {
+            tracing::trace!("dropping stream event while interrupt is pending");
+            return;
+        }
+
         let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
         if !is_resume_initial_replay && !is_stream_error {
             self.restore_retry_status_header_if_present();
@@ -7058,8 +7200,20 @@ impl ChatWidget {
         self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
-    fn is_plan_streaming_in_tui(&self) -> bool {
+    /// Whether an agent message stream is active (not a plan stream).
+    pub(crate) fn has_active_agent_stream(&self) -> bool {
+        self.stream_controller.is_some()
+    }
+
+    pub(crate) fn has_active_plan_stream(&self) -> bool {
         self.plan_stream_controller.is_some()
+    }
+
+    /// Whether the active cell is a transient streaming tail preview.
+    fn active_cell_is_stream_tail(&self) -> bool {
+        self.active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<history_cell::StreamingAgentTailCell>())
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -7085,7 +7239,7 @@ impl ChatWidget {
             return;
         }
         self.set_collaboration_mask(collaboration_mode);
-        let should_queue = self.is_plan_streaming_in_tui();
+        let should_queue = self.has_active_plan_stream();
         let user_message = UserMessage {
             text,
             local_images: Vec::new(),
@@ -7144,6 +7298,17 @@ impl ChatWidget {
     }
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&mut self, op: Op) {
+        if matches!(&op, Op::Interrupt) && self.agent_turn_running {
+            self.interrupt_requested_for_turn = true;
+            if let Some(controller) = self.stream_controller.as_mut() {
+                controller.clear_queue();
+            }
+            if let Some(controller) = self.plan_stream_controller.as_mut() {
+                controller.clear_queue();
+            }
+            self.clear_active_stream_tail();
+            self.request_redraw();
+        }
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);
         if matches!(&op, Op::Review { .. }) && !self.bottom_pane.is_task_running() {

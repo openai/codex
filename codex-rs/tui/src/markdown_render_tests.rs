@@ -852,23 +852,6 @@ fn code_block_multiple_lines_inside_unordered_list() {
 }
 
 #[test]
-fn code_block_inside_unordered_list_item_multiple_lines() {
-    let md = "- Item\n\n  ```\n  first\n  second\n  ```\n";
-    let text = render_markdown_text(md);
-    let lines: Vec<String> = text
-        .lines
-        .iter()
-        .map(|l| {
-            l.spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<String>()
-        })
-        .collect();
-    assert_eq!(lines, vec!["- Item", "", "  first", "  second"]);
-}
-
-#[test]
 fn markdown_render_complex_snapshot() {
     let md = r#"# H1: Markdown Streaming Test
 Intro paragraph with bold **text**, italic *text*, and inline code `x=1`.
@@ -1106,5 +1089,461 @@ fn code_block_preserves_trailing_blank_lines() {
     assert_eq!(
         content[code_start + 1], "",
         "trailing blank line inside code fence was lost: {content:?}"
+    );
+}
+
+#[test]
+fn table_renders_unicode_box() {
+    let md = "| A | B |\n|---|---|\n| 1 | 2 |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "┌─────┬─────┐".to_string(),
+            "│ A   │ B   │".to_string(),
+            "├─────┼─────┤".to_string(),
+            "│ 1   │ 2   │".to_string(),
+            "└─────┴─────┘".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn table_alignment_respects_markers() {
+    let md = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+    assert_eq!(lines[1], "│ Left │ Center │ Right │");
+    assert_eq!(lines[3], "│ a    │   b    │     c │");
+}
+
+#[test]
+fn table_wraps_cell_content_when_width_is_narrow() {
+    let md = "| Key | Description |\n| --- | --- |\n| -v | Enable very verbose logging output for debugging |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(30));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+    assert!(lines[0].starts_with('┌') && lines[0].ends_with('┐'));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Enable very verbose"))
+            && lines.iter().any(|line| line.contains("logging output")),
+        "expected wrapped row content: {lines:?}"
+    );
+}
+
+#[test]
+fn table_inside_blockquote_has_quote_prefix() {
+    let md = "> | A | B |\n> |---|---|\n> | 1 | 2 |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+    assert!(lines.iter().all(|line| line.starts_with("> ")));
+    assert!(lines.iter().any(|line| line.contains("┌─────┬─────┐")));
+}
+
+#[test]
+fn escaped_pipes_render_in_table_cells() {
+    let md = "| Col |\n| --- |\n| a \\| b |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+    assert!(lines.iter().any(|line| line.contains("a | b")));
+}
+
+#[test]
+fn table_with_emoji_cells_renders_boxed_table() {
+    let md = "| Task | State |\n|---|---|\n| Unit tests | ✅ |\n| Release notes | 📝 |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(80));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+    assert!(
+        lines.iter().any(|line| line.contains('┌')),
+        "expected boxed table for emoji content: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.starts_with("|:---")),
+        "did not expect pipe-delimiter fallback for emoji content: {lines:?}"
+    );
+}
+
+#[test]
+fn table_falls_back_to_pipe_rendering_if_it_cannot_fit() {
+    let md = "| c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 |\n|---|---|---|---|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+  10 |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(20));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+    assert!(lines.first().is_some_and(|line| line.starts_with('|')));
+    assert!(!lines.iter().any(|line| line.contains('┌')));
+}
+
+#[test]
+fn table_pipe_fallback_rows_wrap_in_narrow_width() {
+    let md = "| c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 |\n|---|---|---|---|---|---|---|---|---|---|\n| 111111 | 222222 | 333333 | 444444 | 555555 | 666666 | 777777 | 888888 | 999999 | 101010 |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(20));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(lines.first().is_some_and(|line| line.starts_with('|')));
+    assert!(
+        lines.len() > 3,
+        "expected wrapped pipe-fallback rows at narrow width, got {lines:?}"
+    );
+}
+
+#[test]
+fn table_pipe_fallback_escapes_literal_pipes_in_cell_content() {
+    let md = "| c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 |\n|---|---|---|---|---|---|---|---|---|---|\n| keep | keep | keep | keep | keep | keep | keep | keep | a \\| b | keep |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(20));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(lines.first().is_some_and(|line| line.starts_with('|')));
+    assert!(
+        lines.iter().any(|line| line.contains("\\|")),
+        "expected escaped pipe marker to be preserved in wrapped fallback rows: {lines:?}"
+    );
+}
+
+#[test]
+fn table_link_keeps_url_suffix_inside_cell() {
+    let md = "| Site |\n|---|\n| [OpenAI](https://openai.com) |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("OpenAI (https://openai.com)")),
+        "expected link suffix inside table cell: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.trim() == "(https://openai.com)"),
+        "did not expect stray url suffix line outside table: {lines:?}"
+    );
+}
+
+#[test]
+fn table_does_not_absorb_trailing_html_block_label_line() {
+    let md = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a    |   b    |     c |\nInline HTML: <sup>sup</sup> and <sub>sub</sub>.\nHTML block:\n<div style=\"border:1px solid #ccc;padding:2px\">inline block</div>\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim() == "HTML block:"),
+        "expected 'HTML block:' as plain prose line: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("│ HTML block:")),
+        "did not expect 'HTML block:' inside table grid: {lines:?}"
+    );
+}
+
+#[test]
+fn table_spillover_prose_wraps_in_narrow_width() {
+    let long_label = "This html spillover prose line should wrap on narrow widths to avoid clipping:";
+    let md = format!(
+        "| Left | Center | Right |\n|:-----|:------:|------:|\n| a    |   b    |     c |\n{long_label}\n<div style=\"border:1px solid #ccc;padding:2px\">inline block</div>\n"
+    );
+    let text = crate::markdown_render::render_markdown_text_with_width(&md, Some(40));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines.iter().any(|line| line.contains("This html spillover prose")),
+        "expected spillover prose to be present: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains(long_label)),
+        "did not expect spillover prose to remain as one long clipped line: {lines:?}"
+    );
+}
+
+#[test]
+fn table_keeps_sparse_comparison_row_inside_grid() {
+    let md = "| A | B | C |\n|---|---|---|\n| x < y > z | | |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ x < y > z") && line.ends_with('│')),
+        "expected sparse comparison row to remain inside table grid: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.trim() == "x < y > z"),
+        "did not expect sparse comparison row to spill outside table: {lines:?}"
+    );
+}
+
+#[test]
+fn table_keeps_sparse_rows_with_empty_trailing_cells() {
+    let md = "| A | B | C |\n|---|---|---|\n| a | | |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ a") && line.ends_with('│')),
+        "expected sparse row to remain inside table grid: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line == "a"),
+        "did not expect sparse row content to spill outside the table: {lines:?}"
+    );
+}
+
+#[test]
+fn table_normalizes_uneven_row_column_counts() {
+    let md = "| A | B | C |\n|---|---|---|\n| 1 | 2 |\n| 3 | 4 | 5 | 6 |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines.iter().any(|line| line.starts_with('┌'))
+            && lines.iter().any(|line| line.starts_with('└')),
+        "expected normalized uneven rows to remain in boxed table output: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ 1") && line.ends_with('│')),
+        "expected shorter row to be padded inside grid: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ 3") && line.ends_with('│')),
+        "expected longer row to be truncated to grid width: {lines:?}"
+    );
+}
+
+#[test]
+fn table_keeps_sparse_sentence_row_inside_grid() {
+    let md = "| A | B | C |\n|---|---|---|\n| This is done. | | |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ This is done.") && line.ends_with('│')),
+        "expected sparse sentence row to remain inside table grid: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.trim() == "This is done."),
+        "did not expect sparse sentence row to spill outside table: {lines:?}"
+    );
+}
+
+#[test]
+fn table_keeps_label_only_sparse_row_inside_grid() {
+    let md = "| A | B | C |\n|---|---|---|\n| Status: | | |\n| ok | | |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ Status:") && line.ends_with('│')),
+        "expected label-only sparse row to remain inside table grid: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.trim() == "Status:"),
+        "did not expect label-only sparse row to spill outside table: {lines:?}"
+    );
+}
+
+#[test]
+fn table_keeps_single_word_label_row_at_end_inside_grid() {
+    let md = "| A | B | C |\n|---|---|---|\n| Status: | | |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ Status:") && line.ends_with('│')),
+        "expected single-word trailing label row to remain inside table grid: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.trim() == "Status:"),
+        "did not expect single-word trailing label row to spill outside table: {lines:?}"
+    );
+}
+
+#[test]
+fn table_keeps_multi_word_label_row_at_end_inside_grid() {
+    let md = "| A | B | C |\n|---|---|---|\n| Build status: | | |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ Build status:") && line.ends_with('│')),
+        "expected multi-word trailing label row to remain inside table grid: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.trim() == "Build status:"),
+        "did not expect multi-word trailing label row to spill outside table: {lines:?}"
+    );
+}
+
+#[test]
+fn table_preserves_structured_leading_columns_when_last_column_is_long() {
+    let md = "| Milestone | Planned Date | Outcome | Retrospective Summary |\n|---|---|---|---|\n| Canary rollout | 2026-01-10 | Completed | Canary
+  traffic was held at 5% longer than planned due to latency regressions tied to cold cache behavior; after pre-warming and query plan hints, p95
+  returned to baseline and rollout resumed safely. |\n| Full region cutover | 2026-01-24 | Completed | Cutover succeeded with no customer-visible
+  downtime, though internal dashboards lagged for approximately 18 minutes because ingestion workers autoscaled slower than forecast under burst load.
+  |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(160));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines.iter().any(|line| line.contains("Milestone")),
+        "expected first structured header to remain readable: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("Planned Date")),
+        "expected date header to remain readable: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("2026-01-10")),
+        "expected date values to avoid forced mid-token wraps: {lines:?}"
+    );
+}
+
+#[test]
+fn table_preserves_status_column_with_long_notes() {
+    let md = "| Service | Status | Notes |\n|---|---|---|\n| Auth API | Stable | Handles login and token refresh with no major incidents in the last
+  30 days. |\n| Billing Worker | Monitoring | Throughput is good, but we still see occasional retry storms when upstream settlement providers return
+  partial failures. |\n| Search Indexer | Tuning | Performance improved after shard balancing, yet memory usage remains elevated during full rebuild
+  windows. |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(150));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines.iter().any(|line| line.contains("Status")),
+        "expected status header to remain readable: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("Monitoring")),
+        "expected status values to avoid mid-word wraps: {lines:?}"
+    );
+}
+
+#[test]
+fn table_keeps_long_body_rows_inside_grid_instead_of_spilling_raw_pipe_rows() {
+    let md = "| Milestone | Planned Date | Outcome | Retrospective Summary |\n|---|---|---|---|\n| Canary rollout | 2026-01-10 | Completed | Canary
+  traffic was held at 5% longer than planned due to latency regressions tied to cold cache behavior; after pre-warming and query plan hints, p95
+  returned to baseline and rollout resumed safely. |\n| Full region cutover | 2026-01-24 | Completed | Cutover succeeded with no customer-visible
+  downtime, though internal dashboards lagged for approximately 18 minutes because ingestion workers autoscaled slower than forecast under burst load.
+  |\n| Legacy decommission | 2026-02-07 | In progress | Most workloads have been drained, but final decommission is blocked by one compliance export
+  task that still depends on a deprecated storage path and requires legal sign-off before removal. |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(200));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines.iter().any(|line| line.starts_with('┌'))
+            && lines.iter().any(|line| line.starts_with('└')),
+        "expected boxed table output: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("│ Canary rollout")),
+        "expected first body row to stay inside table grid: {lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("| Canary rollout |")),
+        "did not expect raw pipe-form body rows outside table: {lines:?}"
     );
 }

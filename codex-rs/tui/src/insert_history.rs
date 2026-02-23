@@ -124,8 +124,15 @@ where
     // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
     queue!(writer, MoveTo(0, cursor_top))?;
 
+    let scroll_bottom = area.top().saturating_sub(1);
+    let mut advance_row = cursor_top;
     for line in wrapped {
-        queue!(writer, Print("\r\n"))?;
+        // Explicitly anchor before each line advance to avoid terminal wrap-pending drift when
+        // prior content reached the right edge.
+        queue!(writer, MoveTo(0, advance_row), Print("\n"))?;
+        if advance_row < scroll_bottom {
+            advance_row += 1;
+        }
         // URL lines can be wider than the terminal and will
         // character-wrap onto continuation rows. Pre-clear those rows
         // so stale content from a previously longer line is erased.
@@ -732,5 +739,59 @@ mod tests {
             url_row <= prompt_row + 2,
             "expected URL content to appear immediately after prompt (allowing at most one spacer row), got prompt_row={prompt_row}, url_row={url_row}, rows={rows:?}",
         );
+    }
+
+    #[test]
+    fn vt100_exact_width_rows_keep_stable_line_progression() {
+        let width: u16 = 10;
+        let height: u16 = 7;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 1, width, 1);
+        term.set_viewport_area(viewport);
+
+        let lines = vec![
+            Line::from("1234567890"),
+            Line::from("abcdefghij"),
+            Line::from("KLMNOPQRST"),
+        ];
+        insert_history_lines(&mut term, lines).expect("insert_history_lines should succeed");
+
+        let screen = term.backend().vt100().screen();
+        let mut non_empty_rows: Vec<(u16, String)> = Vec::new();
+        for row in 0..height.saturating_sub(1) {
+            let row_text = (0..width)
+                .map(|col| {
+                    screen
+                        .cell(row, col)
+                        .map(|cell| cell.contents().to_string())
+                        .unwrap_or_default()
+                })
+                .collect::<String>();
+            if !row_text.trim().is_empty() {
+                non_empty_rows.push((row, row_text));
+            }
+        }
+
+        assert_eq!(
+            non_empty_rows.len(),
+            3,
+            "expected exactly three populated rows, got {non_empty_rows:?}",
+        );
+
+        let expected = ["1234567890", "abcdefghij", "KLMNOPQRST"];
+        for (idx, (row, row_text)) in non_empty_rows.iter().enumerate() {
+            assert_eq!(
+                row_text, expected[idx],
+                "unexpected row content at y={row}: {row_text:?}",
+            );
+        }
+        for pair in non_empty_rows.windows(2) {
+            assert_eq!(
+                pair[1].0,
+                pair[0].0 + 1,
+                "expected contiguous row progression, got {non_empty_rows:?}",
+            );
+        }
     }
 }

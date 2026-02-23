@@ -560,6 +560,49 @@ impl TranscriptOverlay {
         }
     }
 
+    /// Replace a range of committed cells with a single consolidated cell.
+    ///
+    /// Mirrors the splice performed on `App::transcript_cells` during
+    /// `ConsolidateAgentMessage` so the Ctrl+T overlay stays in sync with the
+    /// main transcript. The range is clamped defensively: cells may have been
+    /// inserted after the overlay opened, leaving it with fewer entries than
+    /// the main transcript.
+    pub(crate) fn consolidate_cells(
+        &mut self,
+        range: std::ops::Range<usize>,
+        consolidated: Arc<dyn HistoryCell>,
+    ) {
+        let follow_bottom = self.view.is_scrolled_to_bottom();
+        // Clamp the range to the overlay's cell count to avoid panic if the overlay has fewer
+        // cells than the main transcript (e.g. cells were inserted after the overlay has opened).
+        let clamped_end = range.end.min(self.cells.len());
+        let clamped_start = range.start.min(clamped_end);
+        if clamped_start < clamped_end {
+            let removed = clamped_end - clamped_start;
+            if let Some(highlight_cell) = self.highlight_cell.as_mut()
+                && *highlight_cell >= clamped_start
+            {
+                if *highlight_cell < clamped_end {
+                    *highlight_cell = clamped_start;
+                } else {
+                    *highlight_cell = highlight_cell.saturating_sub(removed.saturating_sub(1));
+                }
+            }
+            self.cells
+                .splice(clamped_start..clamped_end, std::iter::once(consolidated));
+            if self
+                .highlight_cell
+                .is_some_and(|highlight_cell| highlight_cell >= self.cells.len())
+            {
+                self.highlight_cell = None;
+            }
+            self.rebuild_renderables();
+        }
+        if follow_bottom {
+            self.view.scroll_offset = usize::MAX;
+        }
+    }
+
     /// Sync the active-cell live tail with the current width and cell state.
     ///
     /// Recomputes the tail only when the cache key changes, preserving scroll
@@ -1074,6 +1117,60 @@ mod tests {
         }));
 
         assert_eq!(overlay.view.scroll_offset, 0);
+    }
+
+    #[test]
+    fn transcript_overlay_consolidation_remaps_highlight_inside_range() {
+        let mut overlay = TranscriptOverlay::new(
+            (0..6)
+                .map(|i| {
+                    Arc::new(TestCell {
+                        lines: vec![Line::from(format!("line{i}"))],
+                    }) as Arc<dyn HistoryCell>
+                })
+                .collect(),
+        );
+        overlay.set_highlight_cell(Some(3));
+
+        overlay.consolidate_cells(
+            2..5,
+            Arc::new(TestCell {
+                lines: vec![Line::from("consolidated")],
+            }),
+        );
+
+        assert_eq!(
+            overlay.highlight_cell,
+            Some(2),
+            "highlight inside consolidated range should point to replacement cell",
+        );
+    }
+
+    #[test]
+    fn transcript_overlay_consolidation_remaps_highlight_after_range() {
+        let mut overlay = TranscriptOverlay::new(
+            (0..7)
+                .map(|i| {
+                    Arc::new(TestCell {
+                        lines: vec![Line::from(format!("line{i}"))],
+                    }) as Arc<dyn HistoryCell>
+                })
+                .collect(),
+        );
+        overlay.set_highlight_cell(Some(6));
+
+        overlay.consolidate_cells(
+            2..5,
+            Arc::new(TestCell {
+                lines: vec![Line::from("consolidated")],
+            }),
+        );
+
+        assert_eq!(
+            overlay.highlight_cell,
+            Some(4),
+            "highlight after consolidated range should shift left by removed cells",
+        );
     }
 
     #[test]

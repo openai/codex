@@ -107,6 +107,7 @@ const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 /// Smooth-mode streaming drains one line per tick, so this interval controls
 /// perceived typing speed for non-backlogged output.
 const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
+const RESIZE_REFLOW_DEBOUNCE: Duration = Duration::from_millis(75);
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -229,6 +230,27 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
         history_cell::new_warning_event(message),
     )));
+}
+
+fn trailing_run_start<T: 'static>(transcript_cells: &[Arc<dyn HistoryCell>]) -> usize {
+    let end = transcript_cells.len();
+    let mut start = end;
+
+    while start > 0
+        && transcript_cells[start - 1].is_stream_continuation()
+        && transcript_cells[start - 1].as_any().is::<T>()
+    {
+        start -= 1;
+    }
+
+    if start > 0
+        && transcript_cells[start - 1].as_any().is::<T>()
+        && !transcript_cells[start - 1].is_stream_continuation()
+    {
+        start -= 1;
+    }
+
+    start
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -537,6 +559,17 @@ pub(crate) struct App {
     pub(crate) overlay: Option<Overlay>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
     has_emitted_history_lines: bool,
+    last_transcript_render_width: Option<u16>,
+    resize_reflow_pending_until: Option<Instant>,
+    /// Set to `true` when a resize reflow runs during an active agent stream (`SetWidth` handler),
+    /// so that `ConsolidateAgentMessage` can schedule a re-reflow to pick up the
+    /// `AgentMarkdownCell` rendering.
+    ///
+    /// Cleared in three places:
+    /// 1. `ConsolidateAgentMessage` - normal completion (cells consolidated).
+    /// 2. `ConsolidateAgentMessage` - no-cells-to-consolidate `else` branch.
+    /// 3. `clear_thread_state()` - thread switch / abort.
+    reflow_ran_during_stream: bool,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -979,12 +1012,186 @@ impl App {
         self.overlay = None;
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
+        tui.clear_pending_history_lines();
         self.has_emitted_history_lines = false;
+        self.last_transcript_render_width = None;
+        self.resize_reflow_pending_until = None;
+        self.reflow_ran_during_stream = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
         tui.terminal.clear_scrollback()?;
         tui.terminal.clear()?;
         Ok(())
+    }
+
+    fn reset_history_emission_state(&mut self) {
+        self.has_emitted_history_lines = false;
+        self.deferred_history_lines.clear();
+    }
+
+    fn display_lines_for_history_insert(
+        &mut self,
+        cell: &dyn HistoryCell,
+        width: u16,
+    ) -> Vec<Line<'static>> {
+        let mut display = cell.display_lines(width);
+        if !display.is_empty() && !cell.is_stream_continuation() {
+            if self.has_emitted_history_lines {
+                display.insert(0, Line::from(""));
+            } else {
+                self.has_emitted_history_lines = true;
+            }
+        }
+        display
+    }
+
+    fn insert_history_cell_lines(
+        &mut self,
+        tui: &mut tui::Tui,
+        cell: &dyn HistoryCell,
+        width: u16,
+    ) {
+        let display = self.display_lines_for_history_insert(cell, width);
+        if display.is_empty() {
+            return;
+        }
+        if self.overlay.is_some() {
+            self.deferred_history_lines.extend(display);
+        } else {
+            tui.insert_history_lines(display);
+        }
+    }
+
+    fn schedule_resize_reflow(&mut self) -> bool {
+        let now = Instant::now();
+        let due_now = self
+            .resize_reflow_pending_until
+            .is_some_and(|deadline| now >= deadline);
+        self.resize_reflow_pending_until = Some(now + RESIZE_REFLOW_DEBOUNCE);
+        due_now
+    }
+
+    /// After stream consolidation, schedule a follow-up reflow if one ran mid-stream.
+    fn maybe_finish_stream_reflow(&mut self, tui: &mut tui::Tui) {
+        if self.reflow_ran_during_stream {
+            if self.schedule_resize_reflow() {
+                tui.frame_requester().schedule_frame();
+            } else {
+                tui.frame_requester()
+                    .schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
+            }
+        } else if self
+            .resize_reflow_pending_until
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            tui.frame_requester().schedule_frame();
+        }
+        self.reflow_ran_during_stream = false;
+    }
+
+    fn handle_draw_size_change(
+        &mut self,
+        size: ratatui::layout::Size,
+        last_known_screen_size: ratatui::layout::Size,
+        frame_requester: &tui::FrameRequester,
+    ) -> bool {
+        let previous_width = self.last_transcript_render_width.replace(size.width);
+        let width_changed = previous_width.is_some_and(|width| width != size.width);
+        if width_changed {
+            self.chat_widget.on_terminal_resize(size.width);
+            if self.schedule_resize_reflow() {
+                frame_requester.schedule_frame();
+            } else {
+                frame_requester.schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
+            }
+        } else if previous_width.is_none() {
+            self.chat_widget.on_terminal_resize(size.width);
+        }
+        if size != last_known_screen_size {
+            self.refresh_status_line();
+        }
+        self.maybe_clear_resize_reflow_without_terminal();
+        width_changed
+    }
+
+    fn maybe_clear_resize_reflow_without_terminal(&mut self) {
+        let Some(deadline) = self.resize_reflow_pending_until else {
+            return;
+        };
+        if Instant::now() < deadline || self.overlay.is_some() || !self.transcript_cells.is_empty()
+        {
+            return;
+        }
+
+        self.resize_reflow_pending_until = None;
+        self.reset_history_emission_state();
+    }
+
+    fn handle_draw_pre_render(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let size = tui.terminal.size()?;
+        let width_changed = self.handle_draw_size_change(
+            size,
+            tui.terminal.last_known_screen_size,
+            &tui.frame_requester(),
+        );
+        if width_changed {
+            // Width-sensitive history inserts queued before this frame may be wrapped for the old
+            // viewport. Drop them and let resize reflow rebuild from transcript cells.
+            tui.clear_pending_history_lines();
+        }
+        self.maybe_run_resize_reflow(tui)?;
+        Ok(())
+    }
+
+    fn maybe_run_resize_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let Some(deadline) = self.resize_reflow_pending_until else {
+            return Ok(());
+        };
+        if Instant::now() < deadline
+            || self.overlay.is_some()
+            || self.chat_widget.has_active_agent_stream()
+            || self.chat_widget.has_active_plan_stream()
+        {
+            return Ok(());
+        }
+
+        self.resize_reflow_pending_until = None;
+        // Drop any queued pre-resize inserts before rebuilding at the new width.
+        tui.clear_pending_history_lines();
+        if self.transcript_cells.is_empty() {
+            self.reset_history_emission_state();
+            return Ok(());
+        }
+
+        tui.terminal.clear_scrollback()?;
+        tui.terminal.clear()?;
+
+        self.reset_history_emission_state();
+
+        // Track that a reflow happened during an active stream or while trailing
+        // unconsolidated AgentMessageCells are still pending consolidation so
+        // ConsolidateAgentMessage can schedule a follow-up reflow.
+        if self.should_mark_reflow_as_stream_time() {
+            self.reflow_ran_during_stream = true;
+        }
+
+        let width = tui.terminal.size()?.width;
+        // Iterate by index to avoid cloning the Vec and bumping Arc refcounts.
+        for i in 0..self.transcript_cells.len() {
+            let cell = self.transcript_cells[i].clone();
+            self.insert_history_cell_lines(tui, cell.as_ref(), width);
+        }
+
+        Ok(())
+    }
+
+    fn should_mark_reflow_as_stream_time(&self) -> bool {
+        self.chat_widget.has_active_agent_stream()
+            || self.chat_widget.has_active_plan_stream()
+            || trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells)
+                < self.transcript_cells.len()
+            || trailing_run_start::<history_cell::ProposedPlanStreamCell>(&self.transcript_cells)
+                < self.transcript_cells.len()
     }
 
     fn reset_thread_event_state(&mut self) {
@@ -1283,6 +1490,9 @@ impl App {
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
+            last_transcript_render_width: None,
+            resize_reflow_pending_until: None,
+            reflow_ran_during_stream: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
@@ -1425,10 +1635,7 @@ impl App {
         event: TuiEvent,
     ) -> Result<AppRunControl> {
         if matches!(event, TuiEvent::Draw) {
-            let size = tui.terminal.size()?;
-            if size != tui.terminal.last_known_screen_size {
-                self.refresh_status_line();
-            }
+            self.handle_draw_pre_render(tui)?;
         }
 
         if self.overlay.is_some() {
@@ -1688,24 +1895,75 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
+                self.insert_history_cell_lines(
+                    tui,
+                    cell.as_ref(),
+                    tui.terminal.last_known_screen_size.width,
+                );
+            }
+            AppEvent::ConsolidateAgentMessage(source) => {
+                // Walk backward to find the contiguous run of streaming AgentMessageCells that
+                // belong to the just-finalized stream
+                let end = self.transcript_cells.len();
+                tracing::debug!(
+                    "ConsolidateAgentMessage: transcript_cells.len()={end}, source_len={}",
+                    source.len()
+                );
+                let start =
+                    trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
+                if start < end {
+                    tracing::debug!(
+                        "ConsolidateAgentMessage: replacing cells [{start}..{end}] with AgentMarkdownCell"
+                    );
+                    let consolidated: Arc<dyn HistoryCell> =
+                        Arc::new(history_cell::AgentMarkdownCell::new(source));
+                    self.transcript_cells
+                        .splice(start..end, std::iter::once(consolidated.clone()));
+
+                    // Keep the transcript overlay in sync.
+                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+                        t.consolidate_cells(start..end, consolidated.clone());
+                        tui.frame_requester().schedule_frame();
                     }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
-                    }
+
+                    self.maybe_finish_stream_reflow(tui);
+                } else {
+                    tracing::debug!(
+                        "ConsolidateAgentMessage: no cells to consolidate(start={start}, end={end})",
+                    );
+                    self.maybe_finish_stream_reflow(tui);
                 }
+            }
+            AppEvent::ConsolidateProposedPlan(source) => {
+                let end = self.transcript_cells.len();
+                let start = trailing_run_start::<history_cell::ProposedPlanStreamCell>(
+                    &self.transcript_cells,
+                );
+                let consolidated: Arc<dyn HistoryCell> =
+                    Arc::new(history_cell::new_proposed_plan(source));
+
+                if start < end {
+                    self.transcript_cells
+                        .splice(start..end, std::iter::once(consolidated.clone()));
+
+                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+                        t.consolidate_cells(start..end, consolidated.clone());
+                        tui.frame_requester().schedule_frame();
+                    }
+                } else {
+                    self.transcript_cells.push(consolidated.clone());
+                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+                        t.insert_cell(consolidated.clone());
+                        tui.frame_requester().schedule_frame();
+                    }
+                    self.insert_history_cell_lines(
+                        tui,
+                        consolidated.as_ref(),
+                        tui.terminal.last_known_screen_size.width,
+                    );
+                }
+
+                self.maybe_finish_stream_reflow(tui);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -1733,6 +1991,7 @@ impl App {
             }
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
+                self.maybe_run_resize_reflow(tui)?;
             }
             AppEvent::CodexEvent(event) => {
                 self.enqueue_primary_event(event).await?;
@@ -3130,6 +3389,7 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
+    use ratatui::layout::Size;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -3503,6 +3763,43 @@ mod tests {
         assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
     }
 
+    #[tokio::test]
+    async fn resize_reflow_repro_draw_should_drain_pending_without_commit_tick() {
+        let mut app = make_test_app().await;
+        let frame_requester = crate::tui::FrameRequester::test_dummy();
+        let size = Size::new(120, 40);
+
+        app.last_transcript_render_width = Some(100);
+        app.handle_draw_size_change(size, size, &frame_requester);
+
+        app.resize_reflow_pending_until = Some(Instant::now() - Duration::from_millis(1));
+
+        app.handle_draw_size_change(size, size, &frame_requester);
+
+        assert!(
+            app.resize_reflow_pending_until.is_none(),
+            "resize reflow should drain on draw even when commit animation is idle",
+        );
+    }
+
+    #[tokio::test]
+    async fn resize_reflow_repro_marks_stream_time_before_consolidation() {
+        let mut app = make_test_app().await;
+        app.transcript_cells.push(Arc::new(AgentMessageCell::new(
+            vec![Line::from("| Key | Value |")],
+            false,
+        )));
+
+        assert!(
+            !app.chat_widget.has_active_agent_stream(),
+            "repro requires stream controller to be cleared before consolidate event",
+        );
+        assert!(
+            app.should_mark_reflow_as_stream_time(),
+            "reflow in the pre-consolidation window should still be treated as stream-time",
+        );
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -3536,6 +3833,9 @@ mod tests {
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
+            last_transcript_render_width: None,
+            resize_reflow_pending_until: None,
+            reflow_ran_during_stream: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -3594,6 +3894,9 @@ mod tests {
                 overlay: None,
                 deferred_history_lines: Vec::new(),
                 has_emitted_history_lines: false,
+                last_transcript_render_width: None,
+                resize_reflow_pending_until: None,
+                reflow_ran_during_stream: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
                 status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),

@@ -113,9 +113,11 @@ pub mod update_action;
 mod update_prompt;
 mod updates;
 mod version;
+mod width;
 
 mod wrapping;
 
+mod table_detect;
 #[cfg(test)]
 pub mod test_backend;
 

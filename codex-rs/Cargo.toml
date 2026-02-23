@@ -276,7 +276,10 @@ tracing-subscriber = "0.3.22"
 tracing-test = "0.2.5"
 tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
-syntect = "5"
+# Keep syntect pinned while we carry explicit deny.toml exceptions for
+# RUSTSEC-2024-0320 / RUSTSEC-2025-0141; re-evaluate replacement/upgrade
+# once transitive dependencies are maintained.
+syntect = "=5.3.0"
 ts-rs = "11"
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uds_windows = "1.1.0"
