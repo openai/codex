@@ -40,7 +40,7 @@ impl ShellPolicyFactory {
     }
 }
 
-struct ShellEscalationPolicy {
+pub struct ShellEscalationPolicy {
     provider: Arc<dyn ShellActionProvider>,
     stopwatch: Stopwatch,
 }
