@@ -67,21 +67,16 @@ use codex_execpolicy::Decision;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_shell_command::is_dangerous_command::command_might_be_dangerous;
+use codex_shell_escalation as shell_escalation;
 use rmcp::ErrorData as McpError;
 use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{self};
 
-use crate::posix::mcp_escalation_policy::ExecPolicyOutcome;
+use crate::unix::mcp_escalation_policy::ExecPolicyOutcome;
 
-mod escalate_client;
-mod escalate_protocol;
-mod escalate_server;
-mod escalation_policy;
 mod mcp;
 mod mcp_escalation_policy;
-mod socket;
-mod stopwatch;
 
 pub use mcp::ExecResult;
 
@@ -165,7 +160,7 @@ pub async fn main_execve_wrapper() -> anyhow::Result<()> {
         .init();
 
     let ExecveWrapperCli { file, argv } = ExecveWrapperCli::parse();
-    let exit_code = escalate_client::run(file, argv).await?;
+    let exit_code = shell_escalation::run(file, argv).await?;
     std::process::exit(exit_code);
 }
 

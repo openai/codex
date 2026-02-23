@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,6 +9,8 @@ use codex_core::MCP_SANDBOX_STATE_METHOD;
 use codex_core::SandboxState;
 use codex_execpolicy::Policy;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_shell_escalation::EscalationPolicyFactory;
+use codex_shell_escalation::run_escalate_server;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
@@ -19,7 +20,6 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CustomRequest;
 use rmcp::model::CustomResult;
 use rmcp::model::*;
-use rmcp::schemars;
 use rmcp::service::RequestContext;
 use rmcp::service::RunningService;
 use rmcp::tool;
@@ -29,11 +29,7 @@ use rmcp::transport::stdio;
 use serde_json::json;
 use tokio::sync::RwLock;
 
-use crate::posix::escalate_server::EscalateServer;
-use crate::posix::escalate_server::{self};
-use crate::posix::escalation_policy::EscalationPolicy;
-use crate::posix::mcp_escalation_policy::McpEscalationPolicy;
-use crate::posix::stopwatch::Stopwatch;
+use crate::unix::mcp_escalation_policy::McpEscalationPolicy;
 
 /// Path to our patched bash.
 const CODEX_BASH_PATH_ENV_VAR: &str = "CODEX_BASH_PATH";
@@ -46,19 +42,7 @@ pub(crate) fn get_bash_path() -> Result<PathBuf> {
         .context(format!("{CODEX_BASH_PATH_ENV_VAR} must be set"))
 }
 
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ExecParams {
-    /// The bash string to execute.
-    pub command: String,
-    /// The working directory to execute the command in. Must be an absolute path.
-    pub workdir: String,
-    /// The timeout for the command in milliseconds.
-    pub timeout_ms: Option<u64>,
-    /// Launch Bash with -lc instead of -c: defaults to true.
-    pub login: Option<bool>,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExecResult {
     pub exit_code: i32,
     pub output: String,
@@ -66,8 +50,8 @@ pub struct ExecResult {
     pub timed_out: bool,
 }
 
-impl From<escalate_server::ExecResult> for ExecResult {
-    fn from(result: escalate_server::ExecResult) -> Self {
+impl From<codex_shell_escalation::ExecResult> for ExecResult {
+    fn from(result: codex_shell_escalation::ExecResult) -> Self {
         Self {
             exit_code: result.exit_code,
             output: result.output,
@@ -87,10 +71,27 @@ pub struct ExecTool {
     sandbox_state: Arc<RwLock<Option<SandboxState>>>,
 }
 
-trait EscalationPolicyFactory {
-    type Policy: EscalationPolicy + Send + Sync + 'static;
+#[derive(Debug, serde::Serialize, serde::Deserialize, rmcp::schemars::JsonSchema)]
+pub struct ExecParams {
+    /// The bash string to execute.
+    pub command: String,
+    /// The working directory to execute the command in. Must be an absolute path.
+    pub workdir: String,
+    /// The timeout for the command in milliseconds.
+    pub timeout_ms: Option<u64>,
+    /// Launch Bash with -lc instead of -c: defaults to true.
+    pub login: Option<bool>,
+}
 
-    fn create_policy(&self, policy: Arc<RwLock<Policy>>, stopwatch: Stopwatch) -> Self::Policy;
+impl From<ExecParams> for codex_shell_escalation::ExecParams {
+    fn from(inner: ExecParams) -> Self {
+        Self {
+            command: inner.command,
+            workdir: inner.workdir,
+            timeout_ms: inner.timeout_ms,
+            login: inner.login,
+        }
+    }
 }
 
 struct McpEscalationPolicyFactory {
@@ -101,7 +102,11 @@ struct McpEscalationPolicyFactory {
 impl EscalationPolicyFactory for McpEscalationPolicyFactory {
     type Policy = McpEscalationPolicy;
 
-    fn create_policy(&self, policy: Arc<RwLock<Policy>>, stopwatch: Stopwatch) -> Self::Policy {
+    fn create_policy(
+        &self,
+        policy: Arc<RwLock<Policy>>,
+        stopwatch: codex_shell_escalation::Stopwatch,
+    ) -> Self::Policy {
         McpEscalationPolicy::new(
             policy,
             self.context.clone(),
@@ -153,8 +158,8 @@ impl ExecTool {
                     use_linux_sandbox_bwrap: false,
                 });
         let result = run_escalate_server(
-            params,
-            sandbox_state,
+            params.into(),
+            &sandbox_state,
             &self.bash_path,
             &self.execve_wrapper,
             self.policy.clone(),
@@ -170,48 +175,6 @@ impl ExecTool {
             ExecResult::from(result),
         )?]))
     }
-}
-
-/// Runs the escalate server to execute a shell command with potential
-/// escalation of execve calls.
-///
-/// - `exec_params` defines the shell command to run
-/// - `sandbox_state` is the sandbox to use to run the shell program
-/// - `shell_program` is the path to the shell program to run (e.g. /bin/bash)
-/// - `execve_wrapper` is the path to the execve wrapper binary to use for
-///   handling execve calls from the shell program. This is likely a symlink to
-///   Codex using a special name.
-/// - `policy` is the exec policy to use for deciding whether to allow or deny
-///   execve calls from the shell program.
-/// - `escalation_policy_factory` is a factory for creating an
-///   `EscalationPolicy` to use for deciding whether to allow, deny, or prompt
-///   the user for execve calls from the shell program. We use a factory here
-///   because the `EscalationPolicy` may need to capture request-specific
-///   context (e.g. the MCP request context) that is not available at the time
-///   we create the `ExecTool`.
-/// - `effective_timeout` is the timeout to use for running the shell command.
-///   Implementations are encouraged to excludeany time spent prompting the
-///   user.
-async fn run_escalate_server(
-    exec_params: ExecParams,
-    sandbox_state: SandboxState,
-    shell_program: impl AsRef<Path>,
-    execve_wrapper: impl AsRef<Path>,
-    policy: Arc<RwLock<Policy>>,
-    escalation_policy_factory: impl EscalationPolicyFactory,
-    effective_timeout: Duration,
-) -> anyhow::Result<crate::posix::escalate_server::ExecResult> {
-    let stopwatch = Stopwatch::new(effective_timeout);
-    let cancel_token = stopwatch.cancellation_token();
-    let escalate_server = EscalateServer::new(
-        shell_program.as_ref().to_path_buf(),
-        execve_wrapper.as_ref().to_path_buf(),
-        escalation_policy_factory.create_policy(policy, stopwatch),
-    );
-
-    escalate_server
-        .exec(exec_params, cancel_token, &sandbox_state)
-        .await
 }
 
 #[derive(Default)]
@@ -307,7 +270,7 @@ mod tests {
     /// `timeout_ms` fields are optional.
     #[test]
     fn exec_params_json_schema_matches_expected() {
-        let schema = schemars::schema_for!(ExecParams);
+        let schema = rmcp::schemars::schema_for!(ExecParams);
         let actual = serde_json::to_value(schema).expect("schema should serialize");
 
         assert_eq!(

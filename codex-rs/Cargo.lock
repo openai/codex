@@ -1786,21 +1786,19 @@ dependencies = [
  "codex-execpolicy",
  "codex-protocol",
  "codex-shell-command",
+ "codex-shell-escalation",
  "codex-utils-cargo-bin",
  "core_test_support",
  "exec_server_test_support",
- "libc",
  "maplit",
- "path-absolutize",
  "pretty_assertions",
  "rmcp",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "shlex",
- "socket2 0.6.2",
  "tempfile",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2199,6 +2197,27 @@ dependencies = [
  "tree-sitter-bash",
  "url",
  "which",
+]
+
+[[package]]
+name = "codex-shell-escalation"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "codex-core",
+ "codex-execpolicy",
+ "codex-protocol",
+ "libc",
+ "path-absolutize",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "socket2 0.6.2",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
