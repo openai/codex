@@ -1257,7 +1257,10 @@ impl From<anyhow::Error> for StartupOutcomeError {
     }
 }
 
-fn elicitation_capability_for_server(server_name: &str) -> Option<ElicitationCapability> {
+fn elicitation_capability_for_server(
+    server_name: &str,
+    mcp_elicitations_enabled: bool,
+) -> Option<ElicitationCapability> {
     if server_name == CODEX_APPS_MCP_SERVER_NAME {
         // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
         // indicates this should be an empty object.
@@ -1265,7 +1268,7 @@ fn elicitation_capability_for_server(server_name: &str) -> Option<ElicitationCap
             form: Some(FormElicitationCapability {
                 schema_validation: None,
             }),
-            url: Some(UrlElicitationCapability {}),
+            url: mcp_elicitations_enabled.then_some(UrlElicitationCapability {}),
         })
     } else {
         None
@@ -1285,7 +1288,10 @@ async fn start_server_task(
         elicitation_requests,
         codex_apps_tools_cache_context,
     } = params;
-    let elicitation = elicitation_capability_for_server(&server_name);
+    let elicitation = elicitation_capability_for_server(
+        &server_name,
+        elicitation_requests.mcp_elicitations_enabled,
+    );
     let params = InitializeRequestParams {
         meta: None,
         capabilities: ClientCapabilities {
@@ -2166,7 +2172,8 @@ mod tests {
 
     #[test]
     fn elicitation_capability_enabled_only_for_codex_apps() {
-        let codex_apps_capability = elicitation_capability_for_server(CODEX_APPS_MCP_SERVER_NAME);
+        let codex_apps_capability =
+            elicitation_capability_for_server(CODEX_APPS_MCP_SERVER_NAME, true);
         assert!(matches!(
             codex_apps_capability,
             Some(ElicitationCapability {
@@ -2177,7 +2184,19 @@ mod tests {
             })
         ));
 
-        assert!(elicitation_capability_for_server("custom_mcp").is_none());
+        let codex_apps_without_feature =
+            elicitation_capability_for_server(CODEX_APPS_MCP_SERVER_NAME, false);
+        assert!(matches!(
+            codex_apps_without_feature,
+            Some(ElicitationCapability {
+                form: Some(FormElicitationCapability {
+                    schema_validation: None
+                }),
+                url: None,
+            })
+        ));
+
+        assert!(elicitation_capability_for_server("custom_mcp", true).is_none());
     }
 
     #[test]
