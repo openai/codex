@@ -10,16 +10,16 @@ Choose a turn from the current conversation to fork after.
 │      Short answer: not via the current app-server protocol.              │
 │› 2: Please also handle macOS path edge cases when filenames contain ...  │
 │      Acknowledged. I will cover macOS path handling and spaces.          │
+│  3: One more thing: include tests for rollback + fork interaction        │
+│      I added coverage for rollback semantics in the turn extraction he...│
 └──────────────────────────────────────────────────────────────────────────┘
-┌Selected turn─────────────────────────────────────────────────────────────┐
-│Selected: 2:                                                              │
-│                                                                          │
-│User request                                                              │
+┌Selected turn: 2──────────────────────────────────────────────────────────┐
 │Please also handle macOS path edge cases when filenames contain spaces    │
 │                                                                          │
-│Model response                                                            │
 │Acknowledged. I will cover macOS path handling and spaces.                │
 │                                                                          │
 │Forking here omits 1 newer turn from the new thread.                      │
+│                                                                          │
+│                                                                          │
 └──────────────────────────────────────────────────────────────────────────┘
 Use ↑/↓ (or j/k) to choose, enter to fork, esc to cancel, digits jump to row

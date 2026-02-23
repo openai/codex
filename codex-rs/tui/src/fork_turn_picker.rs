@@ -25,7 +25,6 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Clear;
@@ -354,7 +353,7 @@ impl ForkTurnPickerScreen {
             .constraints([
                 Constraint::Length(3),
                 Constraint::Min(6),
-                Constraint::Length(11),
+                Constraint::Length(9),
                 Constraint::Length(2),
             ])
             .split(area);
@@ -456,9 +455,14 @@ impl ForkTurnPickerScreen {
     }
 
     fn render_selected_preview(&self, area: Rect, buf: &mut Buffer) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title("Selected turn");
+        let display_number = self.display_turn_number(self.selected);
+        let is_latest = self.selected + 1 == self.turns.len();
+        let title = if is_latest {
+            format!("Selected turn: {display_number} (latest)")
+        } else {
+            format!("Selected turn: {display_number}")
+        };
+        let block = Block::default().borders(Borders::ALL).title(title);
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -467,7 +471,6 @@ impl ForkTurnPickerScreen {
         }
 
         let selected = &self.turns[self.selected];
-        let display_number = self.display_turn_number(self.selected);
         let newer_turns = self
             .turns
             .len()
@@ -485,20 +488,8 @@ impl ForkTurnPickerScreen {
             .unwrap_or("[no model response recorded]");
 
         let lines = vec![
-            Line::from(vec![
-                "Selected: ".dim(),
-                format!("{display_number}:").cyan(),
-                if self.selected + 1 == self.turns.len() {
-                    Span::from(" (latest)").dim()
-                } else {
-                    Span::from("")
-                },
-            ]),
-            Line::from(""),
-            Line::from("User request".dim()),
             Line::from(selected.user_request.clone()),
             Line::from(""),
-            Line::from("Model response".dim()),
             Line::from(model_response).dim(),
             Line::from(""),
             Line::from(status_line).dim(),
