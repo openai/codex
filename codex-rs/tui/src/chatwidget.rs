@@ -217,6 +217,7 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
+use crate::clipboard_text;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -550,6 +551,8 @@ pub(crate) struct ChatWidget {
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
+    // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
+    last_copyable_output: Option<String>,
     running_commands: HashMap<String, RunningCommand>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
@@ -662,6 +665,9 @@ pub(crate) struct ChatWidget {
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
+    #[cfg(test)]
+    clipboard_text_writer_override:
+        Option<Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync + 'static>>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -1077,6 +1083,7 @@ impl ChatWidget {
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.clone());
         let initial_messages = event.initial_messages.clone();
+        self.last_copyable_output = None;
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -1265,6 +1272,9 @@ impl ChatWidget {
         } else {
             text
         };
+        if !plan_text.trim().is_empty() {
+            self.last_copyable_output = Some(plan_text.clone());
+        }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.
         let should_restore_after_stream = self.plan_stream_controller.is_some();
@@ -1358,6 +1368,11 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+        if let Some(message) = last_agent_message.as_ref()
+            && !message.trim().is_empty()
+        {
+            self.last_copyable_output = Some(message.clone());
+        }
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
@@ -2223,11 +2238,24 @@ impl ChatWidget {
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
     fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
+        let is_final_answer = matches!(item.phase.as_ref(), Some(MessagePhase::FinalAnswer));
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
             Some(MessagePhase::FinalAnswer) | None => false,
             Some(MessagePhase::Commentary) => true,
         };
+        if is_final_answer {
+            let text = item
+                .content
+                .into_iter()
+                .map(|entry| match entry {
+                    codex_protocol::items::AgentMessageContent::Text { text } => text,
+                })
+                .collect::<String>();
+            if !text.trim().is_empty() {
+                self.last_copyable_output = Some(text);
+            }
+        }
         self.maybe_restore_status_indicator_after_stream_idle();
     }
 
@@ -2685,6 +2713,7 @@ impl ChatWidget {
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
+            last_copyable_output: None,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -2735,6 +2764,8 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            #[cfg(test)]
+            clipboard_text_writer_override: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2855,6 +2886,7 @@ impl ChatWidget {
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
+            last_copyable_output: None,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -2905,6 +2937,8 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            #[cfg(test)]
+            clipboard_text_writer_override: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3014,6 +3048,7 @@ impl ChatWidget {
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
+            last_copyable_output: None,
             running_commands: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -3064,6 +3099,8 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            #[cfg(test)]
+            clipboard_text_writer_override: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3466,6 +3503,41 @@ impl ChatWidget {
                     };
                     tx.send(AppEvent::DiffResult(text));
                 });
+            }
+            SlashCommand::Copy => {
+                let Some(text) = self.last_copyable_output.as_deref() else {
+                    self.add_info_message(
+                        "No completed Codex output available to copy yet.".to_string(),
+                        None,
+                    );
+                    return;
+                };
+
+                #[cfg(test)]
+                let copy_result = if let Some(writer) = &self.clipboard_text_writer_override {
+                    writer(text)
+                } else {
+                    clipboard_text::copy_text_to_clipboard(text).map_err(|e| e.to_string())
+                };
+                #[cfg(not(test))]
+                let copy_result =
+                    clipboard_text::copy_text_to_clipboard(text).map_err(|e| e.to_string());
+
+                match copy_result {
+                    Ok(()) => {
+                        let hint = self.agent_turn_running.then_some(
+                            "Current turn is still running; copied the latest completed output (not the in-progress response)."
+                                .to_string(),
+                        );
+                        self.add_info_message(
+                            "Copied latest Codex output to clipboard.".to_string(),
+                            hint,
+                        );
+                    }
+                    Err(err) => {
+                        self.add_error_message(format!("Failed to copy to clipboard: {err}"))
+                    }
+                }
             }
             SlashCommand::Mention => {
                 self.insert_str("@");

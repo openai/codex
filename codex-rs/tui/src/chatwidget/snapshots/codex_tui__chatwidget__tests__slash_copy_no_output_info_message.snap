@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 4430
+expression: rendered.clone()
+---
+• No completed Codex output available to copy yet.
