@@ -988,6 +988,48 @@ impl App {
         self.pending_primary_events.clear();
     }
 
+    async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
+        // Start a fresh in-memory session while preserving resumability via persisted rollout
+        // history.
+        let model = self.chat_widget.current_model().to_string();
+        let summary = session_summary(
+            self.chat_widget.token_usage(),
+            self.chat_widget.thread_id(),
+            self.chat_widget.thread_name(),
+        );
+        self.shutdown_current_thread().await;
+        if let Err(err) = self.server.remove_and_close_all_threads().await {
+            tracing::warn!(error = %err, "failed to close all threads");
+        }
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: self.config.clone(),
+            frame_requester: tui.frame_requester(),
+            app_event_tx: self.app_event_tx.clone(),
+            // New sessions start without prefilled message content.
+            initial_user_message: None,
+            enhanced_keys_supported: self.enhanced_keys_supported,
+            auth_manager: self.auth_manager.clone(),
+            models_manager: self.server.get_models_manager(),
+            feedback: self.feedback.clone(),
+            is_first_run: false,
+            feedback_audience: self.feedback_audience,
+            model: Some(model),
+            status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
+            otel_manager: self.otel_manager.clone(),
+        };
+        self.chat_widget = ChatWidget::new(init, self.server.clone());
+        self.reset_thread_event_state();
+        if let Some(summary) = summary {
+            let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+            if let Some(command) = summary.resume_command {
+                let spans = vec!["To continue this session, run ".into(), command.cyan()];
+                lines.push(spans.into());
+            }
+            self.chat_widget.add_plain_history_lines(lines);
+        }
+        tui.frame_requester().schedule_frame();
+    }
+
     async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
         let Some(mut rx) = self.active_thread_rx.take() else {
             return Ok(());
@@ -1474,43 +1516,7 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
-                let model = self.chat_widget.current_model().to_string();
-                let summary = session_summary(
-                    self.chat_widget.token_usage(),
-                    self.chat_widget.thread_id(),
-                    self.chat_widget.thread_name(),
-                );
-                self.shutdown_current_thread().await;
-                if let Err(err) = self.server.remove_and_close_all_threads().await {
-                    tracing::warn!(error = %err, "failed to close all threads");
-                }
-                let init = crate::chatwidget::ChatWidgetInit {
-                    config: self.config.clone(),
-                    frame_requester: tui.frame_requester(),
-                    app_event_tx: self.app_event_tx.clone(),
-                    // New sessions start without prefilled message content.
-                    initial_user_message: None,
-                    enhanced_keys_supported: self.enhanced_keys_supported,
-                    auth_manager: self.auth_manager.clone(),
-                    models_manager: self.server.get_models_manager(),
-                    feedback: self.feedback.clone(),
-                    is_first_run: false,
-                    feedback_audience: self.feedback_audience,
-                    model: Some(model),
-                    status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
-                    otel_manager: self.otel_manager.clone(),
-                };
-                self.chat_widget = ChatWidget::new(init, self.server.clone());
-                self.reset_thread_event_state();
-                if let Some(summary) = summary {
-                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
-                    if let Some(command) = summary.resume_command {
-                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
-                        lines.push(spans.into());
-                    }
-                    self.chat_widget.add_plain_history_lines(lines);
-                }
-                tui.frame_requester().schedule_frame();
+                self.start_fresh_session_with_summary_hint(tui).await;
             }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, false)?;
@@ -1521,45 +1527,7 @@ impl App {
                 self.backtrack = BacktrackState::default();
                 self.backtrack_render_pending = false;
 
-                // Match `/new` session semantics after nuking the terminal UI: close active in-memory
-                // thread handles, but preserve resumeability via the persisted rollout history.
-                let model = self.chat_widget.current_model().to_string();
-                let summary = session_summary(
-                    self.chat_widget.token_usage(),
-                    self.chat_widget.thread_id(),
-                    self.chat_widget.thread_name(),
-                );
-                self.shutdown_current_thread().await;
-                if let Err(err) = self.server.remove_and_close_all_threads().await {
-                    tracing::warn!(error = %err, "failed to close all threads");
-                }
-                let init = crate::chatwidget::ChatWidgetInit {
-                    config: self.config.clone(),
-                    frame_requester: tui.frame_requester(),
-                    app_event_tx: self.app_event_tx.clone(),
-                    // New sessions start without prefilled message content.
-                    initial_user_message: None,
-                    enhanced_keys_supported: self.enhanced_keys_supported,
-                    auth_manager: self.auth_manager.clone(),
-                    models_manager: self.server.get_models_manager(),
-                    feedback: self.feedback.clone(),
-                    is_first_run: false,
-                    feedback_audience: self.feedback_audience,
-                    model: Some(model),
-                    status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
-                    otel_manager: self.otel_manager.clone(),
-                };
-                self.chat_widget = ChatWidget::new(init, self.server.clone());
-                self.reset_thread_event_state();
-                if let Some(summary) = summary {
-                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
-                    if let Some(command) = summary.resume_command {
-                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
-                        lines.push(spans.into());
-                    }
-                    self.chat_widget.add_plain_history_lines(lines);
-                }
-                tui.frame_requester().schedule_frame();
+                self.start_fresh_session_with_summary_hint(tui).await;
             }
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
