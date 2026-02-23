@@ -406,6 +406,7 @@ impl ForkTurnPickerScreen {
         let visible_entries = (visible_rows / 2).max(1);
         let mut lines = Vec::with_capacity(visible_rows);
         let scroll_top = self.effective_scroll_top(visible_entries);
+        let label_digits = self.max_display_label_digits();
         let end = self
             .effective_scroll_top(visible_entries)
             .saturating_add(visible_entries)
@@ -413,7 +414,7 @@ impl ForkTurnPickerScreen {
         for idx in scroll_top..end {
             let is_selected = idx == self.selected;
             let display_number = self.display_turn_number(idx);
-            let label = format!("{display_number}:");
+            let label = format!("{display_number:>label_digits$}:");
             let user_prefix = format!("{} {} ", if is_selected { "›" } else { " " }, label);
             let user_width = usize::from(inner.width).saturating_sub(user_prefix.len());
             let user_text = if user_width == 0 {
@@ -509,6 +510,10 @@ impl ForkTurnPickerScreen {
 
     fn display_turn_number(&self, idx: usize) -> usize {
         idx.saturating_add(1)
+    }
+
+    fn max_display_label_digits(&self) -> usize {
+        self.turns.len().max(1).to_string().len()
     }
 }
 
