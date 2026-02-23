@@ -1,5 +1,3 @@
-//! Helpers for computing and caching optional per-turn metadata headers.
-
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;

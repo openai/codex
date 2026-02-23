@@ -903,29 +903,22 @@ impl ModelClientSession {
 
             let ws_request = self.prepare_websocket_request(ws_payload, &request, ws_version);
             self.websocket_last_request = Some(request);
-            return self.send_websocket_request(ws_request, otel_manager).await;
+            let stream_result = self
+                .connection
+                .as_ref()
+                .ok_or_else(|| {
+                    map_api_error(ApiError::Stream(
+                        "websocket connection is unavailable".to_string(),
+                    ))
+                })?
+                .stream_request(ws_request)
+                .await
+                .map_err(map_api_error)?;
+            let (stream, last_request_rx) =
+                map_response_stream(stream_result, otel_manager.clone());
+            self.websocket_last_response_rx = Some(last_request_rx);
+            return Ok(WebsocketStreamOutcome::Stream(stream));
         }
-    }
-
-    async fn send_websocket_request(
-        &mut self,
-        request: ResponsesWsRequest,
-        otel_manager: &OtelManager,
-    ) -> Result<WebsocketStreamOutcome> {
-        let stream_result = self
-            .connection
-            .as_ref()
-            .ok_or_else(|| {
-                map_api_error(ApiError::Stream(
-                    "websocket connection is unavailable".to_string(),
-                ))
-            })?
-            .stream_request(request)
-            .await
-            .map_err(map_api_error)?;
-        let (stream, last_request_rx) = map_response_stream(stream_result, otel_manager.clone());
-        self.websocket_last_response_rx = Some(last_request_rx);
-        Ok(WebsocketStreamOutcome::Stream(stream))
     }
 
     /// Builds request and SSE telemetry for streaming API calls.
