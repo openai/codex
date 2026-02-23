@@ -6,11 +6,19 @@ use anyhow::Context as _;
 use anyhow::Result;
 use codex_core::MCP_SANDBOX_STATE_CAPABILITY;
 use codex_core::MCP_SANDBOX_STATE_METHOD;
-use codex_core::SandboxState;
+use codex_core::SandboxState as CoreSandboxState;
+use codex_core::exec::process_exec_tool_call;
 use codex_execpolicy::Policy;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_shell_escalation::EscalationPolicyFactory;
-use codex_shell_escalation::run_escalate_server;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::SandboxPermissions as ProtocolSandboxPermissions;
+use codex_shell_escalation::unix::escalate_server::EscalationPolicyFactory;
+use codex_shell_escalation::unix::escalate_server::ExecParams as ShellExecParams;
+use codex_shell_escalation::unix::escalate_server::ExecResult as ShellExecResult;
+use codex_shell_escalation::unix::escalate_server::SandboxState as ShellEscalationSandboxState;
+use codex_shell_escalation::unix::escalate_server::ShellCommandExecutor;
+use codex_shell_escalation::unix::escalate_server::run_escalate_server;
+use codex_shell_escalation::unix::stopwatch::Stopwatch;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
@@ -28,6 +36,8 @@ use rmcp::tool_router;
 use rmcp::transport::stdio;
 use serde_json::json;
 use tokio::sync::RwLock;
+use std::collections::HashMap;
+use tokio_util::sync::CancellationToken;
 
 use crate::unix::mcp_escalation_policy::McpEscalationPolicy;
 
@@ -50,8 +60,8 @@ pub struct ExecResult {
     pub timed_out: bool,
 }
 
-impl From<codex_shell_escalation::ExecResult> for ExecResult {
-    fn from(result: codex_shell_escalation::ExecResult) -> Self {
+impl From<ShellExecResult> for ExecResult {
+    fn from(result: ShellExecResult) -> Self {
         Self {
             exit_code: result.exit_code,
             output: result.output,
@@ -68,7 +78,7 @@ pub struct ExecTool {
     execve_wrapper: PathBuf,
     policy: Arc<RwLock<Policy>>,
     preserve_program_paths: bool,
-    sandbox_state: Arc<RwLock<Option<SandboxState>>>,
+    sandbox_state: Arc<RwLock<Option<CoreSandboxState>>>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -83,7 +93,7 @@ pub struct ExecParams {
     pub login: Option<bool>,
 }
 
-impl From<ExecParams> for codex_shell_escalation::ExecParams {
+impl From<ExecParams> for ShellExecParams {
     fn from(inner: ExecParams) -> Self {
         Self {
             command: inner.command,
@@ -99,13 +109,54 @@ struct McpEscalationPolicyFactory {
     preserve_program_paths: bool,
 }
 
+struct McpShellCommandExecutor;
+
+#[async_trait::async_trait]
+impl ShellCommandExecutor for McpShellCommandExecutor {
+    async fn run(
+        &self,
+        command: Vec<String>,
+        cwd: PathBuf,
+        env: HashMap<String, String>,
+        cancel_rx: CancellationToken,
+        sandbox_state: &ShellEscalationSandboxState,
+    ) -> anyhow::Result<ShellExecResult> {
+        let result = process_exec_tool_call(
+            codex_core::exec::ExecParams {
+                command,
+                cwd,
+                expiration: codex_core::exec::ExecExpiration::Cancellation(cancel_rx),
+                env,
+                network: None,
+                sandbox_permissions: ProtocolSandboxPermissions::UseDefault,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                justification: None,
+                arg0: None,
+            },
+            &sandbox_state.sandbox_policy,
+            &sandbox_state.sandbox_cwd,
+            &sandbox_state.codex_linux_sandbox_exe,
+            sandbox_state.use_linux_sandbox_bwrap,
+            None,
+        )
+        .await?;
+
+        Ok(ShellExecResult {
+            exit_code: result.exit_code,
+            output: result.aggregated_output.text,
+            duration: result.duration,
+            timed_out: result.timed_out,
+        })
+    }
+}
+
 impl EscalationPolicyFactory for McpEscalationPolicyFactory {
     type Policy = McpEscalationPolicy;
 
     fn create_policy(
         &self,
         policy: Arc<RwLock<Policy>>,
-        stopwatch: codex_shell_escalation::Stopwatch,
+        stopwatch: Stopwatch,
     ) -> Self::Policy {
         McpEscalationPolicy::new(
             policy,
@@ -151,15 +202,21 @@ impl ExecTool {
                 .read()
                 .await
                 .clone()
-                .unwrap_or_else(|| SandboxState {
+                .unwrap_or_else(|| CoreSandboxState {
                     sandbox_policy: SandboxPolicy::new_read_only_policy(),
                     codex_linux_sandbox_exe: None,
                     sandbox_cwd: PathBuf::from(&params.workdir),
                     use_linux_sandbox_bwrap: false,
                 });
+        let shell_sandbox_state = ShellEscalationSandboxState {
+            sandbox_policy: sandbox_state.sandbox_policy.clone(),
+            codex_linux_sandbox_exe: sandbox_state.codex_linux_sandbox_exe.clone(),
+            sandbox_cwd: sandbox_state.sandbox_cwd.clone(),
+            use_linux_sandbox_bwrap: sandbox_state.use_linux_sandbox_bwrap,
+        };
         let result = run_escalate_server(
             params.into(),
-            &sandbox_state,
+            &shell_sandbox_state,
             &self.bash_path,
             &self.execve_wrapper,
             self.policy.clone(),
@@ -168,6 +225,7 @@ impl ExecTool {
                 preserve_program_paths: self.preserve_program_paths,
             },
             effective_timeout,
+            &McpShellCommandExecutor,
         )
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -236,7 +294,7 @@ impl ServerHandler for ExecTool {
             ));
         };
 
-        let Ok(sandbox_state) = serde_json::from_value::<SandboxState>(params.clone()) else {
+        let Ok(sandbox_state) = serde_json::from_value::<CoreSandboxState>(params.clone()) else {
             return Err(McpError::invalid_params(
                 "failed to deserialize sandbox state".to_string(),
                 Some(params),
