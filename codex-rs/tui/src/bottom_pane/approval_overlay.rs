@@ -488,7 +488,7 @@ fn exec_options(
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
             },
             ApprovalOption {
-                label: "Yes, and allow this host for this session".to_string(),
+                label: "Yes, and allow this host for this conversation".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
@@ -500,10 +500,7 @@ fn exec_options(
                     "Yes, and allow this host in the future".to_string(),
                     KeyCode::Char('p'),
                 ),
-                NetworkPolicyRuleAction::Deny => (
-                    "No, and never allow this host".to_string(),
-                    KeyCode::Char('d'),
-                ),
+                NetworkPolicyRuleAction::Deny => continue,
             };
             options.push(ApprovalOption {
                 label,
@@ -691,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn network_deny_forever_option_emits_network_policy_amendment() {
+    fn network_deny_forever_shortcut_is_not_bound() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let mut view = ApprovalOverlay::new(
@@ -720,26 +717,9 @@ mod tests {
         );
         view.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
 
-        let mut saw_op = false;
-        while let Ok(ev) = rx.try_recv() {
-            if let AppEvent::CodexOp(Op::ExecApproval { decision, .. }) = ev {
-                assert_eq!(
-                    decision,
-                    ReviewDecision::NetworkPolicyAmendment {
-                        network_policy_amendment: NetworkPolicyAmendment {
-                            host: "example.com".to_string(),
-                            action: NetworkPolicyRuleAction::Deny,
-                        },
-                    }
-                );
-                saw_op = true;
-                break;
-            }
-        }
-
         assert!(
-            saw_op,
-            "expected network deny-forever decision to emit an op"
+            rx.try_recv().is_err(),
+            "unexpected approval event emitted for hidden network deny shortcut"
         );
     }
 
@@ -802,9 +782,8 @@ mod tests {
             labels,
             vec![
                 "Yes, just this once".to_string(),
-                "Yes, and allow this host for this session".to_string(),
+                "Yes, and allow this host for this conversation".to_string(),
                 "Yes, and allow this host in the future".to_string(),
-                "No, and never allow this host".to_string(),
                 "No, and tell Codex what to do differently".to_string(),
             ]
         );
