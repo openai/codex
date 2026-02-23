@@ -219,9 +219,9 @@ fn ensure_codex_cli() -> Result<PathBuf> {
 }
 
 async fn resolve_git_path(use_login_shell: bool) -> Result<String> {
-    let bash_flag = if use_login_shell { "-lc" } else { "-c" };
-    let git = Command::new("bash")
-        .arg(bash_flag)
+    let zsh_flag = if use_login_shell { "-lc" } else { "-c" };
+    let git = Command::new("zsh")
+        .arg(zsh_flag)
         .arg("command -v git")
         .output()
         .await
