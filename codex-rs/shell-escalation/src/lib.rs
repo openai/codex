@@ -1,3 +1,4 @@
+<<<<<<< local: 4dbedf0a57a9 - mbolin: Use Arc-based ToolCtx in tool runtimes
 #[cfg(unix)]
 mod unix {
     mod escalate_client;
@@ -19,3 +20,11 @@ mod unix {
 
 #[cfg(unix)]
 pub use unix::*;
+||||||| base
+=======
+#[cfg(unix)]
+pub mod unix;
+
+#[cfg(unix)]
+pub use unix::*;
+>>>>>>> graft: 3aab533f2d22 - mbolin: Support zsh shell tool with shell-escal...

@@ -32,7 +32,16 @@ codex-core = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
+<<<<<<< local: 4dbedf0a57a9 - mbolin: Use Arc-based ToolCtx in tool runtimes
 codex-shell-escalation = { workspace = true }
+||||||| base
+libc = { workspace = true }
+path-absolutize = { workspace = true }
+=======
+
+[target.'cfg(unix)'.dependencies]
+codex-shell-escalation = { workspace = true }
+>>>>>>> graft: 3aab533f2d22 - mbolin: Support zsh shell tool with shell-escal...
 rmcp = { workspace = true, default-features = false, features = [
     "auth",
     "elicitation",
@@ -50,7 +59,22 @@ schemars = { version = "1.2.1" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 shlex = { workspace = true }
+<<<<<<< local: 4dbedf0a57a9 - mbolin: Use Arc-based ToolCtx in tool runtimes
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+||||||| base
+socket2 = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tokio-util = { workspace = true }
+=======
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tokio-util = { workspace = true }
+>>>>>>> graft: 3aab533f2d22 - mbolin: Support zsh shell tool with shell-escal...
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
