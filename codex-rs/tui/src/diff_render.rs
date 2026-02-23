@@ -629,6 +629,7 @@ fn push_wrapped_diff_line_inner_with_theme(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_wrapped_diff_line_inner_with_theme_and_color_level(
     line_number: usize,
     kind: DiffLineType,
