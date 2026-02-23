@@ -5,8 +5,8 @@ expression: terminal.backend()
 /fork select a turn
 Choose a turn from the current conversation to fork after.
 3 turns available. The newest turn is selected by default.
-┌Turns (oldest to newest, 1 = latest)──────────────────────────────────────┐
-│  3: Initial bug report with stack trace and repro steps                  │
+┌Turns (oldest to newest)──────────────────────────────────────────────────┐
+│  1: Initial bug report with stack trace and repro steps                  │
 │      Short answer: not via the current app-server protocol.              │
 │› 2: Please also handle macOS path edge cases when filenames contain ...  │
 │      Acknowledged. I will cover macOS path handling and spaces.          │
@@ -22,5 +22,4 @@ Choose a turn from the current conversation to fork after.
 │                                                                          │
 │Forking here omits 1 newer turn from the new thread.                      │
 └──────────────────────────────────────────────────────────────────────────┘
-Use ↑/↓ (or j/k) to choose, enter to fork, esc to cancel, digits jump (1 =
-latest)
+Use ↑/↓ (or j/k) to choose, enter to fork, esc to cancel, digits jump to row

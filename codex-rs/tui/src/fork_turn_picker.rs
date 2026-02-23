@@ -318,7 +318,7 @@ impl ForkTurnPickerScreen {
         if display_number == 0 || display_number > self.turns.len() {
             return;
         }
-        let idx = self.turns.len().saturating_sub(display_number);
+        let idx = display_number.saturating_sub(1);
         self.select_index(idx);
     }
 
@@ -384,7 +384,7 @@ impl ForkTurnPickerScreen {
             key_hint::plain(KeyCode::Enter).into(),
             " to fork, ".dim(),
             key_hint::plain(KeyCode::Esc).into(),
-            " to cancel, digits jump (1 = latest)".dim(),
+            " to cancel, digits jump to row".dim(),
         ]);
         Paragraph::new(hints)
             .wrap(Wrap { trim: false })
@@ -394,7 +394,7 @@ impl ForkTurnPickerScreen {
     fn render_turn_list(&self, area: Rect, buf: &mut Buffer) {
         let block = Block::default()
             .borders(Borders::ALL)
-            .title("Turns (oldest to newest, 1 = latest)");
+            .title("Turns (oldest to newest)");
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -487,7 +487,7 @@ impl ForkTurnPickerScreen {
             Line::from(vec![
                 "Selected: ".dim(),
                 format!("{display_number}:").cyan(),
-                if display_number == 1 {
+                if self.selected + 1 == self.turns.len() {
                     Span::from(" (latest)").dim()
                 } else {
                     Span::from("")
@@ -508,7 +508,7 @@ impl ForkTurnPickerScreen {
     }
 
     fn display_turn_number(&self, idx: usize) -> usize {
-        self.turns.len().saturating_sub(idx)
+        idx.saturating_add(1)
     }
 }
 
