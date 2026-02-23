@@ -32,9 +32,9 @@ const MCP_DEPENDENCY_OPTION_INSTALL: &str = "Install";
 const MCP_DEPENDENCY_OPTION_SKIP: &str = "Continue anyway";
 
 fn is_full_access_mode(turn_context: &TurnContext) -> bool {
-    matches!(turn_context.approval_policy, AskForApproval::Never)
+    matches!(turn_context.approval_policy.value(), AskForApproval::Never)
         && matches!(
-            turn_context.sandbox_policy,
+            turn_context.sandbox_policy.get(),
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
         )
 }
@@ -242,6 +242,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             oauth_config.env_http_headers,
             &[],
             config.mcp_oauth_callback_port,
+            config.mcp_oauth_callback_url.as_deref(),
         )
         .await
         {

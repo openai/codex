@@ -143,10 +143,15 @@ impl ToolHandler for ApplyPatchHandler {
                             turn: turn.as_ref(),
                             call_id: call_id.clone(),
                             tool_name: tool_name.to_string(),
-                            network_attempt_id: None,
                         };
                         let out = orchestrator
-                            .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
+                            .run(
+                                &mut runtime,
+                                &req,
+                                &tool_ctx,
+                                &turn,
+                                turn.approval_policy.value(),
+                            )
                             .await
                             .map(|result| result.output);
                         let event_ctx = ToolEventCtx::new(
@@ -234,10 +239,15 @@ pub(crate) async fn intercept_apply_patch(
                         turn,
                         call_id: call_id.to_string(),
                         tool_name: tool_name.to_string(),
-                        network_attempt_id: None,
                     };
                     let out = orchestrator
-                        .run(&mut runtime, &req, &tool_ctx, turn, turn.approval_policy)
+                        .run(
+                            &mut runtime,
+                            &req,
+                            &tool_ctx,
+                            turn,
+                            turn.approval_policy.value(),
+                        )
                         .await
                         .map(|result| result.output);
                     let event_ctx =

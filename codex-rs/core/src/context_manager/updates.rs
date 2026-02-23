@@ -6,38 +6,41 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::protocol::TurnContextItem;
 
 fn build_environment_update_item(
-    previous: Option<&TurnContext>,
+    previous: Option<&TurnContextItem>,
     next: &TurnContext,
     shell: &Shell,
 ) -> Option<ResponseItem> {
     let prev = previous?;
-    let prev_context = EnvironmentContext::from_turn_context(prev, shell);
+    let prev_context = EnvironmentContext::from_turn_context_item(prev, shell);
     let next_context = EnvironmentContext::from_turn_context(next, shell);
     if prev_context.equals_except_shell(&next_context) {
         return None;
     }
 
-    Some(ResponseItem::from(EnvironmentContext::diff(
-        prev, next, shell,
-    )))
+    Some(ResponseItem::from(
+        EnvironmentContext::diff_from_turn_context_item(prev, next, shell),
+    ))
 }
 
 fn build_permissions_update_item(
-    previous: Option<&TurnContext>,
+    previous: Option<&TurnContextItem>,
     next: &TurnContext,
     exec_policy: &Policy,
 ) -> Option<ResponseItem> {
     let prev = previous?;
-    if prev.sandbox_policy == next.sandbox_policy && prev.approval_policy == next.approval_policy {
+    if prev.sandbox_policy == *next.sandbox_policy.get()
+        && prev.approval_policy == next.approval_policy.value()
+    {
         return None;
     }
 
     Some(
         DeveloperInstructions::from_policy(
-            &next.sandbox_policy,
-            next.approval_policy,
+            next.sandbox_policy.get(),
+            next.approval_policy.value(),
             exec_policy,
             &next.cwd,
         )
@@ -46,11 +49,11 @@ fn build_permissions_update_item(
 }
 
 fn build_collaboration_mode_update_item(
-    previous: Option<&TurnContext>,
+    previous: Option<&TurnContextItem>,
     next: &TurnContext,
 ) -> Option<ResponseItem> {
     let prev = previous?;
-    if prev.collaboration_mode != next.collaboration_mode {
+    if prev.collaboration_mode.as_ref() != Some(&next.collaboration_mode) {
         // If the next mode has empty developer instructions, this returns None and we emit no
         // update, so prior collaboration instructions remain in the prompt history.
         Some(DeveloperInstructions::from_collaboration_mode(&next.collaboration_mode)?.into())
@@ -60,7 +63,7 @@ fn build_collaboration_mode_update_item(
 }
 
 fn build_personality_update_item(
-    previous: Option<&TurnContext>,
+    previous: Option<&TurnContextItem>,
     next: &TurnContext,
     personality_feature_enabled: bool,
 ) -> Option<ResponseItem> {
@@ -68,7 +71,7 @@ fn build_personality_update_item(
         return None;
     }
     let previous = previous?;
-    if next.model_info.slug != previous.model_info.slug {
+    if next.model_info.slug != previous.model {
         return None;
     }
 
@@ -96,12 +99,10 @@ pub(crate) fn personality_message_for(
 }
 
 pub(crate) fn build_model_instructions_update_item(
-    previous: Option<&TurnContext>,
-    resumed_model: Option<&str>,
+    previous_user_turn_model: Option<&str>,
     next: &TurnContext,
 ) -> Option<ResponseItem> {
-    let previous_model =
-        resumed_model.or_else(|| previous.map(|prev| prev.model_info.slug.as_str()))?;
+    let previous_model = previous_user_turn_model?;
     if previous_model == next.model_info.slug {
         return None;
     }
@@ -115,8 +116,8 @@ pub(crate) fn build_model_instructions_update_item(
 }
 
 pub(crate) fn build_settings_update_items(
-    previous: Option<&TurnContext>,
-    resumed_model: Option<&str>,
+    previous: Option<&TurnContextItem>,
+    previous_user_turn_model: Option<&str>,
     next: &TurnContext,
     shell: &Shell,
     exec_policy: &Policy,
@@ -124,6 +125,13 @@ pub(crate) fn build_settings_update_items(
 ) -> Vec<ResponseItem> {
     let mut update_items = Vec::new();
 
+    // Keep model-switch instructions first so model-specific guidance is read before
+    // any other context diffs on this turn.
+    if let Some(model_instructions_item) =
+        build_model_instructions_update_item(previous_user_turn_model, next)
+    {
+        update_items.push(model_instructions_item);
+    }
     if let Some(env_item) = build_environment_update_item(previous, next, shell) {
         update_items.push(env_item);
     }
@@ -132,11 +140,6 @@ pub(crate) fn build_settings_update_items(
     }
     if let Some(collaboration_mode_item) = build_collaboration_mode_update_item(previous, next) {
         update_items.push(collaboration_mode_item);
-    }
-    if let Some(model_instructions_item) =
-        build_model_instructions_update_item(previous, resumed_model, next)
-    {
-        update_items.push(model_instructions_item);
     }
     if let Some(personality_item) =
         build_personality_update_item(previous, next, personality_feature_enabled)

@@ -323,7 +323,11 @@ impl ModelMigrationScreen {
         let wrap_width = (content_width > 0).then_some(content_width as usize);
         let rendered = render_markdown_text_with_width(markdown, wrap_width);
         for line in rendered.lines {
-            column.push(line.inset(Insets::tlbr(0, horizontal_inset, 0, 0)));
+            column.push(
+                Paragraph::new(line)
+                    .wrap(Wrap { trim: false })
+                    .inset(Insets::tlbr(0, horizontal_inset, 0, 0)),
+            );
         }
     }
 
@@ -393,6 +397,7 @@ fn fill_migration_markdown(template: &str, current_model: &str, target_model: &s
 
 #[cfg(test)]
 mod tests {
+    use super::ModelMigrationCopy;
     use super::ModelMigrationScreen;
     use super::migration_copy_for_models;
     use crate::custom_terminal::Terminal;
@@ -577,5 +582,35 @@ mod tests {
             screen.outcome(),
             super::ModelMigrationOutcome::Rejected
         ));
+    }
+
+    #[test]
+    fn markdown_prompt_keeps_long_url_tail_visible_when_narrow() {
+        let long_url = "https://example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path/tail42";
+        let screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            ModelMigrationCopy {
+                heading: Vec::new(),
+                content: Vec::new(),
+                can_opt_out: false,
+                markdown: Some(long_url.to_string()),
+            },
+        );
+
+        let backend = VT100Backend::new(40, 16);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 40, 16));
+
+        {
+            let mut frame = terminal.get_frame();
+            frame.render_widget_ref(&screen, frame.area());
+        }
+        terminal.flush().expect("flush");
+
+        let rendered = terminal.backend().to_string();
+        assert!(
+            rendered.contains("tail42"),
+            "expected wrapped markdown URL tail to remain visible, got:\n{rendered}"
+        );
     }
 }

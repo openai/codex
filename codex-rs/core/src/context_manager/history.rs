@@ -18,6 +18,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnContextItem;
 use std::ops::Deref;
 
 /// Transcript of thread history
@@ -26,6 +27,15 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
+    /// Reference context snapshot used for diffing and producing model-visible
+    /// settings update items.
+    ///
+    /// This is the baseline for the next regular model turn, and may already
+    /// match the current turn after context updates are persisted.
+    ///
+    /// When this is `None`, settings diffing treats the next turn as having no
+    /// baseline and emits a full reinjection of context state.
+    reference_context_item: Option<TurnContextItem>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -41,6 +51,7 @@ impl ContextManager {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            reference_context_item: None,
         }
     }
 
@@ -50,6 +61,14 @@ impl ContextManager {
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         self.token_info = info;
+    }
+
+    pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
+        self.reference_context_item = item;
+    }
+
+    pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
+        self.reference_context_item.clone()
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -400,6 +419,12 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
     approx_tokens_from_byte_count_i64(model_visible_bytes)
 }
 
+/// Approximate model-visible byte cost for one image input.
+///
+/// The estimator later converts bytes to tokens using a 4-bytes/token heuristic,
+/// so 340 bytes is approximately 85 tokens.
+const IMAGE_BYTES_ESTIMATE: i64 = 340;
+
 pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {
         ResponseItem::GhostSnapshot { .. } => 0,
@@ -410,10 +435,95 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
         | ResponseItem::Compaction {
             encrypted_content: content,
         } => i64::try_from(estimate_reasoning_length(content.len())).unwrap_or(i64::MAX),
-        item => serde_json::to_string(item)
-            .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
-            .unwrap_or_default(),
+        item => {
+            let raw = serde_json::to_string(item)
+                .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
+                .unwrap_or_default();
+            let (payload_bytes, image_count) = image_data_url_estimate_adjustment(item);
+            if payload_bytes == 0 || image_count == 0 {
+                raw
+            } else {
+                // Replace raw base64 payload bytes with a fixed per-image cost.
+                // We intentionally preserve the data URL prefix and JSON wrapper
+                // bytes already included in `raw`.
+                raw.saturating_sub(payload_bytes)
+                    .saturating_add(image_count.saturating_mul(IMAGE_BYTES_ESTIMATE))
+            }
+        }
     }
+}
+
+/// Returns the base64 payload byte length for inline image data URLs that are
+/// eligible for token-estimation discounting.
+///
+/// We only discount payloads for `data:image/...;base64,...` URLs (case
+/// insensitive markers) and leave everything else at raw serialized size.
+fn base64_data_url_payload_len(url: &str) -> Option<usize> {
+    if !url
+        .get(.."data:".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+    {
+        return None;
+    }
+    let comma_index = url.find(',')?;
+    let metadata = &url[..comma_index];
+    let payload = &url[comma_index + 1..];
+    // Parse the media type and parameters without decoding. This keeps the
+    // estimator cheap while ensuring we only apply the fixed-cost image
+    // heuristic to image-typed base64 data URLs.
+    let metadata_without_scheme = &metadata["data:".len()..];
+    let mut metadata_parts = metadata_without_scheme.split(';');
+    let mime_type = metadata_parts.next().unwrap_or_default();
+    let has_base64_marker = metadata_parts.any(|part| part.eq_ignore_ascii_case("base64"));
+    if !mime_type
+        .get(.."image/".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/"))
+    {
+        return None;
+    }
+    if !has_base64_marker {
+        return None;
+    }
+    Some(payload.len())
+}
+
+/// Scans one response item for discount-eligible inline image data URLs and
+/// returns:
+/// - total base64 payload bytes to subtract from raw serialized size
+/// - count of qualifying images to replace with `IMAGE_BYTES_ESTIMATE`
+fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
+    let mut payload_bytes = 0i64;
+    let mut image_count = 0i64;
+
+    let mut accumulate = |image_url: &str| {
+        if let Some(payload_len) = base64_data_url_payload_len(image_url) {
+            payload_bytes =
+                payload_bytes.saturating_add(i64::try_from(payload_len).unwrap_or(i64::MAX));
+            image_count = image_count.saturating_add(1);
+        }
+    };
+
+    match item {
+        ResponseItem::Message { content, .. } => {
+            for content_item in content {
+                if let ContentItem::InputImage { image_url } = content_item {
+                    accumulate(image_url);
+                }
+            }
+        }
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            if let FunctionCallOutputBody::ContentItems(items) = &output.body {
+                for content_item in items {
+                    if let FunctionCallOutputContentItem::InputImage { image_url } = content_item {
+                        accumulate(image_url);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    (payload_bytes, image_count)
 }
 
 fn is_model_generated_item(item: &ResponseItem) -> bool {

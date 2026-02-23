@@ -136,7 +136,7 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
 
     let steer_req = mcp
         .send_turn_steer_request(TurnSteerParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "steer".to_string(),
                 text_elements: Vec::new(),
@@ -151,6 +151,9 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
     .await??;
     let steer: TurnSteerResponse = to_response::<TurnSteerResponse>(steer_resp)?;
     assert_eq!(steer.turn_id, turn.id);
+
+    mcp.interrupt_turn_and_wait_for_aborted(thread.id, steer.turn_id, DEFAULT_READ_TIMEOUT)
+        .await?;
 
     Ok(())
 }

@@ -6,9 +6,9 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
-use codex_core::protocol::Submission;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::Submission;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
 use rmcp::model::ClientNotification;
@@ -61,6 +61,7 @@ impl MessageProcessor {
             config.codex_home.clone(),
             auth_manager,
             SessionSource::Mcp,
+            config.model_catalog.clone(),
         ));
         Self {
             outgoing,
@@ -571,7 +572,7 @@ impl MessageProcessor {
         if let Err(e) = codex_arc
             .submit_with_id(Submission {
                 id: request_id_string,
-                op: codex_core::protocol::Op::Interrupt,
+                op: codex_protocol::protocol::Op::Interrupt,
             })
             .await
         {

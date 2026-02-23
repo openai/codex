@@ -1,4 +1,3 @@
-mod diagnostics;
 mod layer_io;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -6,12 +5,12 @@ mod macos;
 #[cfg(test)]
 mod tests;
 
-use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigToml;
 use crate::config::deserialize_config_toml_with_base;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use crate::git_info::resolve_root_git_project_for_trust;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigRequirementsWithSources;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
@@ -27,9 +26,11 @@ use std::path::PathBuf;
 use toml::Value as TomlValue;
 
 pub use codex_config::CloudRequirementsLoader;
+pub use codex_config::ConfigError;
 pub use codex_config::ConfigLayerEntry;
 pub use codex_config::ConfigLayerStack;
 pub use codex_config::ConfigLayerStackOrdering;
+pub use codex_config::ConfigLoadError;
 pub use codex_config::ConfigRequirements;
 pub use codex_config::ConfigRequirementsToml;
 pub use codex_config::ConstrainedWithSource;
@@ -42,21 +43,17 @@ pub use codex_config::RequirementSource;
 pub use codex_config::ResidencyRequirement;
 pub use codex_config::SandboxModeRequirement;
 pub use codex_config::Sourced;
+pub use codex_config::TextPosition;
+pub use codex_config::TextRange;
 pub use codex_config::WebSearchModeRequirement;
 pub(crate) use codex_config::build_cli_overrides_layer;
+pub(crate) use codex_config::config_error_from_toml;
+pub use codex_config::format_config_error;
+pub use codex_config::format_config_error_with_source;
+pub(crate) use codex_config::io_error_from_config_error;
 pub use codex_config::merge_toml_values;
 #[cfg(test)]
 pub(crate) use codex_config::version_for_toml;
-pub use diagnostics::ConfigError;
-pub use diagnostics::ConfigLoadError;
-pub use diagnostics::TextPosition;
-pub use diagnostics::TextRange;
-pub(crate) use diagnostics::config_error_from_toml;
-pub(crate) use diagnostics::first_layer_config_error;
-pub(crate) use diagnostics::first_layer_config_error_from_entries;
-pub use diagnostics::format_config_error;
-pub use diagnostics::format_config_error_with_source;
-pub(crate) use diagnostics::io_error_from_config_error;
 
 /// On Unix systems, load default settings from this file path, if present.
 /// Note that /etc/codex/ is treated as a "config folder," so subfolders such
@@ -67,6 +64,17 @@ pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 const DEFAULT_PROGRAM_DATA_DIR_WINDOWS: &str = r"C:\ProgramData";
 
 const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
+
+pub(crate) async fn first_layer_config_error(layers: &ConfigLayerStack) -> Option<ConfigError> {
+    codex_config::first_layer_config_error::<ConfigToml>(layers, CONFIG_TOML_FILE).await
+}
+
+pub(crate) async fn first_layer_config_error_from_entries(
+    layers: &[ConfigLayerEntry],
+) -> Option<ConfigError> {
+    codex_config::first_layer_config_error_from_entries::<ConfigToml>(layers, CONFIG_TOML_FILE)
+        .await
+}
 
 /// To build up the set of admin-enforced constraints, we build up from multiple
 /// configuration layers in the following order, but a constraint defined in an

@@ -4,6 +4,7 @@
 
 const { Buffer } = require("node:buffer");
 const crypto = require("node:crypto");
+const fs = require("node:fs");
 const { builtinModules, createRequire } = require("node:module");
 const { createInterface } = require("node:readline");
 const { performance } = require("node:perf_hooks");
@@ -114,9 +115,6 @@ function isDeniedBuiltin(specifier) {
 const pendingTool = new Map();
 let toolCounter = 0;
 const tmpDir = process.env.CODEX_JS_TMP_DIR || process.cwd();
-// Explicit long-lived mutable store exposed as `codex.state`. This is useful
-// when callers want shared state without relying on lexical binding carry-over.
-const state = {};
 const nodeModuleDirEnv = process.env.CODEX_JS_REPL_NODE_MODULE_DIRS ?? "";
 const moduleSearchBases = (() => {
   const bases = [];
@@ -149,6 +147,14 @@ const moduleSearchBases = (() => {
 const importResolveConditions = new Set(["node", "import"]);
 const requireByBase = new Map();
 
+function canonicalizePath(value) {
+  try {
+    return fs.realpathSync.native(value);
+  } catch {
+    return value;
+  }
+}
+
 function getRequireForBase(base) {
   let req = requireByBase.get(base);
   if (!req) {
@@ -165,8 +171,10 @@ function isModuleNotFoundError(err) {
 }
 
 function isWithinBaseNodeModules(base, resolvedPath) {
-  const nodeModulesRoot = path.resolve(base, "node_modules");
-  const relative = path.relative(nodeModulesRoot, resolvedPath);
+  const canonicalBase = canonicalizePath(base);
+  const canonicalResolved = canonicalizePath(resolvedPath);
+  const nodeModulesRoot = path.resolve(canonicalBase, "node_modules");
+  const relative = path.relative(nodeModulesRoot, canonicalResolved);
   return (
     relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
   );
@@ -459,8 +467,7 @@ async function handleExec(message) {
     const { source, nextBindings } = await buildModuleSource(code);
     let output = "";
 
-    context.state = state;
-    context.codex = { state, tmpDir, tool };
+    context.codex = { tmpDir, tool };
     context.tmpDir = tmpDir;
 
     await withCapturedConsole(context, async (logs) => {

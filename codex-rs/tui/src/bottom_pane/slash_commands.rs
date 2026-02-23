@@ -74,4 +74,12 @@ mod tests {
         let cmd = find_builtin_command("debug-config", true, true, true, false);
         assert_eq!(cmd, Some(SlashCommand::DebugConfig));
     }
+
+    #[test]
+    fn clear_command_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("clear", true, true, true, false),
+            Some(SlashCommand::Clear)
+        );
+    }
 }

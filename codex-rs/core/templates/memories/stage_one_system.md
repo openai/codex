@@ -109,6 +109,16 @@ Typical real-world signals (use as examples when analyzing the rollout):
 3) User keeps iterating on the same task:
    - Requests for fixes/revisions on the same artifact usually mean partial, not success.
    - Requesting a restart or pointing out contradictions often indicates fail.
+4) Last task in the rollout:
+   - Treat the final task more conservatively than earlier tasks.
+   - If there is no explicit user feedback or environment validation for the final task,
+     prefer `uncertain` (or `partial` if there was obvious progress but no confirmation).
+   - For non-final tasks, switching to another task without unresolved blockers is a stronger
+     positive signal.
+
+Signal priority:
+- Explicit user feedback and explicit environment/test/tool validation outrank all heuristics.
+- If heuristic signals conflict with explicit feedback, follow explicit feedback.
 
 Fallback heuristics:
   - Success: explicit "done/works", tests pass, correct artifact produced, user
@@ -152,6 +162,8 @@ This summary should be very comprehensive and detailed, because it will be furth
 distilled into MEMORY.md and memory_summary.md.
 There is no strict size limit, and you should feel free to list a lot of points here as
 long as they are helpful.
+Do not target fixed counts (tasks, bullets, references, or topics). Let the rollout's
+signal density decide how much to write.
 Instructional notes in angle brackets are guidance only; do not include them verbatim in the rollout summary.
 
 Template (items are flexible; include only what is useful):
@@ -170,7 +182,7 @@ User preferences: <explicit or inferred from user messages; include how you infe
 
 <Then followed by tasks in this rollout. Each task is a section; sections below are optional per task.>
 
-## Task <idx>: <short task name>
+## Task <idx>: <task name>
 Outcome: <success|partial|fail|uncertain>
 
 Key steps:
@@ -188,9 +200,9 @@ Things that did not work / things that can be improved:
   user approval.">
 - ...
 
-Reusable knowledge: <you are encouraged to list 3-10 points for each task here, anything
-helpful counts, stick to facts. Don't put opinions or suggestions from the assistant
-that are not validated by the user.>
+Reusable knowledge: <list as many durable, evidence-backed points as needed for this task.
+Anything helpful counts; stick to facts. Don't put vague opinions or suggestions from the
+assistant that are not validated.>
 - <facts that will be helpful for future agents, such as how the system works, anything
   that took the agent some effort to figure out, user preferences, etc.>
 - <e.g. "When running evals, you should pass in the flag `some flag
@@ -226,8 +238,22 @@ shows or why it matters>:
   - [3] final verification evidence or explicit user feedback
 
 
-## Task <idx> (if there are multiple tasks): <short task name>
+## Task <idx> (if there are multiple tasks): <task name>
 ...
+
+Task section quality bar (strict):
+- Each task section should be detailed enough that other agent can understand it without
+  reopening the raw rollout.
+- For each task, cover the following when evidence exists (and state uncertainty when it
+  does not):
+  - what the user wanted / expected,
+  - what was attempted and what actually worked,
+  - what failed or remained uncertain and why,
+  - how the outcome was validated (user feedback, tests, tool output, or explicit lack of validation),
+  - reusable procedure/checklist and failure shields,
+  - concrete artifacts/commands/paths/error signatures that future agents can reuse.
+- Do not be terse in task sections. Rich, evidence-backed task summaries are preferred
+  over compact summaries.
 
 ============================================================
 `raw_memory` FORMAT (STRICT)
@@ -235,12 +261,46 @@ shows or why it matters>:
 
 The schema is below.
 ---
-rollout_summary_file: <file.md>
-description: brief description of the task and outcome
+description: concise but information-dense description of the primary task(s), outcome, and highest-value takeaway
+task: <primary_task_signature>
+task_group: <repo_or_workflow_bucket>
+task_outcome: <success|partial|fail|uncertain>
 keywords: k1, k2, k3, ... <searchable handles (tool names, error names, repo concepts, contracts)>
 ---
-- <Structured memory entries. Use bullets. No bolding text.>
+
+Then write task-grouped body content (required):
+### Task 1: <short task name>
+task: <task signature for this task>
+task_group: <project/workflow topic>
+task_outcome: <success|partial|fail|uncertain>
+- <useful memory bullet>
 - ...
+
+### Task 2: <short task name> (if needed)
+task: ...
+task_group: ...
+task_outcome: ...
+- ...
+
+Preferred task-block body shape (strongly recommended):
+- `### Task <n>` blocks should preserve task-specific retrieval signal and consolidation-ready detail.
+- Within each task block, include bullets that explicitly cover (when applicable):
+  - user goal / expected outcome,
+  - what worked (key steps, commands, code paths, artifacts),
+  - what did not work or drifted (and what pivot worked),
+  - validation state (user confirmation, tests, runtime checks, or missing validation),
+  - reusable procedure/checklist and failure shields,
+  - high-signal evidence pointers (error strings, commands, files, IDs, URLs, etc.).
+- Prefer labeled bullets when useful (for example: `- User goal: ...`, `- Validation: ...`,
+  `- Failure shield: ...`) so Phase 2 can retrieve and consolidate faster.
+
+Task grouping rules (strict):
+- Every distinct user task in the thread must appear as its own `### Task <n>` block.
+- Do not merge unrelated tasks into one block just because they happen in the same thread.
+- If a thread contains only one task, keep exactly one task block.
+- For each task block, keep the outcome tied to evidence relevant to that task.
+- If a thread has partially related tasks, prefer splitting into separate task blocks and
+  linking them through shared keywords rather than merging.
 
 What to write in memory entries: Extract useful takeaways from the rollout summaries,
 especially from "User preferences", "Reusable knowledge", "References", and
@@ -249,10 +309,17 @@ Write what would help a future agent doing a similar (or adjacent) task: decisio
 triggers, key steps, proven commands/paths, and failure shields (symptom -> cause -> fix),
 plus any stable user preferences.
 If a rollout summary contains stable user profile details or preferences that generalize,
-capture them here so they're easy to find and can be reflected in memory_summary.md.
+capture them here so they're easy to find without checking rollout summary.
 The goal is to support related-but-not-identical future tasks, so keep
 insights slightly more general; when a future task is very similar, expect the agent to
 use the rollout summary for full detail.
+For each task block, include enough detail to be useful for future agent reference:
+- what the user wanted and expected,
+- what was attempted and what actually worked,
+- what failed or remained uncertain and why,
+- what evidence validates the outcome (user feedback, environment/test feedback, or lack of both),
+- reusable procedures/checklists and failure shields that should survive future similar tasks,
+- artifacts and retrieval handles (commands, file paths, error strings, IDs) that make the task easy to rediscover.
 
 
 ============================================================
@@ -265,3 +332,5 @@ WORKFLOW
 2) Read the rollout carefully (do not miss user messages/tool calls/outputs).
 3) Return `rollout_summary`, `rollout_slug`, and `raw_memory`, valid JSON only.
    No markdown wrapper, no prose outside JSON.
+
+- Do not be terse in task sections. Include validation signal, failure mode, and reusable procedure per task when available.

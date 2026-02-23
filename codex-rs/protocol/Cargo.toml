@@ -1,8 +1,8 @@
 [package]
-name = "codex-protocol"
-version.workspace = true
 edition.workspace = true
 license.workspace = true
+name = "codex-protocol"
+version.workspace = true
 
 [lib]
 name = "codex_protocol"
@@ -12,8 +12,8 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-codex-git = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-git = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-image = { workspace = true }
 icu_decimal = { workspace = true }
