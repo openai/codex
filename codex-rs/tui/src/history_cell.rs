@@ -2861,10 +2861,10 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wrapping::word_wrap_lines;
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
+    use crate::wrapping::word_wrap_lines;
     use codex_config::types::McpServerConfig;
     use codex_config::types::McpServerDisabledReason;
     use codex_core::config::Config;
