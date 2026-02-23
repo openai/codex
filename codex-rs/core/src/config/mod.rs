@@ -372,7 +372,7 @@ pub struct Config {
     pub js_repl_node_module_dirs: Vec<PathBuf>,
 
     /// Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution.
-    pub zsh_path: Option<PathBuf>,
+    pub zsh_path: Option<AbsolutePathBuf>,
 
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
@@ -1484,7 +1484,7 @@ pub struct ConfigOverrides {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub js_repl_node_path: Option<PathBuf>,
     pub js_repl_node_module_dirs: Option<Vec<PathBuf>>,
-    pub zsh_path: Option<PathBuf>,
+    pub zsh_path: Option<AbsolutePathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
@@ -1905,8 +1905,8 @@ impl Config {
             })
             .unwrap_or_default();
         let zsh_path = zsh_path_override
-            .or(config_profile.zsh_path.map(Into::into))
-            .or(cfg.zsh_path.map(Into::into));
+            .or(config_profile.zsh_path)
+            .or(cfg.zsh_path);
 
         let review_model = override_review_model.or(cfg.review_model);
 
