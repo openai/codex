@@ -1613,6 +1613,9 @@ impl Session {
         match conversation_history {
             InitialHistory::New => {
                 // Build and record initial items (user instructions + environment context)
+                // TODO(ccunningham): Defer initial context insertion until the first real turn
+                // starts so it reflects the actual first-turn settings (permissions, etc.) and
+                // we do not emit model-visible "diff" updates before the first user message.
                 let items = self.build_initial_context(&turn_context).await;
                 self.record_conversation_items(&turn_context, &items).await;
                 {
