@@ -198,7 +198,7 @@ pub(crate) fn default_exec_approval_requirement(
 pub(crate) fn approval_requirement_for_sandbox_permissions(
     sandbox_permissions: SandboxPermissions,
     exec_approval_requirement: ExecApprovalRequirement,
-    justification: Option<String>,
+    _justification: Option<String>,
 ) -> ExecApprovalRequirement {
     if !sandbox_permissions.uses_additional_permissions() {
         return exec_approval_requirement;
@@ -214,9 +214,12 @@ pub(crate) fn approval_requirement_for_sandbox_permissions(
                 proposed_execpolicy_amendment: None,
             }
         }
-        ExecApprovalRequirement::Skip { .. } => ExecApprovalRequirement::NeedsApproval {
-            reason: justification,
-            proposed_execpolicy_amendment: None,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox,
+            proposed_execpolicy_amendment,
+        } => ExecApprovalRequirement::Skip {
+            bypass_sandbox,
+            proposed_execpolicy_amendment,
         },
     }
 }
@@ -232,14 +235,13 @@ pub(crate) fn sandbox_override_for_first_attempt(
     exec_approval_requirement: &ExecApprovalRequirement,
 ) -> SandboxOverride {
     if sandbox_permissions.requires_escalated_permissions()
-        || (!sandbox_permissions.uses_additional_permissions()
-            && matches!(
-                exec_approval_requirement,
-                ExecApprovalRequirement::Skip {
-                    bypass_sandbox: true,
-                    ..
-                }
-            ))
+        || matches!(
+            exec_approval_requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                ..
+            }
+        )
     {
         SandboxOverride::BypassSandboxFirstAttempt
     } else {
@@ -450,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn additional_permissions_force_needs_approval() {
+    fn additional_permissions_preserve_allow_including_bypass() {
         assert_eq!(
             approval_requirement_for_sandbox_permissions(
                 SandboxPermissions::WithAdditionalPermissions,
@@ -463,15 +465,18 @@ mod tests {
                 },
                 Some("need file access".to_string()),
             ),
-            ExecApprovalRequirement::NeedsApproval {
-                reason: Some("need file access".to_string()),
-                proposed_execpolicy_amendment: None,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                    "git".to_string(),
+                    "status".to_string(),
+                ])),
             }
         );
     }
 
     #[test]
-    fn additional_permissions_do_not_bypass_sandbox_first_attempt() {
+    fn additional_permissions_allow_bypass_sandbox_first_attempt_when_execpolicy_skips() {
         assert_eq!(
             sandbox_override_for_first_attempt(
                 SandboxPermissions::WithAdditionalPermissions,
@@ -480,7 +485,7 @@ mod tests {
                     proposed_execpolicy_amendment: None,
                 },
             ),
-            SandboxOverride::NoOverride
+            SandboxOverride::BypassSandboxFirstAttempt
         );
     }
 }

@@ -11,7 +11,9 @@ When you need extra filesystem access for one command, use:
   - `fs_read`: list of paths that need read access
   - `fs_write`: list of paths that need write access
 
-This keeps execution inside the current sandbox policy, while adding only the requested permissions for that command after approval.
+This keeps execution inside the current sandbox policy, while adding only the requested permissions for that command, unless an exec-policy allow rule applies and authorizes running the command outside the sandbox.
+
+If the command already matches an exec-policy allow rule, the command can be auto-approved without an extra prompt. In that case, exec-policy allow behavior (including any sandbox bypass) takes precedence.
 
 ## Escalation Requests
 

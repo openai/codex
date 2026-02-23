@@ -256,10 +256,7 @@ fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<Stri
     properties
 }
 
-fn create_exec_command_tool(
-    allow_login_shell: bool,
-    request_permission_enabled: bool,
-) -> ToolSpec {
+fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "cmd".to_string(),
@@ -470,7 +467,7 @@ fn create_shell_command_tool(
                         .to_string(),
                 ),
             },
-        ),
+        );
     }
     properties.extend(create_approval_parameters(request_permission_enabled));
 

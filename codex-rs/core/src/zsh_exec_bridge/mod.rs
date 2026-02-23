@@ -366,6 +366,7 @@ impl ZshExecBridge {
                 approval_reason,
                 None,
                 None::<ExecPolicyAmendment>,
+                None,
             )
             .await;
 

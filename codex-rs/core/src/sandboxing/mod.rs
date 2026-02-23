@@ -244,6 +244,9 @@ fn sandbox_policy_with_additional_permissions(
                     access: merge_read_only_access_with_additional_reads(access, extra_reads),
                 }
             } else {
+                // todo(dylan) - for now, this grants more access than the request. We should restrict this,
+                // but we should add a new SandboxPolicy variant to handle this. While the feature is still
+                // UnderDevelopment, it's a useful approximation of the desired behavior.
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: dedup_absolute_paths(extra_writes),
                     read_only_access: merge_read_only_access_with_additional_reads(
@@ -419,7 +422,6 @@ impl SandboxManager {
 
 pub async fn execute_env(
     env: ExecRequest,
-    _policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {
     let effective_policy = env.sandbox_policy.clone();

@@ -551,6 +551,7 @@ mod tests {
             login: None,
             timeout_ms: None,
             sandbox_permissions: None,
+            additional_permissions: None,
             prefix_rule: None,
             justification: None,
         };
