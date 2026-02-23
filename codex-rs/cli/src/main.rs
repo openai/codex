@@ -1112,6 +1112,34 @@ mod tests {
         assert_eq!(args.prompt.as_deref(), Some("2+2"));
     }
 
+    #[test]
+    fn exec_resume_accepts_output_last_message_flag_after_subcommand() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "exec",
+            "resume",
+            "session-123",
+            "-o",
+            "/tmp/resume-output.md",
+            "re-review",
+        ])
+        .expect("parse should succeed");
+
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+        let Some(codex_exec::Command::Resume(args)) = exec.command else {
+            panic!("expected exec resume");
+        };
+
+        assert_eq!(
+            exec.last_message_file,
+            Some(std::path::PathBuf::from("/tmp/resume-output.md"))
+        );
+        assert_eq!(args.session_id.as_deref(), Some("session-123"));
+        assert_eq!(args.prompt.as_deref(), Some("re-review"));
+    }
+
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
         let Subcommand::AppServer(app_server) = cli.subcommand.expect("app-server present") else {

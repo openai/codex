@@ -1,35 +1,54 @@
 use std::collections::HashMap;
 use std::os::fd::AsRawFd;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use path_absolutize::Absolutize as _;
-
 use codex_core::SandboxState;
-use codex_core::exec::process_exec_tool_call;
-use codex_core::sandboxing::SandboxPermissions;
-use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_execpolicy::Policy;
+use path_absolutize::Absolutize as _;
 use tokio::process::Command;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
-use crate::posix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
-use crate::posix::escalate_protocol::EXEC_WRAPPER_ENV_VAR;
-use crate::posix::escalate_protocol::EscalateAction;
-use crate::posix::escalate_protocol::EscalateRequest;
-use crate::posix::escalate_protocol::EscalateResponse;
-use crate::posix::escalate_protocol::LEGACY_BASH_EXEC_WRAPPER_ENV_VAR;
-use crate::posix::escalate_protocol::SuperExecMessage;
-use crate::posix::escalate_protocol::SuperExecResult;
-use crate::posix::escalation_policy::EscalationPolicy;
-use crate::posix::mcp::ExecParams;
-use crate::posix::socket::AsyncDatagramSocket;
-use crate::posix::socket::AsyncSocket;
-use codex_core::exec::ExecExpiration;
+use crate::unix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
+use crate::unix::escalate_protocol::EXEC_WRAPPER_ENV_VAR;
+use crate::unix::escalate_protocol::EscalateAction;
+use crate::unix::escalate_protocol::EscalateRequest;
+use crate::unix::escalate_protocol::EscalateResponse;
+use crate::unix::escalate_protocol::LEGACY_BASH_EXEC_WRAPPER_ENV_VAR;
+use crate::unix::escalate_protocol::SuperExecMessage;
+use crate::unix::escalate_protocol::SuperExecResult;
+use crate::unix::escalation_policy::EscalationPolicy;
+use crate::unix::socket::AsyncDatagramSocket;
+use crate::unix::socket::AsyncSocket;
+use crate::unix::stopwatch::Stopwatch;
 
-pub(crate) struct EscalateServer {
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct ExecParams {
+    /// The bash string to execute.
+    pub command: String,
+    /// The working directory to execute the command in. Must be an absolute path.
+    pub workdir: String,
+    /// The timeout for the command in milliseconds.
+    pub timeout_ms: Option<u64>,
+    /// Launch Bash with -lc instead of -c: defaults to true.
+    pub login: Option<bool>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct ExecResult {
+    pub exit_code: i32,
+    pub output: String,
+    pub duration: Duration,
+    pub timed_out: bool,
+}
+
+#[allow(clippy::module_name_repetitions)]
+pub struct EscalateServer {
     bash_path: PathBuf,
     execve_wrapper: PathBuf,
     policy: Arc<dyn EscalationPolicy>,
@@ -78,7 +97,7 @@ impl EscalateServer {
             timeout_ms: _,
             login,
         } = params;
-        let result = process_exec_tool_call(
+        let result = codex_core::exec::process_exec_tool_call(
             codex_core::exec::ExecParams {
                 command: vec![
                     self.bash_path.to_string_lossy().to_string(),
@@ -90,11 +109,11 @@ impl EscalateServer {
                     command,
                 ],
                 cwd: PathBuf::from(&workdir),
-                expiration: ExecExpiration::Cancellation(cancel_rx),
+                expiration: codex_core::exec::ExecExpiration::Cancellation(cancel_rx),
                 env,
                 network: None,
-                sandbox_permissions: SandboxPermissions::UseDefault,
-                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                sandbox_permissions: codex_core::sandboxing::SandboxPermissions::UseDefault,
+                windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
                 justification: None,
                 arg0: None,
             },
@@ -106,14 +125,43 @@ impl EscalateServer {
         )
         .await?;
         escalate_task.abort();
-        let result = ExecResult {
+
+        Ok(ExecResult {
             exit_code: result.exit_code,
             output: result.aggregated_output.text,
             duration: result.duration,
             timed_out: result.timed_out,
-        };
-        Ok(result)
+        })
     }
+}
+
+/// Factory for creating escalation policy instances for a single shell run.
+pub trait EscalationPolicyFactory {
+    type Policy: EscalationPolicy + Send + Sync + 'static;
+
+    fn create_policy(&self, policy: Arc<RwLock<Policy>>, stopwatch: Stopwatch) -> Self::Policy;
+}
+
+pub async fn run_escalate_server(
+    exec_params: ExecParams,
+    sandbox_state: &SandboxState,
+    shell_program: impl AsRef<Path>,
+    execve_wrapper: impl AsRef<Path>,
+    policy: Arc<RwLock<Policy>>,
+    escalation_policy_factory: impl EscalationPolicyFactory,
+    effective_timeout: Duration,
+) -> anyhow::Result<ExecResult> {
+    let stopwatch = Stopwatch::new(effective_timeout);
+    let cancel_token = stopwatch.cancellation_token();
+    let escalate_server = EscalateServer::new(
+        shell_program.as_ref().to_path_buf(),
+        execve_wrapper.as_ref().to_path_buf(),
+        escalation_policy_factory.create_policy(policy, stopwatch),
+    );
+
+    escalate_server
+        .exec(exec_params, cancel_token, sandbox_state)
+        .await
 }
 
 async fn escalate_task(
@@ -136,14 +184,6 @@ async fn escalate_task(
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct ExecResult {
-    pub(crate) exit_code: i32,
-    pub(crate) output: String,
-    pub(crate) duration: Duration,
-    pub(crate) timed_out: bool,
-}
-
 async fn handle_escalate_session_with_policy(
     socket: AsyncSocket,
     policy: Arc<dyn EscalationPolicy>,
@@ -158,7 +198,8 @@ async fn handle_escalate_session_with_policy(
     let workdir = PathBuf::from(&workdir).absolutize()?.into_owned();
     let action = policy
         .determine_action(file.as_path(), &argv, &workdir)
-        .await?;
+        .await
+        .context("failed to determine escalation action")?;
 
     tracing::debug!("decided {action:?} for {file:?} {argv:?} {workdir:?}");
 
@@ -253,7 +294,7 @@ mod tests {
             _file: &Path,
             _argv: &[String],
             _workdir: &Path,
-        ) -> Result<EscalateAction, rmcp::ErrorData> {
+        ) -> anyhow::Result<EscalateAction> {
             Ok(self.action.clone())
         }
     }

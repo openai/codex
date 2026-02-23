@@ -326,6 +326,57 @@ async fn replayed_user_message_preserves_remote_image_urls() {
 }
 
 #[tokio::test]
+async fn session_configured_syncs_widget_config_permissions_and_cwd() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
+    chat.config.cwd = PathBuf::from("/home/user/main");
+
+    let expected_sandbox = SandboxPolicy::new_read_only_policy();
+    let expected_cwd = PathBuf::from("/home/user/sub-agent");
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: expected_sandbox.clone(),
+        cwd: expected_cwd.clone(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+
+    chat.handle_codex_event(Event {
+        id: "session-configured".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    assert_eq!(
+        chat.config_ref().permissions.approval_policy.value(),
+        AskForApproval::Never
+    );
+    assert_eq!(
+        chat.config_ref().permissions.sandbox_policy.get(),
+        &expected_sandbox
+    );
+    assert_eq!(&chat.config_ref().cwd, &expected_cwd);
+}
+
+#[tokio::test]
 async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 
@@ -1577,7 +1628,7 @@ async fn make_chatwidget_manual(
         skills: None,
     });
     bottom.set_steer_enabled(true);
-    bottom.set_collaboration_modes_enabled(cfg.features.enabled(Feature::CollaborationModes));
+    bottom.set_collaboration_modes_enabled(true);
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
@@ -1592,6 +1643,7 @@ async fn make_chatwidget_manual(
         },
     };
     let current_collaboration_mode = base_mode;
+    let active_collaboration_mask = collaboration_modes::default_mask(models_manager.as_ref());
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
@@ -1600,7 +1652,7 @@ async fn make_chatwidget_manual(
         active_cell_revision: 0,
         config: cfg,
         current_collaboration_mode,
-        active_collaboration_mask: None,
+        active_collaboration_mask,
         auth_manager,
         models_manager,
         otel_manager,
@@ -4004,17 +4056,10 @@ async fn slash_init_skips_when_project_doc_exists() {
 }
 
 #[tokio::test]
-async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
+async fn collab_mode_shift_tab_cycles_only_when_idle() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, false);
 
     let initial = chat.current_collaboration_mode().clone();
-    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert_eq!(chat.current_collaboration_mode(), &initial);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
-
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
-
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_collaboration_mode(), &initial);
@@ -4379,26 +4424,12 @@ async fn collab_mode_is_sent_after_enabling() {
 }
 
 #[tokio::test]
-async fn collab_mode_toggle_on_applies_default_preset() {
+async fn collab_mode_applies_default_preset() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
 
     chat.bottom_pane
-        .set_composer_text("before toggle".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            collaboration_mode: None,
-            personality: Some(Personality::Pragmatic),
-            ..
-        } => {}
-        other => panic!("expected Op::UserTurn without collaboration_mode, got {other:?}"),
-    }
-
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
-
-    chat.bottom_pane
-        .set_composer_text("after toggle".to_string(), Vec::new(), Vec::new());
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {

@@ -70,7 +70,7 @@ impl ApplyPatchRuntime {
         })
     }
 
-    fn stdout_stream(ctx: &ToolCtx<'_>) -> Option<crate::exec::StdoutStream> {
+    fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
         Some(crate::exec::StdoutStream {
             sub_id: ctx.turn.sub_id.clone(),
             call_id: ctx.call_id.clone(),
@@ -156,7 +156,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         &mut self,
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx<'_>,
+        ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let spec = Self::build_command_spec(req)?;
         let env = attempt
