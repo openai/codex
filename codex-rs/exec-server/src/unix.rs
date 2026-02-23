@@ -67,7 +67,7 @@ use codex_execpolicy::Decision;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_shell_command::is_dangerous_command::command_might_be_dangerous;
-use codex_shell_escalation as shell_escalation;
+use codex_shell_escalation::unix::escalate_client::run;
 use rmcp::ErrorData as McpError;
 use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
@@ -160,7 +160,7 @@ pub async fn main_execve_wrapper() -> anyhow::Result<()> {
         .init();
 
     let ExecveWrapperCli { file, argv } = ExecveWrapperCli::parse();
-    let exit_code = shell_escalation::run(file, argv).await?;
+    let exit_code = run(file, argv).await?;
     std::process::exit(exit_code);
 }
 

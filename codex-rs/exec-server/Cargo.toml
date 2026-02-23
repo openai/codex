@@ -32,6 +32,8 @@ codex-core = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
 codex-shell-escalation = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
     "auth",
@@ -51,6 +53,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 shlex = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
