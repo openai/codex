@@ -121,10 +121,10 @@
 //! - While recording, repeated space events keep the recording alive; if they stop for a short
 //!   window, we stop and transcribe.
 use crate::bottom_pane::footer::mode_indicator_line;
-use crate::bottom_pane::selection_popup_common::truncate_line_with_ellipsis_if_overflow;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
