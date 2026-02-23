@@ -1282,6 +1282,25 @@ mod tests {
     }
 
     #[test]
+    fn find_path_after_filters() {
+        assert_parsed(
+            &shlex_split_safe("find -name '*.rs' ."),
+            vec![ParsedCommand::Search {
+                cmd: "find -name '*.rs' .".to_string(),
+                query: Some("*.rs".to_string()),
+                path: Some(".".to_string()),
+            }],
+        );
+        assert_parsed(
+            &shlex_split_safe("find -type f ."),
+            vec![ParsedCommand::ListFiles {
+                cmd: "find -type f .".to_string(),
+                path: Some(".".to_string()),
+            }],
+        );
+    }
+
+    #[test]
     fn bin_bash_lc_sed() {
         assert_parsed(
             &shlex_split_safe("/bin/bash -lc 'sed -n '1,10p' Cargo.toml'"),
@@ -1863,9 +1882,34 @@ fn parse_fd_query_and_path(tail: &[String]) -> (Option<String>, Option<String>) 
 
 fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>) {
     let args_no_connector = trim_at_connector(tail);
-    // First positional argument (excluding common unary operators) is the root path
+    // First positional argument (excluding common unary operators) is the root path.
+    // Skip values consumed by common flags so `find -type f .` resolves `.`.
+    let candidates = skip_flag_values(
+        &args_no_connector,
+        &[
+            "-type",
+            "-name",
+            "-iname",
+            "-path",
+            "-ipath",
+            "-regex",
+            "-iregex",
+            "-perm",
+            "-user",
+            "-group",
+            "-size",
+            "-maxdepth",
+            "-mindepth",
+            "-newer",
+            "-exec",
+            "-execdir",
+            "-ok",
+            "-okdir",
+            "-printf",
+        ],
+    );
     let mut path: Option<String> = None;
-    for a in &args_no_connector {
+    for a in candidates {
         if !a.starts_with('-') && *a != "!" && *a != "(" && *a != ")" {
             path = Some(short_display_path(a));
             break;
