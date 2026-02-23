@@ -1800,20 +1800,49 @@ impl App {
             AppEvent::ForkCurrentSession => {
                 self.otel_manager
                     .counter("codex.thread.fork", 1, &[("source", "slash_command")]);
-                let summary = session_summary(
-                    self.chat_widget.token_usage(),
-                    self.chat_widget.thread_id(),
-                    self.chat_widget.thread_name(),
-                );
-                self.chat_widget
-                    .add_plain_history_lines(vec!["/fork".magenta().into()]);
                 if let Some(path) = self.chat_widget.rollout_path() {
                     // Fresh threads expose a precomputed path, but the file is
                     // materialized lazily on first user message.
                     if path.exists() {
+                        let turns = match crate::fork_turn_picker::load_fork_turn_entries(&path)
+                            .await
+                        {
+                            Ok(turns) => turns,
+                            Err(err) => {
+                                let path_display = path.display();
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to read current session turns for fork from {path_display}: {err}"
+                                ));
+                                tui.frame_requester().schedule_frame();
+                                return Ok(AppRunControl::Continue);
+                            }
+                        };
+                        if turns.is_empty() {
+                            self.chat_widget.add_error_message(
+                                "A thread must contain at least one turn before it can be forked."
+                                    .to_string(),
+                            );
+                            tui.frame_requester().schedule_frame();
+                            return Ok(AppRunControl::Continue);
+                        }
+                        let Some(nth_user_message) =
+                            crate::fork_turn_picker::run_fork_turn_picker(tui, turns).await?
+                        else {
+                            // Leaving alt-screen may blank the inline viewport; force a redraw.
+                            tui.frame_requester().schedule_frame();
+                            return Ok(AppRunControl::Continue);
+                        };
+
+                        let summary = session_summary(
+                            self.chat_widget.token_usage(),
+                            self.chat_widget.thread_id(),
+                            self.chat_widget.thread_name(),
+                        );
+                        self.chat_widget
+                            .add_plain_history_lines(vec!["/fork".magenta().into()]);
                         match self
                             .server
-                            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false)
+                            .fork_thread(nth_user_message, self.config.clone(), path.clone(), false)
                             .await
                         {
                             Ok(forked) => {
