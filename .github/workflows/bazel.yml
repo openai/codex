@@ -158,8 +158,13 @@ jobs:
 
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
             echo "BuildBuddy API key is available; using remote Bazel configuration."
+            # Work around Bazel 9 remote repo contents cache / overlay materialization failures
+            # seen in CI (for example "is not a symlink" or permission errors while
+            # materializing external repos such as rules_perl). We still use BuildBuddy for
+            # remote execution/cache; this only disables the startup-level repo contents cache.
             set +e
             bazel $BAZEL_STARTUP_ARGS \
+              --noexperimental_remote_repo_contents_cache \
               --bazelrc=.github/workflows/ci.bazelrc \
               "${bazel_args[@]}" \
               "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" \
