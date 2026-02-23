@@ -425,6 +425,17 @@ mod tests {
     }
 
     #[test]
+    fn supports_ls_root_path() {
+        assert_parsed(
+            &shlex_split_safe("ls /"),
+            vec![ParsedCommand::ListFiles {
+                cmd: "ls /".to_string(),
+                path: Some("/".to_string()),
+            }],
+        );
+    }
+
+    #[test]
     fn supports_eza_exa_tree_du() {
         assert_parsed(
             &shlex_split_safe("eza --color=always src"),
@@ -1580,6 +1591,9 @@ fn short_display_path(path: &str) -> String {
     // Normalize separators and drop any trailing slash for display.
     let normalized = path.replace('\\', "/");
     let trimmed = normalized.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "/".to_string();
+    }
     let mut parts = trimmed.split('/').rev().filter(|p| {
         !p.is_empty() && *p != "build" && *p != "dist" && *p != "node_modules" && *p != "src"
     });
