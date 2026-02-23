@@ -62,14 +62,11 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
             match item_type {
                 "message" => {
                     let role = item.get("role").and_then(Value::as_str).unwrap_or("unknown");
-                    let (rendered_parts, is_text_only_message) = item
+                    let rendered_parts = item
                         .get("content")
                         .and_then(Value::as_array)
                         .map(|content| {
-                            let is_text_only_message = content.iter().all(|entry| {
-                                entry.get("type").and_then(Value::as_str) == Some("input_text")
-                            });
-                            let rendered_parts = content
+                            content
                                 .iter()
                                 .map(|entry| {
                                     if let Some(text) = entry.get("text").and_then(Value::as_str) {
@@ -95,12 +92,10 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                                         format!("<{content_type}:{}>", extra_keys.join(","))
                                     }
                                 })
-                                .collect::<Vec<String>>();
-                            (rendered_parts, is_text_only_message)
+                                .collect::<Vec<String>>()
                         })
-                        .unwrap_or((Vec::new(), false));
-                    let use_envelope_style = is_text_only_message && rendered_parts.len() > 1;
-                    let role = if use_envelope_style {
+                        .unwrap_or_default();
+                    let role = if rendered_parts.len() > 1 {
                         format!("{role}[{}]", rendered_parts.len())
                     } else {
                         role.to_string()
@@ -110,9 +105,6 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                     }
                     if rendered_parts.len() == 1 {
                         return format!("{idx:02}:message/{role}:{}", rendered_parts[0]);
-                    }
-                    if !use_envelope_style {
-                        return format!("{idx:02}:message/{role}:{}", rendered_parts.join(" | "));
                     }
 
                     let parts = rendered_parts
@@ -357,7 +349,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "00:message/user:<image> | <input_image:image_url> | </image>"
+            "00:message/user[3]:\n    [01] <image>\n    [02] <input_image:image_url>\n    [03] </image>"
         );
     }
 }

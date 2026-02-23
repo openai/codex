@@ -23,4 +23,8 @@ Scenario: Pre-turn auto-compaction with a context override emits the context dif
 04:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-05:message/user:<image> | <input_image:image_url> | </image> | USER_THREE
+05:message/user[4]:
+    [01] <image>
+    [02] <input_image:image_url>
+    [03] </image>
+    [04] USER_THREE
