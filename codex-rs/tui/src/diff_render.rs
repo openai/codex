@@ -310,31 +310,27 @@ fn render_change(
             for (i, raw) in content.lines().enumerate() {
                 let syn = syntax_lines.as_ref().and_then(|sl| sl.get(i));
                 if let Some(spans) = syn {
-                    out.extend(
-                        push_wrapped_diff_line_inner_with_theme_and_color_level(
-                            i + 1,
-                            DiffLineType::Insert,
-                            raw,
-                            width,
-                            line_number_width,
-                            Some(spans),
-                            theme,
-                            color_level,
-                        ),
-                    );
+                    out.extend(push_wrapped_diff_line_inner_with_theme_and_color_level(
+                        i + 1,
+                        DiffLineType::Insert,
+                        raw,
+                        width,
+                        line_number_width,
+                        Some(spans),
+                        theme,
+                        color_level,
+                    ));
                 } else {
-                    out.extend(
-                        push_wrapped_diff_line_inner_with_theme_and_color_level(
-                            i + 1,
-                            DiffLineType::Insert,
-                            raw,
-                            width,
-                            line_number_width,
-                            None,
-                            theme,
-                            color_level,
-                        ),
-                    );
+                    out.extend(push_wrapped_diff_line_inner_with_theme_and_color_level(
+                        i + 1,
+                        DiffLineType::Insert,
+                        raw,
+                        width,
+                        line_number_width,
+                        None,
+                        theme,
+                        color_level,
+                    ));
                 }
             }
         }
@@ -344,31 +340,27 @@ fn render_change(
             for (i, raw) in content.lines().enumerate() {
                 let syn = syntax_lines.as_ref().and_then(|sl| sl.get(i));
                 if let Some(spans) = syn {
-                    out.extend(
-                        push_wrapped_diff_line_inner_with_theme_and_color_level(
-                            i + 1,
-                            DiffLineType::Delete,
-                            raw,
-                            width,
-                            line_number_width,
-                            Some(spans),
-                            theme,
-                            color_level,
-                        ),
-                    );
+                    out.extend(push_wrapped_diff_line_inner_with_theme_and_color_level(
+                        i + 1,
+                        DiffLineType::Delete,
+                        raw,
+                        width,
+                        line_number_width,
+                        Some(spans),
+                        theme,
+                        color_level,
+                    ));
                 } else {
-                    out.extend(
-                        push_wrapped_diff_line_inner_with_theme_and_color_level(
-                            i + 1,
-                            DiffLineType::Delete,
-                            raw,
-                            width,
-                            line_number_width,
-                            None,
-                            theme,
-                            color_level,
-                        ),
-                    );
+                    out.extend(push_wrapped_diff_line_inner_with_theme_and_color_level(
+                        i + 1,
+                        DiffLineType::Delete,
+                        raw,
+                        width,
+                        line_number_width,
+                        None,
+                        theme,
+                        color_level,
+                    ));
                 }
             }
         }
