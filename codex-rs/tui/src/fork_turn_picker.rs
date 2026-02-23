@@ -7,6 +7,7 @@ use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use codex_core::RolloutRecorder;
 use codex_core::parse_turn_item;
+use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::protocol::EventMsg;
@@ -36,8 +37,8 @@ use tokio_stream::StreamExt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ForkTurnEntry {
-    pub(crate) turn_number: usize,
-    pub(crate) preview: String,
+    pub(crate) user_request: String,
+    pub(crate) model_response: Option<String>,
 }
 
 pub(crate) async fn load_fork_turn_entries(path: &Path) -> std::io::Result<Vec<ForkTurnEntry>> {
@@ -90,14 +91,23 @@ fn fork_turn_entries_from_rollout_items(items: &[RolloutItem]) -> Vec<ForkTurnEn
 
     for item in items {
         match item {
-            RolloutItem::ResponseItem(response_item) => {
-                if let Some(TurnItem::UserMessage(user)) = parse_turn_item(response_item) {
+            RolloutItem::ResponseItem(response_item) => match parse_turn_item(response_item) {
+                Some(TurnItem::UserMessage(user)) => {
                     turns.push(ForkTurnEntry {
-                        turn_number: 0,
-                        preview: user_turn_preview(&user),
+                        user_request: user_turn_preview(&user),
+                        model_response: None,
                     });
                 }
-            }
+                Some(TurnItem::AgentMessage(agent)) => {
+                    let response = agent_turn_preview(&agent.content);
+                    if !response.is_empty()
+                        && let Some(last_turn) = turns.last_mut()
+                    {
+                        last_turn.model_response = Some(response);
+                    }
+                }
+                _ => {}
+            },
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                 let dropped = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
                 let kept = turns.len().saturating_sub(dropped);
@@ -105,10 +115,6 @@ fn fork_turn_entries_from_rollout_items(items: &[RolloutItem]) -> Vec<ForkTurnEn
             }
             _ => {}
         }
-    }
-
-    for (idx, turn) in turns.iter_mut().enumerate() {
-        turn.turn_number = idx + 1;
     }
 
     turns
@@ -171,6 +177,17 @@ fn user_turn_preview(user: &UserMessageItem) -> String {
     } else {
         format!("{text}{suffix}")
     }
+}
+
+fn agent_turn_preview(content: &[AgentMessageContent]) -> String {
+    let text = content
+        .iter()
+        .map(|item| match item {
+            AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn nth_user_message_for_fork(selected_index: usize, turn_count: usize) -> usize {
@@ -245,6 +262,16 @@ impl ForkTurnPickerScreen {
             return;
         }
 
+        if let KeyCode::Char(ch) = key_event.code
+            && key_event.modifiers == KeyModifiers::NONE
+            && ch.is_ascii_digit()
+            && let Some(digit) = ch.to_digit(10)
+            && digit != 0
+        {
+            self.select_display_number(usize::try_from(digit).unwrap_or(usize::MAX));
+            return;
+        }
+
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') => self.cancel(),
             KeyCode::Enter => self.confirm(),
@@ -272,7 +299,7 @@ impl ForkTurnPickerScreen {
     }
 
     fn page_move(&mut self, delta_pages: isize) {
-        let page = self.visible_list_rows();
+        let page = self.visible_list_entries();
         let step = if page == 0 { 1 } else { page };
         let step = isize::try_from(step).unwrap_or(isize::MAX);
         self.move_selection(step.saturating_mul(delta_pages));
@@ -287,21 +314,29 @@ impl ForkTurnPickerScreen {
         self.request_frame.schedule_frame();
     }
 
-    fn visible_list_rows(&self) -> usize {
-        8
+    fn select_display_number(&mut self, display_number: usize) {
+        if display_number == 0 || display_number > self.turns.len() {
+            return;
+        }
+        let idx = self.turns.len().saturating_sub(display_number);
+        self.select_index(idx);
+    }
+
+    fn visible_list_entries(&self) -> usize {
+        4
     }
 
     fn ensure_selected_visible(&mut self) {
-        let rows = self.visible_list_rows().max(1);
+        let entries = self.visible_list_entries().max(1);
         if self.selected < self.scroll_top {
             self.scroll_top = self.selected;
-        } else if self.selected >= self.scroll_top.saturating_add(rows) {
-            self.scroll_top = self.selected.saturating_add(1).saturating_sub(rows);
+        } else if self.selected >= self.scroll_top.saturating_add(entries) {
+            self.scroll_top = self.selected.saturating_add(1).saturating_sub(entries);
         }
     }
 
-    fn effective_scroll_top(&self, visible_rows: usize) -> usize {
-        let rows = visible_rows.max(1);
+    fn effective_scroll_top(&self, visible_entries: usize) -> usize {
+        let rows = visible_entries.max(1);
         if self.selected < self.scroll_top {
             self.selected
         } else if self.selected >= self.scroll_top.saturating_add(rows) {
@@ -319,7 +354,7 @@ impl ForkTurnPickerScreen {
             .constraints([
                 Constraint::Length(3),
                 Constraint::Min(6),
-                Constraint::Length(7),
+                Constraint::Length(11),
                 Constraint::Length(2),
             ])
             .split(area);
@@ -349,7 +384,7 @@ impl ForkTurnPickerScreen {
             key_hint::plain(KeyCode::Enter).into(),
             " to fork, ".dim(),
             key_hint::plain(KeyCode::Esc).into(),
-            " to cancel".dim(),
+            " to cancel, digits jump (1 = latest)".dim(),
         ]);
         Paragraph::new(hints)
             .wrap(Wrap { trim: false })
@@ -359,7 +394,7 @@ impl ForkTurnPickerScreen {
     fn render_turn_list(&self, area: Rect, buf: &mut Buffer) {
         let block = Block::default()
             .borders(Borders::ALL)
-            .title("Turns (oldest to newest)");
+            .title("Turns (oldest to newest, 1 = latest)");
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -368,31 +403,50 @@ impl ForkTurnPickerScreen {
         }
 
         let visible_rows = usize::from(inner.height);
+        let visible_entries = (visible_rows / 2).max(1);
         let mut lines = Vec::with_capacity(visible_rows);
-        let scroll_top = self.effective_scroll_top(visible_rows);
+        let scroll_top = self.effective_scroll_top(visible_entries);
         let end = self
-            .effective_scroll_top(visible_rows)
-            .saturating_add(visible_rows)
+            .effective_scroll_top(visible_entries)
+            .saturating_add(visible_entries)
             .min(self.turns.len());
         for idx in scroll_top..end {
             let is_selected = idx == self.selected;
-            let mut label = format!("Turn {}", self.turns[idx].turn_number);
-            if idx + 1 == self.turns.len() {
-                label.push_str(" (latest)");
-            }
-            let row_text = format!("{label}: {}", self.turns[idx].preview);
-            let max_width = usize::from(inner.width).saturating_sub(2);
-            let row_text = if max_width == 0 {
+            let display_number = self.display_turn_number(idx);
+            let label = format!("{display_number}:");
+            let user_prefix = format!("{} {} ", if is_selected { "›" } else { " " }, label);
+            let user_width = usize::from(inner.width).saturating_sub(user_prefix.len());
+            let user_text = if user_width == 0 {
                 String::new()
             } else {
-                truncate_text(&row_text, max_width)
+                truncate_text(&self.turns[idx].user_request, user_width)
             };
-            let line = if is_selected {
-                Line::from(vec!["› ".cyan(), row_text.cyan()])
+            let user_line = if is_selected {
+                Line::from(vec![user_prefix.cyan(), user_text.into()])
             } else {
-                Line::from(vec!["  ".dim(), row_text.into()])
+                Line::from(vec![user_prefix.dim(), user_text.into()])
             };
-            lines.push(line);
+            lines.push(user_line);
+
+            if lines.len() >= visible_rows {
+                break;
+            }
+
+            let response_prefix = " ".repeat(4 + label.len());
+            let response_text = self.turns[idx]
+                .model_response
+                .as_deref()
+                .unwrap_or("[no model response recorded]");
+            let response_width = usize::from(inner.width).saturating_sub(response_prefix.len());
+            let response_text = if response_width == 0 {
+                String::new()
+            } else {
+                truncate_text(response_text, response_width)
+            };
+            lines.push(Line::from(vec![
+                response_prefix.into(),
+                response_text.dim(),
+            ]));
         }
 
         Paragraph::new(lines)
@@ -412,35 +466,49 @@ impl ForkTurnPickerScreen {
         }
 
         let selected = &self.turns[self.selected];
-        let keep_label = if selected.turn_number == 1 {
-            "turn 1".to_string()
-        } else {
-            format!("turns 1-{}", selected.turn_number)
-        };
-        let status_line = if selected.turn_number == self.turns.len() {
+        let display_number = self.display_turn_number(self.selected);
+        let newer_turns = self
+            .turns
+            .len()
+            .saturating_sub(self.selected)
+            .saturating_sub(1);
+        let status_line = if newer_turns == 0 {
             "Forking from the latest turn keeps the full current conversation.".to_string()
         } else {
-            format!("Forking here keeps {keep_label} and drops later turns from the new thread.")
+            let suffix = if newer_turns == 1 { "" } else { "s" };
+            format!("Forking here omits {newer_turns} newer turn{suffix} from the new thread.")
         };
+        let model_response = selected
+            .model_response
+            .as_deref()
+            .unwrap_or("[no model response recorded]");
 
         let lines = vec![
             Line::from(vec![
                 "Selected: ".dim(),
-                format!("Turn {}", selected.turn_number).cyan(),
-                if selected.turn_number == self.turns.len() {
+                format!("{display_number}:").cyan(),
+                if display_number == 1 {
                     Span::from(" (latest)").dim()
                 } else {
                     Span::from("")
                 },
             ]),
             Line::from(""),
-            Line::from(selected.preview.clone()),
+            Line::from("User request".dim()),
+            Line::from(selected.user_request.clone()),
+            Line::from(""),
+            Line::from("Model response".dim()),
+            Line::from(model_response).dim(),
             Line::from(""),
             Line::from(status_line).dim(),
         ];
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(inner, buf);
+    }
+
+    fn display_turn_number(&self, idx: usize) -> usize {
+        self.turns.len().saturating_sub(idx)
     }
 }
 
@@ -539,12 +607,12 @@ mod tests {
             turns,
             vec![
                 ForkTurnEntry {
-                    turn_number: 1,
-                    preview: "first request".to_string(),
+                    user_request: "first request".to_string(),
+                    model_response: Some("first answer".to_string()),
                 },
                 ForkTurnEntry {
-                    turn_number: 2,
-                    preview: "replacement request".to_string(),
+                    user_request: "replacement request".to_string(),
+                    model_response: Some("replacement answer".to_string()),
                 },
             ]
         );
@@ -563,19 +631,26 @@ mod tests {
             FrameRequester::test_dummy(),
             vec![
                 ForkTurnEntry {
-                    turn_number: 1,
-                    preview: "Initial bug report with stack trace and repro steps".to_string(),
+                    user_request: "Initial bug report with stack trace and repro steps".to_string(),
+                    model_response: Some(
+                        "Short answer: not via the current app-server protocol.".to_string(),
+                    ),
                 },
                 ForkTurnEntry {
-                    turn_number: 2,
-                    preview:
+                    user_request:
                         "Please also handle macOS path edge cases when filenames contain spaces"
                             .to_string(),
+                    model_response: Some(
+                        "Acknowledged. I will cover macOS path handling and spaces.".to_string(),
+                    ),
                 },
                 ForkTurnEntry {
-                    turn_number: 3,
-                    preview: "One more thing: include tests for rollback + fork interaction"
+                    user_request: "One more thing: include tests for rollback + fork interaction"
                         .to_string(),
+                    model_response: Some(
+                        "I added coverage for rollback semantics in the turn extraction helper."
+                            .to_string(),
+                    ),
                 },
             ],
         );
