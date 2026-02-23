@@ -699,27 +699,18 @@ impl App {
         self.clear_ui_header_lines_with_version(width, CODEX_CLI_VERSION)
     }
 
-    fn clear_terminal_ui(&mut self, tui: &mut tui::Tui) -> Result<()> {
+    fn clear_terminal_ui(&mut self, tui: &mut tui::Tui, redraw_header: bool) -> Result<()> {
         let is_alt_screen_active = tui.is_alt_screen_active();
-        let use_apple_terminal_clear_workaround = !is_alt_screen_active
-            && matches!(
-                codex_core::terminal::terminal_info().name,
-                codex_core::terminal::TerminalName::AppleTerminal
-            );
 
         // Drop queued history insertions so stale transcript lines cannot be flushed after /clear.
         tui.clear_pending_history_lines();
 
         if is_alt_screen_active {
             tui.terminal.clear_visible_screen()?;
-        } else if use_apple_terminal_clear_workaround {
-            // Terminal.app can leave mixed old/new glyphs behind when we purge + clear.
-            // Use a stricter ANSI reset, then redraw only a fresh session header box instead of
-            // replaying the initialization transcript preamble.
-            tui.terminal.clear_scrollback_and_visible_screen_ansi()?;
         } else {
-            tui.terminal.clear_scrollback()?;
-            tui.terminal.clear_visible_screen()?;
+            // Some terminals (Terminal.app, Warp) do not reliably drop scrollback when purge and
+            // clear are emitted as separate backend commands. Prefer a single ANSI sequence.
+            tui.terminal.clear_scrollback_and_visible_screen_ansi()?;
         }
 
         let mut area = tui.terminal.viewport_area;
@@ -731,11 +722,13 @@ impl App {
         }
         self.has_emitted_history_lines = false;
 
-        let width = tui.terminal.last_known_screen_size.width;
-        let header_lines = self.clear_ui_header_lines(width);
-        if !header_lines.is_empty() {
-            tui.insert_history_lines(header_lines);
-            self.has_emitted_history_lines = true;
+        if redraw_header {
+            let width = tui.terminal.last_known_screen_size.width;
+            let header_lines = self.clear_ui_header_lines(width);
+            if !header_lines.is_empty() {
+                tui.insert_history_lines(header_lines);
+                self.has_emitted_history_lines = true;
+            }
         }
         Ok(())
     }
@@ -1520,7 +1513,52 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ClearUi => {
-                self.clear_terminal_ui(tui)?;
+                self.clear_terminal_ui(tui, false)?;
+                self.overlay = None;
+                self.transcript_cells.clear();
+                self.deferred_history_lines.clear();
+                self.has_emitted_history_lines = false;
+                self.backtrack = BacktrackState::default();
+                self.backtrack_render_pending = false;
+
+                // Match `/new` session semantics after nuking the terminal UI: close active in-memory
+                // thread handles, but preserve resumeability via the persisted rollout history.
+                let model = self.chat_widget.current_model().to_string();
+                let summary = session_summary(
+                    self.chat_widget.token_usage(),
+                    self.chat_widget.thread_id(),
+                    self.chat_widget.thread_name(),
+                );
+                self.shutdown_current_thread().await;
+                if let Err(err) = self.server.remove_and_close_all_threads().await {
+                    tracing::warn!(error = %err, "failed to close all threads");
+                }
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: self.config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: self.app_event_tx.clone(),
+                    // New sessions start without prefilled message content.
+                    initial_user_message: None,
+                    enhanced_keys_supported: self.enhanced_keys_supported,
+                    auth_manager: self.auth_manager.clone(),
+                    models_manager: self.server.get_models_manager(),
+                    feedback: self.feedback.clone(),
+                    is_first_run: false,
+                    feedback_audience: self.feedback_audience,
+                    model: Some(model),
+                    status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
+                    otel_manager: self.otel_manager.clone(),
+                };
+                self.chat_widget = ChatWidget::new(init, self.server.clone());
+                self.reset_thread_event_state();
+                if let Some(summary) = summary {
+                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    if let Some(command) = summary.resume_command {
+                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
+                        lines.push(spans.into());
+                    }
+                    self.chat_widget.add_plain_history_lines(lines);
+                }
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenResumePicker => {
