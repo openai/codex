@@ -5,17 +5,19 @@
 //! We include the concatenation of all files found along the path from the
 //! repository root to the current working directory as follows:
 //!
-//! 1.  Determine the Git repository root by walking upwards from the current
-//!     working directory until a `.git` directory or file is found. If no Git
-//!     root is found, only the current working directory is considered.
+//! 1.  Determine the repository root by walking upwards from the current
+//!     working directory until one of the configured project-root markers is
+//!     found. If no marker is found, only the current working directory is
+//!     considered.
 //! 2.  Collect every `AGENTS.md` found from the repository root down to the
 //!     current working directory (inclusive) and concatenate their contents in
 //!     that order.
-//! 3.  We do **not** walk past the Git root.
+//! 3.  We do **not** walk past the detected repository root.
 
 use crate::config::Config;
 use crate::features::Feature;
 use crate::skills::SkillMetadata;
+use crate::skills::loader::project_root_markers_from_stack;
 use crate::skills::render_skills_section;
 use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
@@ -187,20 +189,28 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
         dir = canon;
     }
 
-    // Build chain from cwd upwards and detect git root.
+    let project_root_markers = project_root_markers_from_stack(&config.config_layer_stack);
+
+    // Build chain from cwd upwards and detect the configured project root.
     let mut chain: Vec<PathBuf> = vec![dir.clone()];
-    let mut git_root: Option<PathBuf> = None;
+    let mut project_root: Option<PathBuf> = None;
     let mut cursor = dir;
     while let Some(parent) = cursor.parent() {
-        let git_marker = cursor.join(".git");
-        let git_exists = match std::fs::metadata(&git_marker) {
-            Ok(_) => true,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(e),
-        };
+        let mut has_root_marker = false;
+        for marker in &project_root_markers {
+            let marker_path = cursor.join(marker);
+            match std::fs::metadata(&marker_path) {
+                Ok(_) => {
+                    has_root_marker = true;
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
 
-        if git_exists {
-            git_root = Some(cursor.clone());
+        if has_root_marker {
+            project_root = Some(cursor.clone());
             break;
         }
 
@@ -208,7 +218,7 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
         cursor = parent.to_path_buf();
     }
 
-    let search_dirs: Vec<PathBuf> = if let Some(root) = git_root {
+    let search_dirs: Vec<PathBuf> = if let Some(root) = project_root {
         let mut dirs: Vec<PathBuf> = Vec::new();
         let mut saw_root = false;
         for p in chain.iter().rev() {
@@ -270,9 +280,11 @@ fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
+    use crate::config::ConfigToml;
     use crate::features::Feature;
     use crate::skills::loader::SkillRoot;
     use crate::skills::loader::load_skills_from_roots;
+    use codex_config::CONFIG_TOML_FILE;
     use codex_protocol::protocol::SkillScope;
     use std::fs;
     use std::path::PathBuf;
@@ -387,6 +399,48 @@ mod tests {
 
         // Build config pointing at the nested dir.
         let mut cfg = make_config(&repo, 4096, None).await;
+        cfg.cwd = nested;
+
+        let res = get_user_instructions(&cfg, None)
+            .await
+            .expect("doc expected");
+        assert_eq!(res, "root level doc");
+    }
+
+    /// When `cwd` is nested inside a sapling repo, the search should locate
+    /// AGENTS.md placed at the repository root (identified by `.sl`).
+    #[tokio::test]
+    async fn finds_doc_in_sapling_repo_root() {
+        let repo = tempfile::tempdir().expect("tempdir");
+
+        // Simulate a sapling repository.
+        std::fs::create_dir(repo.path().join(".sl")).unwrap();
+
+        // Put the doc at the repo root.
+        fs::write(repo.path().join("AGENTS.md"), "root level doc").unwrap();
+
+        // Now create a nested working directory: repo/workspace/crate_a
+        let nested = repo.path().join("workspace/crate_a");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        // Build config pointing at the nested dir.
+        let codex_home = TempDir::new().expect("tempdir");
+        let config_toml = ConfigToml {
+            project_root_markers: Some(vec![".sl".to_string()]),
+            ..Default::default()
+        };
+        fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            toml::to_string(&config_toml).expect("serialize config"),
+        )
+        .expect("write config");
+
+        let mut cfg = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("defaults for test should always succeed");
+        cfg.project_doc_max_bytes = 4096;
         cfg.cwd = nested;
 
         let res = get_user_instructions(&cfg, None)

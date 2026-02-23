@@ -295,7 +295,9 @@ fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) ->
     roots
 }
 
-fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec<String> {
+pub(crate) fn project_root_markers_from_stack(
+    config_layer_stack: &ConfigLayerStack,
+) -> Vec<String> {
     let mut merged = TomlValue::Table(toml::map::Map::new());
     for layer in
         config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)

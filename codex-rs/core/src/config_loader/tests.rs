@@ -1248,6 +1248,14 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
     Ok(())
 }
 
+#[test]
+fn default_project_root_markers_include_git_only() {
+    assert_eq!(
+        super::default_project_root_markers(),
+        vec![".git".to_string()]
+    );
+}
+
 mod requirements_exec_policy_tests {
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;
