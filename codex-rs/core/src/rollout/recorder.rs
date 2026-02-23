@@ -160,6 +160,7 @@ fn sanitize_rollout_item_for_persistence(
 
 impl RolloutRecorder {
     /// List threads (rollout files) under the provided Codex home directory.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_threads(
         config: &Config,
         page_size: usize,
@@ -185,6 +186,7 @@ impl RolloutRecorder {
     }
 
     /// List archived threads (rollout files) under the archived sessions directory.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_archived_threads(
         config: &Config,
         page_size: usize,
