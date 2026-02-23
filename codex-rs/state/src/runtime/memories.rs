@@ -129,6 +129,7 @@ LEFT JOIN jobs
             None,
             None,
             SortKey::UpdatedAt,
+            None,
         );
         builder
             .push(" AND id != ")
