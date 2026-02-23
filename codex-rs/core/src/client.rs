@@ -12,16 +12,17 @@
 //! requests during that turn. It caches a Responses WebSocket connection (opened lazily) and stores
 //! per-turn state such as the `x-codex-turn-state` token used for sticky routing.
 //!
-//! Prewarm sends a deferred `response.create` and waits for completion so the next request can
-//! append onto the same websocket connection.
+//! WebSocket prewarm is a v2-only `response.create` with `generate=false`; it waits for completion
+//! so the next request can reuse the same connection and `previous_response_id`.
 //!
 //! Turn execution performs prewarm as a best-effort step before the first stream request so the
-//! subsequent request can reuse the same connection via append semantics.
+//! subsequent request can reuse the same connection.
 //!
 //! ## Retry-Budget Tradeoff
 //!
-//! Deferred request prewarm is treated as the first websocket connection attempt for a turn. If
-//! it fails, normal stream retry/fallback logic handles recovery on the same turn.
+//! V2 request prewarm is treated as the first websocket connection attempt for a turn. If it
+//! fails, normal stream retry/fallback logic handles recovery on the same turn. V1 prewarm
+//! remains connection-only.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -597,6 +598,7 @@ impl ModelClientSession {
         &self,
         request: &ResponsesApiRequest,
         last_response: Option<&LastResponse>,
+        allow_empty_delta: bool,
     ) -> Option<Vec<ResponseItem>> {
         // Checks whether the current request is an incremental append to the previous request.
         // We only append when non-input request fields are unchanged and `input` is a strict
@@ -620,7 +622,9 @@ impl ModelClientSession {
         }
 
         let baseline_len = baseline.len();
-        if request.input.starts_with(&baseline) && baseline_len < request.input.len() {
+        if request.input.starts_with(&baseline)
+            && (allow_empty_delta || baseline_len < request.input.len())
+        {
             Some(request.input[baseline_len..].to_vec())
         } else {
             trace!("incremental request failed, items didn't match");
@@ -646,7 +650,10 @@ impl ModelClientSession {
         let Some(last_response) = self.get_last_response() else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
-        let Some(append_items) = self.get_incremental_items(request, Some(&last_response)) else {
+        let allow_empty_delta = matches!(ws_version, ResponsesWebsocketVersion::V2);
+        let Some(append_items) =
+            self.get_incremental_items(request, Some(&last_response), allow_empty_delta)
+        else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
 
@@ -841,7 +848,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         turn_metadata_header: Option<&str>,
-        defer: bool,
+        warmup: bool,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.auth_manager.clone();
 
@@ -864,8 +871,8 @@ impl ModelClientSession {
                 client_metadata: build_ws_client_metadata(turn_metadata_header),
                 ..ResponseCreateWsRequest::from(&request)
             };
-            if defer {
-                ws_payload.defer = Some(true);
+            if warmup {
+                ws_payload.generate = Some(false);
             }
 
             match self
@@ -951,13 +958,14 @@ impl ModelClientSession {
         let Some(ws_version) = self.client.active_ws_version(model_info) else {
             return Ok(());
         };
-        if matches!(ws_version, ResponsesWebsocketVersion::V2) {
+        if self.websocket_last_request.is_some() {
+            return Ok(());
+        }
+
+        if matches!(ws_version, ResponsesWebsocketVersion::V1) {
             self.preconnect_websocket(otel_manager, model_info)
                 .await
                 .map_err(map_api_error)?;
-            return Ok(());
-        }
-        if self.websocket_last_request.is_some() {
             return Ok(());
         }
 
@@ -975,14 +983,10 @@ impl ModelClientSession {
             .await
         {
             Ok(WebsocketStreamOutcome::Stream(mut stream)) => {
-                // Wait for the deferred warmup request to complete before sending append.
+                // Wait for the v2 warmup request to complete before sending the first turn request.
                 while let Some(event) = stream.next().await {
                     match event {
-                        Ok(ResponseEvent::Completed { .. }) => {
-                            if let Some(last_request) = self.websocket_last_request.as_mut() {
-                                last_request.input.clear();
-                            }
-                        }
+                        Ok(ResponseEvent::Completed { .. }) => break,
                         Err(err) => return Err(err),
                         _ => {}
                     }

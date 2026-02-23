@@ -124,12 +124,12 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done()],
+        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
     ]])
     .await;
 
-    let harness = websocket_harness(&server).await;
+    let harness = websocket_harness_with_options(&server, false, false, true, true).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
@@ -158,13 +158,11 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
         .body_json();
 
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
-    assert_eq!(warmup["defer"].as_bool(), Some(true));
+    assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup["tools"], serde_json::json!([]));
-    assert_eq!(follow_up["type"].as_str(), Some("response.append"));
-    assert_eq!(
-        follow_up["input"],
-        serde_json::to_value(&prompt.input).unwrap()
-    );
+    assert_eq!(follow_up["type"].as_str(), Some("response.create"));
+    assert_eq!(follow_up["previous_response_id"].as_str(), Some("warm-1"));
+    assert_eq!(follow_up["input"], serde_json::json!([]));
 
     server.shutdown().await;
 }
@@ -243,12 +241,12 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done()],
+        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
     ]])
     .await;
 
-    let harness = websocket_harness(&server).await;
+    let harness = websocket_harness_with_options(&server, false, false, true, true).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
@@ -292,13 +290,11 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
         .expect("missing follow-up request")
         .body_json();
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
-    assert_eq!(warmup["defer"].as_bool(), Some(true));
+    assert_eq!(warmup["generate"].as_bool(), Some(false));
     assert_eq!(warmup["tools"], serde_json::json!([]));
-    assert_eq!(follow_up["type"].as_str(), Some("response.append"));
-    assert_eq!(
-        follow_up["input"],
-        serde_json::to_value(&prompt.input).unwrap()
-    );
+    assert_eq!(follow_up["type"].as_str(), Some("response.create"));
+    assert_eq!(follow_up["previous_response_id"].as_str(), Some("warm-1"));
+    assert_eq!(follow_up["input"], serde_json::json!([]));
 
     server.shutdown().await;
 }
@@ -307,10 +303,10 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
 async fn responses_websocket_prewarm_uses_model_preference_when_feature_disabled() {
     skip_if_no_network!();
 
-    let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done()],
-        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
-    ]])
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
     .await;
 
     let harness = websocket_harness_with_options(&server, false, false, false, true).await;
@@ -328,30 +324,20 @@ async fn responses_websocket_prewarm_uses_model_preference_when_feature_disabled
         .await
         .expect("websocket prewarm failed");
 
-    // Prewarm should issue a deferred response.create over the warmed websocket.
+    // V1 prewarm only preconnects and should not issue a request.
     assert_eq!(server.handshakes().len(), 1);
-    let connection = server.single_connection();
-    assert_eq!(connection.len(), 1);
-    let warmup = connection
-        .first()
-        .expect("missing warmup request")
-        .body_json();
-    assert_eq!(warmup["type"].as_str(), Some("response.create"));
-    assert_eq!(warmup["defer"].as_bool(), Some(true));
+    assert_eq!(server.single_connection().len(), 0);
 
     stream_until_complete(&mut client_session, &harness, &prompt).await;
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
-    assert_eq!(connection.len(), 2);
-    let follow_up = connection
-        .get(1)
-        .expect("missing follow-up request")
+    assert_eq!(connection.len(), 1);
+    let turn = connection
+        .first()
+        .expect("missing turn request")
         .body_json();
-    assert_eq!(follow_up["type"].as_str(), Some("response.append"));
-    assert_eq!(
-        follow_up["input"],
-        serde_json::to_value(&prompt.input).unwrap()
-    );
+    assert_eq!(turn["type"].as_str(), Some("response.create"));
+    assert_eq!(turn["input"], serde_json::to_value(&prompt.input).unwrap());
 
     server.shutdown().await;
 }
