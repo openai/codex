@@ -6,12 +6,16 @@ use std::path::PathBuf;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_utils_home_dir::find_codex_home;
 #[cfg(unix)]
+use codex_shell_escalation;
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
 
 const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
+#[cfg(unix)]
+const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
 const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -38,6 +42,22 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("");
+
+    #[cfg(unix)]
+    if exe_name == EXECVE_WRAPPER_ARG0 {
+        let mut args = std::env::args();
+        let _ = args.next();
+        let file = match args.next().and_then(|arg| arg.into_string().ok()) {
+            Some(file) => file,
+            None => std::process::exit(1),
+        };
+        let argv = args.map(|arg| arg.to_string()).collect::<Vec<_>>();
+
+        match codex_shell_escalation::run(file, argv) {
+            Ok(exit_code) => std::process::exit(exit_code),
+            Err(_) => std::process::exit(1),
+        }
+    }
 
     if exe_name == LINUX_SANDBOX_ARG0 {
         // Safety: [`run_main`] never returns.
@@ -227,6 +247,8 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         MISSPELLED_APPLY_PATCH_ARG0,
         #[cfg(target_os = "linux")]
         LINUX_SANDBOX_ARG0,
+        #[cfg(unix)]
+        EXECVE_WRAPPER_ARG0,
     ] {
         let exe = std::env::current_exe()?;
 
