@@ -16,6 +16,14 @@ pub(crate) struct UserInstructions {
 }
 
 impl UserInstructions {
+    pub(crate) fn serialize_to_text(&self) -> String {
+        format!(
+            "{USER_INSTRUCTIONS_PREFIX}{directory}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>",
+            directory = self.directory,
+            contents = self.text
+        )
+    }
+
     pub(crate) fn is_user_instructions_text(text: &str) -> bool {
         text.starts_with(USER_INSTRUCTIONS_PREFIX)
             || text.starts_with(USER_INSTRUCTIONS_OPEN_TAG_LEGACY)
@@ -36,11 +44,7 @@ impl From<UserInstructions> for ResponseItem {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
-                text: format!(
-                    "{USER_INSTRUCTIONS_PREFIX}{directory}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>",
-                    directory = ui.directory,
-                    contents = ui.text
-                ),
+                text: ui.serialize_to_text(),
             }],
             end_turn: None,
             phase: None,

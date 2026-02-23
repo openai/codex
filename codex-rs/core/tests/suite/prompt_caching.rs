@@ -30,10 +30,17 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 fn text_user_input(text: String) -> serde_json::Value {
+    text_user_input_parts(vec![text])
+}
+
+fn text_user_input_parts(texts: Vec<String>) -> serde_json::Value {
     serde_json::json!({
         "type": "message",
         "role": "user",
-        "content": [ { "type": "input_text", "text": text } ]
+        "content": texts
+            .into_iter()
+            .map(|text| serde_json::json!({ "type": "input_text", "text": text }))
+            .collect::<Vec<_>>()
     })
 }
 
@@ -297,8 +304,8 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let input1 = body1["input"].as_array().expect("input array");
     assert_eq!(
         input1.len(),
-        4,
-        "expected permissions + cached prefix + env + user msg"
+        3,
+        "expected permissions + cached contextual user prefix + user msg"
     );
 
     let ui_text = input1[1]["content"][0]["text"]
@@ -313,11 +320,11 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let cwd_str = config.cwd.to_string_lossy();
     let expected_env_text = default_env_context_str(&cwd_str, &shell);
     assert_eq!(
-        input1[2],
-        text_user_input(expected_env_text),
-        "expected environment context after UI message"
+        input1[1]["content"][1]["text"].as_str(),
+        Some(expected_env_text.as_str()),
+        "expected environment context bundled after UI message in cached contextual message"
     );
-    assert_eq!(input1[3], text_user_input("hello 1".to_string()));
+    assert_eq!(input1[2], text_user_input("hello 1".to_string()));
 
     let body2 = req2.single_request().body_json();
     let input2 = body2["input"].as_array().expect("input array");
@@ -500,11 +507,14 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
     let env_texts: Vec<&str> = input
         .iter()
         .filter_map(|msg| {
-            msg["content"]
-                .as_array()
-                .and_then(|content| content.first())
-                .and_then(|item| item["text"].as_str())
+            msg["content"].as_array().map(|content| {
+                content
+                    .iter()
+                    .filter_map(|item| item["text"].as_str())
+                    .collect::<Vec<_>>()
+            })
         })
+        .flatten()
         .filter(|text| text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG))
         .collect();
     assert!(
@@ -559,11 +569,14 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
     let user_texts: Vec<&str> = input
         .iter()
         .filter_map(|msg| {
-            msg["content"]
-                .as_array()
-                .and_then(|content| content.first())
-                .and_then(|item| item["text"].as_str())
+            msg["content"].as_array().map(|content| {
+                content
+                    .iter()
+                    .filter_map(|item| item["text"].as_str())
+                    .collect::<Vec<_>>()
+            })
         })
+        .flatten()
         .collect();
     assert!(
         user_texts.contains(&"first message"),
@@ -786,13 +799,18 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let shell = default_user_shell();
     let default_cwd_lossy = default_cwd.to_string_lossy();
 
-    let expected_env_msg_1 = text_user_input(default_env_context_str(&default_cwd_lossy, &shell));
+    let expected_contextual_user_msg_1 = text_user_input_parts(vec![
+        expected_ui_msg["content"][0]["text"]
+            .as_str()
+            .expect("cached user instructions text")
+            .to_string(),
+        default_env_context_str(&default_cwd_lossy, &shell),
+    ]);
     let expected_user_message_1 = text_user_input("hello 1".to_string());
 
     let expected_input_1 = serde_json::Value::Array(vec![
         expected_permissions_msg.clone(),
-        expected_ui_msg.clone(),
-        expected_env_msg_1.clone(),
+        expected_contextual_user_msg_1.clone(),
         expected_user_message_1.clone(),
     ]);
     assert_eq!(body1["input"], expected_input_1);
@@ -800,8 +818,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_permissions_msg,
-        expected_ui_msg,
-        expected_env_msg_1,
+        expected_contextual_user_msg_1,
         expected_user_message_1,
         expected_user_message_2,
     ]);
@@ -893,12 +910,17 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
 
     let shell = default_user_shell();
     let expected_env_text_1 = default_env_context_str(&default_cwd.to_string_lossy(), &shell);
-    let expected_env_msg_1 = text_user_input(expected_env_text_1);
+    let expected_contextual_user_msg_1 = text_user_input_parts(vec![
+        expected_ui_msg["content"][0]["text"]
+            .as_str()
+            .expect("cached user instructions text")
+            .to_string(),
+        expected_env_text_1,
+    ]);
     let expected_user_message_1 = text_user_input("hello 1".to_string());
     let expected_input_1 = serde_json::Value::Array(vec![
         expected_permissions_msg.clone(),
-        expected_ui_msg.clone(),
-        expected_env_msg_1.clone(),
+        expected_contextual_user_msg_1.clone(),
         expected_user_message_1.clone(),
     ]);
     assert_eq!(body1["input"], expected_input_1);
@@ -928,8 +950,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let expected_user_message_2 = text_user_input("hello 2".to_string());
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_permissions_msg,
-        expected_ui_msg,
-        expected_env_msg_1,
+        expected_contextual_user_msg_1,
         expected_user_message_1,
         expected_settings_update_msg,
         expected_user_message_2,

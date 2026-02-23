@@ -2980,27 +2980,27 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
-        let mut items = Vec::<ResponseItem>::with_capacity(4);
+        let mut developer_sections = Vec::<DeveloperInstructions>::with_capacity(8);
+        let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
-        items.push(
-            DeveloperInstructions::from_policy(
-                turn_context.sandbox_policy.get(),
-                turn_context.approval_policy.value(),
-                self.services.exec_policy.current().as_ref(),
-                &turn_context.cwd,
-                turn_context.features.enabled(Feature::RequestPermissions),
-            )
-            .into(),
-        );
+        developer_sections.push(DeveloperInstructions::from_policy(
+            turn_context.sandbox_policy.get(),
+            turn_context.approval_policy.value(),
+            self.services.exec_policy.current().as_ref(),
+            &turn_context.cwd,
+            turn_context.features.enabled(Feature::RequestPermissions),
+        ));
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
-            items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
+            developer_sections.push(DeveloperInstructions::new(
+                developer_instructions.to_string(),
+            ));
         }
         // Add developer instructions for memories.
         if let Some(memory_prompt) =
             build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
             && turn_context.features.enabled(Feature::MemoryTool)
         {
-            items.push(DeveloperInstructions::new(memory_prompt).into());
+            developer_sections.push(DeveloperInstructions::new(memory_prompt));
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         let (collaboration_mode, base_instructions) = {
@@ -3013,7 +3013,7 @@ impl Session {
         if let Some(collab_instructions) =
             DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
         {
-            items.push(collab_instructions.into());
+            developer_sections.push(collab_instructions);
         }
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
@@ -3028,35 +3028,43 @@ impl Session {
                         personality,
                     )
             {
-                items.push(
-                    DeveloperInstructions::personality_spec_message(personality_message).into(),
-                );
+                developer_sections.push(DeveloperInstructions::personality_spec_message(
+                    personality_message,
+                ));
             }
         }
         if turn_context.features.enabled(Feature::Apps) {
-            items.push(DeveloperInstructions::new(render_apps_section()).into());
+            developer_sections.push(DeveloperInstructions::new(render_apps_section()));
         }
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
                 turn_context.config.commit_attribution.as_deref(),
             )
         {
-            items.push(DeveloperInstructions::new(commit_message_instruction).into());
+            developer_sections.push(DeveloperInstructions::new(commit_message_instruction));
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            items.push(
+            contextual_user_sections.push(
                 UserInstructions {
                     text: user_instructions.to_string(),
                     directory: turn_context.cwd.to_string_lossy().into_owned(),
                 }
-                .into(),
+                .serialize_to_text(),
             );
         }
-        items.push(ResponseItem::from(EnvironmentContext::from_turn_context(
-            turn_context,
-            shell.as_ref(),
-        )));
-        items
+        contextual_user_sections.push(
+            EnvironmentContext::from_turn_context(turn_context, shell.as_ref()).serialize_to_xml(),
+        );
+
+        crate::context_manager::updates::SettingsUpdateEnvelope {
+            developer_message: crate::context_manager::updates::build_developer_update_item(
+                developer_sections,
+            ),
+            contextual_user_message: crate::context_manager::updates::build_contextual_user_message(
+                contextual_user_sections,
+            ),
+        }
+        .into_items()
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {

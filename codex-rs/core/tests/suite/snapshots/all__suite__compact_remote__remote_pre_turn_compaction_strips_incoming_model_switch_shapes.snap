@@ -6,23 +6,19 @@ Scenario: Remote pre-turn compaction during model switch currently excludes inco
 
 ## Initial Request (Previous Model)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:BEFORE_SWITCH_USER
+01:message/user[2]:<AGENTS_MD> | <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:BEFORE_SWITCH_USER
 
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:BEFORE_SWITCH_USER
-04:message/assistant:BEFORE_SWITCH_REPLY
+01:message/user[2]:<AGENTS_MD> | <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:BEFORE_SWITCH_USER
+03:message/assistant:BEFORE_SWITCH_REPLY
 
 ## Remote Post-Compaction History Layout
 00:message/user:BEFORE_SWITCH_USER
 01:compaction:encrypted=true
 02:message/developer:<model_switch>\nThe user was previously using a different model....
-03:message/developer:<PERMISSIONS_INSTRUCTIONS>
-04:message/developer:<personality_spec> The user has requested a new communication st...
-05:message/user:<AGENTS_MD>
-06:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-07:message/user:AFTER_SWITCH_USER
+03:message/developer[2]:<PERMISSIONS_INSTRUCTIONS> | <personality_spec> The user has requested a new communication st...
+04:message/user[2]:<AGENTS_MD> | <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+05:message/user:AFTER_SWITCH_USER

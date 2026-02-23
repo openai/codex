@@ -139,23 +139,33 @@ pub(crate) fn build_model_instructions_update_item(
     ))
 }
 
-fn build_developer_update_item(
+pub(crate) fn build_developer_update_item(
     update_sections: Vec<DeveloperInstructions>,
 ) -> Option<ResponseItem> {
-    if update_sections.is_empty() {
+    let text_sections = update_sections
+        .into_iter()
+        .map(DeveloperInstructions::into_text)
+        .collect();
+    build_text_message("developer", text_sections)
+}
+
+pub(crate) fn build_contextual_user_message(text_sections: Vec<String>) -> Option<ResponseItem> {
+    build_text_message("user", text_sections)
+}
+
+fn build_text_message(role: &str, text_sections: Vec<String>) -> Option<ResponseItem> {
+    if text_sections.is_empty() {
         return None;
     }
 
-    let content = update_sections
+    let content = text_sections
         .into_iter()
-        .map(|section| ContentItem::InputText {
-            text: section.into_text(),
-        })
+        .map(|text| ContentItem::InputText { text })
         .collect();
 
     Some(ResponseItem::Message {
         id: None,
-        role: "developer".to_string(),
+        role: role.to_string(),
         content,
         end_turn: None,
         phase: None,

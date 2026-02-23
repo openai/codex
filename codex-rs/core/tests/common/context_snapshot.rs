@@ -62,7 +62,7 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
             match item_type {
                 "message" => {
                     let role = item.get("role").and_then(Value::as_str).unwrap_or("unknown");
-                    let text = item
+                    let rendered_parts = item
                         .get("content")
                         .and_then(Value::as_array)
                         .map(|content| {
@@ -93,10 +93,18 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                                     }
                                 })
                                 .collect::<Vec<String>>()
-                                .join(" | ")
                         })
-                        .filter(|text| !text.is_empty())
-                        .unwrap_or_else(|| "<NO_TEXT>".to_string());
+                        .unwrap_or_default();
+                    let role = if rendered_parts.len() > 1 {
+                        format!("{role}[{}]", rendered_parts.len())
+                    } else {
+                        role.to_string()
+                    };
+                    let text = if rendered_parts.is_empty() {
+                        "<NO_TEXT>".to_string()
+                    } else {
+                        rendered_parts.join(" | ")
+                    };
                     format!("{idx:02}:message/{role}:{text}")
                 }
                 "function_call" => {
@@ -333,7 +341,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "00:message/user:<image> | <input_image:image_url> | </image>"
+            "00:message/user[3]:<image> | <input_image:image_url> | </image>"
         );
     }
 }
