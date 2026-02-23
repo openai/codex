@@ -1,4 +1,5 @@
 use anyhow::Result;
+#[cfg(not(test))]
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
@@ -18,6 +19,10 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 #[cfg(not(test))]
 use std::sync::Mutex;
+#[cfg(not(test))]
+use std::sync::atomic::AtomicU16;
+#[cfg(not(test))]
+use std::sync::atomic::Ordering;
 #[cfg(not(test))]
 use tracing::warn;
 
@@ -53,6 +58,7 @@ struct LiveRealtimeAudioController {
     _input_stream: cpal::Stream,
     _output_stream: cpal::Stream,
     playback_state: Arc<Mutex<PlaybackState>>,
+    last_input_peak: Arc<AtomicU16>,
 }
 
 impl RealtimeAudioController {
@@ -94,10 +100,12 @@ impl RealtimeAudioController {
                 output_config.sample_rate.0,
                 output_config.channels,
             )));
+            let last_input_peak = Arc::new(AtomicU16::new(0));
             let mic_state = Arc::new(Mutex::new(MicCaptureState::new(
                 realtime_audio_op_tx,
                 input_config.sample_rate.0,
                 input_config.channels,
+                Arc::clone(&last_input_peak),
             )));
 
             let input_stream = build_input_stream(
@@ -127,6 +135,7 @@ impl RealtimeAudioController {
                     _input_stream: input_stream,
                     _output_stream: output_stream,
                     playback_state,
+                    last_input_peak,
                 }),
             })
         }
@@ -151,12 +160,24 @@ impl RealtimeAudioController {
     }
 
     pub(crate) fn shutdown(self) {}
+
+    pub(crate) fn last_input_peak(&self) -> u16 {
+        match &self.backend {
+            #[cfg(not(test))]
+            RealtimeAudioBackend::Live(controller) => {
+                controller.last_input_peak.load(Ordering::Relaxed)
+            }
+            #[cfg(test)]
+            RealtimeAudioBackend::Stub => 0,
+        }
+    }
 }
 
 #[cfg(not(test))]
 #[derive(Debug)]
 struct MicCaptureState {
     realtime_audio_op_tx: Sender<Op>,
+    last_input_peak: Arc<AtomicU16>,
     source_sample_rate: u32,
     source_channels: u16,
     source_mono: Vec<f32>,
@@ -170,9 +191,11 @@ impl MicCaptureState {
         realtime_audio_op_tx: Sender<Op>,
         source_sample_rate: u32,
         source_channels: u16,
+        last_input_peak: Arc<AtomicU16>,
     ) -> Self {
         Self {
             realtime_audio_op_tx,
+            last_input_peak,
             source_sample_rate,
             source_channels,
             source_mono: Vec::new(),
@@ -182,16 +205,37 @@ impl MicCaptureState {
     }
 
     fn push_input_samples_f32(&mut self, data: &[f32]) {
+        let peak = data
+            .iter()
+            .map(|sample| ((sample.abs().min(1.0)) * i16::MAX as f32) as u16)
+            .max()
+            .unwrap_or(0);
+        self.last_input_peak.store(peak, Ordering::Relaxed);
         self.push_mono_samples_from_frames(data.iter().copied());
     }
 
     fn push_input_samples_i16(&mut self, data: &[i16]) {
+        let peak = data
+            .iter()
+            .map(|sample| sample.unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        self.last_input_peak.store(peak, Ordering::Relaxed);
         self.push_mono_samples_from_frames(
             data.iter().map(|sample| *sample as f32 / i16::MAX as f32),
         );
     }
 
     fn push_input_samples_u16(&mut self, data: &[u16]) {
+        let peak = data
+            .iter()
+            .map(|sample| {
+                let centered = *sample as i32 - (u16::MAX as i32 / 2);
+                centered.unsigned_abs().min(i16::MAX as u32) as u16
+            })
+            .max()
+            .unwrap_or(0);
+        self.last_input_peak.store(peak, Ordering::Relaxed);
         self.push_mono_samples_from_frames(
             data.iter()
                 .map(|sample| (*sample as f32 / u16::MAX as f32) * 2.0 - 1.0),

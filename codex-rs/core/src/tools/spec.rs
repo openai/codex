@@ -65,7 +65,7 @@ impl ToolsConfig {
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
-        let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
+        let include_collaboration_modes_tools = true;
         let include_search_tool = features.enabled(Feature::Apps);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
@@ -557,7 +557,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
         description:
-            "Spawn a sub-agent for a well-scoped task. Returns the agent id to use to communicate with this agent."
+            "Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -1885,34 +1885,6 @@ mod tests {
                 "close_agent",
             ],
         );
-    }
-
-    #[test]
-    fn request_user_input_requires_collaboration_modes_feature() {
-        let config = test_config();
-        let model_info =
-            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
-        features.disable(Feature::CollaborationModes);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
-        });
-        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-        assert!(
-            !tools.iter().any(|t| t.spec.name() == "request_user_input"),
-            "request_user_input should be disabled when collaboration_modes feature is off"
-        );
-
-        features.enable(Feature::CollaborationModes);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
-        });
-        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-        assert_contains_tool_names(&tools, &["request_user_input"]);
     }
 
     #[test]
