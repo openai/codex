@@ -4,6 +4,7 @@ mod admin;
 mod config;
 mod http_proxy;
 mod mitm;
+mod mitm_certs;
 mod network_policy;
 mod policy;
 mod proxy;

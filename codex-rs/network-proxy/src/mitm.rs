@@ -1,6 +1,5 @@
-mod certs;
-
 use crate::config::NetworkMode;
+use crate::mitm_certs::ManagedMitmCa;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::responses::blocked_text_response;
@@ -14,7 +13,6 @@ use crate::upstream::UpstreamClient;
 use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
-use certs::ManagedMitmCa;
 use rama_core::Layer;
 use rama_core::Service;
 use rama_core::bytes::Bytes;
@@ -480,4 +478,5 @@ fn path_for_log(uri: &Uri) -> String {
 }
 
 #[cfg(test)]
+#[path = "mitm_tests.rs"]
 mod tests;
