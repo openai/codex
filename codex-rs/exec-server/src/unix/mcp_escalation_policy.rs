@@ -2,9 +2,9 @@ use std::path::Path;
 
 use codex_core::sandboxing::SandboxPermissions;
 use codex_execpolicy::Policy;
-use codex_shell_escalation::EscalateAction;
-use codex_shell_escalation::EscalationPolicy;
-use codex_shell_escalation::Stopwatch;
+use codex_shell_escalation::unix::escalate_protocol::EscalateAction;
+use codex_shell_escalation::unix::escalation_policy::EscalationPolicy;
+use codex_shell_escalation::unix::stopwatch::Stopwatch;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::model::CreateElicitationRequestParams;
