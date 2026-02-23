@@ -273,6 +273,22 @@ impl ThreadManager {
         }
     }
 
+    pub async fn reload_user_config(&self) {
+        let threads = self
+            .state
+            .threads
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for thread in threads {
+            if let Err(err) = thread.submit(Op::ReloadUserConfig).await {
+                warn!("failed to request user config reload: {err}");
+            }
+        }
+    }
+
     pub fn subscribe_thread_created(&self) -> broadcast::Receiver<ThreadId> {
         self.state.thread_created_tx.subscribe()
     }

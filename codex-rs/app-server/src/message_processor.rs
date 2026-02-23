@@ -453,7 +453,12 @@ impl MessageProcessor {
         params: ConfigValueWriteParams,
     ) {
         match self.config_api.write_value(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Ok(response) => {
+                self.codex_message_processor
+                    .reload_user_config_for_threads()
+                    .await;
+                self.outgoing.send_response(request_id, response).await;
+            }
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
     }
@@ -464,7 +469,12 @@ impl MessageProcessor {
         params: ConfigBatchWriteParams,
     ) {
         match self.config_api.batch_write(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Ok(response) => {
+                self.codex_message_processor
+                    .reload_user_config_for_threads()
+                    .await;
+                self.outgoing.send_response(request_id, response).await;
+            }
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
     }
