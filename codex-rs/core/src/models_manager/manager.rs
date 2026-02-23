@@ -314,8 +314,12 @@ impl ModelsManager {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
         let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
-        let existing_presets = self.local_models.clone();
-        let mut merged_presets = ModelPreset::merge(remote_presets, existing_presets);
+        let mut merged_presets = if self.has_custom_model_catalog {
+            remote_presets
+        } else {
+            let existing_presets = self.local_models.clone();
+            ModelPreset::merge(remote_presets, existing_presets)
+        };
         let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));
         merged_presets = ModelPreset::filter_by_auth(merged_presets, chatgpt_mode);
 
@@ -879,6 +883,35 @@ mod tests {
         let available = manager.build_available_models(vec![hidden_model, visible_model]);
 
         assert_eq!(available, vec![expected_hidden, expected_visible]);
+    }
+
+    #[tokio::test]
+    async fn custom_catalog_listing_does_not_append_builtin_presets() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            Some(ModelsResponse {
+                models: vec![remote_model("oca/gpt-5.2-codex", "Prefixed", 0)],
+            }),
+        );
+
+        let available = manager.list_models(RefreshStrategy::Offline).await;
+
+        assert!(
+            available
+                .iter()
+                .any(|preset| preset.model == "oca/gpt-5.2-codex"),
+            "expected custom catalog model in list"
+        );
+        assert!(
+            !available
+                .iter()
+                .any(|preset| preset.model == "gpt-5.2-codex"),
+            "expected built-in preset to be omitted when custom catalog is provided"
+        );
     }
 
     #[test]
