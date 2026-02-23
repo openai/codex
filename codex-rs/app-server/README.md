@@ -121,7 +121,7 @@ Example with notification opt-out:
 
 - `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
-- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
+- `thread/fork` — fork an existing thread into a new thread id by copying the stored history. Experimental `forkAfterTurnId` lets clients fork from a selected historical turn (modern turn-id-stable histories only); emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
@@ -215,12 +215,20 @@ To continue a stored session, call `thread/resume` with the `thread.id` you prev
 { "id": 11, "result": { "thread": { "id": "thr_123", … } } }
 ```
 
-To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it:
+To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it. To fork from a selected prior turn instead of the full history, pass experimental `forkAfterTurnId`:
 
 ```json
 { "method": "thread/fork", "id": 12, "params": { "threadId": "thr_123" } }
 { "id": 12, "result": { "thread": { "id": "thr_456", … } } }
 { "method": "thread/started", "params": { "thread": { … } } }
+```
+
+```json
+{ "method": "thread/fork", "id": 13, "params": {
+    "threadId": "thr_123",
+    "forkAfterTurnId": "turn_abc",
+    "cwd": "/Users/me/project-worktree"
+} }
 ```
 
 Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `persistExtendedHistory: true` to persist a richer subset of ThreadItems for non-lossy history when calling `thread/read`, `thread/resume`, and `thread/fork` later. This does not backfill events that were not persisted previously.

@@ -1869,6 +1869,12 @@ pub struct ThreadForkParams {
     #[ts(optional = nullable)]
     pub path: Option<PathBuf>,
 
+    /// [UNSTABLE] Fork after the specified historical turn (inclusive).
+    /// When omitted, the full thread history is copied.
+    #[experimental("thread/fork.forkAfterTurnId")]
+    #[ts(optional = nullable)]
+    pub fork_after_turn_id: Option<String>,
+
     /// Configuration overrides for the forked thread, if any.
     #[ts(optional = nullable)]
     pub model: Option<String>,

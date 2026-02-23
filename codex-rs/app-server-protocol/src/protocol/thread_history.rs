@@ -54,22 +54,40 @@ use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 #[cfg(test)]
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadHistoryBuildResult {
+    pub turns: Vec<Turn>,
+    /// True when any turn id had to be synthesized during replay because the
+    /// rollout history lacked explicit turn lifecycle events.
+    pub has_synthetic_turn_ids: bool,
+}
+
+/// Convert persisted [`RolloutItem`] entries into a sequence of [`Turn`] values and
+/// annotate whether any turn ids were synthesized during replay.
+///
+/// When available, this uses `TurnContext.turn_id` as the canonical turn id so
+/// resumed/rebuilt thread history preserves the original turn identifiers.
+pub fn build_thread_history_from_rollout_items(items: &[RolloutItem]) -> ThreadHistoryBuildResult {
+    let mut builder = ThreadHistoryBuilder::new();
+    for item in items {
+        builder.handle_rollout_item(item);
+    }
+    builder.finish_result()
+}
+
 /// Convert persisted [`RolloutItem`] entries into a sequence of [`Turn`] values.
 ///
 /// When available, this uses `TurnContext.turn_id` as the canonical turn id so
 /// resumed/rebuilt thread history preserves the original turn identifiers.
 pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
-    let mut builder = ThreadHistoryBuilder::new();
-    for item in items {
-        builder.handle_rollout_item(item);
-    }
-    builder.finish()
+    build_thread_history_from_rollout_items(items).turns
 }
 
 pub struct ThreadHistoryBuilder {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
     next_item_index: i64,
+    has_synthetic_turn_ids: bool,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -84,6 +102,7 @@ impl ThreadHistoryBuilder {
             turns: Vec::new(),
             current_turn: None,
             next_item_index: 1,
+            has_synthetic_turn_ids: false,
         }
     }
 
@@ -91,9 +110,16 @@ impl ThreadHistoryBuilder {
         *self = Self::new();
     }
 
-    pub fn finish(mut self) -> Vec<Turn> {
+    pub fn finish(self) -> Vec<Turn> {
+        self.finish_result().turns
+    }
+
+    pub fn finish_result(mut self) -> ThreadHistoryBuildResult {
         self.finish_current_turn();
-        self.turns
+        ThreadHistoryBuildResult {
+            turns: self.turns,
+            has_synthetic_turn_ids: self.has_synthetic_turn_ids,
+        }
     }
 
     pub fn active_turn_snapshot(&self) -> Option<Turn> {
@@ -861,8 +887,15 @@ impl ThreadHistoryBuilder {
     }
 
     fn new_turn(&mut self, id: Option<String>) -> PendingTurn {
+        let id = match id {
+            Some(id) => id,
+            None => {
+                self.has_synthetic_turn_ids = true;
+                Uuid::now_v7().to_string()
+            }
+        };
         PendingTurn {
-            id: id.unwrap_or_else(|| Uuid::now_v7().to_string()),
+            id,
             items: Vec::new(),
             error: None,
             status: TurnStatus::Completed,
@@ -1196,6 +1229,57 @@ mod tests {
                 phase: None,
             }
         );
+    }
+
+    #[test]
+    fn reports_synthetic_turn_ids_for_legacy_history() {
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "legacy".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            })),
+            RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "reply".into(),
+                phase: None,
+            })),
+        ];
+
+        let result = build_thread_history_from_rollout_items(&items);
+        assert_eq!(result.turns.len(), 1);
+        assert_eq!(result.has_synthetic_turn_ids, true);
+    }
+
+    #[test]
+    fn reports_no_synthetic_turn_ids_when_turn_boundaries_are_explicit() {
+        let turn_id = "turn-explicit";
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.to_string(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "modern".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            })),
+            RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "reply".into(),
+                phase: None,
+            })),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn_id.to_string(),
+                last_agent_message: Some("reply".into()),
+            })),
+        ];
+
+        let result = build_thread_history_from_rollout_items(&items);
+        assert_eq!(result.turns.len(), 1);
+        assert_eq!(result.turns[0].id, turn_id);
+        assert_eq!(result.has_synthetic_turn_ids, false);
     }
 
     #[test]

@@ -175,6 +175,7 @@ use codex_app_server_protocol::WindowsSandboxSetupCompletedNotification;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
+use codex_app_server_protocol::build_thread_history_from_rollout_items;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
@@ -3324,6 +3325,7 @@ impl CodexMessageProcessor {
         let ThreadForkParams {
             thread_id,
             path,
+            fork_after_turn_id,
             model,
             model_provider,
             cwd,
@@ -3437,6 +3439,48 @@ impl CodexMessageProcessor {
         };
 
         let fallback_model_provider = config.model_provider_id.clone();
+        let fork_cutoff_nth_user_message = if let Some(fork_after_turn_id) =
+            fork_after_turn_id.as_deref()
+        {
+            let source_items = match read_rollout_items_from_rollout(rollout_path.as_path()).await {
+                Ok(items) => items,
+                Err(err) => {
+                    let (code, message) = match err.kind() {
+                        std::io::ErrorKind::NotFound => (
+                            INVALID_REQUEST_ERROR_CODE,
+                            format!("failed to load rollout `{}`: {err}", rollout_path.display()),
+                        ),
+                        _ => (
+                            INTERNAL_ERROR_CODE,
+                            format!(
+                                "failed to read rollout `{}` for thread fork: {err}",
+                                rollout_path.display()
+                            ),
+                        ),
+                    };
+                    let error = JSONRPCErrorError {
+                        code,
+                        message,
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+            match resolve_thread_fork_cutoff_nth_user_message(
+                source_items.as_slice(),
+                fork_after_turn_id,
+            ) {
+                Ok(cutoff) => cutoff,
+                Err(message) => {
+                    self.send_invalid_request_error(request_id, message).await;
+                    return;
+                }
+            }
+        } else {
+            usize::MAX
+        };
 
         let NewThread {
             thread_id,
@@ -3445,7 +3489,7 @@ impl CodexMessageProcessor {
         } = match self
             .thread_manager
             .fork_thread(
-                usize::MAX,
+                fork_cutoff_nth_user_message,
                 config,
                 rollout_path.clone(),
                 persist_extended_history,
@@ -6867,6 +6911,69 @@ async fn sync_default_client_residency_requirement(
             "failed to sync default client residency requirement after auth refresh"
         ),
     }
+}
+
+fn resolve_thread_fork_cutoff_nth_user_message(
+    rollout_items: &[RolloutItem],
+    fork_after_turn_id: &str,
+) -> Result<usize, String> {
+    let history = build_thread_history_from_rollout_items(rollout_items);
+    if history.has_synthetic_turn_ids {
+        return Err(
+            "turn-based forking is not supported for legacy thread history; use full thread/fork"
+                .to_string(),
+        );
+    }
+
+    let total_user_turns = history
+        .turns
+        .iter()
+        .filter(|turn| {
+            turn.items
+                .iter()
+                .any(|item| matches!(item, ThreadItem::UserMessage { .. }))
+        })
+        .count();
+    let mut user_turn_index = 0usize;
+
+    for turn in &history.turns {
+        let has_user_message = turn
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::UserMessage { .. }));
+        let has_agent_message = turn
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::AgentMessage { .. }));
+
+        if turn.id == fork_after_turn_id {
+            if matches!(turn.status, TurnStatus::InProgress) {
+                return Err(
+                    "fork turn must be completed/interrupted/failed, not in progress".to_string(),
+                );
+            }
+            if !has_user_message {
+                return Err("fork turn must contain a user message".to_string());
+            }
+            if !has_agent_message {
+                return Err("fork turn must contain an agent message".to_string());
+            }
+
+            return if user_turn_index.saturating_add(1) >= total_user_turns {
+                Ok(usize::MAX)
+            } else {
+                Ok(user_turn_index.saturating_add(1))
+            };
+        }
+
+        if has_user_message {
+            user_turn_index = user_turn_index.saturating_add(1);
+        }
+    }
+
+    Err(format!(
+        "fork turn not found in source thread history: {fork_after_turn_id}"
+    ))
 }
 
 /// Derive the effective [`Config`] by layering three override sources.
