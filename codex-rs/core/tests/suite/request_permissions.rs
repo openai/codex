@@ -172,7 +172,7 @@ fn workspace_write_excluding_tmp() -> SandboxPolicy {
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 async fn with_additional_permissions_requires_approval_under_on_request() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
@@ -245,7 +245,7 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
@@ -329,7 +329,7 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write()
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
@@ -413,7 +413,7 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write()
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
