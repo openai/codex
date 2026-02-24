@@ -45,7 +45,7 @@ pub trait ShellCommandExecutor: Send + Sync {
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct ExecParams {
-    /// The bash string to execute.
+    /// The the string of Zsh/shell to execute.
     pub command: String,
     /// The working directory to execute the command in. Must be an absolute path.
     pub workdir: String,
@@ -58,20 +58,22 @@ pub struct ExecParams {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExecResult {
     pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    /// Aggregated stdout+stderr output for compatibility with existing callers.
     pub output: String,
     pub duration: Duration,
     pub timed_out: bool,
 }
 
-#[allow(clippy::module_name_repetitions)]
-pub struct EscalateServer {
+struct EscalateServer {
     bash_path: PathBuf,
     execve_wrapper: PathBuf,
     policy: Arc<dyn EscalationPolicy>,
 }
 
 impl EscalateServer {
-    pub fn new<P>(bash_path: PathBuf, execve_wrapper: PathBuf, policy: P) -> Self
+    fn new<P>(bash_path: PathBuf, execve_wrapper: PathBuf, policy: P) -> Self
     where
         P: EscalationPolicy + Send + Sync + 'static,
     {
@@ -82,7 +84,7 @@ impl EscalateServer {
         }
     }
 
-    pub async fn exec(
+    async fn exec(
         &self,
         params: ExecParams,
         cancel_rx: CancellationToken,
