@@ -37,6 +37,7 @@ pub enum SlashCommand {
     Status,
     DebugConfig,
     Statusline,
+    Theme,
     Mcp,
     Apps,
     Logout,
@@ -46,6 +47,7 @@ pub enum SlashCommand {
     Rollout,
     Ps,
     Clean,
+    Clear,
     Personality,
     TestApproval,
     // Debugging commands.
@@ -66,6 +68,7 @@ impl SlashCommand {
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
+            SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
@@ -75,6 +78,7 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Statusline => "configure which items appear in the status line",
+            SlashCommand::Theme => "choose a syntax highlighting theme",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Clean => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
@@ -134,6 +138,7 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Plan
+            | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
@@ -155,6 +160,7 @@ impl SlashCommand {
             SlashCommand::Collab => true,
             SlashCommand::Agent => true,
             SlashCommand::Statusline => false,
+            SlashCommand::Theme => false,
         }
     }
 

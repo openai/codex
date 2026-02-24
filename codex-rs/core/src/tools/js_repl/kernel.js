@@ -115,9 +115,6 @@ function isDeniedBuiltin(specifier) {
 const pendingTool = new Map();
 let toolCounter = 0;
 const tmpDir = process.env.CODEX_JS_TMP_DIR || process.cwd();
-// Explicit long-lived mutable store exposed as `codex.state`. This is useful
-// when callers want shared state without relying on lexical binding carry-over.
-const state = {};
 const nodeModuleDirEnv = process.env.CODEX_JS_REPL_NODE_MODULE_DIRS ?? "";
 const moduleSearchBases = (() => {
   const bases = [];
@@ -470,8 +467,7 @@ async function handleExec(message) {
     const { source, nextBindings } = await buildModuleSource(code);
     let output = "";
 
-    context.state = state;
-    context.codex = { state, tmpDir, tool };
+    context.codex = { tmpDir, tool };
     context.tmpDir = tmpDir;
 
     await withCapturedConsole(context, async (logs) => {

@@ -320,6 +320,7 @@ async fn handle_exec_approval(
         reason,
         network_approval_context,
         proposed_execpolicy_amendment,
+        additional_permissions,
         ..
     } = event;
     // Race approval with cancellation and timeout to avoid hangs.
@@ -332,6 +333,7 @@ async fn handle_exec_approval(
         reason,
         network_approval_context,
         proposed_execpolicy_amendment,
+        additional_permissions,
     );
     let decision = await_approval_with_cancel(
         approval_fut,

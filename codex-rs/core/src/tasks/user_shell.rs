@@ -101,6 +101,10 @@ pub(crate) async fn execute_user_shell_command(
         // Auxiliary mode runs within an existing active turn. That turn already
         // emitted TurnStarted, so emitting another TurnStarted here would create
         // duplicate turn lifecycle events and confuse clients.
+        // TODO(ccunningham): After TurnStarted, emit model-visible turn context diffs for
+        // standalone lifecycle tasks (for example /shell, and review once it emits TurnStarted).
+        // `/compact` is an intentional exception because compaction requests should not include
+        // freshly reinjected context before the summary/replacement history is applied.
         let event = EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: turn_context.sub_id.clone(),
             model_context_window: turn_context.model_context_window(),
@@ -143,6 +147,7 @@ pub(crate) async fn execute_user_shell_command(
         )
         .await;
 
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let exec_env = ExecRequest {
         command: exec_command.clone(),
         cwd: cwd.clone(),
@@ -151,13 +156,13 @@ pub(crate) async fn execute_user_shell_command(
             Some(session.conversation_id),
         ),
         network: turn_context.network.clone(),
-        network_attempt_id: None,
         // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
         // should use that instead of an "arbitrarily large" timeout here.
         expiration: USER_SHELL_TIMEOUT_MS.into(),
         sandbox: SandboxType::None,
         windows_sandbox_level: turn_context.windows_sandbox_level,
         sandbox_permissions: SandboxPermissions::UseDefault,
+        sandbox_policy: sandbox_policy.clone(),
         justification: None,
         arg0: None,
     };
@@ -168,7 +173,6 @@ pub(crate) async fn execute_user_shell_command(
         tx_event: session.get_tx_event(),
     });
 
-    let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
         .or_cancel(&cancellation_token)
         .await;

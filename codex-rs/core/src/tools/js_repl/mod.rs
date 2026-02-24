@@ -588,6 +588,7 @@ impl JsReplManager {
             env,
             expiration: ExecExpiration::DefaultTimeout,
             sandbox_permissions: SandboxPermissions::UseDefault,
+            additional_permissions: None,
             justification: None,
         };
 
@@ -1800,8 +1801,12 @@ mod tests {
         }
 
         let (session, mut turn) = make_session_and_context().await;
-        turn.approval_policy = AskForApproval::Never;
-        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("test setup should allow updating approval policy");
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);
@@ -1843,8 +1848,12 @@ mod tests {
         }
 
         let (session, mut turn) = make_session_and_context().await;
-        turn.approval_policy = AskForApproval::Never;
-        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("test setup should allow updating approval policy");
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);
@@ -1891,8 +1900,12 @@ try {
         }
 
         let (session, mut turn) = make_session_and_context().await;
-        turn.approval_policy = AskForApproval::Never;
-        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("test setup should allow updating approval policy");
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);
@@ -1941,8 +1954,12 @@ console.log("cell-complete");
         {
             return Ok(());
         }
-        turn.approval_policy = AskForApproval::Never;
-        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("test setup should allow updating approval policy");
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);

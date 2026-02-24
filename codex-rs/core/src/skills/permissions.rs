@@ -112,6 +112,7 @@ pub(crate) fn compile_permission_profile(
         approval_policy: Constrained::allow_any(AskForApproval::Never),
         sandbox_policy: Constrained::allow_any(sandbox_policy),
         network: None,
+        allow_login_shell: true,
         shell_environment_policy: ShellEnvironmentPolicy::default(),
         windows_sandbox_mode: None,
         macos_seatbelt_profile_extensions,
@@ -347,6 +348,7 @@ mod tests {
                     exclude_slash_tmp: false,
                 }),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 #[cfg(target_os = "macos")]
@@ -391,6 +393,7 @@ mod tests {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 #[cfg(target_os = "macos")]
@@ -439,6 +442,7 @@ mod tests {
                     },
                 }),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 #[cfg(target_os = "macos")]

@@ -3,7 +3,6 @@ edition.workspace = true
 license.workspace = true
 name = "codex-core"
 version.workspace = true
-build = "build.rs"
 
 [lib]
 doctest = false
@@ -22,7 +21,6 @@ anyhow = { workspace = true }
 arc-swap = "1.8.2"
 async-channel = { workspace = true }
 async-trait = { workspace = true }
-askama = { workspace = true }
 base64 = { workspace = true }
 bm25 = { workspace = true }
 chardetng = { workspace = true }
@@ -35,6 +33,7 @@ codex-async-utils = { workspace = true }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
 codex-shell-command = { workspace = true }
+codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }
@@ -49,7 +48,7 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
-codex-utils-sanitizer = { workspace = true }
+codex-secrets = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 dirs = { workspace = true }
@@ -59,9 +58,7 @@ env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-include_dir = { workspace = true }
 indexmap = { workspace = true }
-indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
 libc = { workspace = true }
 notify = { workspace = true }
@@ -79,7 +76,6 @@ rmcp = { workspace = true, default-features = false, features = [
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_path_to_error = { workspace = true }
 serde_yaml = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
@@ -140,6 +136,9 @@ windows-sys = { version = "0.52", features = [
 
 [target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { workspace = true, features = ["sync-secret-service"] }
+
+[target.'cfg(unix)'.dependencies]
+codex-shell-escalation = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

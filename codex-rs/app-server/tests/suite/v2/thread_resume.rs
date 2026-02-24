@@ -16,6 +16,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::config_types::Personality;
@@ -314,9 +315,14 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let second_body = responses::sse(vec![responses::ev_response_created("resp-2")]);
+    let second_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]))
+    .set_delay(std::time::Duration::from_millis(500));
     let _first_response_mock = responses::mount_sse_once(&server, first_body).await;
-    let _second_response_mock = responses::mount_sse_once(&server, second_body).await;
+    let _second_response_mock = responses::mount_response_once(&server, second_response).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -358,9 +364,10 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
     .await??;
     primary.clear_message_buffer();
 
-    let running_turn_id = primary
+    let thread_id = thread.id.clone();
+    let running_turn_request_id = primary
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
+            thread_id: thread_id.clone(),
             input: vec![UserInput::Text {
                 text: "keep running".to_string(),
                 text_elements: Vec::new(),
@@ -368,11 +375,13 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    timeout(
+    let running_turn_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(running_turn_id)),
+        primary.read_stream_until_response_message(RequestId::Integer(running_turn_request_id)),
     )
     .await??;
+    let TurnStartResponse { turn: running_turn } =
+        to_response::<TurnStartResponse>(running_turn_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/started"),
@@ -381,7 +390,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
 
     let resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread.id,
+            thread_id: thread_id.clone(),
             history: Some(vec![ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
@@ -407,6 +416,10 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         resume_err.error.message
     );
 
+    primary
+        .interrupt_turn_and_wait_for_aborted(thread_id, running_turn.id, DEFAULT_READ_TIMEOUT)
+        .await?;
+
     Ok(())
 }
 
@@ -418,9 +431,14 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let second_body = responses::sse(vec![responses::ev_response_created("resp-2")]);
+    let second_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]))
+    .set_delay(std::time::Duration::from_millis(500));
     let _first_response_mock = responses::mount_sse_once(&server, first_body).await;
-    let _second_response_mock = responses::mount_sse_once(&server, second_body).await;
+    let _second_response_mock = responses::mount_response_once(&server, second_response).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -462,9 +480,10 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
     .await??;
     primary.clear_message_buffer();
 
-    let running_turn_id = primary
+    let thread_id = thread.id.clone();
+    let running_turn_request_id = primary
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
+            thread_id: thread_id.clone(),
             input: vec![UserInput::Text {
                 text: "keep running".to_string(),
                 text_elements: Vec::new(),
@@ -472,11 +491,13 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
             ..Default::default()
         })
         .await?;
-    timeout(
+    let running_turn_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(running_turn_id)),
+        primary.read_stream_until_response_message(RequestId::Integer(running_turn_request_id)),
     )
     .await??;
+    let TurnStartResponse { turn: running_turn } =
+        to_response::<TurnStartResponse>(running_turn_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/started"),
@@ -485,7 +506,7 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
 
     let resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread.id,
+            thread_id: thread_id.clone(),
             path: Some(PathBuf::from("/tmp/does-not-match-running-rollout.jsonl")),
             ..Default::default()
         })
@@ -500,6 +521,10 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         "unexpected resume error: {}",
         resume_err.error.message
     );
+
+    primary
+        .interrupt_turn_and_wait_for_aborted(thread_id, running_turn.id, DEFAULT_READ_TIMEOUT)
+        .await?;
 
     Ok(())
 }
