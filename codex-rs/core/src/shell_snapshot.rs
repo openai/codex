@@ -342,19 +342,17 @@ alias_count=$(alias -p | wc -l | tr -d ' ')
 echo "# aliases $alias_count"
 alias -p
 echo ''
-export_lines=$(export -p | awk '
-/^(export|declare -x|typeset -x) / {
-  line=$0
-  name=line
-  sub(/^(export|declare -x|typeset -x) /, "", name)
-  sub(/=.*/, "", name)
-  if (name ~ /^(EXCLUDED_EXPORTS)$/) {
-    next
-  }
-  if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
-    print line
-  }
-}')
+export_lines=$(
+  while IFS= read -r name; do
+    if [[ "$name" =~ ^(EXCLUDED_EXPORTS)$ ]]; then
+      continue
+    fi
+    if [[ ! "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      continue
+    fi
+    declare -xp "$name" 2>/dev/null || true
+  done < <(compgen -e)
+)
 export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
 echo "# exports $export_count"
 if [ -n "$export_lines" ]; then
@@ -649,6 +647,46 @@ mod tests {
         assert!(!stdout.contains("PWD=/tmp/stale"));
         assert!(!stdout.contains("NEXTEST_BIN_EXE_codex-write-config-schema"));
         assert!(!stdout.contains("BAD-NAME"));
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bash_snapshot_preserves_multiline_exports() -> Result<()> {
+        let multiline_cert = "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----";
+        let output = Command::new("/bin/bash")
+            .arg("-c")
+            .arg(bash_snapshot_script())
+            .env("BASH_ENV", "/dev/null")
+            .env("MULTILINE_CERT", multiline_cert)
+            .output()?;
+
+        assert!(output.status.success());
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("MULTILINE_CERT=") || stdout.contains("MULTILINE_CERT"),
+            "snapshot should include the multiline export name"
+        );
+
+        let dir = tempdir()?;
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, stdout.as_bytes())?;
+
+        let validate = Command::new("/bin/bash")
+            .arg("-c")
+            .arg("set -e; . \"$1\"")
+            .arg("bash")
+            .arg(&snapshot_path)
+            .env("BASH_ENV", "/dev/null")
+            .output()?;
+
+        assert!(
+            validate.status.success(),
+            "snapshot validation failed: {}",
+            String::from_utf8_lossy(&validate.stderr)
+        );
 
         Ok(())
     }
