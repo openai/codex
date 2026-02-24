@@ -947,9 +947,9 @@ impl EventProcessorWithHumanOutput {
             self.progress_done = false;
             if self.use_ansi_cursor {
                 if self.progress_anchor {
-                    eprint!("\u{1b}[1A\u{1b}[1G\u{1b}[2K\n");
+                    eprintln!("\u{1b}[1A\u{1b}[1G\u{1b}[2K");
                 } else {
-                    eprint!("\u{1b}[1G\u{1b}[2K\n");
+                    eprintln!("\u{1b}[1G\u{1b}[2K");
                 }
             } else {
                 eprintln!();
@@ -1049,24 +1049,24 @@ fn format_agent_job_progress_line(
         format!("{prefix} [{bar}] {rest}")
     };
     let mut line = with_bar(bar_width);
-    if let Some(columns) = columns {
-        if line.len() > columns {
-            let min_line = format!("{prefix} {rest}");
-            if min_line.len() > columns {
-                let mut truncated = min_line;
-                if columns > 2 && truncated.len() > columns {
-                    truncated.truncate(columns - 2);
-                    truncated.push_str("..");
-                }
-                return truncated;
+    if let Some(columns) = columns
+        && line.len() > columns
+    {
+        let min_line = format!("{prefix} {rest}");
+        if min_line.len() > columns {
+            let mut truncated = min_line;
+            if columns > 2 && truncated.len() > columns {
+                truncated.truncate(columns - 2);
+                truncated.push_str("..");
             }
-            let available = columns.saturating_sub(base_len);
-            if available == 0 {
-                return min_line;
-            }
-            bar_width = available.min(bar_width).max(1);
-            line = with_bar(bar_width);
+            return truncated;
         }
+        let available = columns.saturating_sub(base_len);
+        if available == 0 {
+            return min_line;
+        }
+        bar_width = available.min(bar_width).max(1);
+        line = with_bar(bar_width);
     }
     line
 }
