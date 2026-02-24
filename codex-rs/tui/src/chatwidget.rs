@@ -259,6 +259,9 @@ mod skills;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
+mod realtime;
+use self::realtime::RealtimeConversationUiState;
+use self::realtime::RenderedUserMessageEvent;
 use crate::mention_codec::LinkedMention;
 use crate::mention_codec::encode_history_mentions;
 use crate::streaming::chunking::AdaptiveChunkingPolicy;
@@ -665,6 +668,8 @@ pub(crate) struct ChatWidget {
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
+    realtime_conversation: RealtimeConversationUiState,
+    last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -842,6 +847,11 @@ enum ReplayKind {
 }
 
 impl ChatWidget {
+    fn realtime_conversation_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::RealtimeConversation)
+            && cfg!(not(target_os = "linux"))
+    }
+
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
@@ -2847,6 +2857,8 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            realtime_conversation: RealtimeConversationUiState::default(),
+            last_rendered_user_message_event: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2856,6 +2868,9 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
+        widget
+            .bottom_pane
+            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3018,6 +3033,8 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            realtime_conversation: RealtimeConversationUiState::default(),
+            last_rendered_user_message_event: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3027,6 +3044,9 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
+        widget
+            .bottom_pane
+            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3178,6 +3198,8 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            realtime_conversation: RealtimeConversationUiState::default(),
+            last_rendered_user_message_event: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3187,6 +3209,9 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
+        widget
+            .bottom_pane
+            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3308,6 +3333,11 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
                     };
+                    let Some(user_message) =
+                        self.maybe_defer_user_message_for_realtime(user_message)
+                    else {
+                        return;
+                    };
                     // Steer submissions during active final-answer streaming can race with turn
                     // completion and strand the UI in a running state. Queue those inputs instead
                     // of injecting immediately; `on_task_complete()` drains this FIFO via
@@ -3342,6 +3372,11 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
+                    };
+                    let Some(user_message) =
+                        self.maybe_defer_user_message_for_realtime(user_message)
+                    else {
+                        return;
                     };
                     self.queue_user_message(user_message);
                 }
@@ -3478,6 +3513,16 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::Realtime => {
+                if !self.realtime_conversation_enabled() {
+                    return;
+                }
+                if self.realtime_conversation.is_live() {
+                    self.request_realtime_conversation_close(None);
+                } else {
+                    self.start_realtime_conversation();
+                }
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
@@ -4086,7 +4131,17 @@ impl ChatWidget {
 
         // Show replayable user content in conversation history.
         if !text.is_empty() {
-            let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
+            let local_image_paths = local_images
+                .into_iter()
+                .map(|img| img.path)
+                .collect::<Vec<_>>();
+            self.last_rendered_user_message_event =
+                Some(Self::rendered_user_message_event_from_parts(
+                    text.clone(),
+                    text_elements.clone(),
+                    local_image_paths.clone(),
+                    remote_image_urls.clone(),
+                ));
             self.add_to_history(history_cell::new_user_prompt(
                 text,
                 text_elements,
@@ -4094,6 +4149,13 @@ impl ChatWidget {
                 remote_image_urls,
             ));
         } else if !remote_image_urls.is_empty() {
+            self.last_rendered_user_message_event =
+                Some(Self::rendered_user_message_event_from_parts(
+                    String::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    remote_image_urls.clone(),
+                ));
             self.add_to_history(history_cell::new_user_prompt(
                 String::new(),
                 Vec::new(),
@@ -4316,7 +4378,7 @@ impl ChatWidget {
                 }
             }
             EventMsg::UserMessage(ev) => {
-                if from_replay {
+                if from_replay || self.should_render_realtime_user_message_event(&ev) {
                     self.on_user_message_event(ev);
                 }
             }
@@ -4351,11 +4413,23 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::RealtimeConversationStarted(_)
-            | EventMsg::RealtimeConversationRealtime(_)
-            | EventMsg::RealtimeConversationClosed(_)
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::SkillRequestApproval(_) => {}
+            EventMsg::RealtimeConversationStarted(ev) => {
+                if !from_replay {
+                    self.on_realtime_conversation_started(ev);
+                }
+            }
+            EventMsg::RealtimeConversationRealtime(ev) => {
+                if !from_replay {
+                    self.on_realtime_conversation_realtime(ev);
+                }
+            }
+            EventMsg::RealtimeConversationClosed(ev) => {
+                if !from_replay {
+                    self.on_realtime_conversation_closed(ev);
+                }
+            }
             EventMsg::ItemCompleted(event) => {
                 let item = event.item;
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
@@ -4426,6 +4500,8 @@ impl ChatWidget {
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
+        self.last_rendered_user_message_event =
+            Some(Self::rendered_user_message_event_from_event(&event));
         let remote_image_urls = event.images.unwrap_or_default();
         if !event.message.trim().is_empty()
             || !event.text_elements.is_empty()
@@ -6401,6 +6477,17 @@ impl ChatWidget {
         if feature == Feature::VoiceTranscription {
             self.bottom_pane.set_voice_transcription_enabled(enabled);
         }
+        if feature == Feature::RealtimeConversation {
+            let realtime_conversation_enabled = self.realtime_conversation_enabled();
+            self.bottom_pane
+                .set_realtime_conversation_enabled(realtime_conversation_enabled);
+            if !realtime_conversation_enabled && self.realtime_conversation.is_live() {
+                self.request_realtime_conversation_close(Some(
+                    "Realtime voice mode was closed because the feature was disabled.".to_string(),
+                ));
+                self.reset_realtime_conversation_state();
+            }
+        }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
@@ -7588,6 +7675,7 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {
+        self.reset_realtime_conversation_state();
         self.stop_rate_limit_poller();
     }
 }

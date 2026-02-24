@@ -1,3 +1,4 @@
+pub(crate) mod agent_jobs;
 pub mod apply_patch;
 mod dynamic;
 mod grep_files;

@@ -144,6 +144,8 @@ pub enum Feature {
     Personality,
     /// Enable voice transcription in the TUI composer.
     VoiceTranscription,
+    /// Enable experimental realtime voice conversation mode in the TUI.
+    RealtimeConversation,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
@@ -652,9 +654,19 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::RealtimeConversation,
+        key: "realtime_conversation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::PreventIdleSleep,
         key: "prevent_idle_sleep",
-        stage: if cfg!(target_os = "macos") {
+        stage: if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
             Stage::Experimental {
                 name: "Prevent sleep while running",
                 menu_description: "Keep your computer awake while Codex is running a thread.",
