@@ -35,7 +35,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
@@ -2177,18 +2177,11 @@ allow_local_binding = true
         test.config.permissions.network.is_some(),
         "expected managed network proxy config to be present"
     );
-    let proxy_host_and_port = test
-        .config
-        .permissions
-        .network
-        .as_ref()
-        .expect("managed network proxy config")
-        .proxy_host_and_port();
 
     let call_id_first = "allow-network-first";
-    let fetch_command = format!(
-        "curl -sS --noproxy '' -x http://{proxy_host_and_port} http://codex-network-test.invalid 2>&1"
-    );
+    let fetch_command =
+        "curl -sS --noproxy '' -x \"$HTTP_PROXY\" http://codex-network-test.invalid 2>&1"
+            .to_string();
     let expected_network_target = "http://codex-network-test.invalid:80";
     let first_event = shell_event(
         call_id_first,
@@ -2223,18 +2216,25 @@ allow_local_binding = true
     )
     .await?;
 
-    let approval: ExecApprovalRequestEvent = wait_for_event_match(&test.codex, |event| {
-        let EventMsg::ExecApprovalRequest(approval) = event else {
-            return None;
-        };
-        let last_arg = approval
-            .command
-            .last()
-            .map(std::string::String::as_str)
-            .unwrap_or_default();
-        (last_arg == expected_network_target).then(|| approval.clone())
-    })
+    let approval_event = wait_for_event_with_timeout(
+        &test.codex,
+        |event| {
+            let EventMsg::ExecApprovalRequest(approval) = event else {
+                return false;
+            };
+            let last_arg = approval
+                .command
+                .last()
+                .map(std::string::String::as_str)
+                .unwrap_or_default();
+            last_arg == expected_network_target
+        },
+        std::time::Duration::from_secs(30),
+    )
     .await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected matching exec approval event");
+    };
     let network_context = approval
         .network_approval_context
         .clone()
