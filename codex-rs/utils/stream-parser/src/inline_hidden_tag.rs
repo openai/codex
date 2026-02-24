@@ -63,8 +63,18 @@ where
         self.specs
             .iter()
             .enumerate()
-            .filter_map(|(idx, spec)| self.pending.find(spec.open).map(|pos| (pos, idx)))
-            .min_by_key(|(pos, idx)| (*pos, *idx))
+            .filter_map(|(idx, spec)| {
+                self.pending
+                    .find(spec.open)
+                    .map(|pos| (pos, spec.open.len(), idx))
+            })
+            .min_by(|(pos_a, len_a, idx_a), (pos_b, len_b, idx_b)| {
+                pos_a
+                    .cmp(pos_b)
+                    .then_with(|| len_b.cmp(len_a))
+                    .then_with(|| idx_a.cmp(idx_b))
+            })
+            .map(|(pos, _len, idx)| (pos, idx))
     }
 
     fn max_open_prefix_suffix_len(&self) -> usize {
@@ -256,5 +266,28 @@ mod tests {
         assert_eq!(out.extracted.len(), 1);
         assert_eq!(out.extracted[0].tag, Tag::A);
         assert_eq!(out.extracted[0].content, "中");
+    }
+
+    #[test]
+    fn generic_inline_parser_prefers_longest_opener_at_same_offset() {
+        let mut parser = InlineHiddenTagParser::new(vec![
+            InlineTagSpec {
+                tag: Tag::A,
+                open: "<a>",
+                close: "</a>",
+            },
+            InlineTagSpec {
+                tag: Tag::B,
+                open: "<ab>",
+                close: "</ab>",
+            },
+        ]);
+
+        let out = collect_chunks(&mut parser, &["x<ab>y</ab>z"]);
+
+        assert_eq!(out.visible_text, "xz");
+        assert_eq!(out.extracted.len(), 1);
+        assert_eq!(out.extracted[0].tag, Tag::B);
+        assert_eq!(out.extracted[0].content, "y");
     }
 }

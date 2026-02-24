@@ -179,6 +179,7 @@ use crate::project_doc::get_user_instructions;
 use crate::proposed_plan_parser::ProposedPlanParser;
 use crate::proposed_plan_parser::ProposedPlanSegment;
 use crate::proposed_plan_parser::extract_proposed_plan_text;
+use crate::proposed_plan_parser::strip_proposed_plan_blocks;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
@@ -5627,15 +5628,19 @@ struct ParsedAssistantTextDelta {
 }
 
 impl AssistantMessageStreamParsers {
-    fn seed_item_text(&mut self, item_id: &str, text: &str) {
+    fn seed_item_text(&mut self, item_id: &str, text: &str) -> ParsedAssistantTextDelta {
         if text.is_empty() {
-            return;
+            return ParsedAssistantTextDelta::default();
         }
-        let _ = self
+        let parsed = self
             .citations_by_item
             .entry(item_id.to_string())
             .or_default()
             .push_str(text);
+        ParsedAssistantTextDelta {
+            visible_text: parsed.visible_text,
+            citations: parsed.extracted,
+        }
     }
 
     fn parse_delta(&mut self, item_id: &str, delta: &str) -> ParsedAssistantTextDelta {
@@ -6296,11 +6301,24 @@ async fn try_run_sampling_request(
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
+                    let mut turn_item = turn_item;
                     if matches!(turn_item, TurnItem::AgentMessage(_))
                         && let Some(raw_text) = raw_assistant_output_text_from_item(&item)
                     {
                         let item_id = turn_item.id();
-                        assistant_message_stream_parsers.seed_item_text(&item_id, &raw_text);
+                        let ParsedAssistantTextDelta {
+                            mut visible_text,
+                            citations: _citations,
+                        } = assistant_message_stream_parsers.seed_item_text(&item_id, &raw_text);
+                        if plan_mode {
+                            visible_text = strip_proposed_plan_blocks(&visible_text);
+                        }
+                        if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
+                            agent_message.content =
+                                vec![codex_protocol::items::AgentMessageContent::Text {
+                                    text: visible_text,
+                                }];
+                        }
                     }
                     if let Some(state) = plan_mode_state.as_mut()
                         && matches!(turn_item, TurnItem::AgentMessage(_))
@@ -6595,12 +6613,31 @@ mod tests {
         let mut parsers = AssistantMessageStreamParsers::default();
         let item_id = "msg-1";
 
-        parsers.seed_item_text(item_id, "hello <citation>doc");
+        let seeded = parsers.seed_item_text(item_id, "hello <citation>doc");
         let parsed = parsers.parse_delta(item_id, "1</citation> world");
         let tail = parsers.finish_item(item_id);
 
+        assert_eq!(seeded.visible_text, "hello ");
+        assert_eq!(seeded.citations, Vec::<String>::new());
         assert_eq!(parsed.visible_text, " world");
         assert_eq!(parsed.citations, vec!["doc1".to_string()]);
+        assert_eq!(tail.visible_text, "");
+        assert_eq!(tail.citations, Vec::<String>::new());
+    }
+
+    #[test]
+    fn assistant_message_stream_parsers_seed_buffered_prefix_stays_out_of_finish_tail() {
+        let mut parsers = AssistantMessageStreamParsers::default();
+        let item_id = "msg-1";
+
+        let seeded = parsers.seed_item_text(item_id, "hello <cita");
+        let parsed = parsers.parse_delta(item_id, "tion>doc</citation> world");
+        let tail = parsers.finish_item(item_id);
+
+        assert_eq!(seeded.visible_text, "hello ");
+        assert_eq!(seeded.citations, Vec::<String>::new());
+        assert_eq!(parsed.visible_text, " world");
+        assert_eq!(parsed.citations, vec!["doc".to_string()]);
         assert_eq!(tail.visible_text, "");
         assert_eq!(tail.citations, Vec::<String>::new());
     }
