@@ -383,6 +383,7 @@ pub(crate) fn build_theme_picker_params(
         side_content_width: SideContentWidth::Half,
         side_content_min_width: WIDE_PREVIEW_MIN_WIDTH,
         stacked_side_content: Some(Box::new(ThemePreviewNarrowRenderable)),
+        preserve_side_content_bg: true,
         on_selection_changed,
         on_cancel,
         ..Default::default()

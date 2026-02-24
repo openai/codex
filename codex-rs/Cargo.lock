@@ -1726,6 +1726,7 @@ dependencies = [
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
  "core_test_support",
+ "csv",
  "ctor 0.6.3",
  "dirs",
  "dunce",
@@ -2532,7 +2533,9 @@ name = "codex-utils-sleep-inhibitor"
 version = "0.0.0"
 dependencies = [
  "core-foundation 0.9.4",
+ "libc",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
