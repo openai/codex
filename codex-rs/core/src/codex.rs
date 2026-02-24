@@ -257,7 +257,6 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
-use crate::zsh_exec_bridge::ZshExecBridge;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
@@ -1234,7 +1233,8 @@ impl Session {
                     "zsh fork feature enabled, but `zsh_path` is not configured; set `zsh_path` in config.toml"
                 )
             })?;
-            shell::get_shell(shell::ShellType::Zsh, Some(zsh_path)).ok_or_else(|| {
+            let zsh_path = zsh_path.to_path_buf();
+            shell::get_shell(shell::ShellType::Zsh, Some(&zsh_path)).ok_or_else(|| {
                 anyhow::anyhow!(
                     "zsh fork feature enabled, but zsh_path `{}` is not usable; set `zsh_path` to a valid zsh executable",
                     zsh_path.display()
@@ -1313,12 +1313,6 @@ impl Session {
                 (None, None)
             };
 
-        let zsh_exec_bridge =
-            ZshExecBridge::new(config.zsh_path.clone(), config.codex_home.clone());
-        zsh_exec_bridge
-            .initialize_for_session(&conversation_id.to_string())
-            .await;
-
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -1334,7 +1328,7 @@ impl Session {
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
             ),
-            zsh_exec_bridge,
+            shell_zsh_path: config.zsh_path.clone(),
             analytics_events_client: AnalyticsEventsClient::new(
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
@@ -4495,7 +4489,6 @@ mod handlers {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
-        sess.services.zsh_exec_bridge.shutdown().await;
         info!("Shutting down Codex instance");
         let history = sess.clone_history().await;
         let turn_count = history
@@ -8213,7 +8206,7 @@ mod tests {
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
             ),
-            zsh_exec_bridge: ZshExecBridge::default(),
+            shell_zsh_path: None,
             analytics_events_client: AnalyticsEventsClient::new(
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
@@ -8368,7 +8361,7 @@ mod tests {
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
             ),
-            zsh_exec_bridge: ZshExecBridge::default(),
+            shell_zsh_path: None,
             analytics_events_client: AnalyticsEventsClient::new(
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
