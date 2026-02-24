@@ -686,6 +686,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
     let mut external_editor = Line::from("");
+    let mut toggle_other_model = Line::from("");
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
@@ -701,6 +702,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
                 ShortcutId::ExternalEditor => external_editor = text,
+                ShortcutId::ToggleOtherModel => toggle_other_model = text,
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
@@ -717,6 +719,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         file_paths,
         paste_image,
         external_editor,
+        toggle_other_model,
         edit_previous,
         quit,
     ];
@@ -799,6 +802,7 @@ enum ShortcutId {
     FilePaths,
     PasteImage,
     ExternalEditor,
+    ToggleOtherModel,
     EditPrevious,
     Quit,
     ShowTranscript,
@@ -948,6 +952,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to edit in external editor",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::ToggleOtherModel,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('o')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to switch to other model",
     },
     ShortcutDescriptor {
         id: ShortcutId::EditPrevious,
