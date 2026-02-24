@@ -2014,7 +2014,21 @@ impl ChatComposer {
     ///
     /// The returned string **does not** include the leading `@`.
     fn current_at_token(textarea: &TextArea) -> Option<String> {
-        Self::current_prefixed_token(textarea, '@', false)
+        let text = textarea.text();
+        let safe_cursor = Self::clamp_to_char_boundary(text, textarea.cursor());
+        let token = Self::current_prefixed_token(textarea, '@', false)?;
+        if token.contains('@') {
+            return None;
+        }
+        if text[safe_cursor..].starts_with('@')
+            && text[..safe_cursor]
+                .chars()
+                .next_back()
+                .is_some_and(|c| !c.is_whitespace())
+        {
+            return None;
+        }
+        Some(token)
     }
 
     fn current_mention_token(&self) -> Option<String> {
@@ -5416,6 +5430,33 @@ mod tests {
             assert_eq!(
                 result, expected,
                 "Failed for whitespace boundary case: {description} - input: '{input}', cursor: {cursor_pos}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_current_at_token_rejects_tokens_with_second_at() {
+        let input = "npx -y @kaeawc/auto-mobile@latest";
+        let token_start = input.find("@kaeawc").expect("scoped npm package present");
+        let version_at = input
+            .rfind("@latest")
+            .expect("version suffix present in scoped npm package");
+        let test_cases = vec![
+            (token_start, "Cursor at leading @"),
+            (token_start + 8, "Cursor inside scoped package name"),
+            (version_at, "Cursor at version @"),
+            (input.len(), "Cursor at end of token"),
+        ];
+
+        for (cursor_pos, description) in test_cases {
+            let mut textarea = TextArea::new();
+            textarea.insert_str(input);
+            textarea.set_cursor(cursor_pos);
+
+            let result = ChatComposer::current_at_token(&textarea);
+            assert_eq!(
+                result, None,
+                "Failed for case: {description} - input: '{input}', cursor: {cursor_pos}"
             );
         }
     }
