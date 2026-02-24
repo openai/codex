@@ -1797,10 +1797,8 @@ impl CodexMessageProcessor {
             None => None,
         };
         let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
-        let command = params.command;
         let exec_params = ExecParams {
-            original_command: command.join(" "),
-            command,
+            command: params.command,
             cwd,
             expiration: timeout_ms.into(),
             env,

@@ -3,7 +3,6 @@ use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
-use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
@@ -12,72 +11,19 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::features::Feature;
-use core_test_support::responses;
-use pretty_assertions::assert_eq;
-use serde_json::json;
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::Path;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-fn write_skill_with_script(
-    home: &Path,
-    name: &str,
-    script_body: &str,
-) -> Result<std::path::PathBuf> {
-    let skill_dir = home.join("skills").join(name);
-    let scripts_dir = skill_dir.join("scripts");
-    fs::create_dir_all(&scripts_dir)?;
-    fs::write(
-        skill_dir.join("SKILL.md"),
-        format!("---\nname: {name}\ndescription: {name} skill\n---\n"),
-    )?;
-    let script_path = scripts_dir.join("run.py");
-    fs::write(&script_path, script_body)?;
-    Ok(script_path)
-}
-
-fn shell_command_response(tool_call_id: &str, command: &str) -> Result<String> {
-    let arguments = serde_json::to_string(&json!({
-        "command": command,
-        "timeout_ms": 500,
-    }))?;
-    Ok(responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_function_call(tool_call_id, "shell_command", &arguments),
-        responses::ev_completed("resp-1"),
-    ]))
-}
-
-fn command_for_script(script_path: &Path) -> Result<String> {
-    let runner = if cfg!(windows) { "python" } else { "python3" };
-    let script_path = script_path.to_string_lossy().into_owned();
-    Ok(shlex::try_join([runner, script_path.as_str()])?)
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn skill_request_approval_round_trip_on_shell_command_skill_script_exec() -> Result<()> {
+async fn skill_request_approval_round_trip() -> Result<()> {
     let codex_home = tempfile::TempDir::new()?;
-    let script_path = write_skill_with_script(codex_home.path(), "demo", "print('hello')")?;
-    let tool_call_id = "skill-call";
-    let command = command_for_script(&script_path)?;
-    let server = create_mock_responses_server_sequence(vec![
-        shell_command_response(tool_call_id, &command)?,
-        create_final_assistant_message_sse_response("done")?,
-    ])
-    .await;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        &server.uri(),
-        &BTreeMap::from([(Feature::SkillApproval, true)]),
-        8192,
-        Some(false),
-        "mock_provider",
-        "compact",
-    )?;
+    let server =
+        create_mock_responses_server_sequence(vec![create_final_assistant_message_sse_response(
+            "done",
+        )?])
+        .await;
+    create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -111,7 +57,7 @@ async fn skill_request_approval_round_trip_on_shell_command_skill_script_exec() 
         mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
     )
     .await??;
-    let TurnStartResponse { .. } = to_response::<TurnStartResponse>(turn_start_resp)?;
+    let TurnStartResponse { turn, .. } = to_response(turn_start_resp)?;
 
     let server_req = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -122,8 +68,8 @@ async fn skill_request_approval_round_trip_on_shell_command_skill_script_exec() 
         panic!("expected SkillRequestApproval request, got: {server_req:?}");
     };
 
-    assert_eq!(params.item_id, tool_call_id);
-    assert_eq!(params.skill_name, "demo");
+    assert_eq!(params.item_id, turn.id);
+    assert_eq!(params.skill_name, "test-skill");
 
     mcp.send_response(request_id, serde_json::json!({ "decision": "approve" }))
         .await?;
@@ -135,4 +81,29 @@ async fn skill_request_approval_round_trip_on_shell_command_skill_script_exec() 
     .await??;
 
     Ok(())
+}
+
+fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[features]
+skill_approval = true
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )
 }
