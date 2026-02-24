@@ -533,6 +533,8 @@ struct RealtimeConversationUiState {
     #[cfg(not(target_os = "linux"))]
     capture_stop_flag: Option<Arc<AtomicBool>>,
     #[cfg(not(target_os = "linux"))]
+    capture: Option<crate::voice::VoiceCapture>,
+    #[cfg(not(target_os = "linux"))]
     audio_player: Option<crate::voice::RealtimeAudioPlayer>,
 }
 
@@ -7814,13 +7816,13 @@ impl ChatWidget {
         let app_event_tx = self.app_event_tx.clone();
 
         self.realtime_conversation.capture_stop_flag = Some(stop_flag.clone());
+        self.realtime_conversation.capture = Some(capture);
         if self.realtime_conversation.audio_player.is_none() {
             self.realtime_conversation.audio_player =
                 crate::voice::RealtimeAudioPlayer::start().ok();
         }
 
         std::thread::spawn(move || {
-            let mut capture = capture;
             let mut meter = crate::voice::RecordingMeterState::new();
             let mut sent_samples = 0usize;
             const MAX_SAMPLES_PER_CHUNK: usize = 4_800 * 2;
@@ -7872,12 +7874,6 @@ impl ChatWidget {
 
                 std::thread::sleep(Duration::from_millis(60));
             }
-
-            let _ = capture.stop();
-            app_event_tx.send(AppEvent::TranscriptionFailed {
-                id: meter_placeholder_id,
-                error: "realtime capture stopped".to_string(),
-            });
         });
     }
 
@@ -7888,6 +7884,9 @@ impl ChatWidget {
     fn stop_realtime_local_audio(&mut self) {
         if let Some(flag) = self.realtime_conversation.capture_stop_flag.take() {
             flag.store(true, Ordering::Relaxed);
+        }
+        if let Some(capture) = self.realtime_conversation.capture.take() {
+            let _ = capture.stop();
         }
         if let Some(id) = self.realtime_conversation.meter_placeholder_id.take() {
             self.remove_transcription_placeholder(&id);
