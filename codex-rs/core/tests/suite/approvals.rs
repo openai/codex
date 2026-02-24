@@ -80,6 +80,10 @@ enum ActionKind {
         target: TargetPath,
         content: &'static str,
     },
+    FetchUrlNoProxy {
+        endpoint: &'static str,
+        response_body: &'static str,
+    },
     FetchUrl {
         endpoint: &'static str,
         response_body: &'static str,
@@ -136,6 +140,28 @@ impl ActionKind {
                 let escaped_url = url.replace('\'', "\\'");
                 let script = format!(
                     "import sys\nimport urllib.request\nurl = '{escaped_url}'\ntry:\n    data = urllib.request.urlopen(url, timeout=2).read().decode()\n    print('OK:' + data.strip())\nexcept Exception as exc:\n    print('ERR:' + exc.__class__.__name__)\n    sys.exit(1)",
+                );
+
+                let command = format!("python3 -c \"{script}\"");
+                let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
+                Ok((event, Some(command)))
+            }
+            ActionKind::FetchUrlNoProxy {
+                endpoint,
+                response_body,
+            } => {
+                Mock::given(method("GET"))
+                    .and(path(*endpoint))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_string(response_body.to_string()),
+                    )
+                    .mount(server)
+                    .await;
+
+                let url = format!("{}{}", server.uri(), endpoint);
+                let escaped_url = url.replace('\'', "\\'");
+                let script = format!(
+                    "import sys\nimport urllib.request\nurl = '{escaped_url}'\nopener = urllib.request.build_opener(urllib.request.ProxyHandler({{}}))\ntry:\n    data = opener.open(url, timeout=2).read().decode()\n    print('OK:' + data.strip())\nexcept Exception as exc:\n    print('ERR:' + exc.__class__.__name__)\n    sys.exit(1)",
                 );
 
                 let command = format!("python3 -c \"{script}\"");
@@ -698,7 +724,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             name: "danger_full_access_on_request_allows_network",
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
-            action: ActionKind::FetchUrl {
+            action: ActionKind::FetchUrlNoProxy {
                 endpoint: "/dfa/network",
                 response_body: "danger-network-ok",
             },
@@ -714,7 +740,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             name: "danger_full_access_on_request_allows_network_gpt_5_1_no_exit",
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
-            action: ActionKind::FetchUrl {
+            action: ActionKind::FetchUrlNoProxy {
                 endpoint: "/dfa/network",
                 response_body: "danger-network-ok",
             },
