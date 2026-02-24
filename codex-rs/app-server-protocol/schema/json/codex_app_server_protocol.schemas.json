@@ -2818,6 +2818,30 @@
         },
         {
           "properties": {
+            "item_id": {
+              "type": "string"
+            },
+            "skill_name": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "skill_request_approval"
+              ],
+              "title": "SkillRequestApprovalEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "skill_name",
+            "type"
+          ],
+          "title": "SkillRequestApprovalEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
             },
@@ -6195,6 +6219,30 @@
           "type": "object"
         },
         {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "skill/requestApproval"
+              ],
+              "title": "Skill/requestApprovalRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SkillRequestApprovalParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Skill/requestApprovalRequest",
+          "type": "object"
+        },
+        {
           "description": "Execute a dynamic tool call on the client.",
           "properties": {
             "id": {
@@ -6313,6 +6361,43 @@
         "http_addr",
         "socks_addr"
       ],
+      "type": "object"
+    },
+    "SkillApprovalDecision": {
+      "enum": [
+        "approve",
+        "decline"
+      ],
+      "type": "string"
+    },
+    "SkillRequestApprovalParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "skillName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "skillName"
+      ],
+      "title": "SkillRequestApprovalParams",
+      "type": "object"
+    },
+    "SkillRequestApprovalResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/SkillApprovalDecision"
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "title": "SkillRequestApprovalResponse",
       "type": "object"
     },
     "StepStatus": {
