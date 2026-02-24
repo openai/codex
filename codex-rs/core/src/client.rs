@@ -210,21 +210,11 @@ struct LastResponse {
     can_append: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct WebsocketSession {
     connection: Option<ApiWebSocketConnection>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
-}
-
-impl Default for WebsocketSession {
-    fn default() -> Self {
-        Self {
-            connection: None,
-            last_request: None,
-            last_response_rx: None,
-        }
-    }
 }
 
 enum WebsocketStreamOutcome {
