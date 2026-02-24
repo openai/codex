@@ -18,6 +18,8 @@ use std::sync::Arc;
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
+use crate::rule::NetworkRule;
+use crate::rule::NetworkRuleProtocol;
 use crate::rule::PatternToken;
 use crate::rule::PrefixPattern;
 use crate::rule::PrefixRule;
@@ -71,12 +73,14 @@ impl PolicyParser {
 #[derive(Debug, ProvidesStaticType)]
 struct PolicyBuilder {
     rules_by_program: MultiMap<String, RuleRef>,
+    network_rules: Vec<NetworkRule>,
 }
 
 impl PolicyBuilder {
     fn new() -> Self {
         Self {
             rules_by_program: MultiMap::new(),
+            network_rules: Vec::new(),
         }
     }
 
@@ -85,8 +89,12 @@ impl PolicyBuilder {
             .insert(rule.program().to_string(), rule);
     }
 
+    fn add_network_rule(&mut self, rule: NetworkRule) {
+        self.network_rules.push(rule);
+    }
+
     fn build(self) -> crate::policy::Policy {
-        crate::policy::Policy::new(self.rules_by_program)
+        crate::policy::Policy::from_parts(self.rules_by_program, self.network_rules)
     }
 }
 
@@ -140,6 +148,13 @@ fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
 
 fn parse_examples<'v>(examples: UnpackList<Value<'v>>) -> Result<Vec<Vec<String>>> {
     examples.items.into_iter().map(parse_example).collect()
+}
+
+fn parse_network_rule_decision(raw: &str) -> Result<Decision> {
+    match raw {
+        "deny" => Ok(Decision::Forbidden),
+        other => Decision::parse(other),
+    }
 }
 
 fn parse_example<'v>(value: Value<'v>) -> Result<Vec<String>> {
@@ -264,6 +279,33 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         validate_match_examples(&rules, &matches)?;
 
         rules.into_iter().for_each(|rule| builder.add_rule(rule));
+        Ok(NoneType)
+    }
+
+    fn network_rule<'v>(
+        host: &'v str,
+        protocol: &'v str,
+        decision: &'v str,
+        justification: Option<&'v str>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<NoneType> {
+        let protocol = NetworkRuleProtocol::parse(protocol)?;
+        let decision = parse_network_rule_decision(decision)?;
+        let justification = match justification {
+            Some(raw) if raw.trim().is_empty() => {
+                return Err(Error::InvalidRule("justification cannot be empty".to_string()).into());
+            }
+            Some(raw) => Some(raw.to_string()),
+            None => None,
+        };
+
+        let mut builder = policy_builder(eval);
+        builder.add_network_rule(NetworkRule {
+            host: crate::rule::normalize_network_rule_host(host)?,
+            protocol,
+            decision,
+            justification,
+        });
         Ok(NoneType)
     }
 }

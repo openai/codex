@@ -23,7 +23,6 @@ members = [
     "hooks",
     "secrets",
     "exec",
-    "exec-server",
     "execpolicy",
     "execpolicy-legacy",
     "keyring-store",
@@ -114,7 +113,6 @@ codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
-codex-shell-escalation = { path = "shell-escalation" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
@@ -138,7 +136,6 @@ codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
-exec_server_test_support = { path = "exec-server/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
 # External

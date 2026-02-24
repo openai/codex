@@ -56,8 +56,11 @@ use codex_hooks::HookResult;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::normalize_host;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::approvals::NetworkPolicyAmendment;
+use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
@@ -166,6 +169,7 @@ use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_tool_mentions_from_messages;
+use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::project_doc::get_user_instructions;
 use crate::proposed_plan_parser::ProposedPlanParser;
 use crate::proposed_plan_parser::ProposedPlanSegment;
@@ -2403,6 +2407,103 @@ impl Session {
         }
     }
 
+    pub(crate) async fn persist_network_policy_amendment(
+        &self,
+        amendment: &NetworkPolicyAmendment,
+        network_approval_context: &NetworkApprovalContext,
+    ) -> anyhow::Result<()> {
+        let host =
+            Self::validated_network_policy_amendment_host(amendment, network_approval_context)?;
+        let codex_home = self
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .codex_home()
+            .clone();
+        let execpolicy_amendment =
+            execpolicy_network_rule_amendment(amendment, network_approval_context, &host);
+
+        if let Some(started_network_proxy) = self.services.network_proxy.as_ref() {
+            let proxy = started_network_proxy.proxy();
+            match amendment.action {
+                NetworkPolicyRuleAction::Allow => proxy
+                    .add_allowed_domain(&host)
+                    .await
+                    .map_err(|err| anyhow::anyhow!("failed to update runtime allowlist: {err}"))?,
+                NetworkPolicyRuleAction::Deny => proxy
+                    .add_denied_domain(&host)
+                    .await
+                    .map_err(|err| anyhow::anyhow!("failed to update runtime denylist: {err}"))?,
+            }
+        }
+
+        self.services
+            .exec_policy
+            .append_network_rule_and_update(
+                &codex_home,
+                &host,
+                execpolicy_amendment.protocol,
+                execpolicy_amendment.decision,
+                Some(execpolicy_amendment.justification),
+            )
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!("failed to persist network policy amendment to execpolicy: {err}")
+            })?;
+
+        Ok(())
+    }
+
+    fn validated_network_policy_amendment_host(
+        amendment: &NetworkPolicyAmendment,
+        network_approval_context: &NetworkApprovalContext,
+    ) -> anyhow::Result<String> {
+        let approved_host = normalize_host(&network_approval_context.host);
+        let amendment_host = normalize_host(&amendment.host);
+        if amendment_host != approved_host {
+            return Err(anyhow::anyhow!(
+                "network policy amendment host '{}' does not match approved host '{}'",
+                amendment.host,
+                network_approval_context.host
+            ));
+        }
+        Ok(approved_host)
+    }
+
+    pub(crate) async fn record_network_policy_amendment_message(
+        &self,
+        sub_id: &str,
+        amendment: &NetworkPolicyAmendment,
+    ) {
+        let (action, list_name) = match amendment.action {
+            NetworkPolicyRuleAction::Allow => ("Allowed", "allowlist"),
+            NetworkPolicyRuleAction::Deny => ("Denied", "denylist"),
+        };
+        let text = format!(
+            "{action} network rule saved in execpolicy ({list_name}): {}",
+            amendment.host
+        );
+        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
+
+        if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
+            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
+                .await;
+            return;
+        }
+
+        if self
+            .inject_response_items(vec![ResponseInputItem::Message {
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText { text }],
+            }])
+            .await
+            .is_err()
+        {
+            warn!("no active turn found to record network policy amendment message for {sub_id}");
+        }
+    }
+
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `call_id` + `approval_id` so matching responses are delivered
@@ -2440,6 +2541,18 @@ impl Session {
         }
 
         let parsed_cmd = parse_command(&command);
+        let proposed_network_policy_amendments = network_approval_context.as_ref().map(|context| {
+            vec![
+                NetworkPolicyAmendment {
+                    host: context.host.clone(),
+                    action: NetworkPolicyRuleAction::Allow,
+                },
+                NetworkPolicyAmendment {
+                    host: context.host.clone(),
+                    action: NetworkPolicyRuleAction::Deny,
+                },
+            ]
+        });
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
             approval_id,
@@ -2449,6 +2562,7 @@ impl Session {
             reason,
             network_approval_context,
             proposed_execpolicy_amendment,
+            proposed_network_policy_amendments,
             parsed_cmd,
         });
         self.send_event(turn_context, event).await;
@@ -6141,6 +6255,7 @@ mod tests {
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
     use crate::protocol::InitialHistory;
+    use crate::protocol::NetworkApprovalProtocol;
     use crate::protocol::RateLimitSnapshot;
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
@@ -6265,6 +6380,41 @@ mod tests {
             call_id: call_id.to_string(),
             output: FunctionCallOutputPayload::from_text(output.to_string()),
         })
+    }
+
+    #[test]
+    fn validated_network_policy_amendment_host_allows_normalized_match() {
+        let amendment = NetworkPolicyAmendment {
+            host: "ExAmPlE.Com.:443".to_string(),
+            action: NetworkPolicyRuleAction::Allow,
+        };
+        let context = NetworkApprovalContext {
+            host: "example.com".to_string(),
+            protocol: NetworkApprovalProtocol::Https,
+        };
+
+        let host = Session::validated_network_policy_amendment_host(&amendment, &context)
+            .expect("normalized hosts should match");
+
+        assert_eq!(host, "example.com");
+    }
+
+    #[test]
+    fn validated_network_policy_amendment_host_rejects_mismatch() {
+        let amendment = NetworkPolicyAmendment {
+            host: "evil.example.com".to_string(),
+            action: NetworkPolicyRuleAction::Deny,
+        };
+        let context = NetworkApprovalContext {
+            host: "api.example.com".to_string(),
+            protocol: NetworkApprovalProtocol::Https,
+        };
+
+        let err = Session::validated_network_policy_amendment_host(&amendment, &context)
+            .expect_err("mismatched hosts should be rejected");
+
+        let message = err.to_string();
+        assert!(message.contains("does not match approved host"));
     }
 
     #[tokio::test]

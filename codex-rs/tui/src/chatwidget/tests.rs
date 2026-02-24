@@ -2775,6 +2775,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         ),
         network_approval_context: None,
         proposed_execpolicy_amendment: None,
+        proposed_network_policy_amendments: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2821,6 +2822,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         ),
         network_approval_context: None,
         proposed_execpolicy_amendment: None,
+        proposed_network_policy_amendments: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2873,6 +2875,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         reason: None,
         network_approval_context: None,
         proposed_execpolicy_amendment: None,
+        proposed_network_policy_amendments: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -6470,6 +6473,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
             "hello".into(),
             "world".into(),
         ])),
+        proposed_network_policy_amendments: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -6528,6 +6532,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
             "hello".into(),
             "world".into(),
         ])),
+        proposed_network_policy_amendments: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -6573,6 +6578,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         reason: None,
         network_approval_context: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        proposed_network_policy_amendments: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -6937,6 +6943,7 @@ async fn status_widget_and_approval_modal_snapshot() {
             "echo".into(),
             "hello world".into(),
         ])),
+        proposed_network_policy_amendments: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {

@@ -3,10 +3,10 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::escalate_protocol::EscalateAction;
-use crate::escalation_policy::EscalationPolicy;
-use crate::stopwatch::Stopwatch;
-use crate::unix::escalate_server::EscalationPolicyFactory;
+use super::escalate_protocol::EscalateAction;
+use super::escalate_server::EscalationPolicyFactory;
+use super::escalation_policy::EscalationPolicy;
+use super::stopwatch::Stopwatch;
 use codex_execpolicy::Policy;
 
 #[async_trait]
@@ -40,7 +40,10 @@ impl ShellPolicyFactory {
     }
 }
 
-struct ShellEscalationPolicy {
+/// Public only because it is the associated `Policy` type in the public
+/// `EscalationPolicyFactory` impl for `ShellPolicyFactory`.
+#[doc(hidden)]
+pub struct ShellEscalationPolicy {
     provider: Arc<dyn ShellActionProvider>,
     stopwatch: Stopwatch,
 }
