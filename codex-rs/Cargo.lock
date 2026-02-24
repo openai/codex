@@ -1836,34 +1836,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-exec-server"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "clap",
- "codex-core",
- "codex-execpolicy",
- "codex-protocol",
- "codex-shell-command",
- "codex-shell-escalation",
- "codex-utils-cargo-bin",
- "core_test_support",
- "exec_server_test_support",
- "maplit",
- "pretty_assertions",
- "rmcp",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "shlex",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "codex-execpolicy"
 version = "0.0.0"
 dependencies = [
@@ -2265,6 +2237,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "clap",
  "codex-core",
  "codex-execpolicy",
  "codex-protocol",
@@ -2278,6 +2251,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3691,19 +3665,6 @@ dependencies = [
  "futures-core",
  "nom 7.1.3",
  "pin-project-lite",
-]
-
-[[package]]
-name = "exec_server_test_support"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "codex-core",
- "codex-protocol",
- "codex-utils-cargo-bin",
- "rmcp",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
