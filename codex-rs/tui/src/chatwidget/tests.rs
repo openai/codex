@@ -1698,6 +1698,7 @@ async fn make_chatwidget_manual(
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
+        recent_model_history: VecDeque::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,

@@ -960,7 +960,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
             condition: DisplayCondition::Always,
         }],
         prefix: "",
-        label: " to switch to other model",
+        label: " to toggle last two models",
     },
     ShortcutDescriptor {
         id: ShortcutId::EditPrevious,
