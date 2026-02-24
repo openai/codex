@@ -2177,11 +2177,18 @@ allow_local_binding = true
         test.config.permissions.network.is_some(),
         "expected managed network proxy config to be present"
     );
+    let proxy_host_and_port = test
+        .config
+        .permissions
+        .network
+        .as_ref()
+        .expect("managed network proxy config")
+        .proxy_host_and_port();
 
     let call_id_first = "allow-network-first";
-    let fetch_command =
-        "curl -sS --noproxy '' -x \"$HTTP_PROXY\" http://codex-network-test.invalid 2>&1"
-            .to_string();
+    let fetch_command = format!(
+        "curl -sS --noproxy '' -x http://{proxy_host_and_port} http://codex-network-test.invalid 2>&1"
+    );
     let expected_network_target = "http://codex-network-test.invalid:80";
     let first_event = shell_event(
         call_id_first,
