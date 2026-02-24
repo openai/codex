@@ -141,10 +141,10 @@ impl ModelsManager {
         Self::construct_model_info_from_candidates(model, &remote_models, config)
     }
 
-    fn find_model_by_longest_prefix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
+    fn find_model_by_longest_contains(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
         let mut best: Option<ModelInfo> = None;
         for candidate in candidates {
-            if !model.starts_with(&candidate.slug) {
+            if !model.contains(&candidate.slug) {
                 continue;
             }
             let is_better_match = if let Some(current) = best.as_ref() {
@@ -164,7 +164,7 @@ impl ModelsManager {
         candidates: &[ModelInfo],
         config: &Config,
     ) -> ModelInfo {
-        let remote = Self::find_model_by_longest_prefix(model, candidates);
+        let remote = Self::find_model_by_longest_contains(model, candidates);
         let model_info = if let Some(remote) = remote {
             ModelInfo {
                 slug: model.to_string(),
@@ -517,6 +517,32 @@ mod tests {
         assert_eq!(model_info.display_name, "Overlay");
         assert_eq!(model_info.context_window, Some(272_000));
         assert!(!model_info.supports_parallel_tool_calls);
+        assert!(!model_info.used_fallback_model_metadata);
+    }
+
+    #[tokio::test]
+    async fn get_model_info_matches_longest_contained_slug() {
+        let codex_home = tempdir().expect("temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None);
+        let known_slug = manager
+            .get_remote_models()
+            .await
+            .first()
+            .expect("bundled models should include at least one model")
+            .slug
+            .clone();
+        let namespaced_model = format!("custom/{known_slug}");
+
+        let model_info = manager.get_model_info(&namespaced_model, &config).await;
+
+        assert_eq!(model_info.slug, namespaced_model);
         assert!(!model_info.used_fallback_model_metadata);
     }
 
