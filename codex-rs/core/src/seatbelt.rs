@@ -247,12 +247,13 @@ fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
     }
 
     for param in socket_params {
+        // Use subpath so allowlists cover sockets created beneath approved directories.
         policy.push_str(&format!(
-            "(allow network-bind (local unix-socket (path (param \"{}\"))))\n",
+            "(allow network-bind (local unix-socket (subpath (param \"{}\"))))\n",
             param.key
         ));
         policy.push_str(&format!(
-            "(allow network-outbound (remote unix-socket (path (param \"{}\"))))\n",
+            "(allow network-outbound (remote unix-socket (subpath (param \"{}\"))))\n",
             param.key
         ));
     }
@@ -818,13 +819,13 @@ mod tests {
         );
         assert!(
             policy.contains(
-                "(allow network-bind (local unix-socket (path (param \"UNIX_SOCKET_PATH_0\"))))"
+                "(allow network-bind (local unix-socket (subpath (param \"UNIX_SOCKET_PATH_0\"))))"
             ),
             "policy should allow binding explicitly configured unix sockets:\n{policy}"
         );
         assert!(
             policy.contains(
-                "(allow network-outbound (remote unix-socket (path (param \"UNIX_SOCKET_PATH_0\"))))"
+                "(allow network-outbound (remote unix-socket (subpath (param \"UNIX_SOCKET_PATH_0\"))))"
             ),
             "policy should allow connecting to explicitly configured unix sockets:\n{policy}"
         );
