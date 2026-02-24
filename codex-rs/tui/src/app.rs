@@ -1002,8 +1002,9 @@ impl App {
         let codex_op_tx = if let Some(thread) = live_thread {
             crate::chatwidget::spawn_op_forwarder(thread)
         } else {
-            let (codex_op_tx, _codex_op_rx) = unbounded_channel();
-            let (realtime_audio_op_tx, _realtime_audio_op_rx) = tokio::sync::mpsc::channel(1);
+            let (codex_op_tx, codex_op_rx) = unbounded_channel();
+            let (realtime_audio_op_tx, realtime_audio_op_rx) = tokio::sync::mpsc::channel(1);
+            drop((codex_op_rx, realtime_audio_op_rx));
             crate::chatwidget::ChatWidgetOpSenders {
                 codex_op_tx,
                 realtime_audio_op_tx,

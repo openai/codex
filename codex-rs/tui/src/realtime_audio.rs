@@ -4,7 +4,9 @@ use base64::Engine;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::DeviceTrait;
+use cpal::traits::HostTrait;
+use cpal::traits::StreamTrait;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -40,9 +42,9 @@ enum RealtimeAudioBackend {
     Stub,
 }
 struct LiveRealtimeAudioController {
-    _input_capture: crate::voice::VoiceCapture,
-    _input_capture_thread: Option<thread::JoinHandle<()>>,
-    _output_stream: cpal::Stream,
+    input_capture: crate::voice::VoiceCapture,
+    input_capture_thread: Option<thread::JoinHandle<()>>,
+    output_stream: cpal::Stream,
     playback_state: Arc<Mutex<PlaybackState>>,
     last_input_peak: Arc<AtomicU16>,
     meter_stop: Arc<AtomicBool>,
@@ -51,7 +53,7 @@ struct LiveRealtimeAudioController {
 impl RealtimeAudioController {
     pub(crate) fn start(realtime_audio_op_tx: Sender<Op>) -> Result<Self> {
         if cfg!(test) {
-            let _ = realtime_audio_op_tx;
+            drop(realtime_audio_op_tx);
             return Ok(Self {
                 backend: RealtimeAudioBackend::Stub,
             });
@@ -132,9 +134,9 @@ impl RealtimeAudioController {
 
         Ok(Self {
             backend: RealtimeAudioBackend::Live(LiveRealtimeAudioController {
-                _input_capture: input_capture,
-                _input_capture_thread: Some(input_capture_thread),
-                _output_stream: output_stream,
+                input_capture,
+                input_capture_thread: Some(input_capture_thread),
+                output_stream,
                 playback_state,
                 last_input_peak,
                 meter_stop,
@@ -152,7 +154,7 @@ impl RealtimeAudioController {
                 state.enqueue(frame)?;
             }
             RealtimeAudioBackend::Stub => {
-                let _ = frame;
+                return Ok(());
             }
         }
         Ok(())
@@ -160,10 +162,10 @@ impl RealtimeAudioController {
 
     pub(crate) fn shutdown(self) {
         if let RealtimeAudioBackend::Live(controller) = self.backend {
-            if let Err(err) = controller._input_capture.stop().map(|_| ()) {
+            if let Err(err) = controller.input_capture.stop().map(|_| ()) {
                 warn!("failed to stop realtime microphone capture: {err}");
             }
-            if let Some(handle) = controller._input_capture_thread {
+            if let Some(handle) = controller.input_capture_thread {
                 if let Err(err) = handle.join() {
                     warn!("failed to join realtime microphone input thread: {err:?}");
                 }

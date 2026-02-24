@@ -1649,7 +1649,8 @@ async fn make_chatwidget_manual(
         },
     };
     let current_collaboration_mode = base_mode;
-    let (realtime_audio_op_tx, _realtime_audio_op_rx) = tokio::sync::mpsc::channel(1);
+    let (realtime_audio_op_tx, realtime_audio_op_rx) = tokio::sync::mpsc::channel(1);
+    drop(realtime_audio_op_rx);
     let active_collaboration_mask = collaboration_modes::default_mask(models_manager.as_ref());
     let mut widget = ChatWidget {
         app_event_tx,
@@ -3390,7 +3391,7 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
 
 #[tokio::test]
 async fn steer_enter_queues_while_plan_stream_is_active() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, _, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
@@ -3415,7 +3416,7 @@ async fn steer_enter_queues_while_plan_stream_is_active() {
 
 #[tokio::test]
 async fn steer_enter_queues_while_final_answer_stream_is_active() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, _, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     // Keep the assistant stream open (no commit tick/finalize) to model the repro window:
@@ -3539,7 +3540,7 @@ async fn steer_enter_submits_when_plan_stream_is_not_active() {
 
 #[tokio::test]
 async fn ctrl_c_shutdown_works_with_caps_lock() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, _) = make_chatwidget_manual(None).await;
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL));
 
