@@ -110,6 +110,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     .request_command_approval(
                         turn,
                         call_id,
+                        None,
                         command,
                         cwd,
                         reason,
@@ -152,12 +153,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     fn network_approval_spec(
         &self,
         req: &UnifiedExecRequest,
-        _ctx: &ToolCtx<'_>,
+        _ctx: &ToolCtx,
     ) -> Option<NetworkApprovalSpec> {
         req.network.as_ref()?;
         Some(NetworkApprovalSpec {
-            command: req.command.clone(),
-            cwd: req.cwd.clone(),
             network: req.network.clone(),
             mode: NetworkApprovalMode::Deferred,
         })
@@ -167,7 +166,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         &mut self,
         req: &UnifiedExecRequest,
         attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx<'_>,
+        ctx: &ToolCtx,
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
@@ -187,7 +186,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 
         let mut env = req.env.clone();
         if let Some(network) = req.network.as_ref() {
-            network.apply_to_env_for_attempt(&mut env, ctx.network_attempt_id.as_deref());
+            network.apply_to_env(&mut env);
         }
         let spec = build_command_spec(
             &command,

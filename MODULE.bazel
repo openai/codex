@@ -1,5 +1,7 @@
+module(name = "codex")
+
 bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.5.3")
+bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.5.6")
 single_version_override(
     module_name = "toolchains_llvm_bootstrapped",
     patch_strip = 1,
@@ -7,6 +9,8 @@ single_version_override(
         "//patches:toolchains_llvm_bootstrapped_resource_dir.patch",
     ],
 )
+
+register_toolchains("@toolchains_llvm_bootstrapped//toolchain:all")
 
 osx = use_extension("@toolchains_llvm_bootstrapped//extensions:osx.bzl", "osx")
 osx.framework(name = "ApplicationServices")
@@ -16,18 +20,20 @@ osx.framework(name = "CoreFoundation")
 osx.framework(name = "CoreGraphics")
 osx.framework(name = "CoreServices")
 osx.framework(name = "CoreText")
+osx.framework(name = "AudioToolbox")
 osx.framework(name = "CFNetwork")
 osx.framework(name = "FontServices")
+osx.framework(name = "AudioUnit")
+osx.framework(name = "CoreAudio")
+osx.framework(name = "CoreAudioTypes")
 osx.framework(name = "Foundation")
 osx.framework(name = "ImageIO")
+osx.framework(name = "IOKit")
 osx.framework(name = "Kernel")
 osx.framework(name = "OSLog")
 osx.framework(name = "Security")
 osx.framework(name = "SystemConfiguration")
-
-register_toolchains(
-    "@toolchains_llvm_bootstrapped//toolchain:all",
-)
+use_repo(osx, "macosx15.4.sdk")
 
 # Needed to disable xcode...
 bazel_dep(name = "apple_support", version = "2.1.0")
@@ -38,9 +44,9 @@ bazel_dep(name = "rules_rs", version = "0.0.23")
 # Special toolchains branch
 archive_override(
     module_name = "rules_rs",
-    integrity = "sha256-YbDRjZos4UmfIPY98znK1BgBWRQ1/ui3CtL6RqxE30I=",
-    strip_prefix = "rules_rs-6cf3d940fdc48baf3ebd6c37daf8e0be8fc73ecb",
-    url = "https://github.com/dzbarsky/rules_rs/archive/6cf3d940fdc48baf3ebd6c37daf8e0be8fc73ecb.tar.gz",
+    integrity = "sha256-O34UF4H7b1Qacu3vlu2Od4ILGVApzg5j1zl952SFL3w=",
+    strip_prefix = "rules_rs-097123c2aa72672e371e69e7035869f5a45c7b2b",
+    url = "https://github.com/dzbarsky/rules_rs/archive/097123c2aa72672e371e69e7035869f5a45c7b2b.tar.gz",
 )
 
 rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
@@ -133,6 +139,9 @@ crate.annotation(
         "OPENSSL_NO_VENDOR": "1",
         "OPENSSL_STATIC": "1",
     },
+    crate_features = [
+        "dep:openssl-src",
+    ],
     crate = "openssl-sys",
     data = ["@openssl//:gen_dir"],
 )
@@ -143,6 +152,28 @@ crate.annotation(
     crate = "runfiles",
     workspace_cargo_toml = "rust/runfiles/Cargo.toml",
 )
+
+llvm = use_extension("@toolchains_llvm_bootstrapped//extensions:llvm.bzl", "llvm")
+use_repo(llvm, "llvm-project")
+
+crate.annotation(
+    # Provide the hermetic SDK path so the build script doesn't try to invoke an unhermetic `xcrun --show-sdk-path`.
+    build_script_data = [
+        "@macosx15.4.sdk//sysroot",
+    ],
+    build_script_env = {
+        "BINDGEN_EXTRA_CLANG_ARGS": "-isystem $(location @toolchains_llvm_bootstrapped//:builtin_headers)",
+        "COREAUDIO_SDK_PATH": "$(location @macosx15.4.sdk//sysroot)",
+        "LIBCLANG_PATH": "$(location @codex//:clang)",
+    },
+    build_script_tools = [
+        "@codex//:clang",
+        "@toolchains_llvm_bootstrapped//:builtin_headers",
+    ],
+    crate = "coreaudio-sys",
+)
+
+inject_repo(crate, "codex", "toolchains_llvm_bootstrapped", "macosx15.4.sdk")
 
 # Fix readme inclusions
 crate.annotation(
@@ -174,6 +205,17 @@ crate.annotation(
     gen_build_script = "off",
     deps = [":windows_import_lib"],
 )
+
+bazel_dep(name = "alsa_lib", version = "1.2.9.bcr.4")
+
+crate.annotation(
+    crate = "alsa-sys",
+    gen_build_script = "off",
+    deps = ["@alsa_lib"],
+)
+
+inject_repo(crate, "alsa_lib")
+
 use_repo(crate, "crates")
 
 rbe_platform_repository = use_repo_rule("//:rbe.bzl", "rbe_platform_repository")

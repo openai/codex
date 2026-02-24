@@ -2,10 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::CodexThread;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
 use codex_protocol::ThreadId;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use rmcp::model::ErrorData;
 use rmcp::model::RequestId;
 use serde::Deserialize;
@@ -57,10 +57,10 @@ pub(crate) async fn handle_exec_approval_request(
     tool_call_id: String,
     event_id: String,
     call_id: String,
+    approval_id: String,
     codex_parsed_cmd: Vec<ParsedCommand>,
     thread_id: ThreadId,
 ) {
-    let approval_id = call_id.clone();
     let escaped_command =
         shlex::try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "));
     let message = format!(

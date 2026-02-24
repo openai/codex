@@ -17,13 +17,13 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use codex_core::features::Features;
-use codex_core::protocol::ElicitationAction;
-use codex_core::protocol::ExecPolicyAmendment;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::NetworkApprovalContext;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
 use codex_protocol::mcp::RequestId;
+use codex_protocol::protocol::ElicitationAction;
+use codex_protocol::protocol::ExecPolicyAmendment;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::NetworkApprovalContext;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -122,7 +122,7 @@ impl ApprovalOverlay {
                     || "Would you like to run the following command?".to_string(),
                     |network_approval_context| {
                         format!(
-                            "Do you want to approve access to \"{}\"?",
+                            "Do you want to approve network access to \"{}\"?",
                             network_approval_context.host
                         )
                     },
@@ -364,12 +364,14 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     header.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
                     header.push(Line::from(""));
                 }
-                let full_cmd = strip_bash_lc_and_escape(&command);
-                let mut full_cmd_lines = highlight_bash_to_lines(&full_cmd);
-                if let Some(first) = full_cmd_lines.first_mut() {
-                    first.spans.insert(0, Span::from("$ "));
+                if network_approval_context.is_none() {
+                    let full_cmd = strip_bash_lc_and_escape(&command);
+                    let mut full_cmd_lines = highlight_bash_to_lines(&full_cmd);
+                    if let Some(first) = full_cmd_lines.first_mut() {
+                        first.spans.insert(0, Span::from("$ "));
+                    }
+                    header.extend(full_cmd_lines);
                 }
-                header.extend(full_cmd_lines);
                 Self {
                     variant: ApprovalVariant::Exec {
                         id,
@@ -574,7 +576,7 @@ fn elicitation_options() -> Vec<ApprovalOption> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use codex_core::protocol::NetworkApprovalProtocol;
+    use codex_protocol::protocol::NetworkApprovalProtocol;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -738,10 +740,14 @@ mod tests {
             .collect();
 
         assert!(
-            rendered
-                .iter()
-                .any(|line| line.contains("Do you want to approve access to \"example.com\"?")),
+            rendered.iter().any(|line| {
+                line.contains("Do you want to approve network access to \"example.com\"?")
+            }),
             "expected network title to include host, got {rendered:?}"
+        );
+        assert!(
+            !rendered.iter().any(|line| line.contains("$ curl")),
+            "network prompt should not show command line, got {rendered:?}"
         );
         assert!(
             !rendered.iter().any(|line| line.contains("don't ask again")),

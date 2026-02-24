@@ -26,6 +26,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
+use crate::zsh_exec_bridge::ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
@@ -59,7 +60,7 @@ impl ShellRuntime {
         Self
     }
 
-    fn stdout_stream(ctx: &ToolCtx<'_>) -> Option<crate::exec::StdoutStream> {
+    fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
         Some(crate::exec::StdoutStream {
             sub_id: ctx.turn.sub_id.clone(),
             call_id: ctx.call_id.clone(),
@@ -109,6 +110,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     .request_command_approval(
                         turn,
                         call_id,
+                        None,
                         command,
                         cwd,
                         reason,
@@ -148,12 +150,10 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
     fn network_approval_spec(
         &self,
         req: &ShellRequest,
-        _ctx: &ToolCtx<'_>,
+        _ctx: &ToolCtx,
     ) -> Option<NetworkApprovalSpec> {
         req.network.as_ref()?;
         Some(NetworkApprovalSpec {
-            command: req.command.clone(),
-            cwd: req.cwd.clone(),
             network: req.network.clone(),
             mode: NetworkApprovalMode::Immediate,
         })
@@ -163,7 +163,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         &mut self,
         req: &ShellRequest,
         attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx<'_>,
+        ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
@@ -181,6 +181,36 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             command
         };
 
+        if ctx.session.features().enabled(Feature::ShellZshFork) {
+            let wrapper_socket_path = ctx
+                .session
+                .services
+                .zsh_exec_bridge
+                .next_wrapper_socket_path();
+            let mut zsh_fork_env = req.env.clone();
+            zsh_fork_env.insert(
+                ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR.to_string(),
+                wrapper_socket_path.to_string_lossy().to_string(),
+            );
+            let spec = build_command_spec(
+                &command,
+                &req.cwd,
+                &zsh_fork_env,
+                req.timeout_ms.into(),
+                req.sandbox_permissions,
+                req.justification.clone(),
+            )?;
+            let env = attempt
+                .env_for(spec, req.network.as_ref())
+                .map_err(|err| ToolError::Codex(err.into()))?;
+            return ctx
+                .session
+                .services
+                .zsh_exec_bridge
+                .execute_shell_request(&env, &ctx.session, &ctx.turn, &ctx.call_id)
+                .await;
+        }
+
         let spec = build_command_spec(
             &command,
             &req.cwd,
@@ -189,10 +219,9 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.sandbox_permissions,
             req.justification.clone(),
         )?;
-        let mut env = attempt
+        let env = attempt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
-        env.network_attempt_id = ctx.network_attempt_id.clone();
         let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
             .await
             .map_err(ToolError::Codex)?;

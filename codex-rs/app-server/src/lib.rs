@@ -10,7 +10,6 @@ use codex_core::config_loader::LoaderOverrides;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
@@ -42,6 +41,7 @@ use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_feedback::CodexFeedback;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use tracing::error;
 use tracing::info;
@@ -49,6 +49,7 @@ use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod bespoke_event_handling;
@@ -62,9 +63,20 @@ mod message_processor;
 mod models;
 mod outgoing_message;
 mod thread_state;
+mod thread_status;
 mod transport;
 
 pub use crate::transport::AppServerTransport;
+
+const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LogFormat {
+    Default,
+    Json,
+}
+
+type StderrLogLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
 
 /// Control-plane messages from the processor/transport side to the outbound router task.
 ///
@@ -80,6 +92,7 @@ enum OutboundControlEvent {
     Opened {
         connection_id: ConnectionId,
         writer: mpsc::Sender<crate::outgoing_message::OutgoingMessage>,
+        disconnect_sender: Option<CancellationToken>,
         initialized: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     },
@@ -197,6 +210,20 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
     })
 }
 
+impl LogFormat {
+    fn from_env_value(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(str::to_ascii_lowercase) {
+            Some(value) if value == "json" => Self::Json,
+            _ => Self::Default,
+        }
+    }
+}
+
+fn log_format_from_env() -> LogFormat {
+    let value = std::env::var(LOG_FORMAT_ENV_VAR).ok();
+    LogFormat::from_env_value(value.as_deref())
+}
+
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
@@ -237,7 +264,8 @@ pub async fn run_main_with_transport(
                 Some(start_websocket_acceptor(bind_address, transport_event_tx.clone()).await?);
         }
     }
-    let shutdown_when_no_connections = matches!(transport, AppServerTransport::Stdio);
+    let single_client_mode = matches!(transport, AppServerTransport::Stdio);
+    let shutdown_when_no_connections = single_client_mode;
 
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
@@ -340,18 +368,26 @@ pub async fn run_main_with_transport(
         )
     })?;
 
-    // Install a simple subscriber so `tracing` output is visible.  Users can
-    // control the log level with `RUST_LOG`.
-    let stderr_fmt = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr)
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-        .with_filter(EnvFilter::from_default_env());
+    // Install a simple subscriber so `tracing` output is visible. Users can
+    // control the log level with `RUST_LOG` and switch to JSON logs with
+    // `LOG_FORMAT=json`.
+    let stderr_fmt: StderrLogLayer = match log_format_from_env() {
+        LogFormat::Json => tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(std::io::stderr)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+            .with_filter(EnvFilter::from_default_env())
+            .boxed(),
+        LogFormat::Default => tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+            .with_filter(EnvFilter::from_default_env())
+            .boxed(),
+    };
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
-
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
     let _ = tracing_subscriber::registry()
@@ -368,61 +404,43 @@ pub async fn run_main_with_transport(
         }
     }
 
-    let transport_event_tx_for_outbound = transport_event_tx.clone();
     let outbound_handle = tokio::spawn(async move {
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
-        let mut pending_closed_connections = VecDeque::<ConnectionId>::new();
         loop {
             tokio::select! {
-                biased;
-                event = outbound_control_rx.recv() => {
-                    let Some(event) = event else {
-                        break;
-                    };
-                    match event {
-                        OutboundControlEvent::Opened {
-                            connection_id,
-                            writer,
-                            initialized,
-                            opted_out_notification_methods,
-                        } => {
-                            outbound_connections.insert(
+                    biased;
+                    event = outbound_control_rx.recv() => {
+                        let Some(event) = event else {
+                            break;
+                        };
+                        match event {
+                            OutboundControlEvent::Opened {
                                 connection_id,
-                                OutboundConnectionState::new(
-                                    writer,
-                                    initialized,
-                                    opted_out_notification_methods,
-                                ),
-                            );
-                        }
-                        OutboundControlEvent::Closed { connection_id } => {
-                            outbound_connections.remove(&connection_id);
+                                writer,
+                                disconnect_sender,
+                                initialized,
+                                opted_out_notification_methods,
+                            } => {
+                                outbound_connections.insert(
+                                    connection_id,
+                                    OutboundConnectionState::new(
+                                        writer,
+                                        initialized,
+                                        opted_out_notification_methods,
+                                        disconnect_sender,
+                                    ),
+                                );
+                            }
+                            OutboundControlEvent::Closed { connection_id } => {
+                                outbound_connections.remove(&connection_id);
+                            }
                         }
                     }
-                }
-                envelope = outgoing_rx.recv() => {
+                    envelope = outgoing_rx.recv() => {
                     let Some(envelope) = envelope else {
                         break;
                     };
-                    let disconnected_connections =
-                        route_outgoing_envelope(&mut outbound_connections, envelope).await;
-                    pending_closed_connections.extend(disconnected_connections);
-                }
-            }
-
-            while let Some(connection_id) = pending_closed_connections.front().copied() {
-                match transport_event_tx_for_outbound
-                    .try_send(TransportEvent::ConnectionClosed { connection_id })
-                {
-                    Ok(()) => {
-                        pending_closed_connections.pop_front();
-                    }
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        break;
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        return;
-                    }
+                    route_outgoing_envelope(&mut outbound_connections, envelope).await;
                 }
             }
         }
@@ -438,6 +456,7 @@ pub async fn run_main_with_transport(
             outgoing: outgoing_message_sender,
             codex_linux_sandbox_exe,
             config: Arc::new(config),
+            single_client_mode,
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
@@ -455,7 +474,11 @@ pub async fn run_main_with_transport(
                             break;
                         };
                         match event {
-                            TransportEvent::ConnectionOpened { connection_id, writer } => {
+                            TransportEvent::ConnectionOpened {
+                                connection_id,
+                                writer,
+                                disconnect_sender,
+                            } => {
                                 let outbound_initialized = Arc::new(AtomicBool::new(false));
                                 let outbound_opted_out_notification_methods =
                                     Arc::new(RwLock::new(HashSet::new()));
@@ -463,6 +486,7 @@ pub async fn run_main_with_transport(
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
                                         writer,
+                                        disconnect_sender,
                                         initialized: Arc::clone(&outbound_initialized),
                                         opted_out_notification_methods: Arc::clone(
                                             &outbound_opted_out_notification_methods,
@@ -482,6 +506,9 @@ pub async fn run_main_with_transport(
                                 );
                             }
                             TransportEvent::ConnectionClosed { connection_id } => {
+                                if connections.remove(&connection_id).is_none() {
+                                    continue;
+                                }
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Closed { connection_id })
                                     .await
@@ -490,7 +517,6 @@ pub async fn run_main_with_transport(
                                     break;
                                 }
                                 processor.connection_closed(connection_id).await;
-                                connections.remove(&connection_id);
                                 if shutdown_when_no_connections && connections.is_empty() {
                                     break;
                                 }
@@ -499,7 +525,7 @@ pub async fn run_main_with_transport(
                                 match message {
                                     JSONRPCMessage::Request(request) => {
                                         let Some(connection_state) = connections.get_mut(&connection_id) else {
-                                            warn!("dropping request from unknown connection: {:?}", connection_id);
+                                            warn!("dropping request from unknown connection: {connection_id:?}");
                                             continue;
                                         };
                                         let was_initialized = connection_state.session.initialized;
@@ -529,12 +555,24 @@ pub async fn run_main_with_transport(
                                         }
                                     }
                                     JSONRPCMessage::Response(response) => {
+                                        if !connections.contains_key(&connection_id) {
+                                            warn!("dropping response from unknown connection: {connection_id:?}");
+                                            continue;
+                                        }
                                         processor.process_response(response).await;
                                     }
                                     JSONRPCMessage::Notification(notification) => {
+                                        if !connections.contains_key(&connection_id) {
+                                            warn!("dropping notification from unknown connection: {connection_id:?}");
+                                            continue;
+                                        }
                                         processor.process_notification(notification).await;
                                     }
                                     JSONRPCMessage::Error(err) => {
+                                        if !connections.contains_key(&connection_id) {
+                                            warn!("dropping error from unknown connection: {connection_id:?}");
+                                            continue;
+                                        }
                                         processor.process_error(err).await;
                                     }
                                 }
@@ -550,14 +588,12 @@ pub async fn run_main_with_transport(
                                         connection_state.session.initialized.then_some(*connection_id)
                                     })
                                     .collect();
-                                if !initialized_connection_ids.is_empty() {
-                                    processor
-                                        .try_attach_thread_listener(
-                                            thread_id,
-                                            initialized_connection_ids,
-                                        )
-                                        .await;
-                                }
+                                processor
+                                    .try_attach_thread_listener(
+                                        thread_id,
+                                        initialized_connection_ids,
+                                    )
+                                    .await;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                                 // TODO(jif) handle lag.
@@ -592,4 +628,25 @@ pub async fn run_main_with_transport(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LogFormat;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn log_format_from_env_value_matches_json_values_case_insensitively() {
+        assert_eq!(LogFormat::from_env_value(Some("json")), LogFormat::Json);
+        assert_eq!(LogFormat::from_env_value(Some("JSON")), LogFormat::Json);
+        assert_eq!(LogFormat::from_env_value(Some("  Json  ")), LogFormat::Json);
+    }
+
+    #[test]
+    fn log_format_from_env_value_defaults_for_non_json_values() {
+        assert_eq!(LogFormat::from_env_value(None), LogFormat::Default);
+        assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
+        assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
+        assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);
+    }
 }

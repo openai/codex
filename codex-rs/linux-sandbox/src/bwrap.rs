@@ -15,8 +15,8 @@ use std::path::PathBuf;
 
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::WritableRoot;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::WritableRoot;
 
 /// Options that control how bubblewrap is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,8 +49,8 @@ pub(crate) enum BwrapNetworkMode {
     Isolated,
     /// Intended proxy-only mode.
     ///
-    /// Bubblewrap does not currently enforce proxy-only egress, so this is
-    /// treated as isolated for fail-closed behavior.
+    /// Bubblewrap enforces this by unsharing the network namespace. The
+    /// proxy-routing bridge is established by the helper process after startup.
     ProxyOnly,
 }
 
@@ -135,11 +135,12 @@ fn create_bwrap_flags(
 ///
 /// The mount order is important:
 /// 1. `--ro-bind / /` makes the entire filesystem read-only.
-/// 2. `--bind <root> <root>` re-enables writes for allowed roots.
-/// 3. `--ro-bind <subpath> <subpath>` re-applies read-only protections under
+/// 2. `--dev /dev` mounts a minimal writable `/dev` with standard device nodes
+///    (including `/dev/urandom`) even under a read-only root.
+/// 3. `--bind <root> <root>` re-enables writes for allowed roots, including
+///    writable subpaths under `/dev` (for example, `/dev/shm`).
+/// 4. `--ro-bind <subpath> <subpath>` re-applies read-only protections under
 ///    those writable roots so protected subpaths win.
-/// 4. `--dev-bind /dev/null /dev/null` preserves the common sink even under a
-///    read-only root.
 fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<Vec<String>> {
     if !sandbox_policy.has_full_disk_read_access() {
         return Err(CodexErr::UnsupportedOperation(
@@ -151,12 +152,18 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
     let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
     ensure_mount_targets_exist(&writable_roots)?;
 
-    let mut args = Vec::new();
-
-    // Read-only root, then selectively re-enable writes.
-    args.push("--ro-bind".to_string());
-    args.push("/".to_string());
-    args.push("/".to_string());
+    // Read-only root, then mount a minimal device tree.
+    // In bubblewrap (`bubblewrap.c`, `SETUP_MOUNT_DEV`), `--dev /dev` creates
+    // the standard minimal nodes: null, zero, full, random, urandom, and tty.
+    // `/dev` must be mounted before writable roots so explicit `/dev/*`
+    // writable binds remain visible.
+    let mut args = vec![
+        "--ro-bind".to_string(),
+        "/".to_string(),
+        "/".to_string(),
+        "--dev".to_string(),
+        "/dev".to_string(),
+    ];
 
     for writable_root in &writable_roots {
         let root = writable_root.root.as_path();
@@ -180,12 +187,15 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
         }
 
         if !subpath.exists() {
-            if let Some(first_missing) = find_first_non_existent_component(&subpath)
-                && is_within_allowed_write_paths(&first_missing, &allowed_write_paths)
+            // Keep this in the per-subpath loop: each protected subpath can have
+            // a different first missing component that must be blocked
+            // independently (for example, `/repo/.git` vs `/repo/.codex`).
+            if let Some(first_missing_component) = find_first_non_existent_component(&subpath)
+                && is_within_allowed_write_paths(&first_missing_component, &allowed_write_paths)
             {
                 args.push("--ro-bind".to_string());
                 args.push("/dev/null".to_string());
-                args.push(path_to_string(&first_missing));
+                args.push(path_to_string(&first_missing_component));
             }
             continue;
         }
@@ -196,11 +206,6 @@ fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<
             args.push(path_to_string(&subpath));
         }
     }
-
-    // Ensure `/dev/null` remains usable regardless of the root bind.
-    args.push("--dev-bind".to_string());
-    args.push("/dev/null".to_string());
-    args.push("/dev/null".to_string());
 
     Ok(args)
 }
@@ -317,7 +322,8 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SandboxPolicy;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -365,6 +371,35 @@ mod tests {
                 "/proc".to_string(),
                 "--".to_string(),
                 "/bin/true".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn mounts_dev_before_writable_dev_binds() {
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path")],
+            read_only_access: Default::default(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let args = create_filesystem_args(&sandbox_policy, Path::new("/")).expect("bwrap fs args");
+        assert_eq!(
+            args,
+            vec![
+                "--ro-bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
+                "--dev".to_string(),
+                "/dev".to_string(),
+                "--bind".to_string(),
+                "/dev".to_string(),
+                "/dev".to_string(),
+                "--bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
             ]
         );
     }

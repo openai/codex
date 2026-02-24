@@ -1,12 +1,12 @@
 use codex_core::config::Constrained;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -100,7 +100,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     // Approve via parent using the emitted approval call ID.
     test.codex
         .submit(Op::ExecApproval {
-            id: approval.call_id,
+            id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Approved,
         })

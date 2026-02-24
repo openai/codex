@@ -17,7 +17,8 @@ CONTEXT: MEMORY FOLDER STRUCTURE
 
 Folder structure (under {{ memory_root }}/):
 - memory_summary.md
-  - Always loaded into the system prompt. Must remain tiny and highly navigational.
+  - Always loaded into the system prompt. Must remain informative and highly navigational,
+    but still discriminative enough to guide retrieval.
 - MEMORY.md
   - Handbook entries. Used to grep for keywords; aggregated insights from rollouts;
     pointers to rollout summaries if certain past rollouts are very relevant.
@@ -40,8 +41,10 @@ GLOBAL SAFETY, HYGIENE, AND NO-FILLER RULES (STRICT)
 - Evidence-based only: do not invent facts or claim verification that did not happen.
 - Redact secrets: never store tokens/keys/passwords; replace with [REDACTED_SECRET].
 - Avoid copying large tool outputs. Prefer compact summaries + exact error snippets + pointers.
-- **No-op is allowed and preferred** when there is no meaningful, reusable learning worth saving.
-  - If nothing is worth saving, make NO file changes.
+- No-op content updates are allowed and preferred when there is no meaningful, reusable
+  learning worth saving.
+  - INIT mode: still create minimal required files (`MEMORY.md` and `memory_summary.md`).
+  - INCREMENTAL UPDATE mode: if nothing is worth saving, make no file changes.
 
 ============================================================
 WHAT COUNTS AS HIGH-SIGNAL MEMORY
@@ -97,7 +100,10 @@ Primary inputs (always read these, if exists):
 Under `{{ memory_root }}/`:
 - `raw_memories.md`
   - mechanical merge of `raw_memories` from Phase 1;
-  - source of rollout-level metadata needed for MEMORY.md header annotations;
+  - ordered latest-first; use this recency ordering as a major heuristic when choosing
+    what to promote, expand, or deprecate;
+  - source of rollout-level metadata needed for MEMORY.md `### rollout_summary_files`
+    annotations;
     you should be able to find `cwd` and `updated_at` there.
 - `MEMORY.md`
   - merged memories; produce a lightly clustered version if applicable
@@ -123,45 +129,148 @@ Rules:
 - If there is no meaningful signal to add beyond what already exists, keep outputs minimal.
 - You should always make sure `MEMORY.md` and `memory_summary.md` exist and are up to date.
 - Follow the format and schema of the artifacts below.
+- Do not target fixed counts (memory blocks, task groups, topics, or bullets). Let the
+  signal determine the granularity and depth.
+- Quality objective: for high-signal task families, `MEMORY.md` should be materially more
+  useful than `raw_memories.md` while remaining easy to navigate.
 
 ============================================================
 1) `MEMORY.md` FORMAT (STRICT)
 ============================================================
 
-Clustered schema:
----
-rollout_summary_files:
-  - <file1.md> (<annotation that includes status/usefulness, cwd, and updated_at, e.g. "success, most useful architecture walkthrough, cwd=/repo/path, updated_at=2026-02-12T10:30:00Z">)
-  - <file2.md> (<annotation with cwd=/..., updated_at=...>)
-description: brief description of the shared tasks/outcomes
-keywords: k1, k2, k3, ... <searchable handles (tool names, error names, repo concepts, contracts)>
----
+`MEMORY.md` is the durable, retrieval-oriented handbook. Each block should be easy to grep
+and rich enough to reuse without reopening raw rollout logs.
 
-- <Structured memory entries. Use bullets. No bolding text.>
+Each memory block MUST start with:
+
+# Task Group: <repo / project / workflow / detail-task family; broad but distinguishable>
+
+scope: <what this block covers, when to use it, and notable boundaries>
+
+- `Task Group` is for retrieval. Choose granularity based on memory density:
+  repo / project / workflow / detail-task family.
+- `scope:` is for scanning. Keep it short and operational.
+
+Body format (strict):
+
+- Use the task-grouped markdown structure below (headings + bullets). Do not use a flat
+  bullet dump.
+- The header (`# Task Group: ...` + `scope: ...`) is the index. The body contains
+  task-level detail.
+- Every `## Task <n>` section MUST include task-local rollout files, task-local keywords,
+  and task-specific learnings.
+- Use `-` bullets for lists and learnings. Do not use `*`.
+- No bolding text in the memory body.
+
+Required task-oriented body shape (strict):
+
+## Task 1: <task description, outcome>
+
+task: <specific, searchable task signature; avoid fluff>
+
+### rollout_summary_files
+
+- <rollout_summaries/file1.md> (cwd=<path>, updated_at=<timestamp>, <optional status/usefulness note>)
+
+### keywords
+
+- <task-local retrieval handles: tool names, error strings, repo concepts, APIs/contracts>
+
+### learnings
+
+- <task-specific learnings>
+- <user expectation, preference, style, tone, feedback>
+- <what worked, what failed, validation, reusable procedure, etc.>
+- <failure shields: symptom -> cause -> fix>
+- <scope boundaries / anti-drift notes when relevant>
+- <uncertainty explicitly preserved if unresolved>
+
+## Task 2: <task description, outcome>
+
+task: <specific, searchable task signature; avoid fluff>
+
+### rollout_summary_files
+
 - ...
 
-Schema rules (strict):
-- Keep entries compact and retrieval-friendly.
-- A single note block may correspond to multiple related tasks; aggregate when tasks and lessons align.
-- In `rollout_summary_files`, each parenthesized annotation must include
-  `cwd=<path>` and `updated_at=<timestamp>` copied from that rollout summary metadata.
-  If missing from an individual rollout summary, recover them from `raw_memories.md`.
-- If you need to reference skills, do it in the BODY as bullets, not in the header
-  (e.g., "- Related skill: skills/<skill-name>/SKILL.md").
-- Use lowercase, hyphenated skill folder names.
-- Preserve provenance: include the relevant rollout_summary_file(s) for the block.
+### keywords
 
-What to write in memory entries: Extract the highest-signal takeaways from the rollout
-summaries, especially from "User preferences", "Reusable knowledge", "References", and
-"Things that did not work / things that can be improved".
-Write what would most help a future agent doing a similar (or adjacent) task: decision
-triggers, key steps, proven commands/paths, and failure shields (symptom -> cause -> fix),
-plus any stable user preferences.
-If a rollout summary contains stable user profile details or preferences that generalize,
-capture them here so they're easy to find and can be reflected in memory_summary.md.
-The goal of MEMORY.md is to support related-but-not-identical future tasks, so keep
-insights slightly more general; when a future task is very similar, expect the agent to
-use the rollout summary for full detail.
+- ...
+
+### learnings
+
+- <task-specific memories / learnings>
+
+... More `## Task <n>` sections if needed
+
+## General Tips
+
+- <cross-task guidance, deduplicated and generalized> [Task 1]
+- <conflict/staleness resolution note using task references> [Task 1][Task 2]
+- <structured memory bullets; no bolding>
+
+Schema rules (strict):
+- A) Structure and consistency
+  - Exact block shape: `# Task Group`, `scope:`, one or more `## Task <n>`, and
+    `## General Tips`.
+  - Keep all tasks and tips inside the task family implied by the block header.
+  - Keep entries retrieval-friendly, but not shallow.
+  - Do not emit placeholder values (`task: task`, `# Task Group: misc`, `scope: general`, etc.).
+- B) Task boundaries and clustering
+  - Primary organization unit is the task (`## Task <n>`), not the rollout file.
+  - Default mapping: one coherent rollout summary -> one MEMORY block -> one `## Task 1`.
+  - If a rollout contains multiple distinct tasks, split them into multiple `## Task <n>`
+    sections. If those tasks belong to different task families, split into separate
+    MEMORY blocks (`# Task Group`).
+  - A MEMORY block may include multiple rollouts only when they belong to the same
+    task group and the task intent, technical context, and outcome pattern align.
+  - A single `## Task <n>` section may cite multiple rollout summaries when they are
+    iterative attempts or follow-up runs for the same task.
+  - Do not cluster on keyword overlap alone.
+  - When in doubt, preserve boundaries (separate tasks/blocks) rather than over-cluster.
+- C) Provenance and metadata
+  - Every `## Task <n>` section must include `### rollout_summary_files`, `### keywords`,
+    and `### learnings`.
+  - `### rollout_summary_files` must be task-local (not a block-wide catch-all list).
+  - Each rollout annotation must include `cwd=<path>` and `updated_at=<timestamp>`.
+    If missing from a rollout summary, recover them from `raw_memories.md`.
+  - Major learnings should be traceable to rollout summaries listed in the same task section.
+  - Order rollout references by freshness and practical usefulness.
+- D) Retrieval and references
+  - `task:` lines must be specific and searchable.
+  - `### keywords` should be discriminative and task-local (tool names, error strings,
+    repo concepts, APIs/contracts).
+  - Put task-specific detail in `## Task <n>` and only deduplicated cross-task guidance in
+    `## General Tips`.
+  - If you reference skills, do it in body bullets only (for example:
+    `- Related skill: skills/<skill-name>/SKILL.md`).
+  - Use lowercase, hyphenated skill folder names.
+- E) Ordering and conflict handling
+  - For grouped blocks, order `## Task <n>` sections by practical usefulness, then recency.
+  - Treat `updated_at` as a first-class signal: fresher validated evidence usually wins.
+  - If evidence conflicts and validation is unclear, preserve the uncertainty explicitly.
+  - In `## General Tips`, cite task references (`[Task 1]`, `[Task 2]`, etc.) when
+    merging, deduplicating, or resolving evidence.
+
+What to write:
+- Extract the takeaways from rollout summaries and raw_memories, especially sections like
+  "User preferences", "Reusable knowledge", "References", and "Things that did not work".
+- Optimize for future related tasks: decision triggers, validated commands/paths,
+  verification steps, and failure shields (symptom -> cause -> fix).
+- Capture stable user preferences/details that generalize so they can also inform
+  `memory_summary.md`.
+- `MEMORY.md` should support related-but-not-identical tasks: slightly more general than a
+  rollout summary, but still operational and concrete.
+- Use `raw_memories.md` as the routing layer; deep-dive into `rollout_summaries/*.md` when:
+  - the task is high-value and needs richer detail,
+  - multiple rollouts overlap and need conflict/staleness resolution,
+  - raw memory wording is too terse/ambiguous to consolidate confidently,
+  - you need stronger evidence, validation context, or user feedback.
+- Each block should be useful on its own and materially richer than `memory_summary.md`:
+  - include concrete triggers, commands/paths, and failure shields,
+  - include outcome-specific notes (what worked, what failed, what remains uncertain),
+  - include scope boundaries / anti-drift notes when they affect future task success,
+  - include stale/conflict notes when newer evidence changes prior guidance.
 
 ============================================================
 2) `memory_summary.md` FORMAT (STRICT)
@@ -210,17 +319,23 @@ For example, include (when known):
 ## What's in Memory
 This is a compact index to help future agents quickly find details in `MEMORY.md`,
 `skills/`, and `rollout_summaries/`.
-Organize by topic. Each bullet should include: topic, keywords (used to search over
-memory files), and a brief description.
+Organize by topic. Each bullet must include: topic, keywords, and a clear description.
 Ordered by utility - which is the most likely to be useful for a future agent.
+Do not target a fixed topic count. Cover the real high-signal areas and omit low-signal noise.
+Prefer grouping by task family / workflow intent, not by incidental tools alone.
 
 Recommended format:
 - <topic>: <keyword1>, <keyword2>, <keyword3>, ...
-  - desc: <brief description>
+  - desc: <clear and specific description of what is inside this topic and when to use it>
 
 Notes:
 - Do not include large snippets; push details into MEMORY.md and rollout summaries.
 - Prefer topics/keywords that help a future agent search MEMORY.md efficiently.
+- Prefer clear topic taxonomy over verbose drill-down pointers.
+- Keep descriptions explicit enough that a future model can decide which keyword cluster
+  to search first for a new user query.
+- Topic descriptions should mention what is inside, when to use it, and what kind of
+  outcome/procedure depth is available (for example: runbook, diagnostics, reporting, recovery).
 
 ============================================================
 3) `skills/` FORMAT (optional)
@@ -303,29 +418,41 @@ WORKFLOW
      - create initial `skills/*` (optional but highly recommended)
      - write `memory_summary.md` last (highest-signal file)
    - Use your best efforts to get the most high-quality memory files
-   - Do not be lazy at browsing files at the INIT phase
+   - Do not be lazy at browsing files in INIT mode; deep-dive high-value rollouts and
+     conflicting task families until MEMORY blocks are richer and more useful than raw memories
 
 3) INCREMENTAL UPDATE behavior:
    - Treat `raw_memories.md` as the primary source of NEW signal.
    - Read existing memory files first for continuity.
    - Integrate new signal into existing artifacts by:
+     - scanning new raw memories in recency order and identifying which existing blocks they should update
      - updating existing knowledge with better/newer evidence
      - updating stale or contradicting guidance
+     - expanding terse old blocks when new summaries/raw memories make the task family clearer
      - doing light clustering and merging if needed
      - updating existing skills or adding new skills only when there is clear new reusable procedure
      - update `memory_summary.md` last to reflect the final state of the memory folder
 
-4) For both modes, update `MEMORY.md` after skill updates:
-   - add clear **Related skills** pointers in the BODY of corresponding note blocks (do
-     not change the YAML header schema)
+4) Evidence deep-dive rule (both modes):
+   - `raw_memories.md` is the routing layer, not always the final authority for detail.
+   - When a task family is important, ambiguous, or duplicated across multiple rollouts,
+     open the relevant `rollout_summaries/*.md` files and extract richer procedural detail,
+     validation signals, and user feedback before finalizing `MEMORY.md`.
+   - Use `updated_at` and validation strength together to resolve stale/conflicting notes.
 
-5) Housekeeping (optional):
+5) For both modes, update `MEMORY.md` after skill updates:
+   - add clear related-skill pointers as plain bullets in the BODY of corresponding task
+     sections (do not change the `# Task Group` / `scope:` block header format)
+
+6) Housekeeping (optional):
    - remove clearly redundant/low-signal rollout summaries
    - if multiple summaries overlap for the same thread, keep the best one
 
-6) Final pass:
+7) Final pass:
    - remove duplication in memory_summary, skills/, and MEMORY.md
    - ensure any referenced skills/summaries actually exist
+   - ensure MEMORY blocks and "What's in Memory" use a consistent task-oriented taxonomy
+   - ensure recent important task families are easy to find (description + keywords + topic wording)
    - if there is no net-new or higher-quality signal to add, keep changes minimal (no
      churn for its own sake).
 
@@ -341,6 +468,6 @@ Use `rg` for fast retrieval while consolidating:
 - Search durable notes:
   `rg -n -i "<pattern>" "{{ memory_root }}/MEMORY.md"`
 - Search across memory tree:
-  `rg -n -i "<pattern>" "{{ memory_root }}" | head -n 50`
+  `rg -n -i "<pattern>" "{{ memory_root }}" | head -n 100`
 - Locate rollout summary files:
-  `rg --files "{{ memory_root }}/rollout_summaries" | head -n 200`
+  `rg --files "{{ memory_root }}/rollout_summaries" | head -n 400`

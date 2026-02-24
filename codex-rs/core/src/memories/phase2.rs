@@ -2,6 +2,7 @@ use crate::agent::AgentStatus;
 use crate::agent::status::is_final as is_final_agent_status;
 use crate::codex::Session;
 use crate::config::Config;
+use crate::features::Feature;
 use crate::memories::memory_root;
 use crate::memories::metrics;
 use crate::memories::phase_two;
@@ -14,6 +15,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -36,6 +38,12 @@ struct Counters {
 /// Runs memory phase 2 (aka consolidation) in strict order. The method represents the linear
 /// flow of the consolidation phase.
 pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
+    let phase_two_e2e_timer = session
+        .services
+        .otel_manager
+        .start_timer(metrics::MEMORY_PHASE_TWO_E2E_MS, &[])
+        .ok();
+
     let Some(db) = session.services.state_db.as_deref() else {
         // This should not happen.
         return;
@@ -117,7 +125,13 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     };
 
     // 6. Spawn the agent handler.
-    agent::handle(session, claim, new_watermark, thread_id);
+    agent::handle(
+        session,
+        claim,
+        new_watermark,
+        thread_id,
+        phase_two_e2e_timer,
+    );
 
     // 7. Metrics and logs.
     let counters = Counters {
@@ -214,6 +228,8 @@ mod agent {
         agent_config.cwd = root;
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
+        // Consolidation runs as an internal sub-agent and must not recursively delegate.
+        agent_config.features.disable(Feature::Collab);
 
         // Sandbox policy
         let mut writable_roots = Vec::new();
@@ -245,6 +261,7 @@ mod agent {
                 .clone()
                 .unwrap_or(phase_two::MODEL.to_string()),
         );
+        agent_config.model_reasoning_effort = Some(phase_two::REASONING_EFFORT);
 
         Some(agent_config)
     }
@@ -264,6 +281,7 @@ mod agent {
         claim: Claim,
         new_watermark: i64,
         thread_id: ThreadId,
+        phase_two_e2e_timer: Option<codex_otel::Timer>,
     ) {
         let Some(db) = session.services.state_db.clone() else {
             return;
@@ -271,6 +289,7 @@ mod agent {
         let session = session.clone();
 
         tokio::spawn(async move {
+            let _phase_two_e2e_timer = phase_two_e2e_timer;
             let agent_control = session.services.agent_control.clone();
 
             // TODO(jif) we might have a very small race here.
@@ -294,6 +313,9 @@ mod agent {
             .await;
 
             if matches!(final_status, AgentStatus::Completed(_)) {
+                if let Some(token_usage) = agent_control.get_total_token_usage(thread_id).await {
+                    emit_token_usage_metrics(&session, &token_usage);
+                }
                 job::succeed(&session, &db, &claim, new_watermark, "succeeded").await;
             } else {
                 job::failed(&session, &db, &claim, "failed_agent").await;
@@ -388,5 +410,34 @@ fn emit_metrics(session: &Arc<Session>, counters: Counters) {
         metrics::MEMORY_PHASE_TWO_JOBS,
         1,
         &[("status", "agent_spawned")],
+    );
+}
+
+fn emit_token_usage_metrics(session: &Arc<Session>, token_usage: &TokenUsage) {
+    let otel = session.services.otel_manager.clone();
+    otel.histogram(
+        metrics::MEMORY_PHASE_TWO_TOKEN_USAGE,
+        token_usage.total_tokens.max(0),
+        &[("token_type", "total")],
+    );
+    otel.histogram(
+        metrics::MEMORY_PHASE_TWO_TOKEN_USAGE,
+        token_usage.input_tokens.max(0),
+        &[("token_type", "input")],
+    );
+    otel.histogram(
+        metrics::MEMORY_PHASE_TWO_TOKEN_USAGE,
+        token_usage.cached_input(),
+        &[("token_type", "cached_input")],
+    );
+    otel.histogram(
+        metrics::MEMORY_PHASE_TWO_TOKEN_USAGE,
+        token_usage.output_tokens.max(0),
+        &[("token_type", "output")],
+    );
+    otel.histogram(
+        metrics::MEMORY_PHASE_TWO_TOKEN_USAGE,
+        token_usage.reasoning_output_tokens.max(0),
+        &[("token_type", "reasoning_output")],
     );
 }

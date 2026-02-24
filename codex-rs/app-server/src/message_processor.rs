@@ -49,6 +49,7 @@ use codex_core::default_client::set_default_originator;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use futures::FutureExt;
 use tokio::sync::broadcast;
 use tokio::time::Duration;
 use tokio::time::timeout;
@@ -139,6 +140,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) config: Arc<Config>,
+    pub(crate) single_client_mode: bool,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
@@ -154,6 +156,7 @@ impl MessageProcessor {
             outgoing,
             codex_linux_sandbox_exe,
             config,
+            single_client_mode,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
@@ -173,6 +176,7 @@ impl MessageProcessor {
             config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::VSCode,
+            config.model_catalog.clone(),
         ));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
@@ -183,6 +187,7 @@ impl MessageProcessor {
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
             cloud_requirements: cloud_requirements.clone(),
+            single_client_mode,
             feedback,
         });
         let config_api = ConfigApi::new(
@@ -382,8 +387,12 @@ impl MessageProcessor {
                 .await;
             }
             other => {
+                // Box the delegated future so this wrapper's async state machine does not
+                // inline the full `CodexMessageProcessor::process_request` future, which
+                // can otherwise push worker-thread stack usage over the edge.
                 self.codex_message_processor
                     .process_request(connection_id, other)
+                    .boxed()
                     .await;
             }
         }

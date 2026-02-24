@@ -1,7 +1,6 @@
 use crate::admin;
 use crate::config;
 use crate::http_proxy;
-use crate::metadata::proxy_username_for_attempt_id;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::runtime::BlockedRequestObserver;
 use crate::runtime::unix_socket_permissions_supported;
@@ -207,6 +206,10 @@ impl NetworkProxyBuilder {
             socks_addr,
             socks_enabled: current_cfg.network.enable_socks5,
             allow_local_binding: current_cfg.network.allow_local_binding,
+            allow_unix_sockets: current_cfg.network.allow_unix_sockets.clone(),
+            dangerously_allow_all_unix_sockets: current_cfg
+                .network
+                .dangerously_allow_all_unix_sockets,
             admin_addr,
             reserved_listeners,
             policy_decider: self.policy_decider,
@@ -241,6 +244,8 @@ pub struct NetworkProxy {
     socks_addr: SocketAddr,
     socks_enabled: bool,
     allow_local_binding: bool,
+    allow_unix_sockets: Vec<String>,
+    dangerously_allow_all_unix_sockets: bool,
     admin_addr: SocketAddr,
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
@@ -272,6 +277,8 @@ impl Eq for NetworkProxy {}
 pub const PROXY_URL_ENV_KEYS: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "WS_PROXY",
+    "WSS_PROXY",
     "ALL_PROXY",
     "FTP_PROXY",
     "YARN_HTTP_PROXY",
@@ -290,6 +297,7 @@ pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
 pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
 
 const FTP_PROXY_ENV_KEYS: &[&str] = &["FTP_PROXY", "ftp_proxy"];
+const WEBSOCKET_PROXY_ENV_KEYS: &[&str] = &["WS_PROXY", "WSS_PROXY", "ws_proxy", "wss_proxy"];
 
 pub const NO_PROXY_ENV_KEYS: &[&str] = &[
     "NO_PROXY",
@@ -335,12 +343,8 @@ fn apply_proxy_env_overrides(
     socks_addr: SocketAddr,
     socks_enabled: bool,
     allow_local_binding: bool,
-    network_attempt_id: Option<&str>,
 ) {
-    let http_proxy_url = network_attempt_id
-        .map(proxy_username_for_attempt_id)
-        .map(|username| format!("http://{username}@{http_addr}"))
-        .unwrap_or_else(|| format!("http://{http_addr}"));
+    let http_proxy_url = format!("http://{http_addr}");
     let socks_proxy_url = format!("socks5h://{socks_addr}");
     env.insert(
         ALLOW_LOCAL_BINDING_ENV_KEY.to_string(),
@@ -375,6 +379,9 @@ fn apply_proxy_env_overrides(
         ],
         &http_proxy_url,
     );
+    // Some websocket clients look for dedicated WS/WSS proxy environment variables instead of
+    // HTTP(S)_PROXY. Keep them aligned with the managed HTTP proxy endpoint.
+    set_env_keys(env, WEBSOCKET_PROXY_ENV_KEYS, &http_proxy_url);
 
     // Keep local/private targets direct so local IPC and metadata endpoints avoid the proxy.
     set_env_keys(env, NO_PROXY_ENV_KEYS, DEFAULT_NO_PROXY_VALUE);
@@ -384,9 +391,7 @@ fn apply_proxy_env_overrides(
     // Keep HTTP_PROXY/HTTPS_PROXY as HTTP endpoints. A lot of clients break if
     // those vars contain SOCKS URLs. We only switch ALL_PROXY here.
     //
-    // For attempt-scoped runs, point ALL_PROXY at the HTTP proxy URL so the
-    // attempt metadata survives in proxy credentials for correlation.
-    if socks_enabled && network_attempt_id.is_none() {
+    if socks_enabled {
         set_env_keys(env, ALL_PROXY_ENV_KEYS, &socks_proxy_url);
         set_env_keys(env, FTP_PROXY_ENV_KEYS, &socks_proxy_url);
     } else {
@@ -420,15 +425,19 @@ impl NetworkProxy {
         self.admin_addr
     }
 
-    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
-        self.apply_to_env_for_attempt(env, None);
+    pub fn allow_local_binding(&self) -> bool {
+        self.allow_local_binding
     }
 
-    pub fn apply_to_env_for_attempt(
-        &self,
-        env: &mut HashMap<String, String>,
-        network_attempt_id: Option<&str>,
-    ) {
+    pub fn allow_unix_sockets(&self) -> &[String] {
+        &self.allow_unix_sockets
+    }
+
+    pub fn dangerously_allow_all_unix_sockets(&self) -> bool {
+        self.dangerously_allow_all_unix_sockets
+    }
+
+    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
         apply_proxy_env_overrides(
@@ -437,7 +446,6 @@ impl NetworkProxy {
             self.socks_addr,
             self.socks_enabled,
             self.allow_local_binding,
-            network_attempt_id,
         );
     }
 
@@ -451,7 +459,9 @@ impl NetworkProxy {
         ensure_rustls_crypto_provider();
 
         if !unix_socket_permissions_supported() {
-            warn!("allowUnixSockets is macOS-only; requests will be rejected on this platform");
+            warn!(
+                "allowUnixSockets and dangerouslyAllowAllUnixSockets are macOS-only; requests will be rejected on this platform"
+            );
         }
 
         let reserved_listeners = self.reserved_listeners.as_ref();
@@ -729,6 +739,14 @@ mod tests {
     }
 
     #[test]
+    fn has_proxy_url_env_vars_detects_websocket_proxy_keys() {
+        let mut env = HashMap::new();
+        env.insert("wss_proxy".to_string(), "http://127.0.0.1:3128".to_string());
+
+        assert_eq!(has_proxy_url_env_vars(&env), true);
+    }
+
+    #[test]
     fn apply_proxy_env_overrides_sets_common_tool_vars() {
         let mut env = HashMap::new();
         apply_proxy_env_overrides(
@@ -737,11 +755,18 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
-            None,
         );
 
         assert_eq!(
             env.get("HTTP_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("WS_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("WSS_PROXY"),
             Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(
@@ -780,7 +805,6 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             false,
             true,
-            None,
         );
 
         assert_eq!(
@@ -791,7 +815,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_proxy_env_overrides_embeds_attempt_id_in_http_proxy_url() {
+    fn apply_proxy_env_overrides_uses_plain_http_proxy_url() {
         let mut env = HashMap::new();
         apply_proxy_env_overrides(
             &mut env,
@@ -799,20 +823,27 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
-            Some("attempt-123"),
         );
 
         assert_eq!(
             env.get("HTTP_PROXY"),
-            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+            Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(
             env.get("HTTPS_PROXY"),
-            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("WS_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("WSS_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(
             env.get("ALL_PROXY"),
-            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+            Some(&"socks5h://127.0.0.1:8081".to_string())
         );
         #[cfg(target_os = "macos")]
         assert_eq!(
@@ -837,7 +868,6 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
-            None,
         );
 
         assert_eq!(

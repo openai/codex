@@ -15,6 +15,7 @@ use crate::state_db::StateDbHandle;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
+use crate::zsh_exec_bridge::ZshExecBridge;
 use codex_hooks::Hooks;
 use codex_otel::OtelManager;
 use tokio::sync::Mutex;
@@ -26,6 +27,7 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
+    pub(crate) zsh_exec_bridge: ZshExecBridge,
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,

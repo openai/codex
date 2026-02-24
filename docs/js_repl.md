@@ -37,6 +37,19 @@ You can configure an explicit runtime path:
 js_repl_node_path = "/absolute/path/to/node"
 ```
 
+## Module resolution
+
+`js_repl` resolves **bare** specifiers (for example `await import("pkg")`) using an ordered
+search path. Path-style specifiers (`./`, `../`, absolute paths, `file:` URLs) are rejected.
+
+Module resolution proceeds in the following order:
+
+1. `CODEX_JS_REPL_NODE_MODULE_DIRS` (PATH-delimited list)
+2. `js_repl_node_module_dirs` in config/profile (array of absolute paths)
+3. Thread working directory (cwd, always included as the last fallback)
+
+For `CODEX_JS_REPL_NODE_MODULE_DIRS` and `js_repl_node_module_dirs`, module resolution is attempted in the order provided with earlier entries taking precedence.
+
 ## Usage
 
 - `js_repl` is a freeform tool: send raw JavaScript source text.
@@ -50,7 +63,6 @@ js_repl_node_path = "/absolute/path/to/node"
 
 `js_repl` exposes these globals:
 
-- `codex.state`: mutable object persisted for the current kernel session.
 - `codex.tmpDir`: per-session scratch directory path.
 - `codex.tool(name, args?)`: executes a normal Codex tool call from inside `js_repl` (including shell tools like `shell` / `shell_command` when available).
 - To share generated images with the model, write a file under `codex.tmpDir`, call `await codex.tool("view_image", { path: "/absolute/path" })`, then delete the file.

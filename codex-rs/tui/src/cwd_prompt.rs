@@ -51,6 +51,12 @@ pub(crate) enum CwdSelection {
     Session,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CwdPromptOutcome {
+    Selection(CwdSelection),
+    Exit,
+}
+
 impl CwdSelection {
     fn next(self) -> Self {
         match self {
@@ -72,7 +78,7 @@ pub(crate) async fn run_cwd_selection_prompt(
     action: CwdPromptAction,
     current_cwd: &Path,
     session_cwd: &Path,
-) -> Result<CwdSelection> {
+) -> Result<CwdPromptOutcome> {
     let mut screen = CwdPromptScreen::new(
         tui.frame_requester(),
         action,
@@ -102,7 +108,13 @@ pub(crate) async fn run_cwd_selection_prompt(
         }
     }
 
-    Ok(screen.selection().unwrap_or(CwdSelection::Session))
+    if screen.should_exit {
+        Ok(CwdPromptOutcome::Exit)
+    } else {
+        Ok(CwdPromptOutcome::Selection(
+            screen.selection().unwrap_or(CwdSelection::Session),
+        ))
+    }
 }
 
 struct CwdPromptScreen {
@@ -112,6 +124,7 @@ struct CwdPromptScreen {
     session_cwd: String,
     highlighted: CwdSelection,
     selection: Option<CwdSelection>,
+    should_exit: bool,
 }
 
 impl CwdPromptScreen {
@@ -128,6 +141,7 @@ impl CwdPromptScreen {
             session_cwd,
             highlighted: CwdSelection::Session,
             selection: None,
+            should_exit: false,
         }
     }
 
@@ -138,7 +152,9 @@ impl CwdPromptScreen {
         if key_event.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'))
         {
-            self.select(CwdSelection::Session);
+            self.selection = None;
+            self.should_exit = true;
+            self.request_frame.schedule_frame();
             return;
         }
         match key_event.code {
@@ -166,7 +182,7 @@ impl CwdPromptScreen {
     }
 
     fn is_done(&self) -> bool {
-        self.selection.is_some()
+        self.should_exit || self.selection.is_some()
     }
 
     fn selection(&self) -> Option<CwdSelection> {
@@ -282,5 +298,13 @@ mod tests {
         screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(screen.selection(), Some(CwdSelection::Current));
+    }
+
+    #[test]
+    fn cwd_prompt_ctrl_c_exits_instead_of_selecting() {
+        let mut screen = new_prompt();
+        screen.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(screen.selection(), None);
+        assert!(screen.is_done());
     }
 }

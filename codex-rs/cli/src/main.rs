@@ -390,7 +390,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 
     let mut lines = vec![format!(
         "{}",
-        codex_core::protocol::FinalOutput::from(token_usage)
+        codex_protocol::protocol::FinalOutput::from(token_usage)
     )];
 
     if let Some(resume_cmd) =
@@ -544,6 +544,11 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
 
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
+        // Run wrapper mode only after arg0 dispatch so `codex-linux-sandbox`
+        // invocations don't get misclassified as zsh exec-wrapper calls.
+        if codex_core::maybe_run_zsh_exec_wrapper_mode()? {
+            return Ok(());
+        }
         cli_main(codex_linux_sandbox_exe).await?;
         Ok(())
     })
@@ -867,7 +872,7 @@ fn maybe_print_under_development_feature_warning(
         return;
     }
 
-    let config_path = codex_home.join(codex_core::config::CONFIG_TOML_FILE);
+    let config_path = codex_home.join(codex_config::CONFIG_TOML_FILE);
     eprintln!(
         "Under-development features enabled: {feature}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {}.",
         config_path.display()
@@ -1034,8 +1039,8 @@ fn print_completion(cmd: CompletionCommand) {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
-    use codex_core::protocol::TokenUsage;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::TokenUsage;
     use pretty_assertions::assert_eq;
 
     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
@@ -1105,6 +1110,34 @@ mod tests {
         assert!(args.last);
         assert_eq!(args.session_id, None);
         assert_eq!(args.prompt.as_deref(), Some("2+2"));
+    }
+
+    #[test]
+    fn exec_resume_accepts_output_last_message_flag_after_subcommand() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "exec",
+            "resume",
+            "session-123",
+            "-o",
+            "/tmp/resume-output.md",
+            "re-review",
+        ])
+        .expect("parse should succeed");
+
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+        let Some(codex_exec::Command::Resume(args)) = exec.command else {
+            panic!("expected exec resume");
+        };
+
+        assert_eq!(
+            exec.last_message_file,
+            Some(std::path::PathBuf::from("/tmp/resume-output.md"))
+        );
+        assert_eq!(args.session_id.as_deref(), Some("session-123"));
+        assert_eq!(args.prompt.as_deref(), Some("re-review"));
     }
 
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {

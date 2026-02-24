@@ -5,19 +5,19 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ItemCompletedEvent;
-use codex_core::protocol::ItemStartedEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::RolloutItem;
-use codex_core::protocol::RolloutLine;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::WarningEvent;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -363,7 +363,7 @@ async fn summarize_context_three_requests_and_instructions() {
     codex.submit(Op::Shutdown).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    // Verify rollout contains APITurn entries for each API call and a Compacted entry.
+    // Verify rollout contains regular sampling TurnContext entries and a Compacted entry.
     println!("rollout path: {}", rollout_path.display());
     let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
         panic!(
@@ -371,7 +371,7 @@ async fn summarize_context_three_requests_and_instructions() {
             rollout_path.display()
         )
     });
-    let mut api_turn_count = 0usize;
+    let mut regular_turn_context_count = 0usize;
     let mut saw_compacted_summary = false;
     for line in text.lines() {
         let trimmed = line.trim();
@@ -383,7 +383,7 @@ async fn summarize_context_three_requests_and_instructions() {
         };
         match entry.item {
             RolloutItem::TurnContext(_) => {
-                api_turn_count += 1;
+                regular_turn_context_count += 1;
             }
             RolloutItem::Compacted(ci) => {
                 if ci.message == expected_summary_message {
@@ -395,8 +395,8 @@ async fn summarize_context_three_requests_and_instructions() {
     }
 
     assert!(
-        api_turn_count == 3,
-        "expected three APITurn entries in rollout"
+        regular_turn_context_count == 2,
+        "expected two regular sampling TurnContext entries in rollout"
     );
     assert!(
         saw_compacted_summary,
@@ -2414,26 +2414,36 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         first_request_user_texts[first_turn_user_index], first_user_message,
         "first turn request should end with the submitted user message"
     );
-    let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
+    let initial_seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
 
     let final_request_user_texts = requests
         .last()
         .unwrap_or_else(|| panic!("final turn request missing for {final_user_message}"))
         .message_input_texts("user");
     assert!(
-        final_request_user_texts
-            .as_slice()
-            .starts_with(seeded_user_prefix),
-        "final request should start with seeded user prefix from first request: {seeded_user_prefix:?}"
+        !initial_seeded_user_prefix.is_empty(),
+        "first turn should include seeded user prefix before the submitted user message"
     );
-    let final_output = &final_request_user_texts[seeded_user_prefix.len()..];
-    let expected = vec![
+    let (final_request_last_user_text, final_request_before_last_user) = final_request_user_texts
+        .split_last()
+        .unwrap_or_else(|| panic!("final turn request missing user messages"));
+    assert_eq!(
+        final_request_last_user_text, final_user_message,
+        "final turn request should end with the submitted user message"
+    );
+    let history_before_seeded_prefix = final_request_before_last_user
+        .strip_suffix(initial_seeded_user_prefix)
+        .unwrap_or_else(|| {
+            panic!(
+                "final request should end with the seeded user prefix from the first request: {initial_seeded_user_prefix:?}"
+            )
+        });
+    let expected_history = vec![
         first_user_message.to_string(),
         second_user_message.to_string(),
         expected_second_summary,
-        final_user_message.to_string(),
     ];
-    assert_eq!(final_output, expected.as_slice());
+    assert_eq!(history_before_seeded_prefix, expected_history.as_slice());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3038,6 +3048,131 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // TODO(ccunningham): Update once pre-turn compaction context-overflow handling includes incoming
 // user input and emits richer oversized-input messaging.
+async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let previous_model = "gpt-5.1-codex-max";
+    let next_model = "gpt-5.2-codex";
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "BEFORE_SWITCH_REPLY"),
+                ev_completed_with_tokens("r1", 500),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "PRETURN_SWITCH_SUMMARY"),
+                ev_completed_with_tokens("r2", 100),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "AFTER_SWITCH_REPLY"),
+                ev_completed_with_tokens("r3", 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config
+                .features
+                .enable(codex_core::features::Feature::RemoteModels);
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .build(&server)
+        .await
+        .expect("build codex");
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "BEFORE_SWITCH_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: previous_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "AFTER_SWITCH_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: next_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit second user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected first turn, pre-turn compact, and post-compact follow-up requests"
+    );
+
+    let compact_body = requests[1].body_json().to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "pre-turn compaction request should include summarization prompt"
+    );
+    assert!(
+        !compact_body.contains("<model_switch>"),
+        "pre-turn compaction request should strip incoming model-switch update item"
+    );
+
+    let follow_up_body = requests[2].body_json().to_string();
+    assert!(
+        follow_up_body.contains("<model_switch>"),
+        "post-compaction follow-up should include model-switch update item"
+    );
+
+    insta::assert_snapshot!(
+        "pre_turn_compaction_strips_incoming_model_switch_shapes",
+        format_labeled_requests_snapshot(
+            "Pre-turn compaction during model switch (without pre-sampling model-switch compaction): current behavior strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.",
+            &[
+                ("Initial Request (Previous Model)", &requests[0]),
+                ("Local Compaction Request", &requests[1]),
+                ("Local Post-Compaction History Layout", &requests[2]),
+            ]
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     skip_if_no_network!();
 

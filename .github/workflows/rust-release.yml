@@ -611,7 +611,22 @@ jobs:
             fi
 
             echo "+ ${publish_cmd[*]}"
-            "${publish_cmd[@]}"
+            set +e
+            publish_output="$("${publish_cmd[@]}" 2>&1)"
+            publish_status=$?
+            set -e
+
+            echo "${publish_output}"
+            if [[ ${publish_status} -eq 0 ]]; then
+              continue
+            fi
+
+            if grep -qiE "previously published|cannot publish over|version already exists" <<< "${publish_output}"; then
+              echo "Skipping already-published package version for ${filename}"
+              continue
+            fi
+
+            exit "${publish_status}"
           done
 
   update-branch:

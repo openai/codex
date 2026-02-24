@@ -8,6 +8,8 @@ use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
+use crate::thread_status::ThreadWatchActiveGuard;
+use crate::thread_status::ThreadWatchManager;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
@@ -42,8 +44,8 @@ use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
+use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::PatchApplyStatus;
-use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
 use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
@@ -70,57 +72,83 @@ use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::build_turns_from_rollout_items;
+use codex_app_server_protocol::convert_patch_changes;
 use codex_core::CodexThread;
-use codex_core::parse_command::shlex_join;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::CodexErrorInfo as CoreCodexErrorInfo;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::FileChange as CoreFileChange;
-use codex_core::protocol::McpToolCallBeginEvent;
-use codex_core::protocol::McpToolCallEndEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
-use codex_core::protocol::TokenCountEvent;
-use codex_core::protocol::TurnDiffEvent;
+use codex_core::ThreadManager;
+use codex_core::find_thread_name_by_id;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::McpToolCallBeginEvent;
+use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
+use codex_shell_command::parse_command::shlex_join;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::error;
+use tracing::warn;
 
 type JsonValue = serde_json::Value;
+
+enum CommandExecutionApprovalPresentation {
+    Network(V2NetworkApprovalContext),
+    Command(CommandExecutionCompletionItem),
+}
+
+struct CommandExecutionCompletionItem {
+    command: String,
+    cwd: PathBuf,
+    command_actions: Vec<V2ParsedCommand>,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
     conversation_id: ThreadId,
     conversation: Arc<CodexThread>,
+    thread_manager: Arc<ThreadManager>,
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
+    thread_watch_manager: ThreadWatchManager,
     api_version: ApiVersion,
     fallback_model_provider: String,
+    codex_home: &Path,
 ) {
     let Event {
         id: event_turn_id,
         msg,
     } = event;
     match msg {
-        EventMsg::TurnStarted(_) => {}
+        EventMsg::TurnStarted(_) => {
+            thread_watch_manager
+                .note_turn_started(&conversation_id.to_string())
+                .await;
+        }
         EventMsg::TurnComplete(_ev) => {
+            let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
+            thread_watch_manager
+                .note_turn_completed(&conversation_id.to_string(), turn_failed)
+                .await;
             handle_turn_complete(conversation_id, event_turn_id, &outgoing, &thread_state).await;
         }
         EventMsg::Warning(_warning_event) => {}
@@ -144,148 +172,200 @@ pub(crate) async fn apply_bespoke_event_handling(
             changes,
             reason,
             grant_root,
-        }) => match api_version {
-            ApiVersion::V1 => {
-                let params = ApplyPatchApprovalParams {
-                    conversation_id,
-                    call_id: call_id.clone(),
-                    file_changes: changes.clone(),
-                    reason,
-                    grant_root,
-                };
-                let rx = outgoing
-                    .send_request(ServerRequestPayload::ApplyPatchApproval(params))
-                    .await;
-                tokio::spawn(async move {
-                    on_patch_approval_response(call_id, rx, conversation).await;
-                });
-            }
-            ApiVersion::V2 => {
-                // Until we migrate the core to be aware of a first class FileChangeItem
-                // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
-                let item_id = call_id.clone();
-                let patch_changes = convert_patch_changes(&changes);
-
-                let first_start = {
-                    let mut state = thread_state.lock().await;
-                    state
-                        .turn_summary
-                        .file_change_started
-                        .insert(item_id.clone())
-                };
-                if first_start {
-                    let item = ThreadItem::FileChange {
-                        id: item_id.clone(),
-                        changes: patch_changes.clone(),
-                        status: PatchApplyStatus::InProgress,
+        }) => {
+            let permission_guard = thread_watch_manager
+                .note_permission_requested(&conversation_id.to_string())
+                .await;
+            match api_version {
+                ApiVersion::V1 => {
+                    let params = ApplyPatchApprovalParams {
+                        conversation_id,
+                        call_id: call_id.clone(),
+                        file_changes: changes.clone(),
+                        reason,
+                        grant_root,
                     };
-                    let notification = ItemStartedNotification {
-                        thread_id: conversation_id.to_string(),
-                        turn_id: event_turn_id.clone(),
-                        item,
-                    };
-                    outgoing
-                        .send_server_notification(ServerNotification::ItemStarted(notification))
+                    let rx = outgoing
+                        .send_request(ServerRequestPayload::ApplyPatchApproval(params))
                         .await;
+                    tokio::spawn(async move {
+                        let _permission_guard = permission_guard;
+                        on_patch_approval_response(call_id, rx, conversation).await;
+                    });
                 }
-
-                let params = FileChangeRequestApprovalParams {
-                    thread_id: conversation_id.to_string(),
-                    turn_id: turn_id.clone(),
-                    item_id: item_id.clone(),
-                    reason,
-                    grant_root,
-                };
-                let rx = outgoing
-                    .send_request(ServerRequestPayload::FileChangeRequestApproval(params))
-                    .await;
-                tokio::spawn(async move {
-                    on_file_change_request_approval_response(
-                        event_turn_id,
-                        conversation_id,
-                        item_id,
-                        patch_changes,
-                        rx,
-                        conversation,
-                        outgoing,
-                        thread_state.clone(),
-                    )
-                    .await;
-                });
-            }
-        },
-        EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-            call_id,
-            turn_id,
-            command,
-            cwd,
-            reason,
-            proposed_execpolicy_amendment,
-            parsed_cmd,
-            ..
-        }) => match api_version {
-            ApiVersion::V1 => {
-                let params = ExecCommandApprovalParams {
-                    conversation_id,
-                    call_id: call_id.clone(),
-                    command,
-                    cwd,
-                    reason,
-                    parsed_cmd,
-                };
-                let rx = outgoing
-                    .send_request(ServerRequestPayload::ExecCommandApproval(params))
-                    .await;
-                tokio::spawn(async move {
-                    on_exec_approval_response(call_id, event_turn_id, rx, conversation).await;
-                });
-            }
-            ApiVersion::V2 => {
-                let item_id = call_id.clone();
-                let command_actions = parsed_cmd
-                    .iter()
-                    .cloned()
-                    .map(V2ParsedCommand::from)
-                    .collect::<Vec<_>>();
-                let command_string = shlex_join(&command);
-                let proposed_execpolicy_amendment_v2 =
-                    proposed_execpolicy_amendment.map(V2ExecPolicyAmendment::from);
-
-                let params = CommandExecutionRequestApprovalParams {
-                    thread_id: conversation_id.to_string(),
-                    turn_id: turn_id.clone(),
-                    // Until we migrate the core to be aware of a first class CommandExecutionItem
+                ApiVersion::V2 => {
+                    // Until we migrate the core to be aware of a first class FileChangeItem
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
-                    item_id: item_id.clone(),
-                    reason,
-                    command: Some(command_string.clone()),
-                    cwd: Some(cwd.clone()),
-                    command_actions: Some(command_actions.clone()),
-                    proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
-                };
-                let rx = outgoing
-                    .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
-                        params,
-                    ))
-                    .await;
-                tokio::spawn(async move {
-                    on_command_execution_request_approval_response(
-                        event_turn_id,
+                    let item_id = call_id.clone();
+                    let patch_changes = convert_patch_changes(&changes);
+
+                    let first_start = {
+                        let mut state = thread_state.lock().await;
+                        state
+                            .turn_summary
+                            .file_change_started
+                            .insert(item_id.clone())
+                    };
+                    if first_start {
+                        let item = ThreadItem::FileChange {
+                            id: item_id.clone(),
+                            changes: patch_changes.clone(),
+                            status: PatchApplyStatus::InProgress,
+                        };
+                        let notification = ItemStartedNotification {
+                            thread_id: conversation_id.to_string(),
+                            turn_id: event_turn_id.clone(),
+                            item,
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ItemStarted(notification))
+                            .await;
+                    }
+
+                    let params = FileChangeRequestApprovalParams {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: turn_id.clone(),
+                        item_id: item_id.clone(),
+                        reason,
+                        grant_root,
+                    };
+                    let rx = outgoing
+                        .send_request(ServerRequestPayload::FileChangeRequestApproval(params))
+                        .await;
+                    tokio::spawn(async move {
+                        on_file_change_request_approval_response(
+                            event_turn_id,
+                            conversation_id,
+                            item_id,
+                            patch_changes,
+                            rx,
+                            conversation,
+                            outgoing,
+                            thread_state.clone(),
+                            permission_guard,
+                        )
+                        .await;
+                    });
+                }
+            }
+        }
+        EventMsg::ExecApprovalRequest(ev) => {
+            let permission_guard = thread_watch_manager
+                .note_permission_requested(&conversation_id.to_string())
+                .await;
+            let approval_id_for_op = ev.effective_approval_id();
+            let ExecApprovalRequestEvent {
+                call_id,
+                approval_id,
+                turn_id,
+                command,
+                cwd,
+                reason,
+                network_approval_context,
+                proposed_execpolicy_amendment,
+                parsed_cmd,
+                ..
+            } = ev;
+            match api_version {
+                ApiVersion::V1 => {
+                    let params = ExecCommandApprovalParams {
                         conversation_id,
-                        item_id,
-                        command_string,
+                        call_id: call_id.clone(),
+                        approval_id,
+                        command,
+                        cwd,
+                        reason,
+                        parsed_cmd,
+                    };
+                    let rx = outgoing
+                        .send_request(ServerRequestPayload::ExecCommandApproval(params))
+                        .await;
+                    tokio::spawn(async move {
+                        let _permission_guard = permission_guard;
+                        on_exec_approval_response(
+                            approval_id_for_op,
+                            event_turn_id,
+                            rx,
+                            conversation,
+                        )
+                        .await;
+                    });
+                }
+                ApiVersion::V2 => {
+                    let command_actions = parsed_cmd
+                        .iter()
+                        .cloned()
+                        .map(V2ParsedCommand::from)
+                        .collect::<Vec<_>>();
+                    let presentation = if let Some(network_approval_context) =
+                        network_approval_context.map(V2NetworkApprovalContext::from)
+                    {
+                        CommandExecutionApprovalPresentation::Network(network_approval_context)
+                    } else {
+                        let command_string = shlex_join(&command);
+                        let completion_item = CommandExecutionCompletionItem {
+                            command: command_string,
+                            cwd: cwd.clone(),
+                            command_actions: command_actions.clone(),
+                        };
+                        CommandExecutionApprovalPresentation::Command(completion_item)
+                    };
+                    let (network_approval_context, command, cwd, command_actions, completion_item) =
+                        match presentation {
+                            CommandExecutionApprovalPresentation::Network(
+                                network_approval_context,
+                            ) => (Some(network_approval_context), None, None, None, None),
+                            CommandExecutionApprovalPresentation::Command(completion_item) => (
+                                None,
+                                Some(completion_item.command.clone()),
+                                Some(completion_item.cwd.clone()),
+                                Some(completion_item.command_actions.clone()),
+                                Some(completion_item),
+                            ),
+                        };
+                    let proposed_execpolicy_amendment_v2 =
+                        proposed_execpolicy_amendment.map(V2ExecPolicyAmendment::from);
+
+                    let params = CommandExecutionRequestApprovalParams {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: turn_id.clone(),
+                        item_id: call_id.clone(),
+                        approval_id: approval_id.clone(),
+                        reason,
+                        network_approval_context,
+                        command,
                         cwd,
                         command_actions,
-                        rx,
-                        conversation,
-                        outgoing,
-                    )
-                    .await;
-                });
+                        proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
+                    };
+                    let rx = outgoing
+                        .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
+                            params,
+                        ))
+                        .await;
+                    tokio::spawn(async move {
+                        on_command_execution_request_approval_response(
+                            event_turn_id,
+                            conversation_id,
+                            approval_id,
+                            call_id,
+                            completion_item,
+                            rx,
+                            conversation,
+                            outgoing,
+                            thread_state.clone(),
+                            permission_guard,
+                        )
+                        .await;
+                    });
+                }
             }
-        },
+        }
         EventMsg::RequestUserInput(request) => {
             if matches!(api_version, ApiVersion::V2) {
+                let user_input_guard = thread_watch_manager
+                    .note_user_input_requested(&conversation_id.to_string())
+                    .await;
                 let questions = request
                     .questions
                     .into_iter()
@@ -316,7 +396,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_request(ServerRequestPayload::ToolRequestUserInput(params))
                     .await;
                 tokio::spawn(async move {
-                    on_request_user_input_response(event_turn_id, rx, conversation).await;
+                    on_request_user_input_response(
+                        event_turn_id,
+                        rx,
+                        conversation,
+                        user_input_guard,
+                    )
+                    .await;
                 });
             } else {
                 error!(
@@ -577,6 +663,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::CollabCloseEnd(end_event) => {
+            if thread_manager
+                .get_thread(end_event.receiver_thread_id)
+                .await
+                .is_err()
+            {
+                thread_watch_manager
+                    .remove_thread(&end_event.receiver_thread_id.to_string())
+                    .await;
+            }
             let status = match &end_event.status {
                 codex_protocol::protocol::AgentStatus::Errored(_)
                 | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
@@ -715,6 +810,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::Error(ev) => {
+            thread_watch_manager
+                .note_system_error(&conversation_id.to_string())
+                .await;
+
             let message = ev.message.clone();
             let codex_error_info = ev.codex_error_info.clone();
 
@@ -933,6 +1032,14 @@ pub(crate) async fn apply_bespoke_event_handling(
             let cwd = exec_command_begin_event.cwd;
             let process_id = exec_command_begin_event.process_id;
 
+            {
+                let mut state = thread_state.lock().await;
+                state
+                    .turn_summary
+                    .command_execution_started
+                    .insert(item_id.clone());
+            }
+
             let item = ThreadItem::CommandExecution {
                 id: item_id,
                 command,
@@ -1020,6 +1127,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 ..
             } = exec_command_end_event;
 
+            {
+                let mut state = thread_state.lock().await;
+                state
+                    .turn_summary
+                    .command_execution_started
+                    .remove(&call_id);
+            }
+
             let status: CommandExecutionStatus = (&status).into();
             let command_actions = parsed_cmd
                 .into_iter()
@@ -1078,6 +1193,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 }
             }
 
+            thread_watch_manager
+                .note_turn_interrupted(&conversation_id.to_string())
+                .await;
             handle_turn_interrupted(conversation_id, event_turn_id, &outgoing, &thread_state).await;
         }
         EventMsg::ThreadRolledBack(_rollback_event) => {
@@ -1107,6 +1225,19 @@ pub(crate) async fn apply_bespoke_event_handling(
                         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
                             Ok(items) => {
                                 thread.turns = build_turns_from_rollout_items(&items);
+                                thread.status = thread_watch_manager
+                                    .loaded_status_for_thread(&thread.id)
+                                    .await;
+                                match find_thread_name_by_id(codex_home, &conversation_id).await {
+                                    Ok(name) => {
+                                        thread.name = name;
+                                    }
+                                    Err(err) => {
+                                        warn!(
+                                            "Failed to read thread name for {conversation_id}: {err}"
+                                        );
+                                    }
+                                }
                                 ThreadRollbackResponse { thread }
                             }
                             Err(err) => {
@@ -1170,6 +1301,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &outgoing,
             )
             .await;
+        }
+        EventMsg::ShutdownComplete => {
+            thread_watch_manager
+                .note_thread_shutdown(&conversation_id.to_string())
+                .await;
         }
 
         _ => {}
@@ -1525,8 +1661,10 @@ async fn on_request_user_input_response(
     event_turn_id: String,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
+    user_input_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
+    drop(user_input_guard);
     let value = match response {
         Ok(Ok(value)) => value,
         Ok(Err(err)) => {
@@ -1618,46 +1756,6 @@ fn render_review_output_text(output: &ReviewOutputEvent) -> String {
     }
 }
 
-fn convert_patch_changes(changes: &HashMap<PathBuf, CoreFileChange>) -> Vec<FileUpdateChange> {
-    let mut converted: Vec<FileUpdateChange> = changes
-        .iter()
-        .map(|(path, change)| FileUpdateChange {
-            path: path.to_string_lossy().into_owned(),
-            kind: map_patch_change_kind(change),
-            diff: format_file_change_diff(change),
-        })
-        .collect();
-    converted.sort_by(|a, b| a.path.cmp(&b.path));
-    converted
-}
-
-fn map_patch_change_kind(change: &CoreFileChange) -> V2PatchChangeKind {
-    match change {
-        CoreFileChange::Add { .. } => V2PatchChangeKind::Add,
-        CoreFileChange::Delete { .. } => V2PatchChangeKind::Delete,
-        CoreFileChange::Update { move_path, .. } => V2PatchChangeKind::Update {
-            move_path: move_path.clone(),
-        },
-    }
-}
-
-fn format_file_change_diff(change: &CoreFileChange) -> String {
-    match change {
-        CoreFileChange::Add { content } => content.clone(),
-        CoreFileChange::Delete { content } => content.clone(),
-        CoreFileChange::Update {
-            unified_diff,
-            move_path,
-        } => {
-            if let Some(path) = move_path {
-                format!("{unified_diff}\n\nMoved to: {}", path.display())
-            } else {
-                unified_diff.clone()
-            }
-        }
-    }
-}
-
 fn map_file_change_approval_decision(
     decision: FileChangeApprovalDecision,
 ) -> (ReviewDecision, Option<PatchApplyStatus>) {
@@ -1683,8 +1781,10 @@ async fn on_file_change_request_approval_response(
     codex: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<Mutex<ThreadState>>,
+    permission_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
+    drop(permission_guard);
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {
             let response = serde_json::from_value::<FileChangeRequestApprovalResponse>(value)
@@ -1739,15 +1839,17 @@ async fn on_file_change_request_approval_response(
 async fn on_command_execution_request_approval_response(
     event_turn_id: String,
     conversation_id: ThreadId,
+    approval_id: Option<String>,
     item_id: String,
-    command: String,
-    cwd: PathBuf,
-    command_actions: Vec<V2ParsedCommand>,
+    completion_item: Option<CommandExecutionCompletionItem>,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
+    thread_state: Arc<Mutex<ThreadState>>,
+    permission_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
+    drop(permission_guard);
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {
             let response = serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value)
@@ -1794,15 +1896,33 @@ async fn on_command_execution_request_approval_response(
         }
     };
 
-    if let Some(status) = completion_status {
+    let suppress_subcommand_completion_item = {
+        // For regular shell/unified_exec approvals, approval_id is null.
+        // For zsh-fork subcommand approvals, approval_id is present and
+        // item_id points to the parent command item.
+        if approval_id.is_some() {
+            let state = thread_state.lock().await;
+            state
+                .turn_summary
+                .command_execution_started
+                .contains(&item_id)
+        } else {
+            false
+        }
+    };
+
+    if let Some(status) = completion_status
+        && !suppress_subcommand_completion_item
+        && let Some(completion_item) = completion_item
+    {
         complete_command_execution_item(
             conversation_id,
             event_turn_id.clone(),
             item_id.clone(),
-            command.clone(),
-            cwd.clone(),
+            completion_item.command,
+            completion_item.cwd,
             None,
-            command_actions.clone(),
+            completion_item.command_actions,
             status,
             &outgoing,
         )
@@ -1811,7 +1931,7 @@ async fn on_command_execution_request_approval_response(
 
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
-            id: item_id,
+            id: approval_id.unwrap_or_else(|| item_id.clone()),
             turn_id: Some(event_turn_id),
             decision,
         })
@@ -1822,7 +1942,7 @@ async fn on_command_execution_request_approval_response(
 }
 
 fn collab_resume_begin_item(
-    begin_event: codex_core::protocol::CollabResumeBeginEvent,
+    begin_event: codex_protocol::protocol::CollabResumeBeginEvent,
 ) -> ThreadItem {
     ThreadItem::CollabAgentToolCall {
         id: begin_event.call_id,
@@ -1835,7 +1955,7 @@ fn collab_resume_begin_item(
     }
 }
 
-fn collab_resume_end_item(end_event: codex_core::protocol::CollabResumeEndEvent) -> ThreadItem {
+fn collab_resume_end_item(end_event: codex_protocol::protocol::CollabResumeEndEvent) -> ThreadItem {
     let status = match &end_event.status {
         codex_protocol::protocol::AgentStatus::Errored(_)
         | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
@@ -1940,17 +2060,17 @@ mod tests {
     use anyhow::anyhow;
     use anyhow::bail;
     use codex_app_server_protocol::TurnPlanStepStatus;
-    use codex_core::protocol::CollabResumeBeginEvent;
-    use codex_core::protocol::CollabResumeEndEvent;
-    use codex_core::protocol::CreditsSnapshot;
-    use codex_core::protocol::McpInvocation;
-    use codex_core::protocol::RateLimitSnapshot;
-    use codex_core::protocol::RateLimitWindow;
-    use codex_core::protocol::TokenUsage;
-    use codex_core::protocol::TokenUsageInfo;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
+    use codex_protocol::protocol::CollabResumeBeginEvent;
+    use codex_protocol::protocol::CollabResumeEndEvent;
+    use codex_protocol::protocol::CreditsSnapshot;
+    use codex_protocol::protocol::McpInvocation;
+    use codex_protocol::protocol::RateLimitSnapshot;
+    use codex_protocol::protocol::RateLimitWindow;
+    use codex_protocol::protocol::TokenUsage;
+    use codex_protocol::protocol::TokenUsageInfo;
     use pretty_assertions::assert_eq;
     use rmcp::model::Content;
     use serde_json::Value as JsonValue;
@@ -1989,6 +2109,8 @@ mod tests {
             call_id: "call-1".to_string(),
             sender_thread_id: ThreadId::new(),
             receiver_thread_id: ThreadId::new(),
+            receiver_agent_nickname: None,
+            receiver_agent_role: None,
         };
 
         let item = collab_resume_begin_item(event.clone());
@@ -2010,6 +2132,8 @@ mod tests {
             call_id: "call-2".to_string(),
             sender_thread_id: ThreadId::new(),
             receiver_thread_id: ThreadId::new(),
+            receiver_agent_nickname: None,
+            receiver_agent_role: None,
             status: codex_protocol::protocol::AgentStatus::NotFound,
         };
 

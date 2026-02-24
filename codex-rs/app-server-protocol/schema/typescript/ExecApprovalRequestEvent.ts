@@ -7,9 +7,16 @@ import type { ParsedCommand } from "./ParsedCommand";
 
 export type ExecApprovalRequestEvent = { 
 /**
- * Identifier for the associated exec call, if available.
+ * Identifier for the associated command execution item.
  */
 call_id: string, 
+/**
+ * Identifier for this specific approval callback.
+ *
+ * When absent, the approval is for the command item itself (`call_id`).
+ * This is present for subcommand approvals (via execve intercept).
+ */
+approval_id?: string, 
 /**
  * Turn ID that this command belongs to.
  * Uses `#[serde(default)]` for backwards compatibility.
