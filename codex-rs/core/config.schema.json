@@ -725,6 +725,21 @@
       ],
       "type": "object"
     },
+    "ModelTogglePairEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
+    },
     "NetworkModeSchema": {
       "enum": [
         "limited",
@@ -1891,6 +1906,13 @@
     "model_supports_reasoning_summaries": {
       "description": "Override to force-enable reasoning summaries for the configured model.",
       "type": "boolean"
+    },
+    "model_toggle_pair": {
+      "description": "Persisted two-entry model toggle ring (global scope only).",
+      "items": {
+        "$ref": "#/definitions/ModelTogglePairEntry"
+      },
+      "type": "array"
     },
     "model_verbosity": {
       "allOf": [

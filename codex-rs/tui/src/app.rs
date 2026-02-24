@@ -45,6 +45,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::types::ModelTogglePairEntry;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
@@ -1944,6 +1945,7 @@ impl App {
                     }
                 }
                 self.refresh_status_line();
+                self.persist_model_toggle_pair().await;
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
@@ -2518,6 +2520,7 @@ impl App {
                 self.config.plan_mode_reasoning_effort = effort;
                 self.chat_widget.set_plan_mode_reasoning_effort(effort);
                 self.refresh_status_line();
+                self.persist_model_toggle_pair().await;
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
@@ -3017,6 +3020,20 @@ impl App {
         // Instead, explicitly pass the stored collaboration mode's effort into new sessions.
         self.config.model_reasoning_effort = effort;
         self.chat_widget.set_reasoning_effort(effort);
+    }
+
+    async fn persist_model_toggle_pair(&mut self) {
+        let pair: Option<Vec<ModelTogglePairEntry>> =
+            self.chat_widget.model_toggle_pair_for_persist();
+        if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+            .set_model_toggle_pair(pair.as_deref())
+            .apply()
+            .await
+        {
+            tracing::error!(error = %err, "failed to persist model toggle pair");
+            self.chat_widget
+                .add_error_message(format!("Failed to save model toggle pair: {err}"));
+        }
     }
 
     fn on_update_personality(&mut self, personality: Personality) {

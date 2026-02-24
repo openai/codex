@@ -9,6 +9,7 @@ use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::MemoriesConfig;
 use crate::config::types::MemoriesToml;
+use crate::config::types::ModelTogglePairEntry;
 use crate::config::types::Notice;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
@@ -168,6 +169,8 @@ pub struct Config {
 
     /// Optional override of model selection.
     pub model: Option<String>,
+    /// Persisted two-entry model toggle ring (global scope only).
+    pub model_toggle_pair: Option<Vec<ModelTogglePairEntry>>,
 
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
@@ -969,6 +972,8 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
+    /// Persisted two-entry model toggle ring (global scope only).
+    pub model_toggle_pair: Option<Vec<ModelTogglePairEntry>>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
 
@@ -1999,6 +2004,7 @@ impl Config {
 
         let config = Self {
             model,
+            model_toggle_pair: cfg.model_toggle_pair,
             review_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
@@ -4629,6 +4635,7 @@ model_verbosity = "high"
         assert_eq!(
             Config {
                 model: Some("o3".to_string()),
+                model_toggle_pair: None,
                 review_model: None,
                 model_context_window: None,
                 model_auto_compact_token_limit: None,
@@ -4752,6 +4759,7 @@ model_verbosity = "high"
         )?;
         let expected_gpt3_profile_config = Config {
             model: Some("gpt-3.5-turbo".to_string()),
+            model_toggle_pair: None,
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
@@ -4873,6 +4881,7 @@ model_verbosity = "high"
         )?;
         let expected_zdr_profile_config = Config {
             model: Some("o3".to_string()),
+            model_toggle_pair: None,
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
@@ -4980,6 +4989,7 @@ model_verbosity = "high"
         )?;
         let expected_gpt5_profile_config = Config {
             model: Some("gpt-5.1".to_string()),
+            model_toggle_pair: None,
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,

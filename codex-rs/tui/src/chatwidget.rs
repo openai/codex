@@ -51,6 +51,7 @@ use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
+use codex_core::config::types::ModelTogglePairEntry;
 use codex_core::config::types::Notifications;
 use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::ConfigLayerStackOrdering;
@@ -1145,6 +1146,59 @@ impl ChatWidget {
             Some(event.reasoning_effort),
             None,
         );
+        let default_model = self.current_model().to_string();
+        let default_effort = self.effective_reasoning_effort();
+        if let Some(saved_pair) = self.config.model_toggle_pair.clone()
+            && !default_model.is_empty()
+        {
+            let mut persisted: Vec<ModelHistoryEntry> = Vec::with_capacity(2);
+            for entry in saved_pair {
+                if entry.model.trim().is_empty()
+                    || persisted
+                        .iter()
+                        .any(|candidate| candidate.model == entry.model)
+                {
+                    continue;
+                }
+                persisted.push(ModelHistoryEntry {
+                    model: entry.model,
+                    effort: entry.effort,
+                });
+                if persisted.len() == 2 {
+                    break;
+                }
+            }
+
+            if !persisted.is_empty() {
+                let (current, other) = if let Some(index) = persisted
+                    .iter()
+                    .position(|entry| entry.model == default_model)
+                {
+                    let mut current = persisted.remove(index);
+                    current.effort = default_effort;
+                    let other = persisted.into_iter().next();
+                    (current, other)
+                } else {
+                    let current = ModelHistoryEntry {
+                        model: default_model,
+                        effort: default_effort,
+                    };
+                    let other = persisted.get(1).cloned();
+                    (current, other)
+                };
+
+                self.recent_model_history.clear();
+                self.recent_model_history.push_back(current);
+                if let Some(other) = other
+                    && self
+                        .recent_model_history
+                        .iter()
+                        .all(|entry| entry.model != other.model)
+                {
+                    self.recent_model_history.push_back(other);
+                }
+            }
+        }
         self.refresh_model_display();
         self.sync_personality_command_enabled();
         let session_info_cell = history_cell::new_session_info(
@@ -6551,8 +6605,8 @@ impl ChatWidget {
     /// is only recorded when the ring is empty to avoid pushing it to the front
     /// ahead of the new selection.
     pub(crate) fn set_model(&mut self, model: &str) {
-        let previous_model = self.current_model();
-        let changed = previous_model != model;
+        let changed = self.current_model() != model;
+        let previous_model = changed.then(|| self.current_model().to_string());
         let previous_effort = changed.then(|| self.effective_reasoning_effort()).flatten();
         self.current_collaboration_mode =
             self.current_collaboration_mode
@@ -6565,8 +6619,10 @@ impl ChatWidget {
         if changed {
             // Seed the ring with the outgoing model so the user has something to
             // toggle back to even if they never opened the picker before.
-            if self.recent_model_history.is_empty() {
-                self.record_model_history_selection(previous_model.to_string(), previous_effort);
+            if self.recent_model_history.is_empty()
+                && let Some(previous_model) = previous_model
+            {
+                self.record_model_history_selection(previous_model, previous_effort);
             }
             self.record_model_history_selection(
                 model.to_string(),
@@ -6655,6 +6711,19 @@ impl ChatWidget {
             .iter()
             .find(|entry| entry.model != current_model)
             .cloned()
+    }
+
+    pub(crate) fn model_toggle_pair_for_persist(&self) -> Option<Vec<ModelTogglePairEntry>> {
+        let pair: Vec<ModelTogglePairEntry> = self
+            .recent_model_history
+            .iter()
+            .take(2)
+            .map(|entry| ModelTogglePairEntry {
+                model: entry.model.clone(),
+                effort: entry.effort,
+            })
+            .collect();
+        (!pair.is_empty()).then_some(pair)
     }
 
     pub(crate) fn current_model(&self) -> &str {

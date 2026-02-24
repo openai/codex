@@ -20,6 +20,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
+use codex_core::config::types::ModelTogglePairEntry;
 #[cfg(target_os = "windows")]
 use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::RequirementSource;
@@ -6111,6 +6112,100 @@ async fn model_history_other_entry_none_with_single_entry() {
     chat.seed_model_history_if_empty();
     let other = chat.other_recent_model_entry(chat.current_model());
     assert_eq!(other, None);
+}
+
+#[tokio::test]
+async fn session_configured_uses_persisted_pair_other_when_default_present() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.model_toggle_pair = Some(vec![
+        ModelTogglePairEntry {
+            model: "o3".to_string(),
+            effort: Some(ReasoningEffortConfig::High),
+        },
+        ModelTogglePairEntry {
+            model: "gpt-5".to_string(),
+            effort: Some(ReasoningEffortConfig::Low),
+        },
+    ]);
+
+    chat.on_session_configured(codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "gpt-5".to_string(),
+        model_provider_id: "openai".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/tmp"),
+        reasoning_effort: Some(ReasoningEffortConfig::Medium),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    });
+
+    let entries: Vec<ModelHistoryEntry> = chat.recent_model_history.iter().cloned().collect();
+    assert_eq!(
+        entries,
+        vec![
+            ModelHistoryEntry {
+                model: "gpt-5".to_string(),
+                effort: Some(ReasoningEffortConfig::Medium),
+            },
+            ModelHistoryEntry {
+                model: "o3".to_string(),
+                effort: Some(ReasoningEffortConfig::High),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn session_configured_replaces_current_when_default_not_in_persisted_pair() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.model_toggle_pair = Some(vec![
+        ModelTogglePairEntry {
+            model: "o3".to_string(),
+            effort: Some(ReasoningEffortConfig::High),
+        },
+        ModelTogglePairEntry {
+            model: "gpt-4.1".to_string(),
+            effort: Some(ReasoningEffortConfig::Low),
+        },
+    ]);
+
+    chat.on_session_configured(codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "gpt-5".to_string(),
+        model_provider_id: "openai".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/tmp"),
+        reasoning_effort: Some(ReasoningEffortConfig::Medium),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    });
+
+    let entries: Vec<ModelHistoryEntry> = chat.recent_model_history.iter().cloned().collect();
+    assert_eq!(
+        entries,
+        vec![
+            ModelHistoryEntry {
+                model: "gpt-5".to_string(),
+                effort: Some(ReasoningEffortConfig::Medium),
+            },
+            ModelHistoryEntry {
+                model: "gpt-4.1".to_string(),
+                effort: Some(ReasoningEffortConfig::Low),
+            },
+        ]
+    );
 }
 
 #[tokio::test]
