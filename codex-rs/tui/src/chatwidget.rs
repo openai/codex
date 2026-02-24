@@ -2552,6 +2552,7 @@ impl ChatWidget {
             reason: ev.reason,
             network_approval_context: ev.network_approval_context,
             proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
+            additional_permissions: ev.additional_permissions,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
@@ -3400,6 +3401,19 @@ impl ChatWidget {
 
     pub(crate) fn can_launch_external_editor(&self) -> bool {
         self.bottom_pane.can_launch_external_editor()
+    }
+
+    pub(crate) fn can_run_ctrl_l_clear_now(&mut self) -> bool {
+        // Ctrl+L is not a slash command, but it follows /clear's current rule:
+        // block while a task is running.
+        if !self.bottom_pane.is_task_running() {
+            return true;
+        }
+
+        let message = "Ctrl+L is disabled while a task is in progress.".to_string();
+        self.add_to_history(history_cell::new_error_event(message));
+        self.request_redraw();
+        false
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {

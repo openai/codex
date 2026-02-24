@@ -88,6 +88,8 @@ pub enum Feature {
     ShellZshFork,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
+    /// Allow requesting additional filesystem permissions while staying sandboxed.
+    RequestPermissions,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
@@ -517,6 +519,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RequestPermissions,
+        key: "request_permissions",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

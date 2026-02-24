@@ -1,3 +1,4 @@
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
@@ -10,6 +11,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -19,6 +21,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
+use codex_protocol::models::AdditionalPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -43,6 +46,8 @@ pub(crate) struct ExecCommandArgs {
     max_output_tokens: Option<usize>,
     #[serde(default)]
     sandbox_permissions: SandboxPermissions,
+    #[serde(default)]
+    additional_permissions: Option<AdditionalPermissions>,
     #[serde(default)]
     justification: Option<String>,
     #[serde(default)]
@@ -153,12 +158,16 @@ impl ToolHandler for UnifiedExecHandler {
                     yield_time_ms,
                     max_output_tokens,
                     sandbox_permissions,
+                    additional_permissions,
                     justification,
                     prefix_rule,
                     ..
                 } = args;
 
-                if sandbox_permissions.requires_escalated_permissions()
+                let request_permission_enabled =
+                    session.features().enabled(Feature::RequestPermissions);
+
+                if sandbox_permissions.requires_additional_permissions()
                     && !matches!(
                         context.turn.approval_policy.value(),
                         codex_protocol::protocol::AskForApproval::OnRequest
@@ -175,6 +184,20 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
+                let normalized_additional_permissions =
+                    match normalize_and_validate_additional_permissions(
+                        request_permission_enabled,
+                        context.turn.approval_policy.value(),
+                        sandbox_permissions,
+                        additional_permissions,
+                        &cwd,
+                    ) {
+                        Ok(normalized) => normalized,
+                        Err(err) => {
+                            manager.release_process_id(&process_id).await;
+                            return Err(FunctionCallError::RespondToModel(err));
+                        }
+                    };
 
                 if let Some(output) = intercept_apply_patch(
                     &command,
@@ -203,6 +226,7 @@ impl ToolHandler for UnifiedExecHandler {
                             network: context.turn.network.clone(),
                             tty,
                             sandbox_permissions,
+                            additional_permissions: normalized_additional_permissions,
                             justification,
                             prefix_rule,
                         },

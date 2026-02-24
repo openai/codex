@@ -730,6 +730,15 @@ impl App {
         self.clear_ui_header_lines_with_version(width, CODEX_CLI_VERSION)
     }
 
+    fn queue_clear_ui_header(&mut self, tui: &mut tui::Tui) {
+        let width = tui.terminal.last_known_screen_size.width;
+        let header_lines = self.clear_ui_header_lines(width);
+        if !header_lines.is_empty() {
+            tui.insert_history_lines(header_lines);
+            self.has_emitted_history_lines = true;
+        }
+    }
+
     fn clear_terminal_ui(&mut self, tui: &mut tui::Tui, redraw_header: bool) -> Result<()> {
         let is_alt_screen_active = tui.is_alt_screen_active();
 
@@ -754,14 +763,18 @@ impl App {
         self.has_emitted_history_lines = false;
 
         if redraw_header {
-            let width = tui.terminal.last_known_screen_size.width;
-            let header_lines = self.clear_ui_header_lines(width);
-            if !header_lines.is_empty() {
-                tui.insert_history_lines(header_lines);
-                self.has_emitted_history_lines = true;
-            }
+            self.queue_clear_ui_header(tui);
         }
         Ok(())
+    }
+
+    fn reset_app_ui_state_after_clear(&mut self) {
+        self.overlay = None;
+        self.transcript_cells.clear();
+        self.deferred_history_lines.clear();
+        self.has_emitted_history_lines = false;
+        self.backtrack = BacktrackState::default();
+        self.backtrack_render_pending = false;
     }
 
     async fn shutdown_current_thread(&mut self) {
@@ -1616,12 +1629,7 @@ impl App {
             }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, false)?;
-                self.overlay = None;
-                self.transcript_cells.clear();
-                self.deferred_history_lines.clear();
-                self.has_emitted_history_lines = false;
-                self.backtrack = BacktrackState::default();
-                self.backtrack_render_pending = false;
+                self.reset_app_ui_state_after_clear();
 
                 self.start_fresh_session_with_summary_hint(tui).await;
             }
@@ -3112,6 +3120,25 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if !self.chat_widget.can_run_ctrl_l_clear_now() {
+                    return;
+                }
+                if let Err(err) = self.clear_terminal_ui(tui, false) {
+                    tracing::warn!(error = %err, "failed to clear terminal UI");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to clear terminal UI: {err}"));
+                } else {
+                    self.reset_app_ui_state_after_clear();
+                    self.queue_clear_ui_header(tui);
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            KeyEvent {
                 code: KeyCode::Char('g'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
@@ -3538,8 +3565,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn clear_ui_after_long_transcript_snapshots_fresh_header_only() {
+    async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
         let mut app = make_test_app().await;
         app.config.cwd = PathBuf::from("/tmp/project");
         app.chat_widget.set_model("gpt-test");
@@ -3644,6 +3670,18 @@ mod tests {
             !rendered.contains("Bracken Ferry"),
             "clear header should not replay prior conversation turns"
         );
+        rendered
+    }
+
+    #[tokio::test]
+    async fn clear_ui_after_long_transcript_snapshots_fresh_header_only() {
+        let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
+        assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
+    }
+
+    #[tokio::test]
+    async fn ctrl_l_clear_ui_after_long_transcript_reuses_clear_header_snapshot() {
+        let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
         assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
     }
 
@@ -4517,6 +4555,59 @@ mod tests {
             Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
             Err(_) => panic!("expected shutdown op to be sent"),
         }
+    }
+
+    #[tokio::test]
+    async fn clear_only_ui_reset_preserves_chat_session_state() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("keep me".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+        app.chat_widget
+            .apply_external_edit("draft prompt".to_string());
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: "old message".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>];
+        app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+        app.deferred_history_lines = vec![Line::from("stale buffered line")];
+        app.has_emitted_history_lines = true;
+        app.backtrack.primed = true;
+        app.backtrack.overlay_preview_active = true;
+        app.backtrack.nth_user_message = 0;
+        app.backtrack_render_pending = true;
+
+        app.reset_app_ui_state_after_clear();
+
+        assert!(app.overlay.is_none());
+        assert!(app.transcript_cells.is_empty());
+        assert!(app.deferred_history_lines.is_empty());
+        assert!(!app.has_emitted_history_lines);
+        assert!(!app.backtrack.primed);
+        assert!(!app.backtrack.overlay_preview_active);
+        assert!(app.backtrack.pending_rollback.is_none());
+        assert!(!app.backtrack_render_pending);
+        assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
     }
 
     #[tokio::test]

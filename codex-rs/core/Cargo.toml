@@ -137,6 +137,9 @@ windows-sys = { version = "0.52", features = [
 [target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { workspace = true, features = ["sync-secret-service"] }
 
+[target.'cfg(unix)'.dependencies]
+codex-shell-escalation = { workspace = true }
+
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }

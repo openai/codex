@@ -42,7 +42,6 @@ impl ShellPolicyFactory {
 
 /// Public only because it is the associated `Policy` type in the public
 /// `EscalationPolicyFactory` impl for `ShellPolicyFactory`.
-#[doc(hidden)]
 pub struct ShellEscalationPolicy {
     provider: Arc<dyn ShellActionProvider>,
     stopwatch: Stopwatch,

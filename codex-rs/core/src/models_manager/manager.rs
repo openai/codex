@@ -159,12 +159,33 @@ impl ModelsManager {
         best
     }
 
+    /// Retry metadata lookup for a single namespaced slug like `namespace/model-name`.
+    ///
+    /// This only strips one leading namespace segment and only when the namespace is ASCII
+    /// alphanumeric/underscore (`\\w+`) to avoid broadly matching arbitrary aliases.
+    fn find_model_by_namespaced_suffix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
+        let (namespace, suffix) = model.split_once('/')?;
+        if suffix.contains('/') {
+            return None;
+        }
+        if !namespace
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return None;
+        }
+        Self::find_model_by_longest_prefix(suffix, candidates)
+    }
+
     fn construct_model_info_from_candidates(
         model: &str,
         candidates: &[ModelInfo],
         config: &Config,
     ) -> ModelInfo {
-        let remote = Self::find_model_by_longest_prefix(model, candidates);
+        // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
+        // retry for namespaced slugs like `custom/gpt-5.3-codex`.
+        let remote = Self::find_model_by_longest_prefix(model, candidates)
+            .or_else(|| Self::find_model_by_namespaced_suffix(model, candidates));
         let model_info = if let Some(remote) = remote {
             ModelInfo {
                 slug: model.to_string(),
@@ -518,6 +539,58 @@ mod tests {
         assert_eq!(model_info.context_window, Some(272_000));
         assert!(!model_info.supports_parallel_tool_calls);
         assert!(!model_info.used_fallback_model_metadata);
+    }
+
+    #[tokio::test]
+    async fn get_model_info_matches_namespaced_suffix() {
+        let codex_home = tempdir().expect("temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None);
+        let known_slug = manager
+            .get_remote_models()
+            .await
+            .first()
+            .expect("bundled models should include at least one model")
+            .slug
+            .clone();
+        let namespaced_model = format!("custom/{known_slug}");
+
+        let model_info = manager.get_model_info(&namespaced_model, &config).await;
+
+        assert_eq!(model_info.slug, namespaced_model);
+        assert!(!model_info.used_fallback_model_metadata);
+    }
+
+    #[tokio::test]
+    async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
+        let codex_home = tempdir().expect("temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None);
+        let known_slug = manager
+            .get_remote_models()
+            .await
+            .first()
+            .expect("bundled models should include at least one model")
+            .slug
+            .clone();
+        let namespaced_model = format!("ns1/ns2/{known_slug}");
+
+        let model_info = manager.get_model_info(&namespaced_model, &config).await;
+
+        assert_eq!(model_info.slug, namespaced_model);
+        assert!(model_info.used_fallback_model_metadata);
     }
 
     #[tokio::test]
