@@ -2736,6 +2736,31 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
+        // Replay rollout items once and compute two things in lockstep:
+        //   1) reconstructed conversation history (via `ContextManager`)
+        //   2) resume/fork hydration metadata (`previous_model` and
+        //      `reference_context_item`)
+        //
+        // The metadata part needs rollback-aware accounting over "turn spans" and
+        // compaction placement:
+        // - `ActiveRolloutTurn` tracks the in-progress turn span while we walk forward
+        //   through lifecycle events (`TurnStarted` ... `TurnComplete`/`TurnAborted`).
+        // - `ReplayedRolloutTurn` is the finalized per-turn metadata we keep after a
+        //   turn ends (whether it had a user message, a `TurnContextItem`, and/or a
+        //   compaction).
+        // - `RolloutReplayMetaSegment` stores the finalized sequence we later
+        //   rollback-adjust and reverse-scan to find the last surviving regular turn
+        //   context. `CompactionOutsideTurn` is a marker for compaction that happened
+        //   outside any matched turn span; this matters because surviving compaction
+        //   after the last surviving `TurnContextItem` must null
+        //   `reference_context_item` while still preserving `previous_model`.
+        //
+        // `ThreadRolledBack` updates both:
+        // - history: drop user turns from reconstructed response items
+        // - metadata segments: remove finalized turn spans that consumed those user turns
+        //
+        // This keeps resume/fork baseline hydration consistent with the same replay
+        // logic used to rebuild history, instead of maintaining a second bespoke scan.
         #[derive(Debug)]
         struct ActiveRolloutTurn {
             turn_id: String,
