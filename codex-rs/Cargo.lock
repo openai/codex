@@ -2241,7 +2241,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
- "codex-execpolicy",
  "libc",
  "path-absolutize",
  "pretty_assertions",
