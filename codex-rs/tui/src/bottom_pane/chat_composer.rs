@@ -2005,79 +2005,84 @@ impl ChatComposer {
             return left_prefixed;
         }
         if after_cursor.starts_with(prefix) {
-            return right_prefixed.or(left_prefixed);
+            let prefix_starts_token = before_cursor
+                .chars()
+                .next_back()
+                .is_none_or(char::is_whitespace);
+            return if prefix_starts_token {
+                right_prefixed.or(left_prefixed)
+            } else {
+                left_prefixed.or(right_prefixed)
+            };
         }
         left_prefixed.or(right_prefixed)
+    }
+
+    fn looks_like_scoped_npm_package_spec(token: &str) -> bool {
+        let Some((package_name, version)) = token.rsplit_once('@') else {
+            return false;
+        };
+        if package_name.is_empty()
+            || version.is_empty()
+            || !package_name.contains('/')
+            || version.contains('/')
+        {
+            return false;
+        }
+
+        let version_is_dist_tag = version
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+            && version
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-');
+        if version_is_dist_tag {
+            return true;
+        }
+
+        let trimmed = version.trim_start_matches(|c| matches!(c, '^' | '~' | '<' | '>' | '='));
+        let normalized = trimmed
+            .strip_prefix('v')
+            .filter(|tail| tail.chars().next().is_some_and(|c| c.is_ascii_digit()))
+            .unwrap_or(trimmed);
+
+        let (core, suffix) = normalized
+            .find(['-', '+'])
+            .map(|idx| (&normalized[..idx], Some(&normalized[idx + 1..])))
+            .unwrap_or((normalized, None));
+
+        let core_segments: Vec<&str> = core.split('.').collect();
+        if core_segments.is_empty() || core_segments.len() > 3 {
+            return false;
+        }
+        if !core_segments.iter().all(|segment| {
+            !segment.is_empty()
+                && (segment.chars().all(|c| c.is_ascii_digit())
+                    || matches!(*segment, "x" | "X" | "*"))
+        }) {
+            return false;
+        }
+
+        suffix.is_none_or(|suffix| {
+            !suffix.is_empty()
+                && suffix.split('.').all(|segment| {
+                    !segment.is_empty()
+                        && segment
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+                })
+        })
     }
 
     /// Extract the `@token` that the cursor is currently positioned on, if any.
     ///
     /// The returned string **does not** include the leading `@`.
     fn current_at_token(textarea: &TextArea) -> Option<String> {
-        let text = textarea.text();
-        let safe_cursor = Self::clamp_to_char_boundary(text, textarea.cursor());
-        let before_cursor = &text[..safe_cursor];
-        let after_cursor = &text[safe_cursor..];
-        let token_start = before_cursor
-            .char_indices()
-            .rfind(|(_, c)| c.is_whitespace())
-            .map(|(idx, c)| idx + c.len_utf8())
-            .unwrap_or(0);
-        let token_end_rel = after_cursor
-            .char_indices()
-            .find(|(_, c)| c.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(after_cursor.len());
-        let token_end = safe_cursor + token_end_rel;
-        let raw_token = (token_start < token_end).then(|| &text[token_start..token_end]);
-
-        if raw_token.is_some_and(|raw_token| {
-            let Some(rest) = raw_token.strip_prefix('@') else {
-                return false;
-            };
-            let Some(version_sep) = rest.find('@') else {
-                return false;
-            };
-            let package_name = &rest[..version_sep];
-            let version = &rest[version_sep + 1..];
-            if package_name.is_empty()
-                || version.is_empty()
-                || !package_name.contains('/')
-                || version.contains('/')
-            {
-                return false;
-            }
-
-            if !version.contains('.') {
-                return true;
-            }
-
-            let normalized_version = version
-                .strip_prefix('v')
-                .filter(|tail| tail.chars().next().is_some_and(|c| c.is_ascii_digit()))
-                .unwrap_or(version);
-
-            if !normalized_version
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit())
-            {
-                return false;
-            }
-
-            normalized_version.split('.').all(|segment| {
-                !segment.is_empty()
-                    && segment.chars().all(|c| {
-                        c.is_ascii_alphanumeric()
-                            || matches!(c, '-' | '+' | '^' | '~' | '<' | '>' | '=')
-                    })
-                    && segment.chars().any(|c| c.is_ascii_digit())
-            })
-        }) {
+        let token = Self::current_prefixed_token(textarea, '@', false)?;
+        if Self::looks_like_scoped_npm_package_spec(&token) {
             return None;
         }
-
-        let token = Self::current_prefixed_token(textarea, '@', false)?;
         Some(token)
     }
 
