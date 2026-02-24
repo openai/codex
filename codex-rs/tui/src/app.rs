@@ -247,11 +247,165 @@ struct ThreadEventSnapshot {
     events: Vec<Event>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ElicitationRequestKey {
+    server_name: String,
+    request_id: codex_protocol::mcp::RequestId,
+}
+
+impl ElicitationRequestKey {
+    fn new(server_name: String, request_id: codex_protocol::mcp::RequestId) -> Self {
+        Self {
+            server_name,
+            request_id,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct PendingInteractiveReplayState {
+    exec_approval_call_ids_by_id: HashMap<String, String>,
+    patch_approval_call_ids: HashSet<String>,
+    elicitation_requests: HashSet<ElicitationRequestKey>,
+    request_user_input_turn_ids: HashSet<String>,
+}
+
+impl PendingInteractiveReplayState {
+    fn op_can_change_state(op: &Op) -> bool {
+        matches!(
+            op,
+            Op::ExecApproval { .. }
+                | Op::PatchApproval { .. }
+                | Op::ResolveElicitation { .. }
+                | Op::UserInputAnswer { .. }
+                | Op::Shutdown
+        )
+    }
+
+    fn note_outbound_op(&mut self, op: &Op) {
+        match op {
+            Op::ExecApproval { id, .. } => {
+                self.exec_approval_call_ids_by_id.remove(id);
+            }
+            Op::PatchApproval { id, .. } => {
+                self.patch_approval_call_ids.remove(id);
+            }
+            Op::ResolveElicitation {
+                server_name,
+                request_id,
+                ..
+            } => {
+                self.elicitation_requests
+                    .remove(&ElicitationRequestKey::new(
+                        server_name.clone(),
+                        request_id.clone(),
+                    ));
+            }
+            Op::UserInputAnswer { id, .. } => {
+                self.request_user_input_turn_ids.remove(id);
+            }
+            Op::Shutdown => self.clear(),
+            _ => {}
+        }
+    }
+
+    fn note_event(&mut self, event: &Event) {
+        match &event.msg {
+            EventMsg::ExecApprovalRequest(ev) => {
+                self.exec_approval_call_ids_by_id
+                    .insert(ev.effective_approval_id(), ev.call_id.clone());
+            }
+            EventMsg::ExecCommandBegin(ev) => {
+                self.exec_approval_call_ids_by_id
+                    .retain(|_, call_id| call_id != &ev.call_id);
+            }
+            EventMsg::ApplyPatchApprovalRequest(ev) => {
+                self.patch_approval_call_ids.insert(ev.call_id.clone());
+            }
+            EventMsg::PatchApplyBegin(ev) => {
+                self.patch_approval_call_ids.remove(&ev.call_id);
+            }
+            EventMsg::ElicitationRequest(ev) => {
+                self.elicitation_requests.insert(ElicitationRequestKey::new(
+                    ev.server_name.clone(),
+                    ev.id.clone(),
+                ));
+            }
+            EventMsg::RequestUserInput(ev) => {
+                self.request_user_input_turn_ids.insert(ev.turn_id.clone());
+            }
+            EventMsg::TurnComplete(ev) => {
+                self.request_user_input_turn_ids.remove(&ev.turn_id);
+            }
+            EventMsg::TurnAborted(ev) => {
+                if let Some(turn_id) = &ev.turn_id {
+                    self.request_user_input_turn_ids.remove(turn_id);
+                }
+            }
+            EventMsg::ShutdownComplete => self.clear(),
+            _ => {}
+        }
+    }
+
+    fn note_evicted_event(&mut self, event: &Event) {
+        match &event.msg {
+            EventMsg::ExecApprovalRequest(ev) => {
+                self.exec_approval_call_ids_by_id
+                    .remove(&ev.effective_approval_id());
+            }
+            EventMsg::ApplyPatchApprovalRequest(ev) => {
+                self.patch_approval_call_ids.remove(&ev.call_id);
+            }
+            EventMsg::ElicitationRequest(ev) => {
+                self.elicitation_requests
+                    .remove(&ElicitationRequestKey::new(
+                        ev.server_name.clone(),
+                        ev.id.clone(),
+                    ));
+            }
+            EventMsg::RequestUserInput(ev) => {
+                self.request_user_input_turn_ids.remove(&ev.turn_id);
+            }
+            _ => {}
+        }
+    }
+
+    fn should_replay_snapshot_event(&self, event: &Event) -> bool {
+        match &event.msg {
+            EventMsg::ExecApprovalRequest(ev) => self
+                .exec_approval_call_ids_by_id
+                .contains_key(&ev.effective_approval_id()),
+            EventMsg::ApplyPatchApprovalRequest(ev) => {
+                self.patch_approval_call_ids.contains(&ev.call_id)
+            }
+            EventMsg::ElicitationRequest(ev) => {
+                self.elicitation_requests
+                    .contains(&ElicitationRequestKey::new(
+                        ev.server_name.clone(),
+                        ev.id.clone(),
+                    ))
+            }
+            EventMsg::RequestUserInput(ev) => {
+                self.request_user_input_turn_ids.contains(&ev.turn_id)
+            }
+            _ => true,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.exec_approval_call_ids_by_id.clear();
+        self.patch_approval_call_ids.clear();
+        self.elicitation_requests.clear();
+        self.request_user_input_turn_ids.clear();
+    }
+}
+
 #[derive(Debug)]
 struct ThreadEventStore {
     session_configured: Option<Event>,
     buffer: VecDeque<Event>,
     user_message_ids: HashSet<String>,
+    pending_interactive_replay: PendingInteractiveReplayState,
     capacity: usize,
     active: bool,
 }
@@ -262,6 +416,7 @@ impl ThreadEventStore {
             session_configured: None,
             buffer: VecDeque::new(),
             user_message_ids: HashSet::new(),
+            pending_interactive_replay: PendingInteractiveReplayState::default(),
             capacity,
             active: false,
         }
@@ -274,6 +429,7 @@ impl ThreadEventStore {
     }
 
     fn push_event(&mut self, event: Event) {
+        self.pending_interactive_replay.note_event(&event);
         match &event.msg {
             EventMsg::SessionConfigured(_) => {
                 self.session_configured = Some(event);
@@ -308,18 +464,37 @@ impl ThreadEventStore {
         self.buffer.push_back(event);
         if self.buffer.len() > self.capacity
             && let Some(removed) = self.buffer.pop_front()
-            && matches!(removed.msg, EventMsg::UserMessage(_))
-            && !removed.id.is_empty()
         {
-            self.user_message_ids.remove(&removed.id);
+            self.pending_interactive_replay.note_evicted_event(&removed);
+            if matches!(removed.msg, EventMsg::UserMessage(_)) && !removed.id.is_empty() {
+                self.user_message_ids.remove(&removed.id);
+            }
         }
     }
 
     fn snapshot(&self) -> ThreadEventSnapshot {
         ThreadEventSnapshot {
             session_configured: self.session_configured.clone(),
-            events: self.buffer.iter().cloned().collect(),
+            // Thread switches replay buffered events into a rebuilt ChatWidget. Only replay
+            // interactive prompts that are still pending, or answered approvals/input will reappear.
+            events: self
+                .buffer
+                .iter()
+                .filter(|event| {
+                    self.pending_interactive_replay
+                        .should_replay_snapshot_event(event)
+                })
+                .cloned()
+                .collect(),
         }
+    }
+
+    fn note_outbound_op(&mut self, op: &Op) {
+        self.pending_interactive_replay.note_outbound_op(op);
+    }
+
+    fn op_can_change_pending_replay_state(op: &Op) -> bool {
+        PendingInteractiveReplayState::op_can_change_state(op)
     }
 }
 
@@ -806,6 +981,20 @@ impl App {
             self.set_thread_active(active_id, false).await;
         }
         self.active_thread_rx = None;
+    }
+
+    async fn note_active_thread_outbound_op(&mut self, op: &Op) {
+        if !ThreadEventStore::op_can_change_pending_replay_state(op) {
+            return;
+        }
+        let Some(thread_id) = self.active_thread_id else {
+            return;
+        };
+        let Some(channel) = self.thread_event_channels.get(&thread_id) else {
+            return;
+        };
+        let mut store = channel.store.lock().await;
+        store.note_outbound_op(op);
     }
 
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
@@ -1814,6 +2003,7 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
+                self.note_active_thread_outbound_op(&op).await;
                 self.chat_widget.submit_op(op);
             }
             AppEvent::DiffResult(text) => {
@@ -3267,6 +3457,145 @@ mod tests {
         assert_eq!(
             App::should_handle_active_thread_events(wait_for_fork, true),
             true
+        );
+    }
+
+    #[test]
+    fn thread_event_snapshot_keeps_pending_request_user_input() {
+        let mut store = ThreadEventStore::new(8);
+        let request = Event {
+            id: "ev-1".to_string(),
+            msg: EventMsg::RequestUserInput(
+                codex_protocol::request_user_input::RequestUserInputEvent {
+                    call_id: "call-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    questions: Vec::new(),
+                },
+            ),
+        };
+
+        store.push_event(request.clone());
+
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.events.len(), 1);
+        assert!(matches!(
+            snapshot.events.first().map(|event| &event.msg),
+            Some(EventMsg::RequestUserInput(_))
+        ));
+    }
+
+    #[test]
+    fn thread_event_snapshot_drops_resolved_request_user_input_after_user_answer() {
+        let mut store = ThreadEventStore::new(8);
+        store.push_event(Event {
+            id: "ev-1".to_string(),
+            msg: EventMsg::RequestUserInput(
+                codex_protocol::request_user_input::RequestUserInputEvent {
+                    call_id: "call-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    questions: Vec::new(),
+                },
+            ),
+        });
+
+        store.note_outbound_op(&Op::UserInputAnswer {
+            id: "turn-1".to_string(),
+            response: codex_protocol::request_user_input::RequestUserInputResponse {
+                answers: HashMap::new(),
+            },
+        });
+
+        let snapshot = store.snapshot();
+        assert!(
+            snapshot.events.is_empty(),
+            "resolved request_user_input prompt should not replay on thread switch"
+        );
+    }
+
+    #[test]
+    fn thread_event_snapshot_drops_resolved_exec_approval_after_outbound_approval() {
+        let mut store = ThreadEventStore::new(8);
+        store.push_event(Event {
+            id: "ev-1".to_string(),
+            msg: EventMsg::ExecApprovalRequest(
+                codex_protocol::protocol::ExecApprovalRequestEvent {
+                    call_id: "call-1".to_string(),
+                    approval_id: Some("approval-1".to_string()),
+                    turn_id: "turn-1".to_string(),
+                    command: vec!["echo".to_string(), "hi".to_string()],
+                    cwd: PathBuf::from("/tmp"),
+                    reason: None,
+                    network_approval_context: None,
+                    proposed_execpolicy_amendment: None,
+                    parsed_cmd: Vec::new(),
+                },
+            ),
+        });
+
+        store.note_outbound_op(&Op::ExecApproval {
+            id: "approval-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            decision: codex_protocol::protocol::ReviewDecision::Approved,
+        });
+
+        let snapshot = store.snapshot();
+        assert!(
+            snapshot.events.is_empty(),
+            "resolved exec approval prompt should not replay on thread switch"
+        );
+    }
+
+    #[test]
+    fn thread_event_snapshot_drops_resolved_patch_approval_after_outbound_approval() {
+        let mut store = ThreadEventStore::new(8);
+        store.push_event(Event {
+            id: "ev-1".to_string(),
+            msg: EventMsg::ApplyPatchApprovalRequest(
+                codex_protocol::protocol::ApplyPatchApprovalRequestEvent {
+                    call_id: "call-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    changes: HashMap::new(),
+                    reason: None,
+                    grant_root: None,
+                },
+            ),
+        });
+
+        store.note_outbound_op(&Op::PatchApproval {
+            id: "call-1".to_string(),
+            decision: codex_protocol::protocol::ReviewDecision::Approved,
+        });
+
+        let snapshot = store.snapshot();
+        assert!(
+            snapshot.events.is_empty(),
+            "resolved patch approval prompt should not replay on thread switch"
+        );
+    }
+
+    #[test]
+    fn thread_event_snapshot_drops_resolved_elicitation_after_outbound_resolution() {
+        let mut store = ThreadEventStore::new(8);
+        let request_id = codex_protocol::mcp::RequestId::String("request-1".to_string());
+        store.push_event(Event {
+            id: "ev-1".to_string(),
+            msg: EventMsg::ElicitationRequest(codex_protocol::approvals::ElicitationRequestEvent {
+                server_name: "server-1".to_string(),
+                id: request_id.clone(),
+                message: "Please confirm".to_string(),
+            }),
+        });
+
+        store.note_outbound_op(&Op::ResolveElicitation {
+            server_name: "server-1".to_string(),
+            request_id,
+            decision: codex_protocol::approvals::ElicitationAction::Accept,
+        });
+
+        let snapshot = store.snapshot();
+        assert!(
+            snapshot.events.is_empty(),
+            "resolved elicitation prompt should not replay on thread switch"
         );
     }
 
