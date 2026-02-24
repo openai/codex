@@ -7,6 +7,8 @@ use codex_core::config::find_codex_home;
 use codex_core::default_client::get_codex_user_agent;
 use codex_login::AuthMode;
 use codex_login::CodexAuth;
+use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use cpal::traits::DeviceTrait;
 use cpal::traits::HostTrait;
@@ -58,6 +60,37 @@ impl VoiceCapture {
         let last_peak = Arc::new(AtomicU16::new(0));
 
         let stream = build_input_stream(&device, &config, data.clone(), last_peak.clone())?;
+        stream
+            .play()
+            .map_err(|e| format!("failed to start input stream: {e}"))?;
+
+        Ok(Self {
+            stream: Some(stream),
+            sample_rate,
+            channels,
+            data,
+            stopped,
+            last_peak,
+        })
+    }
+
+    pub fn start_realtime(tx: AppEventSender) -> Result<Self, String> {
+        let (device, config) = select_input_device_and_config()?;
+
+        let sample_rate = config.sample_rate().0;
+        let channels = config.channels();
+        let data: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let last_peak = Arc::new(AtomicU16::new(0));
+
+        let stream = build_realtime_input_stream(
+            &device,
+            &config,
+            sample_rate,
+            channels,
+            tx,
+            last_peak.clone(),
+        )?;
         stream
             .play()
             .map_err(|e| format!("failed to start input stream: {e}"))?;
@@ -292,6 +325,87 @@ fn build_input_stream(
             .map_err(|e| format!("failed to build input stream: {e}")),
         _ => Err("unsupported input sample format".to_string()),
     }
+}
+
+fn build_realtime_input_stream(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    sample_rate: u32,
+    channels: u16,
+    tx: AppEventSender,
+    last_peak: Arc<AtomicU16>,
+) -> Result<cpal::Stream, String> {
+    match config.sample_format() {
+        cpal::SampleFormat::F32 => device
+            .build_input_stream(
+                &config.clone().into(),
+                move |input: &[f32], _| {
+                    let peak = peak_f32(input);
+                    last_peak.store(peak, Ordering::Relaxed);
+                    let samples = input.iter().copied().map(f32_to_i16).collect::<Vec<_>>();
+                    send_realtime_audio_chunk(&tx, samples, sample_rate, channels);
+                },
+                move |err| error!("audio input error: {err}"),
+                None,
+            )
+            .map_err(|e| format!("failed to build input stream: {e}")),
+        cpal::SampleFormat::I16 => device
+            .build_input_stream(
+                &config.clone().into(),
+                move |input: &[i16], _| {
+                    let peak = peak_i16(input);
+                    last_peak.store(peak, Ordering::Relaxed);
+                    send_realtime_audio_chunk(&tx, input.to_vec(), sample_rate, channels);
+                },
+                move |err| error!("audio input error: {err}"),
+                None,
+            )
+            .map_err(|e| format!("failed to build input stream: {e}")),
+        cpal::SampleFormat::U16 => device
+            .build_input_stream(
+                &config.clone().into(),
+                move |input: &[u16], _| {
+                    let mut samples = Vec::with_capacity(input.len());
+                    let peak = convert_u16_to_i16_and_peak(input, &mut samples);
+                    last_peak.store(peak, Ordering::Relaxed);
+                    send_realtime_audio_chunk(&tx, samples, sample_rate, channels);
+                },
+                move |err| error!("audio input error: {err}"),
+                None,
+            )
+            .map_err(|e| format!("failed to build input stream: {e}")),
+        _ => Err("unsupported input sample format".to_string()),
+    }
+}
+
+fn send_realtime_audio_chunk(
+    tx: &AppEventSender,
+    samples: Vec<i16>,
+    sample_rate: u32,
+    channels: u16,
+) {
+    if samples.is_empty() || sample_rate == 0 || channels == 0 {
+        return;
+    }
+
+    let mut bytes = Vec::with_capacity(samples.len() * 2);
+    for sample in &samples {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let samples_per_channel = (samples.len() / usize::from(channels)) as u32;
+
+    tx.send(AppEvent::CodexOp(Op::RealtimeConversationAudio(
+        ConversationAudioParams {
+            frame: RealtimeAudioFrame {
+                data: encoded,
+                sample_rate,
+                num_channels: channels,
+                samples_per_channel: Some(samples_per_channel),
+            },
+        },
+    )));
 }
 
 #[inline]

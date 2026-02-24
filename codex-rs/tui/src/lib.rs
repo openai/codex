@@ -143,6 +143,10 @@ mod voice {
             Err("voice input is unavailable in this build".to_string())
         }
 
+        pub fn start_realtime(_tx: AppEventSender) -> Result<Self, String> {
+            Err("voice input is unavailable in this build".to_string())
+        }
+
         pub fn stop(self) -> Result<RecordedAudio, String> {
             Err("voice input is unavailable in this build".to_string())
         }

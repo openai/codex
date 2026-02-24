@@ -46,7 +46,6 @@ use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 #[cfg(not(target_os = "linux"))]
-use base64::Engine;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
@@ -95,7 +94,6 @@ use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
 #[cfg(not(target_os = "linux"))]
-use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::DeprecationNoticeEvent;
@@ -902,6 +900,11 @@ enum ReplayKind {
 }
 
 impl ChatWidget {
+    fn realtime_conversation_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::RealtimeConversation)
+            && cfg!(not(target_os = "linux"))
+    }
+
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
@@ -2917,12 +2920,9 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
-        widget.bottom_pane.set_realtime_conversation_enabled(
-            widget
-                .config
-                .features
-                .enabled(Feature::RealtimeConversation),
-        );
+        widget
+            .bottom_pane
+            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3096,12 +3096,9 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
-        widget.bottom_pane.set_realtime_conversation_enabled(
-            widget
-                .config
-                .features
-                .enabled(Feature::RealtimeConversation),
-        );
+        widget
+            .bottom_pane
+            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3264,12 +3261,9 @@ impl ChatWidget {
         widget.bottom_pane.set_voice_transcription_enabled(
             widget.config.features.enabled(Feature::VoiceTranscription),
         );
-        widget.bottom_pane.set_realtime_conversation_enabled(
-            widget
-                .config
-                .features
-                .enabled(Feature::RealtimeConversation),
-        );
+        widget
+            .bottom_pane
+            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3578,7 +3572,7 @@ impl ChatWidget {
                 self.open_model_popup();
             }
             SlashCommand::Realtime => {
-                if !self.config.features.enabled(Feature::RealtimeConversation) {
+                if !self.realtime_conversation_enabled() {
                     return;
                 }
                 if self.realtime_conversation.is_activeish() {
@@ -6541,8 +6535,10 @@ impl ChatWidget {
             self.bottom_pane.set_voice_transcription_enabled(enabled);
         }
         if feature == Feature::RealtimeConversation {
-            self.bottom_pane.set_realtime_conversation_enabled(enabled);
-            if !enabled && self.realtime_conversation.is_activeish() {
+            let realtime_conversation_enabled = self.realtime_conversation_enabled();
+            self.bottom_pane
+                .set_realtime_conversation_enabled(realtime_conversation_enabled);
+            if !realtime_conversation_enabled && self.realtime_conversation.is_activeish() {
                 self.request_realtime_conversation_close(Some(
                     "Realtime voice mode was closed because the feature was disabled.".to_string(),
                 ));
@@ -7784,7 +7780,7 @@ impl ChatWidget {
     }
 
     fn on_realtime_conversation_started(&mut self, ev: RealtimeConversationStartedEvent) {
-        if !self.config.features.enabled(Feature::RealtimeConversation) {
+        if !self.realtime_conversation_enabled() {
             self.submit_op(Op::RealtimeConversationClose);
             self.reset_realtime_conversation_state();
             return;
@@ -7851,7 +7847,7 @@ impl ChatWidget {
         self.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
         self.request_redraw();
 
-        let capture = match crate::voice::VoiceCapture::start() {
+        let capture = match crate::voice::VoiceCapture::start_realtime(self.app_event_tx.clone()) {
             Ok(capture) => capture,
             Err(err) => {
                 self.remove_transcription_placeholder(&placeholder_id);
@@ -7862,10 +7858,7 @@ impl ChatWidget {
         };
 
         let stop_flag = capture.stopped_flag();
-        let data = capture.data_arc();
         let peak = capture.last_peak_arc();
-        let sample_rate = capture.sample_rate();
-        let channels = capture.channels();
         let meter_placeholder_id = placeholder_id;
         let app_event_tx = self.app_event_tx.clone();
 
@@ -7878,8 +7871,6 @@ impl ChatWidget {
 
         std::thread::spawn(move || {
             let mut meter = crate::voice::RecordingMeterState::new();
-            let mut sent_samples = 0usize;
-            const MAX_SAMPLES_PER_CHUNK: usize = 4_800 * 2;
 
             loop {
                 if stop_flag.load(Ordering::Relaxed) {
@@ -7891,40 +7882,6 @@ impl ChatWidget {
                     id: meter_placeholder_id.clone(),
                     text: meter_text,
                 });
-
-                let mut next_offset = sent_samples;
-                let chunk = match data.lock() {
-                    Ok(buf) => {
-                        if buf.len() > sent_samples {
-                            let end = (sent_samples + MAX_SAMPLES_PER_CHUNK).min(buf.len());
-                            next_offset = end;
-                            buf[sent_samples..end].to_vec()
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    Err(_) => Vec::new(),
-                };
-                sent_samples = next_offset;
-
-                if !chunk.is_empty() && sample_rate > 0 && channels > 0 {
-                    let mut bytes = Vec::with_capacity(chunk.len() * 2);
-                    for sample in &chunk {
-                        bytes.extend_from_slice(&sample.to_le_bytes());
-                    }
-                    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-                    let samples_per_channel = (chunk.len() / usize::from(channels)) as u32;
-                    app_event_tx.send(AppEvent::CodexOp(Op::RealtimeConversationAudio(
-                        ConversationAudioParams {
-                            frame: RealtimeAudioFrame {
-                                data: encoded,
-                                sample_rate,
-                                num_channels: channels,
-                                samples_per_channel: Some(samples_per_channel),
-                            },
-                        },
-                    )));
-                }
 
                 std::thread::sleep(Duration::from_millis(60));
             }

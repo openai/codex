@@ -88,4 +88,12 @@ mod tests {
             Some(SlashCommand::Clear)
         );
     }
+
+    #[test]
+    fn realtime_command_is_hidden_when_realtime_is_disabled() {
+        assert_eq!(
+            find_builtin_command("realtime", true, true, true, false, false),
+            None
+        );
+    }
 }
