@@ -6258,21 +6258,26 @@ async fn try_run_sampling_request(
             ResponseEvent::OutputItemAdded(item) => {
                 if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
                     let mut turn_item = turn_item;
+                    let mut seeded_parsed: Option<ParsedAssistantTextDelta> = None;
+                    let mut seeded_item_id: Option<String> = None;
                     if matches!(turn_item, TurnItem::AgentMessage(_))
                         && let Some(raw_text) = raw_assistant_output_text_from_item(&item)
                     {
                         let item_id = turn_item.id();
-                        let ParsedAssistantTextDelta {
-                            visible_text,
-                            citations: _citations,
-                            plan_segments: _plan_segments,
-                        } = assistant_message_stream_parsers.seed_item_text(&item_id, &raw_text);
+                        let mut seeded =
+                            assistant_message_stream_parsers.seed_item_text(&item_id, &raw_text);
                         if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
                             agent_message.content =
                                 vec![codex_protocol::items::AgentMessageContent::Text {
-                                    text: visible_text,
+                                    text: if plan_mode {
+                                        String::new()
+                                    } else {
+                                        std::mem::take(&mut seeded.visible_text)
+                                    },
                                 }];
                         }
+                        seeded_parsed = plan_mode.then_some(seeded);
+                        seeded_item_id = Some(item_id);
                     }
                     if let Some(state) = plan_mode_state.as_mut()
                         && matches!(turn_item, TurnItem::AgentMessage(_))
@@ -6283,6 +6288,20 @@ async fn try_run_sampling_request(
                             .insert(item_id, turn_item.clone());
                     } else {
                         sess.emit_turn_item_started(&turn_context, &turn_item).await;
+                    }
+                    if let (Some(state), Some(item_id), Some(parsed)) = (
+                        plan_mode_state.as_mut(),
+                        seeded_item_id.as_deref(),
+                        seeded_parsed,
+                    ) {
+                        emit_streamed_assistant_text_delta(
+                            &sess,
+                            &turn_context,
+                            Some(state),
+                            item_id,
+                            parsed,
+                        )
+                        .await;
                     }
                     active_item = Some(turn_item);
                 }
