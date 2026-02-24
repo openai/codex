@@ -660,8 +660,8 @@ async fn plan_mode_streaming_citations_are_stripped_across_added_deltas_and_done
     let agent_delta_text = agent_deltas.concat();
     let plan_delta_text = plan_deltas.concat();
 
-    assert_eq!(agent_started_text, "Intro ");
-    assert_eq!(agent_delta_text, "\nOutro");
+    assert_eq!(agent_started_text, "");
+    assert_eq!(agent_delta_text, "Intro \nOutro");
     assert_eq!(agent_completed_text, "Intro \nOutro");
     assert_eq!(plan_delta_text, "- Step 1\n- Step 2\n");
     assert_eq!(plan_completed.text, "- Step 1\n- Step 2\n");
@@ -803,8 +803,8 @@ async fn plan_mode_streaming_proposed_plan_tag_split_across_added_and_delta_is_p
         })
         .collect();
 
-    assert_eq!(agent_started_text, "Intro\n");
-    assert_eq!(agent_deltas.concat(), "Outro");
+    assert_eq!(agent_started_text, "");
+    assert_eq!(agent_deltas.concat(), "Intro\nOutro");
     assert_eq!(agent_completed_text, "Intro\nOutro");
     assert_eq!(plan_started.text, "");
     assert_eq!(plan_deltas.concat(), "- Step 1\n");
