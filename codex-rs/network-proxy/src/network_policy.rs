@@ -537,6 +537,7 @@ mod tests {
     use crate::config::NetworkProxyConfig;
     use crate::config::NetworkProxySettings;
     use crate::reasons::REASON_DENIED;
+    use crate::reasons::REASON_METHOD_NOT_ALLOWED;
     use crate::reasons::REASON_NOT_ALLOWED;
     use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
     use crate::runtime::ConfigReloader;
@@ -797,6 +798,54 @@ mod tests {
         assert_eq!(event.field("terminal.type"), Some("iTerm.app/3.6.5"));
         assert_eq!(event.field("model"), Some("gpt-5.3-codex"));
         assert_eq!(event.field("slug"), Some("gpt-5.3-codex"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn emit_block_decision_audit_event_emits_non_domain_event() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
+
+        let (_, events) = capture_events(|| async {
+            emit_block_decision_audit_event(
+                &state,
+                BlockDecisionAuditEventArgs {
+                    source: NetworkDecisionSource::ModeGuard,
+                    reason: REASON_METHOD_NOT_ALLOWED,
+                    protocol: NetworkProtocol::Http,
+                    server_address: "unix-socket",
+                    server_port: 0,
+                    method: Some("POST"),
+                    client_addr: None,
+                },
+            );
+        })
+        .await;
+
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision audit event");
+        assert_eq!(event.target, AUDIT_TARGET);
+        assert_eq!(
+            event.field("network.policy.scope"),
+            Some(POLICY_SCOPE_NON_DOMAIN)
+        );
+        assert_eq!(
+            event.field("network.policy.decision"),
+            Some(POLICY_DECISION_DENY)
+        );
+        assert_eq!(event.field("network.policy.source"), Some("mode_guard"));
+        assert_eq!(
+            event.field("network.policy.reason"),
+            Some(REASON_METHOD_NOT_ALLOWED)
+        );
+        assert_eq!(event.field("network.transport.protocol"), Some("http"));
+        assert_eq!(event.field("server.address"), Some("unix-socket"));
+        assert_eq!(event.field("server.port"), Some("0"));
+        assert_eq!(event.field("http.request.method"), Some("POST"));
+        assert_eq!(event.field("client.address"), Some(DEFAULT_CLIENT_ADDRESS));
+        assert_eq!(event.field("network.policy.override"), Some("false"));
+        assert_eq!(
+            find_event_by_name(&events, LEGACY_BLOCK_DECISION_EVENT_NAME),
+            None
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

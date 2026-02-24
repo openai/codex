@@ -886,11 +886,6 @@ mod tests {
 
     use crate::config::NetworkMode;
     use crate::config::NetworkProxySettings;
-    use crate::network_policy::test_support::POLICY_DECISION_EVENT_NAME;
-    use crate::network_policy::test_support::capture_events;
-    use crate::network_policy::test_support::find_event_by_name;
-    use crate::reasons::REASON_NOT_ALLOWED;
-    use crate::reasons::REASON_UNIX_SOCKET_UNSUPPORTED;
     use crate::runtime::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
     use rama_http::Method;
@@ -968,7 +963,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn http_plain_proxy_emits_block_decision_for_unix_socket_method_deny() {
+    async fn http_plain_proxy_blocks_unix_socket_when_method_not_allowed() {
         let state = Arc::new(network_proxy_state_for_policy(
             NetworkProxySettings::default(),
         ));
@@ -985,30 +980,17 @@ mod tests {
             .expect("request should build");
         req.extensions_mut().insert(state);
 
-        let (response, events) =
-            capture_events(|| async { http_plain_proxy(None, req).await.unwrap() }).await;
+        let response = http_plain_proxy(None, req).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response.headers().get("x-proxy-error").unwrap(),
             "blocked-by-method-policy"
         );
-
-        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
-            .expect("expected policy decision event");
-        assert_eq!(event.field("network.policy.scope"), Some("non_domain"));
-        assert_eq!(event.field("network.policy.source"), Some("mode_guard"));
-        assert_eq!(
-            event.field("network.policy.reason"),
-            Some(REASON_METHOD_NOT_ALLOWED)
-        );
-        assert_eq!(event.field("server.address"), Some("unix-socket"));
-        assert_eq!(event.field("server.port"), Some("0"));
-        assert_eq!(event.field("http.request.method"), Some("POST"));
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn http_plain_proxy_emits_block_decision_for_unix_socket_guard_deny() {
+    async fn http_plain_proxy_rejects_unix_socket_when_not_allowlisted() {
         let state = Arc::new(network_proxy_state_for_policy(
             NetworkProxySettings::default(),
         ));
@@ -1021,34 +1003,22 @@ mod tests {
             .expect("request should build");
         req.extensions_mut().insert(state);
 
-        let (response, events) =
-            capture_events(|| async { http_plain_proxy(None, req).await.unwrap() }).await;
-
-        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
-            .expect("expected policy decision event");
-        assert_eq!(event.field("network.policy.scope"), Some("non_domain"));
-        assert_eq!(event.field("network.policy.source"), Some("proxy_state"));
-        assert_eq!(event.field("server.address"), Some("unix-socket"));
-        assert_eq!(event.field("server.port"), Some("0"));
+        let response = http_plain_proxy(None, req).await.unwrap();
 
         if cfg!(target_os = "macos") {
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
             assert_eq!(
-                event.field("network.policy.reason"),
-                Some(REASON_NOT_ALLOWED)
+                response.headers().get("x-proxy-error").unwrap(),
+                "blocked-by-allowlist"
             );
         } else {
             assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
-            assert_eq!(
-                event.field("network.policy.reason"),
-                Some(REASON_UNIX_SOCKET_UNSUPPORTED)
-            );
         }
     }
 
     #[cfg(target_os = "macos")]
     #[tokio::test(flavor = "current_thread")]
-    async fn http_plain_proxy_emits_policy_decision_for_unix_socket_allow() {
+    async fn http_plain_proxy_attempts_allowed_unix_socket_proxy() {
         let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
             allow_unix_sockets: vec!["/tmp/test.sock".to_string()],
             ..NetworkProxySettings::default()
@@ -1062,19 +1032,8 @@ mod tests {
             .expect("request should build");
         req.extensions_mut().insert(state);
 
-        let (response, events) =
-            capture_events(|| async { http_plain_proxy(None, req).await.unwrap() }).await;
+        let response = http_plain_proxy(None, req).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
-
-        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
-            .expect("expected policy decision event");
-        assert_eq!(event.field("network.policy.scope"), Some("non_domain"));
-        assert_eq!(event.field("network.policy.decision"), Some("allow"));
-        assert_eq!(event.field("network.policy.source"), Some("proxy_state"));
-        assert_eq!(event.field("network.policy.reason"), Some("allow"));
-        assert_eq!(event.field("server.address"), Some("unix-socket"));
-        assert_eq!(event.field("server.port"), Some("0"));
-        assert_eq!(event.field("http.request.method"), Some("GET"));
     }
 
     #[test]
