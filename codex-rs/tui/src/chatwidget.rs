@@ -2844,7 +2844,7 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
-            recent_model_history: VecDeque::new(),
+            recent_model_history: VecDeque::with_capacity(2),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -3020,7 +3020,7 @@ impl ChatWidget {
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
-            recent_model_history: VecDeque::new(),
+            recent_model_history: VecDeque::with_capacity(2),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -3177,7 +3177,7 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
-            recent_model_history: VecDeque::new(),
+            recent_model_history: VecDeque::with_capacity(2),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -6551,8 +6551,9 @@ impl ChatWidget {
     /// is only recorded when the ring is empty to avoid pushing it to the front
     /// ahead of the new selection.
     pub(crate) fn set_model(&mut self, model: &str) {
-        let previous_model = self.current_model().to_string();
-        let previous_effort = self.effective_reasoning_effort();
+        let previous_model = self.current_model();
+        let changed = previous_model != model;
+        let previous_effort = changed.then(|| self.effective_reasoning_effort()).flatten();
         self.current_collaboration_mode =
             self.current_collaboration_mode
                 .with_updates(Some(model.to_string()), None, None);
@@ -6561,11 +6562,11 @@ impl ChatWidget {
         {
             mask.model = Some(model.to_string());
         }
-        if previous_model != model {
+        if changed {
             // Seed the ring with the outgoing model so the user has something to
             // toggle back to even if they never opened the picker before.
             if self.recent_model_history.is_empty() {
-                self.record_model_history_selection(previous_model, previous_effort);
+                self.record_model_history_selection(previous_model.to_string(), previous_effort);
             }
             self.record_model_history_selection(
                 model.to_string(),
