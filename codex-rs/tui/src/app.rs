@@ -3530,7 +3530,7 @@ mod tests {
             ),
         };
 
-        store.push_event(request.clone());
+        store.push_event(request);
 
         let snapshot = store.snapshot();
         assert_eq!(snapshot.events.len(), 1);
