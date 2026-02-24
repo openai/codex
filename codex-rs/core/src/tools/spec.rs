@@ -32,9 +32,16 @@ use std::collections::HashMap;
 const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ShellCommandBackendConfig {
+    Classic,
+    ZshFork,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
+    shell_command_backend: ShellCommandBackendConfig,
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -69,6 +76,12 @@ impl ToolsConfig {
         let include_collaboration_modes_tools = true;
         let include_search_tool = features.enabled(Feature::Apps);
         let request_permission_enabled = features.enabled(Feature::RequestPermissions);
+        let shell_command_backend =
+            if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
+                ShellCommandBackendConfig::ZshFork
+            } else {
+                ShellCommandBackendConfig::Classic
+            };
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -99,6 +112,7 @@ impl ToolsConfig {
 
         Self {
             shell_type,
+            shell_command_backend,
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
@@ -1500,7 +1514,7 @@ pub(crate) fn build_specs(
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
-    let shell_command_handler = Arc::new(ShellCommandHandler);
+    let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
     let search_tool_handler = Arc::new(SearchToolBm25Handler);
     let js_repl_handler = Arc::new(JsReplHandler);
@@ -2326,6 +2340,10 @@ mod tests {
         });
 
         assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
+        assert_eq!(
+            tools_config.shell_command_backend,
+            ShellCommandBackendConfig::ZshFork
+        );
     }
 
     #[test]

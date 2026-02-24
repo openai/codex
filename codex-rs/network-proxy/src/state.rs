@@ -1,10 +1,12 @@
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
+use crate::mitm::MitmState;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
 use crate::runtime::ConfigState;
 use serde::Deserialize;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 pub use crate::runtime::BlockedRequest;
 pub use crate::runtime::BlockedRequestArgs;
@@ -57,10 +59,18 @@ pub fn build_config_state(
     crate::config::validate_unix_socket_allowlist_paths(&config)?;
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
+    let mitm = if config.network.mitm {
+        Some(Arc::new(MitmState::new(
+            config.network.allow_upstream_proxy,
+        )?))
+    } else {
+        None
+    };
     Ok(ConfigState {
         config,
         allow_set,
         deny_set,
+        mitm,
         constraints,
         blocked: std::collections::VecDeque::new(),
         blocked_total: 0,

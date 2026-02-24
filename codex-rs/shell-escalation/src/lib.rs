@@ -22,6 +22,6 @@ pub use unix::Stopwatch;
 #[cfg(unix)]
 pub use unix::main_execve_wrapper;
 #[cfg(unix)]
-pub use unix::run;
-#[cfg(unix)]
 pub use unix::run_escalate_server;
+#[cfg(unix)]
+pub use unix::run_shell_escalation_execve_wrapper;
