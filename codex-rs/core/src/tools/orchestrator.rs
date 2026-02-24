@@ -27,6 +27,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 
 pub(crate) struct ToolOrchestrator {
@@ -48,7 +49,7 @@ impl ToolOrchestrator {
     async fn run_attempt<Rq, Out, T>(
         tool: &mut T,
         req: &Rq,
-        tool_ctx: &ToolCtx<'_>,
+        tool_ctx: &ToolCtx,
         attempt: &SandboxAttempt<'_>,
         has_managed_network_requirements: bool,
     ) -> (Result<Out, ToolError>, Option<DeferredNetworkApproval>)
@@ -56,7 +57,7 @@ impl ToolOrchestrator {
         T: ToolRuntime<Rq, Out>,
     {
         let network_approval = begin_network_approval(
-            tool_ctx.session,
+            &tool_ctx.session,
             &tool_ctx.turn.sub_id,
             &tool_ctx.call_id,
             has_managed_network_requirements,
@@ -65,8 +66,8 @@ impl ToolOrchestrator {
         .await;
 
         let attempt_tool_ctx = ToolCtx {
-            session: tool_ctx.session,
-            turn: tool_ctx.turn,
+            session: tool_ctx.session.clone(),
+            turn: tool_ctx.turn.clone(),
             call_id: tool_ctx.call_id.clone(),
             tool_name: tool_ctx.tool_name.clone(),
         };
@@ -79,7 +80,7 @@ impl ToolOrchestrator {
         match network_approval.mode() {
             NetworkApprovalMode::Immediate => {
                 let finalize_result =
-                    finish_immediate_network_approval(tool_ctx.session, network_approval).await;
+                    finish_immediate_network_approval(&tool_ctx.session, network_approval).await;
                 if let Err(err) = finalize_result {
                     return (Err(err), None);
                 }
@@ -88,7 +89,7 @@ impl ToolOrchestrator {
             NetworkApprovalMode::Deferred => {
                 let deferred = network_approval.into_deferred();
                 if run_result.is_err() {
-                    finish_deferred_network_approval(tool_ctx.session, deferred).await;
+                    finish_deferred_network_approval(&tool_ctx.session, deferred).await;
                     return (run_result, None);
                 }
                 (run_result, deferred)
@@ -100,7 +101,7 @@ impl ToolOrchestrator {
         &mut self,
         tool: &mut T,
         req: &Rq,
-        tool_ctx: &ToolCtx<'_>,
+        tool_ctx: &ToolCtx,
         turn_ctx: &crate::codex::TurnContext,
         approval_policy: AskForApproval,
     ) -> Result<OrchestratorRunResult<Out>, ToolError>
@@ -128,7 +129,7 @@ impl ToolOrchestrator {
             }
             ExecApprovalRequirement::NeedsApproval { reason, .. } => {
                 let approval_ctx = ApprovalCtx {
-                    session: tool_ctx.session,
+                    session: &tool_ctx.session,
                     turn: turn_ctx,
                     call_id: &tool_ctx.call_id,
                     retry_reason: reason,
@@ -145,6 +146,14 @@ impl ToolOrchestrator {
                     ReviewDecision::Approved
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                     | ReviewDecision::ApprovedForSession => {}
+                    ReviewDecision::NetworkPolicyAmendment {
+                        network_policy_amendment,
+                    } => match network_policy_amendment.action {
+                        NetworkPolicyRuleAction::Allow => {}
+                        NetworkPolicyRuleAction::Deny => {
+                            return Err(ToolError::Rejected("rejected by user".to_string()));
+                        }
+                    },
                 }
                 already_approved = true;
             }
@@ -256,7 +265,7 @@ impl ToolOrchestrator {
                     && network_approval_context.is_none();
                 if !bypass_retry_approval {
                     let approval_ctx = ApprovalCtx {
-                        session: tool_ctx.session,
+                        session: &tool_ctx.session,
                         turn: turn_ctx,
                         call_id: &tool_ctx.call_id,
                         retry_reason: Some(retry_reason),
@@ -273,6 +282,14 @@ impl ToolOrchestrator {
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                         | ReviewDecision::ApprovedForSession => {}
+                        ReviewDecision::NetworkPolicyAmendment {
+                            network_policy_amendment,
+                        } => match network_policy_amendment.action {
+                            NetworkPolicyRuleAction::Allow => {}
+                            NetworkPolicyRuleAction::Deny => {
+                                return Err(ToolError::Rejected("rejected by user".to_string()));
+                            }
+                        },
                     }
                 }
 

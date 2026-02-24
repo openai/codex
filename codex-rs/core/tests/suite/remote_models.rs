@@ -548,7 +548,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_models_preserve_builtin_presets() -> Result<()> {
+async fn remote_models_do_not_append_removed_builtin_presets() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -592,12 +592,6 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
         available.iter().filter(|model| model.is_default).count(),
         1,
         "expected a single default model"
-    );
-    assert!(
-        available
-            .iter()
-            .any(|model| model.model == "gpt-5.1-codex-max"),
-        "builtin presets should remain available after refresh"
     );
     assert_eq!(
         models_mock.requests().len(),

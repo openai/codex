@@ -96,8 +96,8 @@ async fn read_frame_header(
     while filled < LENGTH_PREFIX_SIZE {
         let mut guard = async_socket.readable().await?;
         // The first read should come with a control message containing any FDs.
-        let result = if !captured_control {
-            guard.try_io(|inner| {
+        let read = if !captured_control {
+            match guard.try_io(|inner| {
                 let mut bufs = [MaybeUninitSlice::new(&mut header[filled..])];
                 let (read, control_len) = {
                     let mut msg = MsgHdrMut::new()
@@ -109,16 +109,18 @@ async fn read_frame_header(
                 control.truncate(control_len);
                 captured_control = true;
                 Ok(read)
-            })
+            }) {
+                Ok(Ok(read)) => read,
+                Ok(Err(err)) => return Err(err),
+                Err(_would_block) => continue,
+            }
         } else {
-            guard.try_io(|inner| inner.get_ref().recv(&mut header[filled..]))
+            match guard.try_io(|inner| inner.get_ref().recv(&mut header[filled..])) {
+                Ok(Ok(read)) => read,
+                Ok(Err(err)) => return Err(err),
+                Err(_would_block) => continue,
+            }
         };
-        let Ok(result) = result else {
-            // Would block, try again.
-            continue;
-        };
-
-        let read = result?;
         if read == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
@@ -150,12 +152,11 @@ async fn read_frame_payload(
     let mut filled = 0;
     while filled < message_len {
         let mut guard = async_socket.readable().await?;
-        let result = guard.try_io(|inner| inner.get_ref().recv(&mut payload[filled..]));
-        let Ok(result) = result else {
-            // Would block, try again.
-            continue;
+        let read = match guard.try_io(|inner| inner.get_ref().recv(&mut payload[filled..])) {
+            Ok(Ok(read)) => read,
+            Ok(Err(err)) => return Err(err),
+            Err(_would_block) => continue,
         };
-        let read = result?;
         if read == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
@@ -261,7 +262,13 @@ impl AsyncSocket {
     }
 
     pub fn pair() -> std::io::Result<(AsyncSocket, AsyncSocket)> {
-        let (server, client) = Socket::pair(Domain::UNIX, Type::STREAM, None)?;
+        // `socket2::Socket::pair()` also applies "common flags" (including
+        // `SO_NOSIGPIPE` on Apple platforms), which can fail for AF_UNIX sockets.
+        // Use `pair_raw()` to avoid those side effects, then restore `CLOEXEC`
+        // explicitly on both endpoints.
+        let (server, client) = Socket::pair_raw(Domain::UNIX, Type::STREAM, None)?;
+        server.set_cloexec(true)?;
+        client.set_cloexec(true)?;
         Ok((AsyncSocket::new(server)?, AsyncSocket::new(client)?))
     }
 
@@ -314,11 +321,10 @@ async fn send_stream_frame(
     let mut include_fds = !fds.is_empty();
     while written < frame.len() {
         let mut guard = socket.writable().await?;
-        let result = guard.try_io(|inner| {
-            send_stream_chunk(inner.get_ref(), &frame[written..], fds, include_fds)
-        });
-        let bytes_written = match result {
-            Ok(bytes_written) => bytes_written?,
+        let bytes_written = match guard
+            .try_io(|inner| send_stream_chunk(inner.get_ref(), &frame[written..], fds, include_fds))
+        {
+            Ok(result) => result?,
             Err(_would_block) => continue,
         };
         if bytes_written == 0 {
@@ -370,7 +376,13 @@ impl AsyncDatagramSocket {
     }
 
     pub fn pair() -> std::io::Result<(Self, Self)> {
-        let (server, client) = Socket::pair(Domain::UNIX, Type::DGRAM, None)?;
+        // `socket2::Socket::pair()` also applies "common flags" (including
+        // `SO_NOSIGPIPE` on Apple platforms), which can fail for AF_UNIX sockets.
+        // Use `pair_raw()` to avoid those side effects, then restore `CLOEXEC`
+        // explicitly on both endpoints.
+        let (server, client) = Socket::pair_raw(Domain::UNIX, Type::DGRAM, None)?;
+        server.set_cloexec(true)?;
+        client.set_cloexec(true)?;
         Ok((Self::new(server)?, Self::new(client)?))
     }
 
@@ -472,7 +484,7 @@ mod tests {
 
     #[test]
     fn send_datagram_bytes_rejects_excessive_fd_counts() -> std::io::Result<()> {
-        let (socket, _peer) = Socket::pair(Domain::UNIX, Type::DGRAM, None)?;
+        let (socket, _peer) = Socket::pair_raw(Domain::UNIX, Type::DGRAM, None)?;
         let fds = fd_list(MAX_FDS_PER_MESSAGE + 1)?;
         let err = send_datagram_bytes(&socket, b"hi", &fds).unwrap_err();
         assert_eq!(std::io::ErrorKind::InvalidInput, err.kind());
@@ -481,7 +493,7 @@ mod tests {
 
     #[test]
     fn send_stream_chunk_rejects_excessive_fd_counts() -> std::io::Result<()> {
-        let (socket, _peer) = Socket::pair(Domain::UNIX, Type::STREAM, None)?;
+        let (socket, _peer) = Socket::pair_raw(Domain::UNIX, Type::STREAM, None)?;
         let fds = fd_list(MAX_FDS_PER_MESSAGE + 1)?;
         let err = send_stream_chunk(&socket, b"hello", &fds, true).unwrap_err();
         assert_eq!(std::io::ErrorKind::InvalidInput, err.kind());

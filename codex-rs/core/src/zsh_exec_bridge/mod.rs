@@ -15,6 +15,8 @@ use crate::protocol::ExecCommandOutputDeltaEvent;
 #[cfg(unix)]
 use crate::protocol::ExecOutputStream;
 #[cfg(unix)]
+use crate::protocol::NetworkPolicyRuleAction;
+#[cfg(unix)]
 use crate::protocol::ReviewDecision;
 #[cfg(unix)]
 use anyhow::Context as _;
@@ -373,6 +375,16 @@ impl ZshExecBridge {
             | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                 (WrapperExecAction::Run, None, false)
             }
+            ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => match network_policy_amendment.action {
+                NetworkPolicyRuleAction::Allow => (WrapperExecAction::Run, None, false),
+                NetworkPolicyRuleAction::Deny => (
+                    WrapperExecAction::Deny,
+                    Some("command denied by host approval policy".to_string()),
+                    true,
+                ),
+            },
             ReviewDecision::Denied => (
                 WrapperExecAction::Deny,
                 Some("command denied by host approval policy".to_string()),
