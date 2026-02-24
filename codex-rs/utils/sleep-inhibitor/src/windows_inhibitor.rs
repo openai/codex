@@ -99,9 +99,21 @@ impl Drop for PowerRequest {
     fn drop(&mut self) {
         // SAFETY: `self.handle` is the handle owned by this `PowerRequest`, and
         // `self.request_type` is the request type that was set on acquire.
-        let _ = unsafe { PowerClearRequest(self.handle, self.request_type) };
+        if unsafe { PowerClearRequest(self.handle, self.request_type) } == 0 {
+            let error = std::io::Error::last_os_error();
+            warn!(
+                reason = %error,
+                "Failed to clear Windows sleep-prevention request"
+            );
+        }
         // SAFETY: `self.handle` is owned by this struct and closed exactly once
         // in `Drop`.
-        let _ = unsafe { CloseHandle(self.handle) };
+        if unsafe { CloseHandle(self.handle) } == 0 {
+            let error = std::io::Error::last_os_error();
+            warn!(
+                reason = %error,
+                "Failed to close Windows sleep-prevention request handle"
+            );
+        }
     }
 }
