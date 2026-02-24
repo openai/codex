@@ -58,6 +58,9 @@ pub struct ExecParams {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExecResult {
     pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    /// Aggregated stdout+stderr output for compatibility with existing callers.
     pub output: String,
     pub duration: Duration,
     pub timed_out: bool,
