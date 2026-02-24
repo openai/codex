@@ -1,0 +1,103 @@
+{
+  "generated_at": "2026-02-23T05:38:12.399597+00:00",
+  "run_dir": "codex-rs/perf-results/codex-swarm-exec-real-min-20260222-223708",
+  "command": "codex exec --sandbox danger-full-access --skip-git-repo-check \"Reply with OK\"",
+  "config_path": "/var/folders/wl/z8733y815nzg28yy0_1_lh7w0000gn/T/codex-perf-rqw8hkd8/codex-home/config.toml",
+  "profile": {
+    "name": "swarm-exec-real-min",
+    "phase": "measure",
+    "concurrency": 1,
+    "warmup": 0,
+    "iterations": 1
+  },
+  "iterations": 1,
+  "summary": {
+    "latency_ms": {
+      "mean": 63744.16024999664,
+      "p50": 63744.16024999664,
+      "p95": 63744.16024999664,
+      "min": 63744.16024999664,
+      "max": 63744.16024999664
+    },
+    "throughput_runs_per_sec": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "max_rss_kb": {
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "min": null,
+      "max": null
+    },
+    "user_cpu_sec": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "system_cpu_sec": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "cpu_pct": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "voluntary_ctx_switches": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "involuntary_ctx_switches": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "peak_open_fds": {
+      "mean": 6.0,
+      "p50": 6.0,
+      "p95": 6.0,
+      "max": 6.0
+    },
+    "peak_direct_children": {
+      "mean": 1.0,
+      "p50": 1.0,
+      "p95": 1.0,
+      "max": 1.0
+    },
+    "queue_cancel_metrics": {},
+    "otel_payloads_total": 1,
+    "metric_datapoints_total": 9,
+    "successful_runs_total": 0,
+    "failed_runs_total": 1,
+    "failed_iterations": [
+      1
+    ]
+  },
+  "runs": [
+    {
+      "iteration": 1,
+      "duration_ms": 63744.16,
+      "throughput_runs_per_sec": 0.0,
+      "max_rss_kb": null,
+      "user_cpu_sec": null,
+      "system_cpu_sec": null,
+      "cpu_pct": null,
+      "voluntary_ctx_switches": null,
+      "involuntary_ctx_switches": null,
+      "peak_open_fds": 6,
+      "peak_direct_children": 1,
+      "return_code": 1,
+      "worker_count": 1,
+      "successful_runs": 0,
+      "failed_runs": 1,
+      "otel_payload_count": 1,
+      "metric_datapoint_count": 9,
+      "queue_cancel_datapoints": {},
+      "stderr_tail": "Reconnecting... 4/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9d245f7b796e50a9-LAX, request id: req_34d745bf494e4de1a4d2d99abd4fb07c)\nReconnecting... 5/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9d245fb3797b4bb4-LAX, request id: req_8ff228adc8174ecc93f18eed2fb7beea)\nERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9d2460234f6069cd-LAX, request id: req_2dba5ec3ceb748ff934adb76c591d98d\n\ncommand timed out"
+    }
+  ]
+}

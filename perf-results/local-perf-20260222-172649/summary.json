@@ -1,0 +1,99 @@
+{
+  "generated_at": "2026-02-23T00:26:49.988458+00:00",
+  "run_dir": "codex-rs/perf-results/local-perf-20260222-172649",
+  "command": "/bin/echo ok",
+  "config_path": "/var/folders/wl/z8733y815nzg28yy0_1_lh7w0000gn/T/codex-perf-imgj3qlv/codex-home-worker-1/config.toml",
+  "profile": {
+    "name": "swarm-smoke",
+    "phase": "measure",
+    "concurrency": 2,
+    "warmup": 0,
+    "iterations": 2
+  },
+  "iterations": 2,
+  "summary": {
+    "latency_ms": {
+      "mean": 105.2568955001334,
+      "p50": 105.2568955001334,
+      "p95": 175.89030174949585,
+      "min": 26.775333000841783,
+      "max": 183.738457999425
+    },
+    "throughput_runs_per_sec": {
+      "mean": 42.79032688245748,
+      "p50": 42.79032688245748,
+      "p95": 71.50508735368764
+    },
+    "max_rss_kb": {
+      "mean": 885248.0,
+      "p50": 885248.0,
+      "p95": 885248.0,
+      "min": 885248.0,
+      "max": 885248.0
+    },
+    "queue_cancel_metrics": {},
+    "otel_payloads_total": 0,
+    "metric_datapoints_total": 0,
+    "successful_runs_total": 4,
+    "failed_runs_total": 0,
+    "failed_iterations": []
+  },
+  "runs": [
+    {
+      "iteration": 1,
+      "duration_ms": 183.738,
+      "throughput_runs_per_sec": 10.885037,
+      "max_rss_kb": 885248,
+      "return_code": 0,
+      "worker_count": 2,
+      "successful_runs": 2,
+      "failed_runs": 0,
+      "otel_payload_count": 0,
+      "metric_datapoint_count": 0,
+      "queue_cancel_datapoints": {},
+      "stderr_tail": "",
+      "worker_results": [
+        {
+          "worker_id": 1,
+          "return_code": 0,
+          "duration_ms": 14.806,
+          "max_rss_kb": 885248
+        },
+        {
+          "worker_id": 2,
+          "return_code": 0,
+          "duration_ms": 13.708,
+          "max_rss_kb": 885248
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "duration_ms": 26.775,
+      "throughput_runs_per_sec": 74.695616,
+      "max_rss_kb": 885248,
+      "return_code": 0,
+      "worker_count": 2,
+      "successful_runs": 2,
+      "failed_runs": 0,
+      "otel_payload_count": 0,
+      "metric_datapoint_count": 0,
+      "queue_cancel_datapoints": {},
+      "stderr_tail": "",
+      "worker_results": [
+        {
+          "worker_id": 1,
+          "return_code": 0,
+          "duration_ms": 20.32,
+          "max_rss_kb": 885248
+        },
+        {
+          "worker_id": 2,
+          "return_code": 0,
+          "duration_ms": 18.484,
+          "max_rss_kb": 885248
+        }
+      ]
+    }
+  ]
+}

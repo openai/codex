@@ -1,0 +1,283 @@
+{
+  "generated_at": "2026-02-23T10:00:34.512829+00:00",
+  "run_dir": "/Users/kooshapari/temp-PRODVERCEL/485/kush/heliosHarness/clones/codex/codex-rs/perf-results/top-attach-smoke3-20260223-030032",
+  "command": "sleep 0.6",
+  "config_path": "/var/folders/wl/z8733y815nzg28yy0_1_lh7w0000gn/T/codex-perf-til99cd5/codex-home/config.toml",
+  "profile": {
+    "name": null,
+    "phase": "measure",
+    "concurrency": 1,
+    "warmup": 0,
+    "iterations": 1,
+    "auth_source_home": "/Users/kooshapari/.codex",
+    "auth_copied_workers": 1,
+    "top_attach": true,
+    "top_interval_ms": 100.0
+  },
+  "iterations": 1,
+  "summary": {
+    "latency_ms": {
+      "mean": 2096.849709001617,
+      "p50": 2096.849709001617,
+      "p95": 2096.849709001617,
+      "min": 2096.849709001617,
+      "max": 2096.849709001617
+    },
+    "throughput_runs_per_sec": {
+      "mean": 0.47690590112733194,
+      "p50": 0.47690590112733194,
+      "p95": 0.47690590112733194
+    },
+    "max_rss_kb": {
+      "mean": 881.0,
+      "p50": 881.0,
+      "p95": 881.0,
+      "min": 881.0,
+      "max": 881.0
+    },
+    "max_rss_mb": {
+      "mean": 0.8603515625,
+      "p50": 0.8603515625,
+      "p95": 0.8603515625,
+      "min": 0.8603515625,
+      "max": 0.8603515625
+    },
+    "user_cpu_sec": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "system_cpu_sec": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "cpu_pct": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "voluntary_ctx_switches": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "involuntary_ctx_switches": {
+      "mean": 57.0,
+      "p50": 57.0,
+      "p95": 57.0
+    },
+    "peak_open_fds": {
+      "mean": 6.0,
+      "p50": 6.0,
+      "p95": 6.0,
+      "max": 6.0
+    },
+    "peak_direct_children": {
+      "mean": 1.0,
+      "p50": 1.0,
+      "p95": 1.0,
+      "max": 1.0
+    },
+    "process_tree_sampled": {
+      "peak_tree_rss_kb": {
+        "mean": 2352.0,
+        "p50": 2352.0,
+        "p95": 2352.0,
+        "max": 2352.0
+      },
+      "peak_tree_rss_mb": {
+        "mean": 2.296875,
+        "p50": 2.296875,
+        "p95": 2.296875,
+        "max": 2.296875
+      },
+      "peak_tree_cpu_pct": {
+        "mean": 0.6,
+        "p50": 0.6,
+        "p95": 0.6,
+        "max": 0.6
+      },
+      "mean_tree_cpu_pct": {
+        "mean": 0.6,
+        "p50": 0.6,
+        "p95": 0.6
+      }
+    },
+    "worker_step_timings_ms": {
+      "build_cmd": {
+        "mean": 0.7104579999577254,
+        "p50": 0.7104579999577254,
+        "p95": 0.7104579999577254
+      },
+      "spawn_proc": {
+        "mean": 7.381333998637274,
+        "p50": 7.381333998637274,
+        "p95": 7.381333998637274
+      },
+      "monitor_loop": {
+        "mean": 2033.2609159995627,
+        "p50": 2033.2609159995627,
+        "p95": 2033.2609159995627
+      },
+      "communicate": {
+        "mean": 0.43783299952337984,
+        "p50": 0.43783299952337984,
+        "p95": 0.43783299952337984
+      },
+      "parse_stats": {
+        "mean": 1.0376670015830314,
+        "p50": 1.0376670015830314,
+        "p95": 1.0376670015830314
+      }
+    },
+    "resource_budget": {
+      "time_budget_ms": {
+        "wall_mean_ms": 2096.849709001617,
+        "observed_worker_step_mean_ms": 2042.8282079992641,
+        "unaccounted_time_mean_ms": 54.021501002353034,
+        "build_cmd_share_pct": 0.0338821612682961,
+        "spawn_proc_share_pct": 0.3520201742141921,
+        "monitor_loop_share_pct": 96.9674129371756,
+        "communicate_share_pct": 0.020880514118098017,
+        "parse_stats_share_pct": 0.049486951646005216,
+        "unaccounted_share_pct": 2.576317261577824
+      },
+      "cpu_budget": {
+        "user_cpu_mean_sec": 0.0,
+        "system_cpu_mean_sec": 0.0,
+        "total_cpu_mean_sec": 0.0,
+        "cpu_core_utilization_pct": 0.0
+      },
+      "process_budget": {
+        "peak_open_fds_mean": 6.0,
+        "peak_direct_children_mean": 1.0,
+        "sampled_peak_tree_rss_mean_kb": 2352.0,
+        "sampled_peak_tree_rss_mean_mb": 2.296875,
+        "sampled_peak_tree_cpu_p95": 0.6
+      },
+      "stability": {
+        "total_runs": 1,
+        "successful_runs_total": 1,
+        "failed_runs_total": 0,
+        "timeout_runs_total": 0,
+        "failure_rate_pct": 0.0,
+        "timeout_rate_pct": 0.0
+      }
+    },
+    "top_attach": {
+      "sample_count": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0
+      },
+      "peak_rss_mb": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "mean_rss_mb": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "peak_cpu_pct": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "mean_cpu_pct": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "otel_turn_action_stream": {
+      "turn_metric_points": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "total": 0
+      },
+      "action_metric_points": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "total": 0
+      },
+      "stream_metric_points": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "total": 0
+      },
+      "turn_metric_value_sum": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "action_metric_value_sum": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "stream_metric_value_sum": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "queue_cancel_metrics": {},
+    "otel_payloads_total": 0,
+    "metric_datapoints_total": 0,
+    "successful_runs_total": 1,
+    "failed_runs_total": 0,
+    "failed_iterations": []
+  },
+  "runs": [
+    {
+      "iteration": 1,
+      "duration_ms": 2096.85,
+      "throughput_runs_per_sec": 0.476906,
+      "max_rss_kb": 881,
+      "max_rss_mb": 0.8603515625,
+      "user_cpu_sec": 0.0,
+      "system_cpu_sec": 0.0,
+      "cpu_pct": null,
+      "voluntary_ctx_switches": 0,
+      "involuntary_ctx_switches": 57,
+      "peak_open_fds": 6,
+      "peak_direct_children": 1,
+      "return_code": 0,
+      "worker_count": 1,
+      "successful_runs": 1,
+      "failed_runs": 0,
+      "otel_payload_count": 0,
+      "metric_datapoint_count": 0,
+      "queue_cancel_datapoints": {},
+      "turn_metric_points": 0,
+      "action_metric_points": 0,
+      "stream_metric_points": 0,
+      "turn_metric_value_sum": null,
+      "action_metric_value_sum": null,
+      "stream_metric_value_sum": null,
+      "sampled_peak_tree_rss_kb": 2352,
+      "sampled_peak_tree_rss_mb": 2.296875,
+      "sampled_peak_tree_cpu_pct": 0.6,
+      "sampled_mean_tree_cpu_pct": 0.6,
+      "build_cmd_ms": 0.7104579999577254,
+      "spawn_proc_ms": 7.381333998637274,
+      "monitor_loop_ms": 2033.2609159995627,
+      "communicate_ms": 0.43783299952337984,
+      "parse_stats_ms": 1.0376670015830314,
+      "top_sample_count": 0,
+      "top_peak_rss_mb": null,
+      "top_mean_rss_mb": null,
+      "top_peak_cpu_pct": null,
+      "top_mean_cpu_pct": null,
+      "stderr_tail": "                   0  voluntary context switches\n                  57  involuntary context switches\n            12505065  instructions retired\n             9534673  cycles elapsed\n              901632  peak memory footprint"
+    }
+  ]
+}

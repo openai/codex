@@ -1,0 +1,313 @@
+{
+  "generated_at": "2026-02-23T10:01:32.308770+00:00",
+  "run_dir": "/Users/kooshapari/temp-PRODVERCEL/485/kush/heliosHarness/clones/codex/codex-rs/perf-results/top-attach-smoke6-20260223-030130",
+  "command": "sleep 0.6",
+  "config_path": "/var/folders/wl/z8733y815nzg28yy0_1_lh7w0000gn/T/codex-perf-ce5gyejx/codex-home-worker-1/config.toml",
+  "profile": {
+    "name": null,
+    "phase": "measure",
+    "concurrency": 2,
+    "warmup": 0,
+    "iterations": 1,
+    "auth_source_home": "/Users/kooshapari/.codex",
+    "auth_copied_workers": 2,
+    "top_attach": true,
+    "top_interval_ms": 100.0
+  },
+  "iterations": 1,
+  "summary": {
+    "latency_ms": {
+      "mean": 1342.4882079998497,
+      "p50": 1342.4882079998497,
+      "p95": 1342.4882079998497,
+      "min": 1342.4882079998497,
+      "max": 1342.4882079998497
+    },
+    "throughput_runs_per_sec": {
+      "mean": 1.4897709999105064,
+      "p50": 1.4897709999105064,
+      "p95": 1.4897709999105064
+    },
+    "max_rss_kb": {
+      "mean": 865.0,
+      "p50": 865.0,
+      "p95": 865.0,
+      "min": 865.0,
+      "max": 865.0
+    },
+    "max_rss_mb": {
+      "mean": 0.8447265625,
+      "p50": 0.8447265625,
+      "p95": 0.8447265625,
+      "min": 0.8447265625,
+      "max": 0.8447265625
+    },
+    "user_cpu_sec": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "system_cpu_sec": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "cpu_pct": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "voluntary_ctx_switches": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "involuntary_ctx_switches": {
+      "mean": 39.0,
+      "p50": 39.0,
+      "p95": 39.0
+    },
+    "peak_open_fds": {
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "peak_direct_children": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "max": 0.0
+    },
+    "process_tree_sampled": {
+      "peak_tree_rss_kb": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "peak_tree_rss_mb": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "peak_tree_cpu_pct": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "mean_tree_cpu_pct": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0
+      }
+    },
+    "worker_step_timings_ms": {
+      "build_cmd": {
+        "mean": 1.5343129998655058,
+        "p50": 1.5343129998655058,
+        "p95": 1.5343129998655058
+      },
+      "spawn_proc": {
+        "mean": 5.296437499964668,
+        "p50": 5.296437499964668,
+        "p95": 5.296437499964668
+      },
+      "monitor_loop": {
+        "mean": 1264.9386875000346,
+        "p50": 1264.9386875000346,
+        "p95": 1264.9386875000346
+      },
+      "communicate": {
+        "mean": 0.3608124989114003,
+        "p50": 0.3608124989114003,
+        "p95": 0.3608124989114003
+      },
+      "parse_stats": {
+        "mean": 1.1306460000923835,
+        "p50": 1.1306460000923835,
+        "p95": 1.1306460000923835
+      }
+    },
+    "resource_budget": {
+      "time_budget_ms": {
+        "wall_mean_ms": 1342.4882079998497,
+        "observed_worker_step_mean_ms": 1273.2608964988685,
+        "unaccounted_time_mean_ms": 69.22731150098116,
+        "build_cmd_share_pct": 0.11428875059926616,
+        "spawn_proc_share_pct": 0.3945239495142933,
+        "monitor_loop_share_pct": 94.2234486651205,
+        "communicate_share_pct": 0.02687639986417227,
+        "parse_stats_share_pct": 0.08422018110512224,
+        "unaccounted_share_pct": 5.156642053796641
+      },
+      "cpu_budget": {
+        "user_cpu_mean_sec": 0.0,
+        "system_cpu_mean_sec": 0.0,
+        "total_cpu_mean_sec": 0.0,
+        "cpu_core_utilization_pct": 0.0
+      },
+      "process_budget": {
+        "peak_open_fds_mean": null,
+        "peak_direct_children_mean": 0.0,
+        "sampled_peak_tree_rss_mean_kb": 0.0,
+        "sampled_peak_tree_rss_mean_mb": 0.0,
+        "sampled_peak_tree_cpu_p95": 0.0
+      },
+      "stability": {
+        "total_runs": 2,
+        "successful_runs_total": 2,
+        "failed_runs_total": 0,
+        "timeout_runs_total": 0,
+        "failure_rate_pct": 0.0,
+        "timeout_rate_pct": 0.0
+      }
+    },
+    "top_attach": {
+      "sample_count": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0
+      },
+      "peak_rss_mb": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "mean_rss_mb": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "peak_cpu_pct": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "mean_cpu_pct": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "otel_turn_action_stream": {
+      "turn_metric_points": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "total": 0
+      },
+      "action_metric_points": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "total": 0
+      },
+      "stream_metric_points": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "total": 0
+      },
+      "turn_metric_value_sum": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "action_metric_value_sum": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "stream_metric_value_sum": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "queue_cancel_metrics": {},
+    "otel_payloads_total": 0,
+    "metric_datapoints_total": 0,
+    "successful_runs_total": 2,
+    "failed_runs_total": 0,
+    "failed_iterations": []
+  },
+  "runs": [
+    {
+      "iteration": 1,
+      "duration_ms": 1342.488,
+      "throughput_runs_per_sec": 1.489771,
+      "max_rss_kb": 865,
+      "max_rss_mb": 0.8447265625,
+      "user_cpu_sec": 0.0,
+      "system_cpu_sec": 0.0,
+      "cpu_pct": null,
+      "voluntary_ctx_switches": 0,
+      "involuntary_ctx_switches": 39,
+      "peak_open_fds": null,
+      "peak_direct_children": 0,
+      "return_code": 0,
+      "worker_count": 2,
+      "successful_runs": 2,
+      "failed_runs": 0,
+      "otel_payload_count": 0,
+      "metric_datapoint_count": 0,
+      "queue_cancel_datapoints": {},
+      "turn_metric_points": 0,
+      "action_metric_points": 0,
+      "stream_metric_points": 0,
+      "turn_metric_value_sum": null,
+      "action_metric_value_sum": null,
+      "stream_metric_value_sum": null,
+      "sampled_peak_tree_rss_kb": 0,
+      "sampled_peak_tree_rss_mb": 0.0,
+      "sampled_peak_tree_cpu_pct": 0.0,
+      "sampled_mean_tree_cpu_pct": 0.0,
+      "build_cmd_ms": 1.5343129998655058,
+      "spawn_proc_ms": 5.296437499964668,
+      "monitor_loop_ms": 1264.9386875000346,
+      "communicate_ms": 0.3608124989114003,
+      "parse_stats_ms": 1.1306460000923835,
+      "top_sample_count": 0,
+      "top_peak_rss_mb": null,
+      "top_mean_rss_mb": null,
+      "top_peak_cpu_pct": null,
+      "top_mean_cpu_pct": null,
+      "stderr_tail": "",
+      "worker_results": [
+        {
+          "worker_id": 1,
+          "return_code": 0,
+          "duration_ms": 1336.859,
+          "max_rss_kb": 865,
+          "max_rss_mb": 0.8447265625,
+          "user_cpu_sec": 0.0,
+          "system_cpu_sec": 0.0,
+          "cpu_pct": null,
+          "voluntary_ctx_switches": 0,
+          "involuntary_ctx_switches": 39,
+          "peak_open_fds": null,
+          "peak_direct_children": 0
+        },
+        {
+          "worker_id": 2,
+          "return_code": 0,
+          "duration_ms": 1310.434,
+          "max_rss_kb": 865,
+          "max_rss_mb": 0.8447265625,
+          "user_cpu_sec": 0.0,
+          "system_cpu_sec": 0.0,
+          "cpu_pct": null,
+          "voluntary_ctx_switches": 0,
+          "involuntary_ctx_switches": 28,
+          "peak_open_fds": null,
+          "peak_direct_children": 0
+        }
+      ]
+    }
+  ]
+}

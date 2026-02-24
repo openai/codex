@@ -1,0 +1,49 @@
+{
+  "iteration": 1,
+  "duration_ms": 54558.83499999618,
+  "throughput_runs_per_sec": 0.0,
+  "max_rss_kb": null,
+  "user_cpu_sec": null,
+  "system_cpu_sec": null,
+  "cpu_pct": null,
+  "voluntary_ctx_switches": null,
+  "involuntary_ctx_switches": null,
+  "peak_open_fds": 6,
+  "peak_direct_children": 1,
+  "return_code": 1,
+  "worker_count": 2,
+  "successful_runs": 0,
+  "failed_runs": 2,
+  "otel_payload_count": 0,
+  "metric_datapoint_count": 0,
+  "queue_cancel_datapoints": {},
+  "stderr_tail": "worker=1 rc=124: Reconnecting... 4/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9d245c827c01a609-LAX, request id: req_7c5c2395abb4404094ec837b9f592b34)\nReconnecting... 5/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9d245cbbcc6cccff-LAX, request id: req_d5dc9e892b704ad3ad66858fea5418a9)\nERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9d245cec1d5052b9-LAX, request id: req_90269ffd9a914a20b582e477fed6ccc9\n\ncommand timed out\nworker=2 rc=124: Reconnecting... 4/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9d245c1cfd3bccd3-LAX, request id: req_8c44142e9ce64184b3f5a0441c7e6132)\nReconnecting... 5/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9d245c6bfed63478-LAX, request id: req_469e893f792f44de851f8417c43886f0)\nERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9d245cbcdfbacbae-LAX, request id: req_0d4b39eb89c746989af7ef5388f68245\n\ncommand timed out",
+  "worker_results": [
+    {
+      "worker_id": 1,
+      "return_code": 124,
+      "duration_ms": 54553.433458000654,
+      "max_rss_kb": null,
+      "user_cpu_sec": null,
+      "system_cpu_sec": null,
+      "cpu_pct": null,
+      "voluntary_ctx_switches": null,
+      "involuntary_ctx_switches": null,
+      "peak_open_fds": 6,
+      "peak_direct_children": 1
+    },
+    {
+      "worker_id": 2,
+      "return_code": 124,
+      "duration_ms": 46774.00366600341,
+      "max_rss_kb": null,
+      "user_cpu_sec": null,
+      "system_cpu_sec": null,
+      "cpu_pct": null,
+      "voluntary_ctx_switches": null,
+      "involuntary_ctx_switches": null,
+      "peak_open_fds": 6,
+      "peak_direct_children": 1
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "iteration": 5,
+  "duration_ms": 104.0659999998752,
+  "throughput_runs_per_sec": 9.60928641440239,
+  "max_rss_kb": 1901440,
+  "user_cpu_sec": null,
+  "system_cpu_sec": null,
+  "cpu_pct": null,
+  "voluntary_ctx_switches": 1,
+  "involuntary_ctx_switches": 120,
+  "peak_open_fds": null,
+  "peak_direct_children": 1,
+  "return_code": 0,
+  "worker_count": 1,
+  "successful_runs": 1,
+  "failed_runs": 0,
+  "otel_payload_count": 0,
+  "metric_datapoint_count": 0,
+  "queue_cancel_datapoints": {},
+  "stderr_tail": "                   1  voluntary context switches\n                 120  involuntary context switches\n            55334652  instructions retired\n            21263020  cycles elapsed\n             1901440  peak memory footprint"
+}

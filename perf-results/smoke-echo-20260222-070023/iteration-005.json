@@ -1,0 +1,11 @@
+{
+  "iteration": 5,
+  "duration_ms": 62.6305420009885,
+  "throughput_runs_per_sec": 15.96665090307245,
+  "max_rss_kb": 885248,
+  "return_code": 0,
+  "otel_payload_count": 0,
+  "metric_datapoint_count": 0,
+  "queue_cancel_datapoints": {},
+  "stderr_tail": "                   0  voluntary context switches\n                  18  involuntary context switches\n             9050346  instructions retired\n             5560265  cycles elapsed\n              885248  peak memory footprint"
+}

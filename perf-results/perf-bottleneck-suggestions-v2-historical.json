@@ -1,0 +1,33 @@
+{
+  "generated_from": "codex-rs/perf-results/perf-baseline-index-v2-historical.json",
+  "warnings": [
+    {
+      "profile": "attribution-hotspots-v1-20260223-031205",
+      "severity": "red",
+      "signal": "failed_runs_total",
+      "message": "Non-zero failures detected.",
+      "suggestion": "Inspect stderr tails first, then split auth/network vs runtime failures."
+    },
+    {
+      "profile": "attribution-smoke-20260223-031007",
+      "severity": "red",
+      "signal": "failed_runs_total",
+      "message": "Non-zero failures detected.",
+      "suggestion": "Inspect stderr tails first, then split auth/network vs runtime failures."
+    },
+    {
+      "profile": "swarm-exec-real-min",
+      "severity": "red",
+      "signal": "failed_runs_total",
+      "message": "Non-zero failures detected.",
+      "suggestion": "Inspect stderr tails first, then split auth/network vs runtime failures."
+    },
+    {
+      "profile": "queue-cancel-stress",
+      "severity": "red",
+      "signal": "failed_runs_total",
+      "message": "Non-zero failures detected.",
+      "suggestion": "Inspect stderr tails first, then split auth/network vs runtime failures."
+    }
+  ]
+}

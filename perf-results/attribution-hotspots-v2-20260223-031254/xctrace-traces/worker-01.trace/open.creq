@@ -1,0 +1,291 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.dt.Instruments.Hierarchies</key>
+	<array>
+		<integer>1</integer>
+		<string>This version of Instruments doesn't implement track hierarchies, which are required to open this distribution.</string>
+	</array>
+	<key>com.apple.dt.ac.topology.XRT64_CC32_R_TypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>The stored data contains storage topology not yet implemented by this version.</string>
+	</array>
+	<key>com.apple.dt.ac.topology.XRTD64_CC32_R_TypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>The stored data contains storage topology not yet implemented by this version.</string>
+	</array>
+	<key>com.apple.dt.etype.XRAnyTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'any'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRApplicationPeriodTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'app-period'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRBacktraceTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'backtrace'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRBooleanTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'boolean'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRCPUCoreTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'core'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRContainmentLayoutIDTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'containment-level'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRCoreProfileCallstackTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'kperf-bt'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRDurationTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'duration'.</string>
+	</array>
+	<key>com.apple.dt.etype.XREventConceptTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'event-concept'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRFilePathTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'file-path'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRHangTypeTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'hang-type'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRKDebugArgumentTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'kdebug-arg'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRKDebugClassTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'kdebug-class'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRKDebugCodeTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'kdebug-code'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRKDebugFunctionTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'kdebug-func'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRKDebugSignpostVariantTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'kdebug-signpost-variant'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRKDebugStringIDTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'kdebug-string'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRKDebugSubclassTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'kdebug-subclass'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRLayoutIDTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'layout-id'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRNarrativeEntryTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'narrative'.</string>
+	</array>
+	<key>com.apple.dt.etype.XROSLogCategoryTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'category'.</string>
+	</array>
+	<key>com.apple.dt.etype.XROSLogEventTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'event-type'.</string>
+	</array>
+	<key>com.apple.dt.etype.XROSLogFormatStringTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'format-string'.</string>
+	</array>
+	<key>com.apple.dt.etype.XROSLogMetadataTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'os-log-metadata'.</string>
+	</array>
+	<key>com.apple.dt.etype.XROSLogSubsystemTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'subsystem'.</string>
+	</array>
+	<key>com.apple.dt.etype.XROSSignpostIdentifierTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'os-signpost-identifier'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRProcessIDTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'pid'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRProcessTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'process'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRPrototypeMediumLengthStringTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'medium-length-string'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRPrototypeShortStringTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'short-string'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRPrototypeStringTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'string'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRPrototypeValueTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'uint64'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRRawStringTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'raw-string'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRRecordedEventTimestampTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'event-time'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRRegionOfInterestClassTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'roi-class'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRRegionOfInterestKindTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'roi-kind'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRRegionOfInterestScopeTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'roi-scope'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRReturnLocationTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'return-location'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRSampleTimestampTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'sample-time'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRSignpostNameTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'signpost-name'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRStartTimeTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'start-time'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRTextBacktraceTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'text-backtrace'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRTextSymbolTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'text-symbol'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRThermalStateTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'thermal-state'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRThreadIDTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'tid'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRThreadNameTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'thread-name'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRThreadStateTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'thread-state'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRThreadTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'thread'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRTimeSampleTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'time-sample-kind'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRTimeSampleWeightTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'weight'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRUUIDTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'uuid'.</string>
+	</array>
+	<key>com.apple.dt.etype.XRVirtualMemoryAddressTypeID</key>
+	<array>
+		<integer>1</integer>
+		<string>This version does not support the new engineering type 'address'.</string>
+	</array>
+	<key>com.apple.dt.path-manager.compression</key>
+	<array>
+		<integer>1</integer>
+		<string>The data is compressed and requires Instruments 9.3 or later to read it.</string>
+	</array>
+	<key>com.apple.dt.trace</key>
+	<array>
+		<integer>5</integer>
+		<string>This document was saved by a newer version of Instruments and the file format has significantly changed. The document will need to be opened by the newer version.</string>
+	</array>
+</dict>
+</plist>

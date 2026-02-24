@@ -1,0 +1,49 @@
+{
+  "iteration": 2,
+  "duration_ms": 45009.61883299897,
+  "throughput_runs_per_sec": 0.0,
+  "max_rss_kb": 1921,
+  "user_cpu_sec": 0.2,
+  "system_cpu_sec": 0.38,
+  "cpu_pct": null,
+  "voluntary_ctx_switches": 519,
+  "involuntary_ctx_switches": 6913,
+  "peak_open_fds": 6,
+  "peak_direct_children": 1,
+  "return_code": 1,
+  "worker_count": 2,
+  "successful_runs": 0,
+  "failed_runs": 2,
+  "otel_payload_count": 0,
+  "metric_datapoint_count": 0,
+  "queue_cancel_datapoints": {},
+  "stderr_tail": "worker=1 rc=1:                  227  voluntary context switches\n                5792  involuntary context switches\n            56943871  instructions retired\n            29107307  cycles elapsed\n             1966976  peak memory footprint\nworker=2 rc=1:                  519  voluntary context switches\n                6913  involuntary context switches\n            56167739  instructions retired\n            25451785  cycles elapsed\n             1934208  peak memory footprint",
+  "worker_results": [
+    {
+      "worker_id": 1,
+      "return_code": 1,
+      "duration_ms": 44163.60108299705,
+      "max_rss_kb": 1921,
+      "user_cpu_sec": 0.2,
+      "system_cpu_sec": 0.36,
+      "cpu_pct": null,
+      "voluntary_ctx_switches": 227,
+      "involuntary_ctx_switches": 5792,
+      "peak_open_fds": 6,
+      "peak_direct_children": 1
+    },
+    {
+      "worker_id": 2,
+      "return_code": 1,
+      "duration_ms": 44979.15700000158,
+      "max_rss_kb": 1889,
+      "user_cpu_sec": 0.2,
+      "system_cpu_sec": 0.4,
+      "cpu_pct": null,
+      "voluntary_ctx_switches": 519,
+      "involuntary_ctx_switches": 6913,
+      "peak_open_fds": 6,
+      "peak_direct_children": 1
+    }
+  ]
+}

@@ -1,0 +1,239 @@
+{
+  "generated_at": "2026-02-23T00:58:28.053196+00:00",
+  "run_dir": "codex-rs/perf-results/queue-cancel-stress-20260222-175827",
+  "command": "sleep 0.2",
+  "config_path": "/var/folders/wl/z8733y815nzg28yy0_1_lh7w0000gn/T/codex-perf-2c96hbtx/codex-home-worker-1/config.toml",
+  "profile": {
+    "name": "queue-cancel-stress",
+    "phase": "stress",
+    "concurrency": 8,
+    "warmup": 0,
+    "iterations": 3
+  },
+  "iterations": 3,
+  "summary": {
+    "latency_ms": {
+      "mean": 77.44627800032806,
+      "p50": 75.2195830027631,
+      "p95": 82.4888460982038,
+      "min": 73.8227090005239,
+      "max": 83.2965419976972
+    },
+    "throughput_runs_per_sec": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "max_rss_kb": {
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "min": null,
+      "max": null
+    },
+    "queue_cancel_metrics": {},
+    "otel_payloads_total": 0,
+    "metric_datapoints_total": 0,
+    "successful_runs_total": 0,
+    "failed_runs_total": 24,
+    "failed_iterations": [
+      1,
+      2,
+      3
+    ]
+  },
+  "runs": [
+    {
+      "iteration": 1,
+      "duration_ms": 83.297,
+      "throughput_runs_per_sec": 0.0,
+      "max_rss_kb": null,
+      "return_code": 1,
+      "worker_count": 8,
+      "successful_runs": 0,
+      "failed_runs": 8,
+      "otel_payload_count": 0,
+      "metric_datapoint_count": 0,
+      "queue_cancel_datapoints": {},
+      "stderr_tail": "worker=4 rc=124: command timed out\nworker=5 rc=124: command timed out\nworker=6 rc=124: command timed out\nworker=7 rc=124: command timed out\nworker=8 rc=124: command timed out",
+      "worker_results": [
+        {
+          "worker_id": 1,
+          "return_code": 124,
+          "duration_ms": 58.893,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 2,
+          "return_code": 124,
+          "duration_ms": 78.522,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 3,
+          "return_code": 124,
+          "duration_ms": 69.573,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 4,
+          "return_code": 124,
+          "duration_ms": 61.492,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 5,
+          "return_code": 124,
+          "duration_ms": 61.409,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 6,
+          "return_code": 124,
+          "duration_ms": 63.682,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 7,
+          "return_code": 124,
+          "duration_ms": 53.769,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 8,
+          "return_code": 124,
+          "duration_ms": 57.642,
+          "max_rss_kb": null
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "duration_ms": 73.823,
+      "throughput_runs_per_sec": 0.0,
+      "max_rss_kb": null,
+      "return_code": 1,
+      "worker_count": 8,
+      "successful_runs": 0,
+      "failed_runs": 8,
+      "otel_payload_count": 0,
+      "metric_datapoint_count": 0,
+      "queue_cancel_datapoints": {},
+      "stderr_tail": "worker=4 rc=124: command timed out\nworker=5 rc=124: command timed out\nworker=6 rc=124: command timed out\nworker=7 rc=124: command timed out\nworker=8 rc=124: command timed out",
+      "worker_results": [
+        {
+          "worker_id": 1,
+          "return_code": 124,
+          "duration_ms": 56.639,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 2,
+          "return_code": 124,
+          "duration_ms": 58.756,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 3,
+          "return_code": 124,
+          "duration_ms": 57.52,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 4,
+          "return_code": 124,
+          "duration_ms": 57.284,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 5,
+          "return_code": 124,
+          "duration_ms": 61.617,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 6,
+          "return_code": 124,
+          "duration_ms": 56.507,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 7,
+          "return_code": 124,
+          "duration_ms": 57.476,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 8,
+          "return_code": 124,
+          "duration_ms": 56.325,
+          "max_rss_kb": null
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "duration_ms": 75.22,
+      "throughput_runs_per_sec": 0.0,
+      "max_rss_kb": null,
+      "return_code": 1,
+      "worker_count": 8,
+      "successful_runs": 0,
+      "failed_runs": 8,
+      "otel_payload_count": 0,
+      "metric_datapoint_count": 0,
+      "queue_cancel_datapoints": {},
+      "stderr_tail": "worker=4 rc=124: command timed out\nworker=5 rc=124: command timed out\nworker=6 rc=124: command timed out\nworker=7 rc=124: command timed out\nworker=8 rc=124: command timed out",
+      "worker_results": [
+        {
+          "worker_id": 1,
+          "return_code": 124,
+          "duration_ms": 64.052,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 2,
+          "return_code": 124,
+          "duration_ms": 59.087,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 3,
+          "return_code": 124,
+          "duration_ms": 58.228,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 4,
+          "return_code": 124,
+          "duration_ms": 53.38,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 5,
+          "return_code": 124,
+          "duration_ms": 53.97,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 6,
+          "return_code": 124,
+          "duration_ms": 55.314,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 7,
+          "return_code": 124,
+          "duration_ms": 56.829,
+          "max_rss_kb": null
+        },
+        {
+          "worker_id": 8,
+          "return_code": 124,
+          "duration_ms": 53.355,
+          "max_rss_kb": null
+        }
+      ]
+    }
+  ]
+}

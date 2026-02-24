@@ -1,0 +1,67 @@
+{
+  "generated_at": "2026-02-22T23:48:50.943438+00:00",
+  "run_dir": "codex-rs/perf-results/codex-tui-footer-test-20260222-164834",
+  "command": "cargo test --manifest-path codex-rs/Cargo.toml -p codex-tui bottom_pane::chat_composer::tests::footer_collapse_snapshots -- --nocapture",
+  "config_path": "/var/folders/wl/z8733y815nzg28yy0_1_lh7w0000gn/T/codex-perf-v2bhq5sk/codex-home/config.toml",
+  "iterations": 3,
+  "summary": {
+    "latency_ms": {
+      "mean": 2861.9733470004576,
+      "p50": 3020.5105409986572,
+      "p95": 3107.5444038004207,
+      "min": 2448.194667002099,
+      "max": 3117.2148330006166
+    },
+    "throughput_runs_per_sec": {
+      "mean": 0.35344443401923825,
+      "p50": 0.33106985935873434,
+      "p95": 0.40072481148325195
+    },
+    "max_rss_kb": {
+      "mean": 170690112.0,
+      "p50": 170739264.0,
+      "p95": 170783443.2,
+      "min": 170542720.0,
+      "max": 170788352.0
+    },
+    "queue_cancel_metrics": {},
+    "otel_payloads_total": 0,
+    "metric_datapoints_total": 0,
+    "failed_iterations": []
+  },
+  "runs": [
+    {
+      "iteration": 1,
+      "duration_ms": 3117.215,
+      "throughput_runs_per_sec": 0.320799,
+      "max_rss_kb": 170788352,
+      "return_code": 0,
+      "otel_payload_count": 0,
+      "metric_datapoint_count": 0,
+      "queue_cancel_datapoints": {},
+      "stderr_tail": "                 870  voluntary context switches\n                4394  involuntary context switches\n          5739408550  instructions retired\n          2250616567  cycles elapsed\n           170788352  peak memory footprint"
+    },
+    {
+      "iteration": 2,
+      "duration_ms": 3020.511,
+      "throughput_runs_per_sec": 0.33107,
+      "max_rss_kb": 170542720,
+      "return_code": 0,
+      "otel_payload_count": 0,
+      "metric_datapoint_count": 0,
+      "queue_cancel_datapoints": {},
+      "stderr_tail": "                  54  voluntary context switches\n                4624  involuntary context switches\n          5779686238  instructions retired\n          2244053326  cycles elapsed\n           170542720  peak memory footprint"
+    },
+    {
+      "iteration": 3,
+      "duration_ms": 2448.195,
+      "throughput_runs_per_sec": 0.408464,
+      "max_rss_kb": 170739264,
+      "return_code": 0,
+      "otel_payload_count": 0,
+      "metric_datapoint_count": 0,
+      "queue_cancel_datapoints": {},
+      "stderr_tail": "                 776  voluntary context switches\n                3677  involuntary context switches\n          5431651253  instructions retired\n          2124858799  cycles elapsed\n           170739264  peak memory footprint"
+    }
+  ]
+}

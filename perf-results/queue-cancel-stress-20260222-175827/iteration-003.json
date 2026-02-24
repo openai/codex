@@ -1,0 +1,64 @@
+{
+  "iteration": 3,
+  "duration_ms": 75.2195830027631,
+  "throughput_runs_per_sec": 0.0,
+  "max_rss_kb": null,
+  "return_code": 1,
+  "worker_count": 8,
+  "successful_runs": 0,
+  "failed_runs": 8,
+  "otel_payload_count": 0,
+  "metric_datapoint_count": 0,
+  "queue_cancel_datapoints": {},
+  "stderr_tail": "worker=4 rc=124: command timed out\nworker=5 rc=124: command timed out\nworker=6 rc=124: command timed out\nworker=7 rc=124: command timed out\nworker=8 rc=124: command timed out",
+  "worker_results": [
+    {
+      "worker_id": 1,
+      "return_code": 124,
+      "duration_ms": 64.05150000136928,
+      "max_rss_kb": null
+    },
+    {
+      "worker_id": 2,
+      "return_code": 124,
+      "duration_ms": 59.08712499876856,
+      "max_rss_kb": null
+    },
+    {
+      "worker_id": 3,
+      "return_code": 124,
+      "duration_ms": 58.22829099997762,
+      "max_rss_kb": null
+    },
+    {
+      "worker_id": 4,
+      "return_code": 124,
+      "duration_ms": 53.380290999484714,
+      "max_rss_kb": null
+    },
+    {
+      "worker_id": 5,
+      "return_code": 124,
+      "duration_ms": 53.96958300116239,
+      "max_rss_kb": null
+    },
+    {
+      "worker_id": 6,
+      "return_code": 124,
+      "duration_ms": 55.314084002020536,
+      "max_rss_kb": null
+    },
+    {
+      "worker_id": 7,
+      "return_code": 124,
+      "duration_ms": 56.829084001947194,
+      "max_rss_kb": null
+    },
+    {
+      "worker_id": 8,
+      "return_code": 124,
+      "duration_ms": 53.35512500096229,
+      "max_rss_kb": null
+    }
+  ]
+}

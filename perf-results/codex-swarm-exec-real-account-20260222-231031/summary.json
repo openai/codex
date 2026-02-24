@@ -1,0 +1,103 @@
+{
+  "generated_at": "2026-02-23T06:10:40.124666+00:00",
+  "run_dir": "codex-rs/perf-results/codex-swarm-exec-real-account-20260222-231031",
+  "command": "codex exec --sandbox danger-full-access --skip-git-repo-check \"Reply with OK only.\"",
+  "config_path": "/var/folders/wl/z8733y815nzg28yy0_1_lh7w0000gn/T/codex-perf-v0tsowb4/codex-home/config.toml",
+  "profile": {
+    "name": "swarm-exec-real-account",
+    "phase": "measure",
+    "concurrency": 1,
+    "warmup": 0,
+    "iterations": 1,
+    "auth_source_home": "/Users/kooshapari/.codex",
+    "auth_copied_workers": 1
+  },
+  "iterations": 1,
+  "summary": {
+    "latency_ms": {
+      "mean": 8311.01066699921,
+      "p50": 8311.01066699921,
+      "p95": 8311.01066699921,
+      "min": 8311.01066699921,
+      "max": 8311.01066699921
+    },
+    "throughput_runs_per_sec": {
+      "mean": 0.1203223097728332,
+      "p50": 0.1203223097728332,
+      "p95": 0.1203223097728332
+    },
+    "max_rss_kb": {
+      "mean": 1905.0,
+      "p50": 1905.0,
+      "p95": 1905.0,
+      "min": 1905.0,
+      "max": 1905.0
+    },
+    "user_cpu_sec": {
+      "mean": 0.17,
+      "p50": 0.17,
+      "p95": 0.17
+    },
+    "system_cpu_sec": {
+      "mean": 0.38,
+      "p50": 0.38,
+      "p95": 0.38
+    },
+    "cpu_pct": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "voluntary_ctx_switches": {
+      "mean": 609.0,
+      "p50": 609.0,
+      "p95": 609.0
+    },
+    "involuntary_ctx_switches": {
+      "mean": 5153.0,
+      "p50": 5153.0,
+      "p95": 5153.0
+    },
+    "peak_open_fds": {
+      "mean": 6.0,
+      "p50": 6.0,
+      "p95": 6.0,
+      "max": 6.0
+    },
+    "peak_direct_children": {
+      "mean": 1.0,
+      "p50": 1.0,
+      "p95": 1.0,
+      "max": 1.0
+    },
+    "queue_cancel_metrics": {},
+    "otel_payloads_total": 1,
+    "metric_datapoints_total": 28,
+    "successful_runs_total": 1,
+    "failed_runs_total": 0,
+    "failed_iterations": []
+  },
+  "runs": [
+    {
+      "iteration": 1,
+      "duration_ms": 8311.011,
+      "throughput_runs_per_sec": 0.120322,
+      "max_rss_kb": 1905,
+      "user_cpu_sec": 0.17,
+      "system_cpu_sec": 0.38,
+      "cpu_pct": null,
+      "voluntary_ctx_switches": 609,
+      "involuntary_ctx_switches": 5153,
+      "peak_open_fds": 6,
+      "peak_direct_children": 1,
+      "return_code": 0,
+      "worker_count": 1,
+      "successful_runs": 1,
+      "failed_runs": 0,
+      "otel_payload_count": 1,
+      "metric_datapoint_count": 28,
+      "queue_cancel_datapoints": {},
+      "stderr_tail": "                 609  voluntary context switches\n                5153  involuntary context switches\n            62727604  instructions retired\n            33028975  cycles elapsed\n             1950592  peak memory footprint"
+    }
+  ]
+}

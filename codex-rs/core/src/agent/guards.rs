@@ -4,6 +4,7 @@ use crate::error::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use rand::Rng;
 use rand::prelude::IndexedRandom;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -112,20 +113,25 @@ impl Guards {
             if names.is_empty() {
                 return None;
             }
-            let available_names: Vec<&str> = names
-                .iter()
-                .copied()
-                .filter(|name| !active_agents.used_agent_nicknames.contains(*name))
-                .collect();
-            if let Some(name) = available_names.choose(&mut rand::rng()) {
-                (*name).to_string()
+            let mut rng = rand::rng();
+            let start_index = rng.random_range(0..names.len());
+
+            let mut selected_name: Option<String> = None;
+            for offset in 0..names.len() {
+                let idx = (start_index + offset) % names.len();
+                let candidate = names[idx];
+                if !active_agents.used_agent_nicknames.contains(candidate) {
+                    selected_name = Some(candidate.to_string());
+                    break;
+                }
+            }
+
+            if let Some(name) = selected_name {
+                name
             } else {
                 active_agents.used_agent_nicknames.clear();
                 active_agents.nickname_reset_count += 1;
-                if let Some(metrics) = codex_otel::metrics::global() {
-                    let _ = metrics.counter("codex.multi_agent.nickname_pool_reset", 1, &[]);
-                }
-                names.choose(&mut rand::rng())?.to_string()
+                names.choose(&mut rng)?.to_string()
             }
         };
         active_agents

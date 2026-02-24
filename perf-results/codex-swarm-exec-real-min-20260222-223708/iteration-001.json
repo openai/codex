@@ -1,0 +1,21 @@
+{
+  "iteration": 1,
+  "duration_ms": 63744.16024999664,
+  "throughput_runs_per_sec": 0.0,
+  "max_rss_kb": null,
+  "user_cpu_sec": null,
+  "system_cpu_sec": null,
+  "cpu_pct": null,
+  "voluntary_ctx_switches": null,
+  "involuntary_ctx_switches": null,
+  "peak_open_fds": 6,
+  "peak_direct_children": 1,
+  "return_code": 1,
+  "worker_count": 1,
+  "successful_runs": 0,
+  "failed_runs": 1,
+  "otel_payload_count": 1,
+  "metric_datapoint_count": 9,
+  "queue_cancel_datapoints": {},
+  "stderr_tail": "Reconnecting... 4/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9d245f7b796e50a9-LAX, request id: req_34d745bf494e4de1a4d2d99abd4fb07c)\nReconnecting... 5/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9d245fb3797b4bb4-LAX, request id: req_8ff228adc8174ecc93f18eed2fb7beea)\nERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: 9d2460234f6069cd-LAX, request id: req_2dba5ec3ceb748ff934adb76c591d98d\n\ncommand timed out"
+}

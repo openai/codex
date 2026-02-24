@@ -1,0 +1,318 @@
+{
+  "generated_at": "2026-02-23T10:12:23.162086+00:00",
+  "run_dir": "/Users/kooshapari/temp-PRODVERCEL/485/kush/heliosHarness/clones/codex/codex-rs/perf-results/attribution-hotspots-v1-20260223-031205",
+  "command": "python3 -c 'import math,time; t=time.time()+2.0; x=0.0\\nwhile time.time()<t: x+=math.sqrt(12345.6789)\\nprint(x)'",
+  "config_path": "/var/folders/wl/z8733y815nzg28yy0_1_lh7w0000gn/T/codex-perf-ll_kztr7/codex-home/config.toml",
+  "profile": {
+    "name": null,
+    "phase": "measure",
+    "concurrency": 1,
+    "warmup": 0,
+    "iterations": 1,
+    "auth_source_home": "/Users/kooshapari/.codex",
+    "auth_copied_workers": 1,
+    "top_attach": true,
+    "top_interval_ms": 250.0,
+    "vmmap_snapshots": true,
+    "xctrace_capture": true,
+    "xctrace_time_limit_sec": 5.0,
+    "xctrace_hotspots_limit": 8
+  },
+  "iterations": 1,
+  "summary": {
+    "latency_ms": {
+      "mean": 17266.890875000172,
+      "p50": 17266.890875000172,
+      "p95": 17266.890875000172,
+      "min": 17266.890875000172,
+      "max": 17266.890875000172
+    },
+    "throughput_runs_per_sec": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "max_rss_kb": {
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "min": null,
+      "max": null
+    },
+    "max_rss_mb": {
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "min": null,
+      "max": null
+    },
+    "user_cpu_sec": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "system_cpu_sec": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "cpu_pct": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "voluntary_ctx_switches": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "involuntary_ctx_switches": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "peak_open_fds": {
+      "mean": 117.0,
+      "p50": 117.0,
+      "p95": 117.0,
+      "max": 117.0
+    },
+    "peak_direct_children": {
+      "mean": 1.0,
+      "p50": 1.0,
+      "p95": 1.0,
+      "max": 1.0
+    },
+    "process_tree_sampled": {
+      "peak_tree_rss_kb": {
+        "mean": 276736.0,
+        "p50": 276736.0,
+        "p95": 276736.0,
+        "max": 276736.0
+      },
+      "peak_tree_rss_mb": {
+        "mean": 270.25,
+        "p50": 270.25,
+        "p95": 270.25,
+        "max": 270.25
+      },
+      "peak_tree_cpu_pct": {
+        "mean": 150.6,
+        "p50": 150.6,
+        "p95": 150.6,
+        "max": 150.6
+      },
+      "mean_tree_cpu_pct": {
+        "mean": 36.01428571428571,
+        "p50": 36.01428571428571,
+        "p95": 36.01428571428571
+      }
+    },
+    "worker_step_timings_ms": {
+      "build_cmd": {
+        "mean": 6.105542001023423,
+        "p50": 6.105542001023423,
+        "p95": 6.105542001023423
+      },
+      "spawn_proc": {
+        "mean": 4.516667000643793,
+        "p50": 4.516667000643793,
+        "p95": 4.516667000643793
+      },
+      "monitor_loop": {
+        "mean": 9644.860707998305,
+        "p50": 9644.860707998305,
+        "p95": 9644.860707998305
+      },
+      "communicate": {
+        "mean": 0.07374999950116035,
+        "p50": 0.07374999950116035,
+        "p95": 0.07374999950116035
+      },
+      "parse_stats": {
+        "mean": 1.0497919993213145,
+        "p50": 1.0497919993213145,
+        "p95": 1.0497919993213145
+      }
+    },
+    "resource_budget": {
+      "time_budget_ms": {
+        "wall_mean_ms": 17266.890875000172,
+        "observed_worker_step_mean_ms": 9656.606458998795,
+        "unaccounted_time_mean_ms": 7610.284416001377,
+        "build_cmd_share_pct": 0.035359822710545524,
+        "spawn_proc_share_pct": 0.026157963430366256,
+        "monitor_loop_share_pct": 55.85754133630736,
+        "communicate_share_pct": 0.00042711800309075393,
+        "parse_stats_share_pct": 0.006079797497540529,
+        "unaccounted_share_pct": 44.074433962051096
+      },
+      "cpu_budget": {
+        "user_cpu_mean_sec": null,
+        "system_cpu_mean_sec": null,
+        "total_cpu_mean_sec": null,
+        "cpu_core_utilization_pct": null
+      },
+      "process_budget": {
+        "peak_open_fds_mean": 117.0,
+        "peak_direct_children_mean": 1.0,
+        "sampled_peak_tree_rss_mean_kb": 276736.0,
+        "sampled_peak_tree_rss_mean_mb": 270.25,
+        "sampled_peak_tree_cpu_p95": 150.6
+      },
+      "stability": {
+        "total_runs": 1,
+        "successful_runs_total": 0,
+        "failed_runs_total": 1,
+        "timeout_runs_total": 0,
+        "failure_rate_pct": 100.0,
+        "timeout_rate_pct": 0.0
+      }
+    },
+    "top_attach": {
+      "sample_count": {
+        "mean": 24.0,
+        "p50": 24.0,
+        "p95": 24.0
+      },
+      "peak_rss_mb": {
+        "mean": 90.546875,
+        "p50": 90.546875,
+        "p95": 90.546875,
+        "max": 90.546875
+      },
+      "mean_rss_mb": {
+        "mean": 37.721354166666664,
+        "p50": 37.721354166666664,
+        "p95": 37.721354166666664
+      },
+      "peak_cpu_pct": {
+        "mean": 51.6,
+        "p50": 51.6,
+        "p95": 51.6,
+        "max": 51.6
+      },
+      "mean_cpu_pct": {
+        "mean": 15.816666666666668,
+        "p50": 15.816666666666668,
+        "p95": 15.816666666666668
+      }
+    },
+    "vmmap_snapshots": {
+      "start_physical_footprint_mb": {
+        "mean": 0.265625,
+        "p50": 0.265625,
+        "p95": 0.265625
+      },
+      "mid_physical_footprint_mb": {
+        "mean": 17.1,
+        "p50": 17.1,
+        "p95": 17.1
+      },
+      "end_physical_footprint_mb": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "xctrace": {
+      "trace_count": 1,
+      "trace_paths": [
+        "/Users/kooshapari/temp-PRODVERCEL/485/kush/heliosHarness/clones/codex/codex-rs/perf-results/attribution-hotspots-v1-20260223-031205/xctrace-traces/worker-01.trace"
+      ],
+      "hotspots_top": []
+    },
+    "otel_turn_action_stream": {
+      "turn_metric_points": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "total": 0
+      },
+      "action_metric_points": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "total": 0
+      },
+      "stream_metric_points": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "total": 0
+      },
+      "turn_metric_value_sum": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "action_metric_value_sum": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "stream_metric_value_sum": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "queue_cancel_metrics": {},
+    "otel_payloads_total": 0,
+    "metric_datapoints_total": 0,
+    "successful_runs_total": 0,
+    "failed_runs_total": 1,
+    "failed_iterations": [
+      1
+    ]
+  },
+  "runs": [
+    {
+      "iteration": 1,
+      "duration_ms": 17266.891,
+      "throughput_runs_per_sec": 0.0,
+      "max_rss_kb": null,
+      "max_rss_mb": null,
+      "user_cpu_sec": null,
+      "system_cpu_sec": null,
+      "cpu_pct": null,
+      "voluntary_ctx_switches": null,
+      "involuntary_ctx_switches": null,
+      "peak_open_fds": 117,
+      "peak_direct_children": 1,
+      "return_code": 1,
+      "worker_count": 1,
+      "successful_runs": 0,
+      "failed_runs": 1,
+      "otel_payload_count": 0,
+      "metric_datapoint_count": 0,
+      "queue_cancel_datapoints": {},
+      "turn_metric_points": 0,
+      "action_metric_points": 0,
+      "stream_metric_points": 0,
+      "turn_metric_value_sum": null,
+      "action_metric_value_sum": null,
+      "stream_metric_value_sum": null,
+      "sampled_peak_tree_rss_kb": 276736,
+      "sampled_peak_tree_rss_mb": 270.25,
+      "sampled_peak_tree_cpu_pct": 150.6,
+      "sampled_mean_tree_cpu_pct": 36.01428571428571,
+      "build_cmd_ms": 6.105542001023423,
+      "spawn_proc_ms": 4.516667000643793,
+      "monitor_loop_ms": 9644.860707998305,
+      "communicate_ms": 0.07374999950116035,
+      "parse_stats_ms": 1.0497919993213145,
+      "top_sample_count": 24,
+      "top_peak_rss_mb": 90.546875,
+      "top_mean_rss_mb": 37.721354166666664,
+      "top_peak_cpu_pct": 51.6,
+      "top_mean_cpu_pct": 15.816666666666668,
+      "vmmap_start_physical_footprint_mb": 0.265625,
+      "vmmap_mid_physical_footprint_mb": 17.1,
+      "vmmap_end_physical_footprint_mb": null,
+      "xctrace_trace_path": "/Users/kooshapari/temp-PRODVERCEL/485/kush/heliosHarness/clones/codex/codex-rs/perf-results/attribution-hotspots-v1-20260223-031205/xctrace-traces/worker-01.trace",
+      "xctrace_hotspots": null,
+      "stderr_tail": "Run issues were detected (trace is still ready to be viewed):\n* [Error] Path not found 'python3'"
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "generated_from": "codex-rs/perf-results/perf-baseline-index-v3-historical-heuristic.json",
+  "warnings": [
+    {
+      "profile": "attribution-hotspots-v1-20260223-031205",
+      "severity": "red",
+      "signal": "failed_runs_total",
+      "message": "Non-zero failures detected.",
+      "suggestion": "Inspect stderr tails first, then split auth/network vs runtime failures."
+    },
+    {
+      "profile": "smoke",
+      "severity": "red",
+      "signal": "failed_runs_total",
+      "message": "Non-zero failures detected.",
+      "suggestion": "Inspect stderr tails first, then split auth/network vs runtime failures."
+    },
+    {
+      "profile": "smoke",
+      "severity": "red",
+      "signal": "latency_p95_ms+throughput_mean",
+      "message": "Latency regressed while throughput dropped.",
+      "suggestion": "Check lock contention, monitor-loop overhead, and child process churn; compare worker step timing deltas."
+    },
+    {
+      "profile": "smoke",
+      "severity": "red",
+      "signal": "monitor_loop_mean_ms",
+      "message": "Monitor loop overhead increased.",
+      "suggestion": "Increase probe interval/sleep, reduce subprocess probes, or move to event-driven sampling."
+    },
+    {
+      "profile": "smoke",
+      "severity": "red",
+      "signal": "sampled_peak_tree_cpu_p95",
+      "message": "CPU tail increased in process tree.",
+      "suggestion": "Use xctrace hotspots to isolate frames; prioritize hot loops before lock tuning."
+    },
+    {
+      "profile": "stress",
+      "severity": "red",
+      "signal": "failed_runs_total",
+      "message": "Non-zero failures detected.",
+      "suggestion": "Inspect stderr tails first, then split auth/network vs runtime failures."
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "iteration": 1,
+  "duration_ms": 18330.198499999824,
+  "throughput_runs_per_sec": 0.05455478291738137,
+  "max_rss_kb": null,
+  "max_rss_mb": null,
+  "user_cpu_sec": null,
+  "system_cpu_sec": null,
+  "cpu_pct": null,
+  "voluntary_ctx_switches": null,
+  "involuntary_ctx_switches": null,
+  "peak_open_fds": 185,
+  "peak_direct_children": 2,
+  "return_code": 0,
+  "worker_count": 1,
+  "successful_runs": 1,
+  "failed_runs": 0,
+  "otel_payload_count": 0,
+  "metric_datapoint_count": 0,
+  "queue_cancel_datapoints": {},
+  "turn_metric_points": 0,
+  "action_metric_points": 0,
+  "stream_metric_points": 0,
+  "turn_metric_value_sum": null,
+  "action_metric_value_sum": null,
+  "stream_metric_value_sum": null,
+  "sampled_peak_tree_rss_kb": 372416,
+  "sampled_peak_tree_rss_mb": 363.6875,
+  "sampled_peak_tree_cpu_pct": 250.9,
+  "sampled_mean_tree_cpu_pct": 42.80135135135136,
+  "build_cmd_ms": 0.592042000789661,
+  "spawn_proc_ms": 2.818749999278225,
+  "monitor_loop_ms": 9717.405166009485,
+  "communicate_ms": 0.06012499943608418,
+  "parse_stats_ms": 0.983959000222967,
+  "top_sample_count": 39,
+  "top_peak_rss_mb": 88.375,
+  "top_mean_rss_mb": 23.017227564102566,
+  "top_peak_cpu_pct": 80.0,
+  "top_mean_cpu_pct": 8.207692307692309,
+  "vmmap_start_physical_footprint_mb": 0.453125,
+  "vmmap_mid_physical_footprint_mb": 19.9,
+  "vmmap_end_physical_footprint_mb": null,
+  "xctrace_trace_path": "/Users/kooshapari/temp-PRODVERCEL/485/kush/heliosHarness/clones/codex/codex-rs/perf-results/attribution-hotspots-v2-20260223-031254/xctrace-traces/worker-01.trace",
+  "xctrace_hotspots": [
+    {
+      "frame": "dyld4::RuntimeState::loadInsertedLibraries(dyld3::OverflowSafeArray<dyld4::Loader*, 4294967295ull>&, dyld4::Loader const*)",
+      "weight_ms": 1.0,
+      "samples": 1
+    },
+    {
+      "frame": "__sysctl",
+      "weight_ms": 1.0,
+      "samples": 1
+    },
+    {
+      "frame": "0x1029695a1",
+      "weight_ms": 1.0,
+      "samples": 1
+    },
+    {
+      "frame": "<deduplicated_symbol>",
+      "weight_ms": 1.0,
+      "samples": 1
+    },
+    {
+      "frame": "0x102656474",
+      "weight_ms": 1.0,
+      "samples": 1
+    }
+  ],
+  "stderr_tail": ""
+}

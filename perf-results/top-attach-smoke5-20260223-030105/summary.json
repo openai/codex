@@ -1,0 +1,313 @@
+{
+  "generated_at": "2026-02-23T10:01:07.226217+00:00",
+  "run_dir": "/Users/kooshapari/temp-PRODVERCEL/485/kush/heliosHarness/clones/codex/codex-rs/perf-results/top-attach-smoke5-20260223-030105",
+  "command": "sleep 0.6",
+  "config_path": "/var/folders/wl/z8733y815nzg28yy0_1_lh7w0000gn/T/codex-perf-piirh89v/codex-home-worker-1/config.toml",
+  "profile": {
+    "name": null,
+    "phase": "measure",
+    "concurrency": 2,
+    "warmup": 0,
+    "iterations": 1,
+    "auth_source_home": "/Users/kooshapari/.codex",
+    "auth_copied_workers": 2,
+    "top_attach": true,
+    "top_interval_ms": 100.0
+  },
+  "iterations": 1,
+  "summary": {
+    "latency_ms": {
+      "mean": 1269.5825840000907,
+      "p50": 1269.5825840000907,
+      "p95": 1269.5825840000907,
+      "min": 1269.5825840000907,
+      "max": 1269.5825840000907
+    },
+    "throughput_runs_per_sec": {
+      "mean": 1.5753209166579565,
+      "p50": 1.5753209166579565,
+      "p95": 1.5753209166579565
+    },
+    "max_rss_kb": {
+      "mean": 865.0,
+      "p50": 865.0,
+      "p95": 865.0,
+      "min": 865.0,
+      "max": 865.0
+    },
+    "max_rss_mb": {
+      "mean": 0.8447265625,
+      "p50": 0.8447265625,
+      "p95": 0.8447265625,
+      "min": 0.8447265625,
+      "max": 0.8447265625
+    },
+    "user_cpu_sec": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "system_cpu_sec": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "cpu_pct": {
+      "mean": null,
+      "p50": null,
+      "p95": null
+    },
+    "voluntary_ctx_switches": {
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "involuntary_ctx_switches": {
+      "mean": 29.0,
+      "p50": 29.0,
+      "p95": 29.0
+    },
+    "peak_open_fds": {
+      "mean": 6.0,
+      "p50": 6.0,
+      "p95": 6.0,
+      "max": 6.0
+    },
+    "peak_direct_children": {
+      "mean": 1.0,
+      "p50": 1.0,
+      "p95": 1.0,
+      "max": 1.0
+    },
+    "process_tree_sampled": {
+      "peak_tree_rss_kb": {
+        "mean": 2336.0,
+        "p50": 2336.0,
+        "p95": 2336.0,
+        "max": 2336.0
+      },
+      "peak_tree_rss_mb": {
+        "mean": 2.28125,
+        "p50": 2.28125,
+        "p95": 2.28125,
+        "max": 2.28125
+      },
+      "peak_tree_cpu_pct": {
+        "mean": 1.0,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 1.0
+      },
+      "mean_tree_cpu_pct": {
+        "mean": 0.95,
+        "p50": 0.95,
+        "p95": 0.95
+      }
+    },
+    "worker_step_timings_ms": {
+      "build_cmd": {
+        "mean": 0.602291499490093,
+        "p50": 0.602291499490093,
+        "p95": 0.602291499490093
+      },
+      "spawn_proc": {
+        "mean": 5.490645999998378,
+        "p50": 5.490645999998378,
+        "p95": 5.490645999998378
+      },
+      "monitor_loop": {
+        "mean": 1198.6467289998473,
+        "p50": 1198.6467289998473,
+        "p95": 1198.6467289998473
+      },
+      "communicate": {
+        "mean": 0.1186045001304592,
+        "p50": 0.1186045001304592,
+        "p95": 0.1186045001304592
+      },
+      "parse_stats": {
+        "mean": 0.511520499458129,
+        "p50": 0.511520499458129,
+        "p95": 0.511520499458129
+      }
+    },
+    "resource_budget": {
+      "time_budget_ms": {
+        "wall_mean_ms": 1269.5825840000907,
+        "observed_worker_step_mean_ms": 1205.3697914989243,
+        "unaccounted_time_mean_ms": 64.2127925011664,
+        "build_cmd_share_pct": 0.04744011985360142,
+        "spawn_proc_share_pct": 0.4324764744880894,
+        "monitor_loop_share_pct": 94.41266319385502,
+        "communicate_share_pct": 0.009342007493263686,
+        "parse_stats_share_pct": 0.040290447104785784,
+        "unaccounted_share_pct": 5.057787757205231
+      },
+      "cpu_budget": {
+        "user_cpu_mean_sec": 0.0,
+        "system_cpu_mean_sec": 0.0,
+        "total_cpu_mean_sec": 0.0,
+        "cpu_core_utilization_pct": 0.0
+      },
+      "process_budget": {
+        "peak_open_fds_mean": 6.0,
+        "peak_direct_children_mean": 1.0,
+        "sampled_peak_tree_rss_mean_kb": 2336.0,
+        "sampled_peak_tree_rss_mean_mb": 2.28125,
+        "sampled_peak_tree_cpu_p95": 1.0
+      },
+      "stability": {
+        "total_runs": 2,
+        "successful_runs_total": 2,
+        "failed_runs_total": 0,
+        "timeout_runs_total": 0,
+        "failure_rate_pct": 0.0,
+        "timeout_rate_pct": 0.0
+      }
+    },
+    "top_attach": {
+      "sample_count": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0
+      },
+      "peak_rss_mb": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "mean_rss_mb": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "peak_cpu_pct": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "mean_cpu_pct": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "otel_turn_action_stream": {
+      "turn_metric_points": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "total": 0
+      },
+      "action_metric_points": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "total": 0
+      },
+      "stream_metric_points": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "total": 0
+      },
+      "turn_metric_value_sum": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "action_metric_value_sum": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "stream_metric_value_sum": {
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "queue_cancel_metrics": {},
+    "otel_payloads_total": 0,
+    "metric_datapoints_total": 0,
+    "successful_runs_total": 2,
+    "failed_runs_total": 0,
+    "failed_iterations": []
+  },
+  "runs": [
+    {
+      "iteration": 1,
+      "duration_ms": 1269.583,
+      "throughput_runs_per_sec": 1.575321,
+      "max_rss_kb": 865,
+      "max_rss_mb": 0.8447265625,
+      "user_cpu_sec": 0.0,
+      "system_cpu_sec": 0.0,
+      "cpu_pct": null,
+      "voluntary_ctx_switches": 0,
+      "involuntary_ctx_switches": 29,
+      "peak_open_fds": 6,
+      "peak_direct_children": 1,
+      "return_code": 0,
+      "worker_count": 2,
+      "successful_runs": 2,
+      "failed_runs": 0,
+      "otel_payload_count": 0,
+      "metric_datapoint_count": 0,
+      "queue_cancel_datapoints": {},
+      "turn_metric_points": 0,
+      "action_metric_points": 0,
+      "stream_metric_points": 0,
+      "turn_metric_value_sum": null,
+      "action_metric_value_sum": null,
+      "stream_metric_value_sum": null,
+      "sampled_peak_tree_rss_kb": 2336,
+      "sampled_peak_tree_rss_mb": 2.28125,
+      "sampled_peak_tree_cpu_pct": 1.0,
+      "sampled_mean_tree_cpu_pct": 0.95,
+      "build_cmd_ms": 0.602291499490093,
+      "spawn_proc_ms": 5.490645999998378,
+      "monitor_loop_ms": 1198.6467289998473,
+      "communicate_ms": 0.1186045001304592,
+      "parse_stats_ms": 0.511520499458129,
+      "top_sample_count": 0,
+      "top_peak_rss_mb": null,
+      "top_mean_rss_mb": null,
+      "top_peak_cpu_pct": null,
+      "top_mean_cpu_pct": null,
+      "stderr_tail": "",
+      "worker_results": [
+        {
+          "worker_id": 1,
+          "return_code": 0,
+          "duration_ms": 1259.851,
+          "max_rss_kb": 865,
+          "max_rss_mb": 0.8447265625,
+          "user_cpu_sec": 0.0,
+          "system_cpu_sec": 0.0,
+          "cpu_pct": null,
+          "voluntary_ctx_switches": 0,
+          "involuntary_ctx_switches": 26,
+          "peak_open_fds": 6,
+          "peak_direct_children": 1
+        },
+        {
+          "worker_id": 2,
+          "return_code": 0,
+          "duration_ms": 1255.487,
+          "max_rss_kb": 865,
+          "max_rss_mb": 0.8447265625,
+          "user_cpu_sec": 0.0,
+          "system_cpu_sec": 0.0,
+          "cpu_pct": null,
+          "voluntary_ctx_switches": 0,
+          "involuntary_ctx_switches": 29,
+          "peak_open_fds": 6,
+          "peak_direct_children": 1
+        }
+      ]
+    }
+  ]
+}

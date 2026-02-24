@@ -53,6 +53,7 @@ codex-utils-string = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 csv = { workspace = true }
 dirs = { workspace = true }
+dashmap = "6.1.0"
 dunce = { workspace = true }
 encoding_rs = { workspace = true }
 env-flags = { workspace = true }

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.dt.path-manager.compression</key>
+	<array>
+		<integer>1</integer>
+		<string>The data is compressed and requires Instruments 9.3 or later to read it.</string>
+	</array>
+	<key>com.apple.dt.trace</key>
+	<array>
+		<integer>5</integer>
+		<string>This document was saved by a newer version of Instruments and the file format has significantly changed. The document will need to be opened by the newer version.</string>
+	</array>
+</dict>
+</plist>

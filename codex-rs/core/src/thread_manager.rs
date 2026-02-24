@@ -27,14 +27,14 @@ use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
-use std::collections::HashMap;
+use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 use tokio::runtime::Handle;
 use tokio::runtime::RuntimeFlavor;
-use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 use tracing::warn;
 
@@ -55,6 +55,21 @@ pub(crate) fn set_thread_manager_test_mode_for_tests(enabled: bool) {
 
 fn should_use_test_thread_manager_behavior() -> bool {
     FORCE_TEST_THREAD_MANAGER_BEHAVIOR.load(Ordering::Relaxed)
+}
+
+fn record_thread_map_lock_wait(operation: &str, duration: std::time::Duration) {
+    if let Some(metrics) = codex_otel::metrics::global() {
+        let _ = metrics.record_duration(
+            "codex.thread_manager.thread_map.lock_wait_duration",
+            duration,
+            &[("operation", operation)],
+        );
+        let _ = metrics.counter(
+            "codex.thread_manager.thread_map.lock_wait",
+            1,
+            &[("operation", operation)],
+        );
+    }
 }
 
 struct TempCodexHomeGuard {
@@ -126,7 +141,7 @@ pub struct ThreadManager {
 /// `Arc` reference that can be downgraded to by `AgentControl` while preventing every single
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
-    threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+    threads: DashMap<ThreadId, Arc<CodexThread>>,
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
@@ -149,7 +164,7 @@ impl ThreadManager {
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
-                threads: Arc::new(RwLock::new(HashMap::new())),
+                threads: DashMap::new(),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::new(
                     codex_home,
@@ -200,7 +215,7 @@ impl ThreadManager {
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
-                threads: Arc::new(RwLock::new(HashMap::new())),
+                threads: DashMap::new(),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::with_provider_for_tests(
                     codex_home,
@@ -249,17 +264,19 @@ impl ThreadManager {
     }
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
-        self.state.threads.read().await.keys().copied().collect()
+        self.state
+            .threads
+            .iter()
+            .map(|entry| *entry.key())
+            .collect()
     }
 
     pub async fn refresh_mcp_servers(&self, refresh_config: McpServerRefreshConfig) {
         let threads = self
             .state
             .threads
-            .read()
-            .await
-            .values()
-            .cloned()
+            .iter()
+            .map(|entry| entry.value().clone())
             .collect::<Vec<_>>();
         for thread in threads {
             if let Err(err) = thread
@@ -356,15 +373,28 @@ impl ThreadManager {
     /// as `Arc<CodexThread>`, it is possible that other references to it exist elsewhere.
     /// Returns the thread if the thread was found and removed.
     pub async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.state.threads.write().await.remove(thread_id)
+        let lock_wait_start = Instant::now();
+        let removed = self
+            .state
+            .threads
+            .remove(thread_id)
+            .map(|(_, thread)| thread);
+        record_thread_map_lock_wait("remove", lock_wait_start.elapsed());
+        removed
     }
 
     /// Closes all threads open in this ThreadManager
     pub async fn remove_and_close_all_threads(&self) -> CodexResult<()> {
-        for thread in self.state.threads.read().await.values() {
+        let threads = self
+            .state
+            .threads
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>();
+        for thread in threads {
             thread.submit(Op::Shutdown).await?;
         }
-        self.state.threads.write().await.clear();
+        self.state.threads.clear();
         Ok(())
     }
 
@@ -411,11 +441,14 @@ impl ThreadManager {
 impl ThreadManagerState {
     /// Fetch a thread by ID or return ThreadNotFound.
     pub(crate) async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
-        let threads = self.threads.read().await;
-        threads
+        let lock_wait_start = Instant::now();
+        let thread = self
+            .threads
             .get(&thread_id)
-            .cloned()
-            .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))
+            .map(|entry| entry.value().clone())
+            .ok_or_else(|| CodexErr::ThreadNotFound(thread_id));
+        record_thread_map_lock_wait("lookup", lock_wait_start.elapsed());
+        thread
     }
 
     /// Send an operation to a thread by ID.
@@ -431,7 +464,10 @@ impl ThreadManagerState {
 
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.threads.write().await.remove(thread_id)
+        let lock_wait_start = Instant::now();
+        let removed = self.threads.remove(thread_id).map(|(_, thread)| thread);
+        record_thread_map_lock_wait("remove", lock_wait_start.elapsed());
+        removed
     }
 
     /// Spawn a new thread with no history using a provided config.
@@ -572,8 +608,9 @@ impl ThreadManagerState {
             session_configured.rollout_path.clone(),
             watch_registration,
         ));
-        let mut threads = self.threads.write().await;
-        threads.insert(thread_id, thread.clone());
+        let lock_wait_start = Instant::now();
+        self.threads.insert(thread_id, thread.clone());
+        record_thread_map_lock_wait("insert", lock_wait_start.elapsed());
 
         Ok(NewThread {
             thread_id,
