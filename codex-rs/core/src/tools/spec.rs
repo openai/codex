@@ -2133,12 +2133,11 @@ mod tests {
     }
 
     #[test]
-    fn request_user_input_requires_collaboration_modes_feature() {
+    fn request_user_input_description_reflects_default_mode_feature_flag() {
         let config = test_config();
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
-        features.disable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -2146,12 +2145,13 @@ mod tests {
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-        assert!(
-            !tools.iter().any(|t| t.spec.name() == "request_user_input"),
-            "request_user_input should be disabled when collaboration_modes feature is off"
+        let request_user_input_tool = find_tool(&tools, "request_user_input");
+        assert_eq!(
+            request_user_input_tool.spec,
+            create_request_user_input_tool(false)
         );
 
-        features.enable(Feature::CollaborationModes);
+        features.enable(Feature::DefaultModeRequestUserInput);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -2159,7 +2159,11 @@ mod tests {
             session_source: SessionSource::Cli,
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-        assert_contains_tool_names(&tools, &["request_user_input"]);
+        let request_user_input_tool = find_tool(&tools, "request_user_input");
+        assert_eq!(
+            request_user_input_tool.spec,
+            create_request_user_input_tool(true)
+        );
     }
 
     #[test]
