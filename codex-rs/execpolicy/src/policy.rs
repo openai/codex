@@ -74,6 +74,15 @@ impl Policy {
     }
 
     pub fn add_prefix_rule(&mut self, prefix: &[String], decision: Decision) -> Result<()> {
+        self.add_prefix_rule_with_justification(prefix, decision, None)
+    }
+
+    pub fn add_prefix_rule_with_justification(
+        &mut self,
+        prefix: &[String],
+        decision: Decision,
+        justification: Option<String>,
+    ) -> Result<()> {
         let (first_token, rest) = prefix
             .split_first()
             .ok_or_else(|| Error::InvalidPattern("prefix cannot be empty".to_string()))?;
@@ -88,7 +97,7 @@ impl Policy {
                     .into(),
             },
             decision,
-            justification: None,
+            justification,
         });
 
         self.rules_by_program.insert(first_token.clone(), rule);
