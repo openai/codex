@@ -142,6 +142,8 @@ pub enum Feature {
     Personality,
     /// Enable voice transcription in the TUI composer.
     VoiceTranscription,
+    /// Enable experimental realtime voice conversation mode in the TUI.
+    RealtimeConversation,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
@@ -640,6 +642,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::VoiceTranscription,
         key: "voice_transcription",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RealtimeConversation,
+        key: "realtime_conversation",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
