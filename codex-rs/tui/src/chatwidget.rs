@@ -92,7 +92,6 @@ use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::ErrorEvent;
@@ -115,11 +114,6 @@ use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RealtimeAudioFrame;
-use codex_protocol::protocol::RealtimeConversationClosedEvent;
-use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
-use codex_protocol::protocol::RealtimeConversationStartedEvent;
-use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -169,7 +163,6 @@ const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
-const REALTIME_CONVERSATION_PROMPT: &str = "You are in a realtime voice conversation in the Codex TUI. Respond conversationally and concisely.";
 
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
@@ -266,6 +259,9 @@ mod skills;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
+mod realtime;
+use self::realtime::RealtimeConversationUiState;
+use self::realtime::RenderedUserMessageEvent;
 use crate::mention_codec::LinkedMention;
 use crate::mention_codec::encode_history_mentions;
 use crate::streaming::chunking::AdaptiveChunkingPolicy;
@@ -508,53 +504,6 @@ pub(crate) enum ExternalEditorState {
     Closed,
     Requested,
     Active,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum RealtimeConversationPhase {
-    #[default]
-    Inactive,
-    Starting,
-    Active,
-    Stopping,
-}
-
-#[derive(Default)]
-struct RealtimeConversationUiState {
-    phase: RealtimeConversationPhase,
-    requested_close: bool,
-    session_id: Option<String>,
-    warned_audio_only_submission: bool,
-    meter_placeholder_id: Option<String>,
-    #[cfg(not(target_os = "linux"))]
-    capture_stop_flag: Option<Arc<AtomicBool>>,
-    #[cfg(not(target_os = "linux"))]
-    capture: Option<crate::voice::VoiceCapture>,
-    #[cfg(not(target_os = "linux"))]
-    audio_player: Option<crate::voice::RealtimeAudioPlayer>,
-}
-
-impl RealtimeConversationUiState {
-    fn is_activeish(&self) -> bool {
-        !matches!(self.phase, RealtimeConversationPhase::Inactive)
-    }
-
-    fn is_live(&self) -> bool {
-        matches!(
-            self.phase,
-            RealtimeConversationPhase::Starting
-                | RealtimeConversationPhase::Active
-                | RealtimeConversationPhase::Stopping
-        )
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct RenderedUserMessageEvent {
-    message: String,
-    remote_image_urls: Vec<String>,
-    local_images: Vec<PathBuf>,
-    text_elements: Vec<TextElement>,
 }
 
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
@@ -3383,20 +3332,11 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
                     };
-                    if self.realtime_conversation.is_live() {
-                        self.restore_user_message_to_composer(user_message);
-                        if !self.realtime_conversation.warned_audio_only_submission {
-                            self.realtime_conversation.warned_audio_only_submission = true;
-                            self.add_info_message(
-                                "Realtime voice mode is audio-only. Use /realtime to stop."
-                                    .to_string(),
-                                None,
-                            );
-                        } else {
-                            self.request_redraw();
-                        }
+                    let Some(user_message) =
+                        self.maybe_defer_user_message_for_realtime(user_message)
+                    else {
                         return;
-                    }
+                    };
                     // Steer submissions during active final-answer streaming can race with turn
                     // completion and strand the UI in a running state. Queue those inputs instead
                     // of injecting immediately; `on_task_complete()` drains this FIFO via
@@ -3432,20 +3372,11 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
                     };
-                    if self.realtime_conversation.is_live() {
-                        self.restore_user_message_to_composer(user_message);
-                        if !self.realtime_conversation.warned_audio_only_submission {
-                            self.realtime_conversation.warned_audio_only_submission = true;
-                            self.add_info_message(
-                                "Realtime voice mode is audio-only. Use /realtime to stop."
-                                    .to_string(),
-                                None,
-                            );
-                        } else {
-                            self.request_redraw();
-                        }
+                    let Some(user_message) =
+                        self.maybe_defer_user_message_for_realtime(user_message)
+                    else {
                         return;
-                    }
+                    };
                     self.queue_user_message(user_message);
                 }
                 InputResult::Command(cmd) => {
@@ -3573,7 +3504,7 @@ impl ChatWidget {
                 if !self.realtime_conversation_enabled() {
                     return;
                 }
-                if self.realtime_conversation.is_activeish() {
+                if self.realtime_conversation.is_live() {
                     self.request_realtime_conversation_close(None);
                 } else {
                     self.start_realtime_conversation();
@@ -6536,7 +6467,7 @@ impl ChatWidget {
             let realtime_conversation_enabled = self.realtime_conversation_enabled();
             self.bottom_pane
                 .set_realtime_conversation_enabled(realtime_conversation_enabled);
-            if !realtime_conversation_enabled && self.realtime_conversation.is_activeish() {
+            if !realtime_conversation_enabled && self.realtime_conversation.is_live() {
                 self.request_realtime_conversation_close(Some(
                     "Realtime voice mode was closed because the feature was disabled.".to_string(),
                 ));
@@ -7693,221 +7624,6 @@ impl ChatWidget {
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
         );
         RenderableItem::Owned(Box::new(flex))
-    }
-}
-
-impl ChatWidget {
-    fn rendered_user_message_event_from_parts(
-        message: String,
-        text_elements: Vec<TextElement>,
-        local_images: Vec<PathBuf>,
-        remote_image_urls: Vec<String>,
-    ) -> RenderedUserMessageEvent {
-        RenderedUserMessageEvent {
-            message,
-            remote_image_urls,
-            local_images,
-            text_elements,
-        }
-    }
-
-    fn rendered_user_message_event_from_event(
-        event: &UserMessageEvent,
-    ) -> RenderedUserMessageEvent {
-        Self::rendered_user_message_event_from_parts(
-            event.message.clone(),
-            event.text_elements.clone(),
-            event.local_images.clone(),
-            event.images.clone().unwrap_or_default(),
-        )
-    }
-
-    fn should_render_realtime_user_message_event(&self, event: &UserMessageEvent) -> bool {
-        if !self.realtime_conversation.is_live() {
-            return false;
-        }
-        let key = Self::rendered_user_message_event_from_event(event);
-        self.last_rendered_user_message_event.as_ref() != Some(&key)
-    }
-
-    fn realtime_footer_hint_items() -> Vec<(String, String)> {
-        vec![("/realtime".to_string(), "stop live voice".to_string())]
-    }
-
-    fn start_realtime_conversation(&mut self) {
-        self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
-        self.realtime_conversation.requested_close = false;
-        self.realtime_conversation.session_id = None;
-        self.realtime_conversation.warned_audio_only_submission = false;
-        self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
-        self.submit_op(Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
-            session_id: None,
-        }));
-        self.request_redraw();
-    }
-
-    fn request_realtime_conversation_close(&mut self, info_message: Option<String>) {
-        if !self.realtime_conversation.is_activeish() {
-            if let Some(message) = info_message {
-                self.add_info_message(message, None);
-            }
-            return;
-        }
-
-        self.realtime_conversation.requested_close = true;
-        self.realtime_conversation.phase = RealtimeConversationPhase::Stopping;
-        self.submit_op(Op::RealtimeConversationClose);
-        self.stop_realtime_local_audio();
-        self.set_footer_hint_override(None);
-
-        if let Some(message) = info_message {
-            self.add_info_message(message, None);
-        } else {
-            self.request_redraw();
-        }
-    }
-
-    fn reset_realtime_conversation_state(&mut self) {
-        self.stop_realtime_local_audio();
-        self.set_footer_hint_override(None);
-        self.realtime_conversation.phase = RealtimeConversationPhase::Inactive;
-        self.realtime_conversation.requested_close = false;
-        self.realtime_conversation.session_id = None;
-        self.realtime_conversation.warned_audio_only_submission = false;
-    }
-
-    fn on_realtime_conversation_started(&mut self, ev: RealtimeConversationStartedEvent) {
-        if !self.realtime_conversation_enabled() {
-            self.submit_op(Op::RealtimeConversationClose);
-            self.reset_realtime_conversation_state();
-            return;
-        }
-        self.realtime_conversation.phase = RealtimeConversationPhase::Active;
-        self.realtime_conversation.session_id = ev.session_id;
-        self.realtime_conversation.warned_audio_only_submission = false;
-        self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
-        self.start_realtime_local_audio();
-        self.request_redraw();
-    }
-
-    fn on_realtime_conversation_realtime(&mut self, ev: RealtimeConversationRealtimeEvent) {
-        match ev.payload {
-            RealtimeEvent::SessionCreated { session_id } => {
-                self.realtime_conversation.session_id = Some(session_id);
-            }
-            RealtimeEvent::SessionUpdated { .. } => {}
-            RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
-            RealtimeEvent::ConversationItemAdded(_item) => {}
-            RealtimeEvent::Error(message) => {
-                self.add_error_message(format!("Realtime voice error: {message}"));
-                self.reset_realtime_conversation_state();
-            }
-        }
-    }
-
-    fn on_realtime_conversation_closed(&mut self, ev: RealtimeConversationClosedEvent) {
-        let requested = self.realtime_conversation.requested_close;
-        let reason = ev.reason;
-        self.reset_realtime_conversation_state();
-        if !requested && let Some(reason) = reason {
-            self.add_info_message(format!("Realtime voice mode closed: {reason}"), None);
-        }
-        self.request_redraw();
-    }
-
-    fn enqueue_realtime_audio_out(&mut self, frame: &RealtimeAudioFrame) {
-        #[cfg(not(target_os = "linux"))]
-        {
-            if self.realtime_conversation.audio_player.is_none() {
-                self.realtime_conversation.audio_player =
-                    crate::voice::RealtimeAudioPlayer::start().ok();
-            }
-            if let Some(player) = &self.realtime_conversation.audio_player
-                && let Err(err) = player.enqueue_frame(frame)
-            {
-                warn!("failed to play realtime audio: {err}");
-            }
-        }
-        #[cfg(target_os = "linux")]
-        {
-            let _ = frame;
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn start_realtime_local_audio(&mut self) {
-        if self.realtime_conversation.capture_stop_flag.is_some() {
-            return;
-        }
-
-        let placeholder_id = self.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
-        self.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
-        self.request_redraw();
-
-        let capture = match crate::voice::VoiceCapture::start_realtime(self.app_event_tx.clone()) {
-            Ok(capture) => capture,
-            Err(err) => {
-                self.remove_transcription_placeholder(&placeholder_id);
-                self.realtime_conversation.meter_placeholder_id = None;
-                self.add_error_message(format!("Failed to start microphone capture: {err}"));
-                return;
-            }
-        };
-
-        let stop_flag = capture.stopped_flag();
-        let peak = capture.last_peak_arc();
-        let meter_placeholder_id = placeholder_id;
-        let app_event_tx = self.app_event_tx.clone();
-
-        self.realtime_conversation.capture_stop_flag = Some(stop_flag.clone());
-        self.realtime_conversation.capture = Some(capture);
-        if self.realtime_conversation.audio_player.is_none() {
-            self.realtime_conversation.audio_player =
-                crate::voice::RealtimeAudioPlayer::start().ok();
-        }
-
-        std::thread::spawn(move || {
-            let mut meter = crate::voice::RecordingMeterState::new();
-
-            loop {
-                if stop_flag.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                let meter_text = meter.next_text(peak.load(Ordering::Relaxed));
-                app_event_tx.send(AppEvent::UpdateRecordingMeter {
-                    id: meter_placeholder_id.clone(),
-                    text: meter_text,
-                });
-
-                std::thread::sleep(Duration::from_millis(60));
-            }
-        });
-    }
-
-    #[cfg(target_os = "linux")]
-    fn start_realtime_local_audio(&mut self) {}
-
-    #[cfg(not(target_os = "linux"))]
-    fn stop_realtime_local_audio(&mut self) {
-        if let Some(flag) = self.realtime_conversation.capture_stop_flag.take() {
-            flag.store(true, Ordering::Relaxed);
-        }
-        if let Some(capture) = self.realtime_conversation.capture.take() {
-            let _ = capture.stop();
-        }
-        if let Some(id) = self.realtime_conversation.meter_placeholder_id.take() {
-            self.remove_transcription_placeholder(&id);
-        }
-        if let Some(player) = self.realtime_conversation.audio_player.take() {
-            player.clear();
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn stop_realtime_local_audio(&mut self) {
-        self.realtime_conversation.meter_placeholder_id = None;
     }
 }
 
