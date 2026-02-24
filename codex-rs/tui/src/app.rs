@@ -4068,6 +4068,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_model_selection_plan_mode_persists_model_toggle_pair() -> Result<()> {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        let codex_home = codex_home.path().to_path_buf();
+        app.config.codex_home = codex_home.clone();
+        app.chat_widget.config.codex_home = codex_home.clone();
+        app.chat_widget.thread_id = Some(ThreadId::new());
+
+        app.on_update_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+        let selected_model = "gpt-5-codex".to_string();
+        let mut tui = crate::tui::Tui::new(
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24))?,
+        );
+
+        app.handle_event(
+            &mut tui,
+            AppEvent::UpdateModelSelection {
+                model: selected_model.clone(),
+                effort: Some(ReasoningEffortConfig::High),
+                scope: crate::app_event::ModelEffortScope::PlanMode,
+            },
+        )
+        .await?;
+
+        let config_path = codex_home.join("config.toml");
+        let raw = std::fs::read_to_string(config_path)?;
+        let parsed: toml::Value = toml::from_str(&raw)?;
+        let pair = parsed
+            .get("model_toggle_pair")
+            .and_then(toml::Value::as_array)
+            .expect("model_toggle_pair persisted");
+        let selected_entry_has_high_effort = pair.iter().any(|entry| {
+            entry.get("model").and_then(toml::Value::as_str) == Some(selected_model.as_str())
+                && entry.get("effort").and_then(toml::Value::as_str) == Some("high")
+        });
+        assert!(
+            selected_entry_has_high_effort,
+            "expected persisted plan-mode model entry to carry high effort"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn refresh_in_memory_config_from_disk_loads_latest_apps_state() -> Result<()> {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
