@@ -660,6 +660,18 @@ fn file_link_hides_destination() {
 }
 
 #[test]
+fn url_link_shows_destination() {
+    let text = render_markdown_text("[docs](https://example.com/docs)");
+    let expected = Text::from(Line::from_iter([
+        "docs".cyan().underlined(),
+        " (".into(),
+        "https://example.com/docs".cyan().underlined(),
+        ")".into(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
 fn markdown_render_file_link_snapshot() {
     let text = render_markdown_text(
         "See [markdown_render.rs:74](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74).",
