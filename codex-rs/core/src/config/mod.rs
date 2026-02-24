@@ -973,6 +973,7 @@ pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
     /// Persisted two-entry model toggle ring (global scope only).
+    #[schemars(length(max = 2))]
     pub model_toggle_pair: Option<Vec<ModelTogglePairEntry>>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
