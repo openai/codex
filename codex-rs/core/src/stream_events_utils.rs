@@ -219,7 +219,10 @@ pub(crate) fn last_assistant_message_from_item(
             return None;
         }
         let stripped = strip_hidden_assistant_markup(&combined, plan_mode);
-        return (!stripped.trim().is_empty()).then_some(stripped);
+        if stripped.trim().is_empty() {
+            return Some(String::new());
+        }
+        return Some(stripped);
     }
     None
 }
@@ -307,5 +310,15 @@ mod tests {
             .expect("assistant text should remain after stripping");
 
         assert_eq!(message, "before\nafter");
+    }
+
+    #[test]
+    fn last_assistant_message_from_item_returns_empty_string_for_citation_only_message() {
+        let item = assistant_output_text("<citation>doc1</citation>");
+
+        let message = last_assistant_message_from_item(&item, false)
+            .expect("assistant item should still count as latest message");
+
+        assert_eq!(message, "");
     }
 }
