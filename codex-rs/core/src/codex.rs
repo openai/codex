@@ -1190,22 +1190,33 @@ impl Session {
 
         let auth = auth.as_ref();
         let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
+        let account_id = auth.and_then(CodexAuth::get_account_id);
+        let account_email = auth.and_then(CodexAuth::get_account_email);
+        let originator = crate::default_client::originator().value;
+        let terminal_type = terminal::user_agent();
+        let session_model = session_configuration.collaboration_mode.model().to_string();
         let otel_manager = OtelManager::new(
             conversation_id,
-            session_configuration.collaboration_mode.model(),
-            session_configuration.collaboration_mode.model(),
-            auth.and_then(CodexAuth::get_account_id),
-            auth.and_then(CodexAuth::get_account_email),
+            session_model.as_str(),
+            session_model.as_str(),
+            account_id.clone(),
+            account_email.clone(),
             auth_mode,
-            crate::default_client::originator().value,
+            originator.clone(),
             config.otel.log_user_prompt,
-            terminal::user_agent(),
+            terminal_type.clone(),
             session_configuration.session_source.clone(),
         );
         let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
             conversation_id: Some(conversation_id.to_string()),
             app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            user_account_id: auth.and_then(CodexAuth::get_account_id),
+            user_account_id: account_id,
+            auth_mode: auth_mode.map(|mode| mode.to_string()),
+            originator: Some(originator),
+            user_email: account_email,
+            terminal_type: Some(terminal_type),
+            model: Some(session_model.clone()),
+            slug: Some(session_model),
         };
         config.features.emit_metrics(&otel_manager);
         otel_manager.counter(
