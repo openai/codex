@@ -2019,7 +2019,7 @@ impl ChatComposer {
             return if prefix_starts_token {
                 right_prefixed.or(left_prefixed)
             } else {
-                left_prefixed.or(right_prefixed)
+                left_prefixed
             };
         }
         left_prefixed.or(right_prefixed)
@@ -5484,6 +5484,28 @@ mod tests {
             let result = ChatComposer::current_at_token(&textarea);
             assert!(
                 result.is_some(),
+                "Failed for case: {description} - input: '{input}', cursor: {cursor_pos}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_current_at_token_ignores_mid_word_at() {
+        let input = "foo@bar";
+        let at_pos = input.find('@').expect("@ present");
+        let test_cases = vec![
+            (at_pos, "Cursor at mid-word @"),
+            (input.len(), "Cursor at end of word containing @"),
+        ];
+
+        for (cursor_pos, description) in test_cases {
+            let mut textarea = TextArea::new();
+            textarea.insert_str(input);
+            textarea.set_cursor(cursor_pos);
+
+            let result = ChatComposer::current_at_token(&textarea);
+            assert_eq!(
+                result, None,
                 "Failed for case: {description} - input: '{input}', cursor: {cursor_pos}"
             );
         }
