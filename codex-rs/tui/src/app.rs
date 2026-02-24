@@ -264,10 +264,11 @@ impl ElicitationRequestKey {
 
 #[derive(Debug, Default)]
 struct PendingInteractiveReplayState {
-    exec_approval_call_ids_by_id: HashMap<String, String>,
+    exec_approval_call_ids: HashSet<String>,
     patch_approval_call_ids: HashSet<String>,
     elicitation_requests: HashSet<ElicitationRequestKey>,
-    request_user_input_turn_ids: HashSet<String>,
+    request_user_input_call_ids: HashSet<String>,
+    request_user_input_call_ids_by_turn_id: HashMap<String, Vec<String>>,
 }
 
 impl PendingInteractiveReplayState {
@@ -285,7 +286,7 @@ impl PendingInteractiveReplayState {
     fn note_outbound_op(&mut self, op: &Op) {
         match op {
             Op::ExecApproval { id, .. } => {
-                self.exec_approval_call_ids_by_id.remove(id);
+                self.exec_approval_call_ids.remove(id);
             }
             Op::PatchApproval { id, .. } => {
                 self.patch_approval_call_ids.remove(id);
@@ -302,7 +303,18 @@ impl PendingInteractiveReplayState {
                     ));
             }
             Op::UserInputAnswer { id, .. } => {
-                self.request_user_input_turn_ids.remove(id);
+                let mut remove_turn_entry = false;
+                if let Some(call_ids) = self.request_user_input_call_ids_by_turn_id.get_mut(id) {
+                    if let Some(call_id) = call_ids.pop() {
+                        self.request_user_input_call_ids.remove(&call_id);
+                    }
+                    if call_ids.is_empty() {
+                        remove_turn_entry = true;
+                    }
+                }
+                if remove_turn_entry {
+                    self.request_user_input_call_ids_by_turn_id.remove(id);
+                }
             }
             Op::Shutdown => self.clear(),
             _ => {}
@@ -312,12 +324,10 @@ impl PendingInteractiveReplayState {
     fn note_event(&mut self, event: &Event) {
         match &event.msg {
             EventMsg::ExecApprovalRequest(ev) => {
-                self.exec_approval_call_ids_by_id
-                    .insert(ev.effective_approval_id(), ev.call_id.clone());
+                self.exec_approval_call_ids.insert(ev.call_id.clone());
             }
             EventMsg::ExecCommandBegin(ev) => {
-                self.exec_approval_call_ids_by_id
-                    .retain(|_, call_id| call_id != &ev.call_id);
+                self.exec_approval_call_ids.remove(&ev.call_id);
             }
             EventMsg::ApplyPatchApprovalRequest(ev) => {
                 self.patch_approval_call_ids.insert(ev.call_id.clone());
@@ -332,14 +342,18 @@ impl PendingInteractiveReplayState {
                 ));
             }
             EventMsg::RequestUserInput(ev) => {
-                self.request_user_input_turn_ids.insert(ev.turn_id.clone());
+                self.request_user_input_call_ids.insert(ev.call_id.clone());
+                self.request_user_input_call_ids_by_turn_id
+                    .entry(ev.turn_id.clone())
+                    .or_default()
+                    .push(ev.call_id.clone());
             }
             EventMsg::TurnComplete(ev) => {
-                self.request_user_input_turn_ids.remove(&ev.turn_id);
+                self.clear_request_user_input_turn(&ev.turn_id);
             }
             EventMsg::TurnAborted(ev) => {
                 if let Some(turn_id) = &ev.turn_id {
-                    self.request_user_input_turn_ids.remove(turn_id);
+                    self.clear_request_user_input_turn(turn_id);
                 }
             }
             EventMsg::ShutdownComplete => self.clear(),
@@ -350,8 +364,7 @@ impl PendingInteractiveReplayState {
     fn note_evicted_event(&mut self, event: &Event) {
         match &event.msg {
             EventMsg::ExecApprovalRequest(ev) => {
-                self.exec_approval_call_ids_by_id
-                    .remove(&ev.effective_approval_id());
+                self.exec_approval_call_ids.remove(&ev.call_id);
             }
             EventMsg::ApplyPatchApprovalRequest(ev) => {
                 self.patch_approval_call_ids.remove(&ev.call_id);
@@ -364,7 +377,21 @@ impl PendingInteractiveReplayState {
                     ));
             }
             EventMsg::RequestUserInput(ev) => {
-                self.request_user_input_turn_ids.remove(&ev.turn_id);
+                self.request_user_input_call_ids.remove(&ev.call_id);
+                let mut remove_turn_entry = false;
+                if let Some(call_ids) = self
+                    .request_user_input_call_ids_by_turn_id
+                    .get_mut(&ev.turn_id)
+                {
+                    call_ids.retain(|call_id| call_id != &ev.call_id);
+                    if call_ids.is_empty() {
+                        remove_turn_entry = true;
+                    }
+                }
+                if remove_turn_entry {
+                    self.request_user_input_call_ids_by_turn_id
+                        .remove(&ev.turn_id);
+                }
             }
             _ => {}
         }
@@ -372,9 +399,7 @@ impl PendingInteractiveReplayState {
 
     fn should_replay_snapshot_event(&self, event: &Event) -> bool {
         match &event.msg {
-            EventMsg::ExecApprovalRequest(ev) => self
-                .exec_approval_call_ids_by_id
-                .contains_key(&ev.effective_approval_id()),
+            EventMsg::ExecApprovalRequest(ev) => self.exec_approval_call_ids.contains(&ev.call_id),
             EventMsg::ApplyPatchApprovalRequest(ev) => {
                 self.patch_approval_call_ids.contains(&ev.call_id)
             }
@@ -386,17 +411,26 @@ impl PendingInteractiveReplayState {
                     ))
             }
             EventMsg::RequestUserInput(ev) => {
-                self.request_user_input_turn_ids.contains(&ev.turn_id)
+                self.request_user_input_call_ids.contains(&ev.call_id)
             }
             _ => true,
         }
     }
 
+    fn clear_request_user_input_turn(&mut self, turn_id: &str) {
+        if let Some(call_ids) = self.request_user_input_call_ids_by_turn_id.remove(turn_id) {
+            for call_id in call_ids {
+                self.request_user_input_call_ids.remove(&call_id);
+            }
+        }
+    }
+
     fn clear(&mut self) {
-        self.exec_approval_call_ids_by_id.clear();
+        self.exec_approval_call_ids.clear();
         self.patch_approval_call_ids.clear();
         self.elicitation_requests.clear();
-        self.request_user_input_turn_ids.clear();
+        self.request_user_input_call_ids.clear();
+        self.request_user_input_call_ids_by_turn_id.clear();
     }
 }
 
@@ -2005,8 +2039,12 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
-                self.note_active_thread_outbound_op(&op).await;
-                self.chat_widget.submit_op(op);
+                let replay_state_op =
+                    ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
+                let submitted = self.chat_widget.submit_op(op);
+                if submitted && let Some(op) = replay_state_op.as_ref() {
+                    self.note_active_thread_outbound_op(op).await;
+                }
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
@@ -3531,7 +3569,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_event_snapshot_drops_resolved_exec_approval_after_outbound_approval() {
+    fn thread_event_snapshot_drops_resolved_exec_approval_after_outbound_approval_call_id() {
         let mut store = ThreadEventStore::new(8);
         store.push_event(Event {
             id: "ev-1".to_string(),
@@ -3545,13 +3583,14 @@ mod tests {
                     reason: None,
                     network_approval_context: None,
                     proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: None,
                     parsed_cmd: Vec::new(),
                 },
             ),
         });
 
         store.note_outbound_op(&Op::ExecApproval {
-            id: "approval-1".to_string(),
+            id: "call-1".to_string(),
             turn_id: Some("turn-1".to_string()),
             decision: codex_protocol::protocol::ReviewDecision::Approved,
         });
@@ -3561,6 +3600,46 @@ mod tests {
             snapshot.events.is_empty(),
             "resolved exec approval prompt should not replay on thread switch"
         );
+    }
+
+    #[test]
+    fn thread_event_snapshot_drops_answered_request_user_input_for_multi_prompt_turn() {
+        let mut store = ThreadEventStore::new(8);
+        store.push_event(Event {
+            id: "ev-1".to_string(),
+            msg: EventMsg::RequestUserInput(
+                codex_protocol::request_user_input::RequestUserInputEvent {
+                    call_id: "call-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    questions: Vec::new(),
+                },
+            ),
+        });
+
+        store.note_outbound_op(&Op::UserInputAnswer {
+            id: "turn-1".to_string(),
+            response: codex_protocol::request_user_input::RequestUserInputResponse {
+                answers: HashMap::new(),
+            },
+        });
+
+        store.push_event(Event {
+            id: "ev-2".to_string(),
+            msg: EventMsg::RequestUserInput(
+                codex_protocol::request_user_input::RequestUserInputEvent {
+                    call_id: "call-2".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    questions: Vec::new(),
+                },
+            ),
+        });
+
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.events.len(), 1);
+        assert!(matches!(
+            snapshot.events.first().map(|event| &event.msg),
+            Some(EventMsg::RequestUserInput(ev)) if ev.call_id == "call-2"
+        ));
     }
 
     #[test]
