@@ -74,7 +74,7 @@ fn assert_message_role(request_body: &serde_json::Value, role: &str) {
 }
 
 #[expect(clippy::unwrap_used)]
-fn message_input_texts<'a>(item: &'a serde_json::Value) -> Vec<&'a str> {
+fn message_input_texts(item: &serde_json::Value) -> Vec<&str> {
     item["content"]
         .as_array()
         .unwrap()

@@ -492,7 +492,7 @@ fn assert_developer_message(item: &ResponseItem, expected_text: &str) {
             assert_eq!(role, "developer");
             let texts = content_texts(content);
             assert!(
-                texts.iter().any(|text| *text == expected_text),
+                texts.contains(&expected_text),
                 "expected developer instructions message, got {texts:?}"
             );
         }
