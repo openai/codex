@@ -237,40 +237,29 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     let req = mock.single_request();
     let body = req.body_json();
-    let output_text = req
-        .function_call_output_content_and_success(call_id)
-        .and_then(|(content, _)| content)
-        .expect("output text present");
-    assert_eq!(output_text, "attached local image path");
+    assert!(
+        find_image_message(&body).is_none(),
+        "view_image tool should not inject a separate image message"
+    );
 
-    let image_message =
-        find_image_message(&body).expect("pending input image message not included in request");
-    let content_items = image_message
-        .get("content")
+    let function_output = req.function_call_output(call_id);
+    let output_items = function_output
+        .get("output")
         .and_then(Value::as_array)
-        .expect("image message has content array");
+        .expect("function_call_output should be a content item array");
     assert_eq!(
-        content_items.len(),
+        output_items.len(),
         1,
-        "view_image should inject only the image content item (no tag/label text)"
+        "view_image should return only the image content item (no tag/label text)"
     );
     assert_eq!(
-        content_items[0].get("type").and_then(Value::as_str),
+        output_items[0].get("type").and_then(Value::as_str),
         Some("input_image"),
-        "view_image should inject only an input_image content item"
+        "view_image should return only an input_image content item"
     );
-    let image_url = image_message
-        .get("content")
-        .and_then(Value::as_array)
-        .and_then(|content| {
-            content.iter().find_map(|span| {
-                if span.get("type").and_then(Value::as_str) == Some("input_image") {
-                    span.get("image_url").and_then(Value::as_str)
-                } else {
-                    None
-                }
-            })
-        })
+    let image_url = output_items[0]
+        .get("image_url")
+        .and_then(Value::as_str)
         .expect("image_url present");
 
     let (prefix, encoded) = image_url
@@ -535,37 +524,35 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
         request.inputs_of_type("input_image").is_empty(),
         "non-image file should not produce an input_image message"
     );
+    let function_output = request.function_call_output(call_id);
+    let output_items = function_output
+        .get("output")
+        .and_then(Value::as_array)
+        .expect("function_call_output should be a content item array");
+    assert_eq!(
+        output_items.len(),
+        1,
+        "non-image placeholder should be returned as a single content item"
+    );
+    assert_eq!(
+        output_items[0].get("type").and_then(Value::as_str),
+        Some("input_text"),
+        "non-image placeholder should be returned as input_text"
+    );
+    let placeholder = output_items[0]
+        .get("text")
+        .and_then(Value::as_str)
+        .expect("placeholder text present");
 
-    let placeholder = request
-        .inputs_of_type("message")
-        .iter()
-        .find_map(|item| {
-            let content = item.get("content").and_then(Value::as_array)?;
-            content.iter().find_map(|span| {
-                if span.get("type").and_then(Value::as_str) == Some("input_text") {
-                    let text = span.get("text").and_then(Value::as_str)?;
-                    if text.contains("Codex could not read the local image at")
-                        && text.contains("unsupported MIME type `application/json`")
-                    {
-                        return Some(text.to_string());
-                    }
-                }
-                None
-            })
-        })
-        .expect("placeholder text found");
-
+    assert!(
+        placeholder.contains("Codex could not read the local image at")
+            && placeholder.contains("unsupported MIME type `application/json`"),
+        "placeholder should describe the unsupported file type: {placeholder}"
+    );
     assert!(
         placeholder.contains(&abs_path.display().to_string()),
         "placeholder should mention path: {placeholder}"
     );
-
-    let output_text = mock
-        .single_request()
-        .function_call_output_content_and_success(call_id)
-        .and_then(|(content, _)| content)
-        .expect("output text present");
-    assert_eq!(output_text, "attached local image path");
 
     Ok(())
 }

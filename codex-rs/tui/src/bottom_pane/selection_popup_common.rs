@@ -28,6 +28,7 @@ use super::scroll_state::ScrollState;
 #[derive(Default)]
 pub(crate) struct GenericDisplayRow {
     pub name: String,
+    pub name_prefix_spans: Vec<Span<'static>>,
     pub display_shortcut: Option<KeyBinding>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
@@ -242,7 +243,8 @@ fn compute_desc_col(
                     .skip(start_idx)
                     .take(visible_items)
                     .map(|(_, row)| {
-                        let mut spans: Vec<Span> = vec![row.name.clone().into()];
+                        let mut spans = row.name_prefix_spans.clone();
+                        spans.push(row.name.clone().into());
                         if row.disabled_reason.is_some() {
                             spans.push(" (disabled)".dim());
                         }
@@ -253,7 +255,8 @@ fn compute_desc_col(
                 ColumnWidthMode::AutoAllRows => rows_all
                     .iter()
                     .map(|row| {
-                        let mut spans: Vec<Span> = vec![row.name.clone().into()];
+                        let mut spans = row.name_prefix_spans.clone();
+                        spans.push(row.name.clone().into());
                         if row.disabled_reason.is_some() {
                             spans.push(" (disabled)".dim());
                         }
@@ -291,6 +294,7 @@ fn should_wrap_name_in_column(row: &GenericDisplayRow) -> bool {
         && row.match_indices.is_none()
         && row.display_shortcut.is_none()
         && row.category_tag.is_none()
+        && row.name_prefix_spans.is_empty()
 }
 
 fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<Line<'static>> {
@@ -508,9 +512,10 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
 
     // Enforce single-line name: allow at most desc_col - 2 cells for name,
     // reserving two spaces before the description column.
+    let name_prefix_width = Line::from(row.name_prefix_spans.clone()).width();
     let name_limit = combined_description
         .as_ref()
-        .map(|_| desc_col.saturating_sub(2))
+        .map(|_| desc_col.saturating_sub(2).saturating_sub(name_prefix_width))
         .unwrap_or(usize::MAX);
 
     let mut name_spans: Vec<Span> = Vec::with_capacity(row.name.len());
@@ -558,8 +563,9 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         name_spans.push(" (disabled)".dim());
     }
 
-    let this_name_width = Line::from(name_spans.clone()).width();
-    let mut full_spans: Vec<Span> = name_spans;
+    let this_name_width = name_prefix_width + Line::from(name_spans.clone()).width();
+    let mut full_spans: Vec<Span> = row.name_prefix_spans.clone();
+    full_spans.extend(name_spans);
     if let Some(display_shortcut) = row.display_shortcut {
         full_spans.push(" (".into());
         full_spans.push(display_shortcut.into());
