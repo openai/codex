@@ -32,6 +32,22 @@ fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
     }
 }
 
+pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option<String> {
+    if let ResponseItem::Message { role, content, .. } = item
+        && role == "assistant"
+    {
+        let combined = content
+            .iter()
+            .filter_map(|ci| match ci {
+                codex_protocol::models::ContentItem::OutputText { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        return Some(combined);
+    }
+    None
+}
+
 /// Handle a completed output item from the model stream, recording it and
 /// queuing any tool execution futures. This records items immediately so
 /// history and rollout stay in sync even if the turn is later cancelled.
@@ -205,16 +221,7 @@ pub(crate) fn last_assistant_message_from_item(
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<String> {
-    if let ResponseItem::Message { role, content, .. } = item
-        && role == "assistant"
-    {
-        let combined = content
-            .iter()
-            .filter_map(|ci| match ci {
-                codex_protocol::models::ContentItem::OutputText { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<String>();
+    if let Some(combined) = raw_assistant_output_text_from_item(item) {
         if combined.is_empty() {
             return None;
         }

@@ -42,6 +42,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::TurnMetadataState;
@@ -5626,6 +5627,17 @@ struct ParsedAssistantTextDelta {
 }
 
 impl AssistantMessageStreamParsers {
+    fn seed_item_text(&mut self, item_id: &str, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let _ = self
+            .citations_by_item
+            .entry(item_id.to_string())
+            .or_default()
+            .push_str(text);
+    }
+
     fn parse_delta(&mut self, item_id: &str, delta: &str) -> ParsedAssistantTextDelta {
         let parsed = self
             .citations_by_item
@@ -6284,6 +6296,12 @@ async fn try_run_sampling_request(
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
+                    if matches!(turn_item, TurnItem::AgentMessage(_))
+                        && let Some(raw_text) = raw_assistant_output_text_from_item(&item)
+                    {
+                        let item_id = turn_item.id();
+                        assistant_message_stream_parsers.seed_item_text(&item_id, &raw_text);
+                    }
                     if let Some(state) = plan_mode_state.as_mut()
                         && matches!(turn_item, TurnItem::AgentMessage(_))
                     {
@@ -6570,6 +6588,21 @@ mod tests {
             is_accessible: true,
             is_enabled: true,
         }
+    }
+
+    #[test]
+    fn assistant_message_stream_parsers_can_be_seeded_from_output_item_added_text() {
+        let mut parsers = AssistantMessageStreamParsers::default();
+        let item_id = "msg-1";
+
+        parsers.seed_item_text(item_id, "hello <citation>doc");
+        let parsed = parsers.parse_delta(item_id, "1</citation> world");
+        let tail = parsers.finish_item(item_id);
+
+        assert_eq!(parsed.visible_text, " world");
+        assert_eq!(parsed.citations, vec!["doc1".to_string()]);
+        assert_eq!(tail.visible_text, "");
+        assert_eq!(tail.citations, Vec::<String>::new());
     }
 
     fn make_mcp_tool(
