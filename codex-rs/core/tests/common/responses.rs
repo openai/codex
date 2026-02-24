@@ -300,8 +300,8 @@ pub struct WebSocketConnectionConfig {
     pub response_headers: Vec<(String, String)>,
     /// Optional delay inserted before accepting the websocket handshake.
     ///
-    /// Tests use this to force startup preconnect into an in-flight state so first-turn adoption
-    /// paths can be exercised deterministically.
+    /// Tests use this to force websocket setup into an in-flight state so first-turn warmup paths
+    /// can be exercised deterministically.
     pub accept_delay: Option<Duration>,
 }
 
@@ -337,7 +337,7 @@ impl WebSocketTestServer {
     /// Waits until at least `expected` websocket handshakes have been observed or timeout elapses.
     ///
     /// Uses a short bounded polling interval so tests can deterministically wait for background
-    /// preconnect activity without busy-spinning.
+    /// websocket activity without busy-spinning.
     pub async fn wait_for_handshakes(&self, expected: usize, timeout: Duration) -> bool {
         if self.handshakes.lock().unwrap().len() >= expected {
             return true;

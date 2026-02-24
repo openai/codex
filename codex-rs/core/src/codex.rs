@@ -106,6 +106,7 @@ use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::debug;
@@ -1265,7 +1266,7 @@ impl Session {
                 }
             };
         session_configuration.thread_name = thread_name.clone();
-        let mut state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone());
         let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
         let network_approval = Arc::new(NetworkApprovalService::default());
         // The managed proxy can call back into core for allowlist-miss decisions.
@@ -1372,16 +1373,6 @@ impl Session {
             config.js_repl_node_module_dirs.clone(),
         ));
 
-        let prewarm_model_info = models_manager
-            .get_model_info(session_configuration.collaboration_mode.model(), &config)
-            .await;
-        let startup_regular_task = RegularTask::with_startup_prewarm(
-            services.model_client.clone(),
-            services.otel_manager.clone(),
-            prewarm_model_info,
-        );
-        state.set_startup_regular_task(startup_regular_task);
-
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
@@ -1399,7 +1390,6 @@ impl Session {
             let mut guard = network_policy_decider_session.write().await;
             *guard = Arc::downgrade(&sess);
         }
-
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
@@ -1429,7 +1419,6 @@ impl Session {
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_file_watcher_listener();
-
         // Construct sandbox_state before MCP startup so it can be sent to each
         // MCP server immediately after it becomes ready (avoiding blocking).
         let sandbox_state = SandboxState {
@@ -1490,6 +1479,8 @@ impl Session {
                 ));
             }
         }
+        sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
+            .await;
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
@@ -2155,8 +2146,69 @@ impl Session {
     }
 
     pub(crate) async fn take_startup_regular_task(&self) -> Option<RegularTask> {
+        let startup_regular_task = {
+            let mut state = self.state.lock().await;
+            state.take_startup_regular_task()
+        };
+        let startup_regular_task = startup_regular_task?;
+        match startup_regular_task.await {
+            Ok(Ok(regular_task)) => Some(regular_task),
+            Ok(Err(err)) => {
+                warn!("startup websocket prewarm setup failed: {err:#}");
+                None
+            }
+            Err(err) => {
+                warn!("startup websocket prewarm setup join failed: {err}");
+                None
+            }
+        }
+    }
+
+    async fn schedule_startup_prewarm(self: &Arc<Self>, base_instructions: String) {
+        let sess = Arc::clone(self);
+        let startup_regular_task: JoinHandle<CodexResult<RegularTask>> =
+            tokio::spawn(
+                async move { sess.schedule_startup_prewarm_inner(base_instructions).await },
+            );
         let mut state = self.state.lock().await;
-        state.take_startup_regular_task()
+        state.set_startup_regular_task(startup_regular_task);
+    }
+
+    async fn schedule_startup_prewarm_inner(
+        self: &Arc<Self>,
+        base_instructions: String,
+    ) -> CodexResult<RegularTask> {
+        let startup_turn_context = self
+            .new_default_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
+            .await;
+        let startup_cancellation_token = CancellationToken::new();
+        let startup_router = built_tools(
+            self,
+            startup_turn_context.as_ref(),
+            &[],
+            &HashSet::new(),
+            None,
+            &startup_cancellation_token,
+        )
+        .await?;
+        let startup_prompt = build_prompt(
+            Vec::new(),
+            startup_router.as_ref(),
+            startup_turn_context.as_ref(),
+            BaseInstructions {
+                text: base_instructions,
+            },
+        );
+        let startup_turn_metadata_header = startup_turn_context
+            .turn_metadata_state
+            .current_header_value();
+        RegularTask::with_startup_prewarm(
+            self.services.model_client.clone(),
+            startup_prompt,
+            startup_turn_context,
+            startup_turn_metadata_header,
+        )
+        .await
     }
 
     pub(crate) async fn get_config(&self) -> std::sync::Arc<Config> {
@@ -5331,6 +5383,21 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
     tool.connector_id.as_deref()
 }
 
+fn build_prompt(
+    input: Vec<ResponseItem>,
+    router: &ToolRouter,
+    turn_context: &TurnContext,
+    base_instructions: BaseInstructions,
+) -> Prompt {
+    Prompt {
+        input,
+        tools: router.specs(),
+        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        base_instructions,
+        personality: turn_context.personality,
+        output_schema: turn_context.final_output_json_schema.clone(),
+    }
+}
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -5362,19 +5429,14 @@ async fn run_sampling_request(
     )
     .await?;
 
-    let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
-
-    let tools = router.specs();
     let base_instructions = sess.get_base_instructions().await;
 
-    let prompt = Prompt {
+    let prompt = build_prompt(
         input,
-        tools,
-        parallel_tool_calls: model_supports_parallel,
+        router.as_ref(),
+        turn_context.as_ref(),
         base_instructions,
-        personality: turn_context.personality,
-        output_schema: turn_context.final_output_json_schema.clone(),
-    };
+    );
     let mut retries = 0;
     loop {
         let err = match try_run_sampling_request(
