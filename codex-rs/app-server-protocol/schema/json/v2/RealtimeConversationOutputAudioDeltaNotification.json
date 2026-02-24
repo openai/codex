@@ -2,6 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
     "RealtimeConversationAudioChunk": {
+      "description": "EXPERIMENTAL - realtime conversation audio chunk.",
       "properties": {
         "data": {
           "type": "string"
@@ -33,6 +34,7 @@
       "type": "object"
     }
   },
+  "description": "EXPERIMENTAL - streamed output audio emitted by the realtime backend.",
   "properties": {
     "audio": {
       "$ref": "#/definitions/RealtimeConversationAudioChunk"

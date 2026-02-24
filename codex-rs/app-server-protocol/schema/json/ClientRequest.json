@@ -989,6 +989,7 @@
       ]
     },
     "RealtimeConversationAudioChunk": {
+      "description": "EXPERIMENTAL - realtime conversation audio chunk.",
       "properties": {
         "data": {
           "type": "string"

@@ -1,5 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "EXPERIMENTAL - emitted when the backend prompt for realtime changes.",
   "properties": {
     "backendPrompt": {
       "type": [

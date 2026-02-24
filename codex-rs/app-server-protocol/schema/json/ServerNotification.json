@@ -1291,6 +1291,7 @@
       "type": "object"
     },
     "RealtimeConversationAudioChunk": {
+      "description": "EXPERIMENTAL - realtime conversation audio chunk.",
       "properties": {
         "data": {
           "type": "string"
@@ -1322,6 +1323,7 @@
       "type": "object"
     },
     "RealtimeConversationClosedNotification": {
+      "description": "EXPERIMENTAL - emitted when the realtime transport closes.",
       "properties": {
         "reason": {
           "type": [
@@ -1339,6 +1341,7 @@
       "type": "object"
     },
     "RealtimeConversationErrorNotification": {
+      "description": "EXPERIMENTAL - emitted when realtime conversation encounters an error.",
       "properties": {
         "message": {
           "type": "string"
@@ -1354,6 +1357,7 @@
       "type": "object"
     },
     "RealtimeConversationItemAddedNotification": {
+      "description": "EXPERIMENTAL - raw non-audio realtime item emitted by the backend.",
       "properties": {
         "item": true,
         "threadId": {
@@ -1367,6 +1371,7 @@
       "type": "object"
     },
     "RealtimeConversationOutputAudioDeltaNotification": {
+      "description": "EXPERIMENTAL - streamed output audio emitted by the realtime backend.",
       "properties": {
         "audio": {
           "$ref": "#/definitions/RealtimeConversationAudioChunk"
@@ -1382,6 +1387,7 @@
       "type": "object"
     },
     "RealtimeConversationSessionUpdatedNotification": {
+      "description": "EXPERIMENTAL - emitted when the backend prompt for realtime changes.",
       "properties": {
         "backendPrompt": {
           "type": [
@@ -1399,6 +1405,7 @@
       "type": "object"
     },
     "RealtimeConversationStartedNotification": {
+      "description": "EXPERIMENTAL - emitted when realtime conversation startup is accepted.",
       "properties": {
         "sessionId": {
           "type": [

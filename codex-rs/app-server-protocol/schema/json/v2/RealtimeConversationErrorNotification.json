@@ -1,5 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "EXPERIMENTAL - emitted when realtime conversation encounters an error.",
   "properties": {
     "message": {
       "type": "string"

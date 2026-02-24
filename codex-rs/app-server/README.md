@@ -584,12 +584,12 @@ The fuzzy file search session API emits per-query notifications:
 
 The realtime conversation API emits thread-scoped notifications for session lifecycle and streaming media:
 
-- `realtimeConversation/started` — `{ threadId, sessionId }` once realtime starts for the thread.
-- `realtimeConversation/sessionUpdated` — `{ threadId, backendPrompt }` when the backend prompt changes.
-- `realtimeConversation/itemAdded` — `{ threadId, item }` for non-audio realtime conversation items. `item` is forwarded as raw JSON while the upstream websocket item schema remains unstable.
-- `realtimeConversation/outputAudio/delta` — `{ threadId, audio }` for streamed output audio chunks. `audio` uses camelCase fields (`data`, `sampleRate`, `numChannels`, `samplesPerChannel`).
-- `realtimeConversation/error` — `{ threadId, message }` when realtime encounters a transport or backend error.
-- `realtimeConversation/closed` — `{ threadId, reason }` when the realtime transport closes.
+- `realtimeConversation/started` — `{ threadId, sessionId }` once realtime starts for the thread (experimental).
+- `realtimeConversation/sessionUpdated` — `{ threadId, backendPrompt }` when the backend prompt changes (experimental).
+- `realtimeConversation/itemAdded` — `{ threadId, item }` for non-audio realtime conversation items (experimental). `item` is forwarded as raw JSON while the upstream websocket item schema remains unstable.
+- `realtimeConversation/outputAudio/delta` — `{ threadId, audio }` for streamed output audio chunks (experimental). `audio` uses camelCase fields (`data`, `sampleRate`, `numChannels`, `samplesPerChannel`).
+- `realtimeConversation/error` — `{ threadId, message }` when realtime encounters a transport or backend error (experimental).
+- `realtimeConversation/closed` — `{ threadId, reason }` when the realtime transport closes (experimental).
 
 Because audio is intentionally separate from `ThreadItem`, clients can opt out of `realtimeConversation/outputAudio/delta` independently with `optOutNotificationMethods`.
 

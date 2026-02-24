@@ -7,6 +7,7 @@ use crate::export::GeneratedSchema;
 use crate::export::write_json_schema;
 use crate::protocol::v1;
 use crate::protocol::v2;
+use codex_experimental_api_macros::ExperimentalApi;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -606,7 +607,16 @@ macro_rules! server_notification_definitions {
         ),* $(,)?
     ) => {
         /// Notification sent from the server to the client.
-        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
+        #[derive(
+            Serialize,
+            Deserialize,
+            Debug,
+            Clone,
+            JsonSchema,
+            TS,
+            Display,
+            ExperimentalApi,
+        )]
         #[serde(tag = "method", content = "params", rename_all = "camelCase")]
         #[strum(serialize_all = "camelCase")]
         pub enum ServerNotification {
@@ -843,11 +853,17 @@ server_notification_definitions! {
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
     FuzzyFileSearchSessionCompleted => "fuzzyFileSearch/sessionCompleted" (FuzzyFileSearchSessionCompletedNotification),
+    #[experimental("realtimeConversation/started")]
     RealtimeConversationStarted => "realtimeConversation/started" (v2::RealtimeConversationStartedNotification),
+    #[experimental("realtimeConversation/sessionUpdated")]
     RealtimeConversationSessionUpdated => "realtimeConversation/sessionUpdated" (v2::RealtimeConversationSessionUpdatedNotification),
+    #[experimental("realtimeConversation/itemAdded")]
     RealtimeConversationItemAdded => "realtimeConversation/itemAdded" (v2::RealtimeConversationItemAddedNotification),
+    #[experimental("realtimeConversation/outputAudio/delta")]
     RealtimeConversationOutputAudioDelta => "realtimeConversation/outputAudio/delta" (v2::RealtimeConversationOutputAudioDeltaNotification),
+    #[experimental("realtimeConversation/error")]
     RealtimeConversationError => "realtimeConversation/error" (v2::RealtimeConversationErrorNotification),
+    #[experimental("realtimeConversation/closed")]
     RealtimeConversationClosed => "realtimeConversation/closed" (v2::RealtimeConversationClosedNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
@@ -1475,6 +1491,34 @@ mod tests {
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("realtimeConversation/start"));
+    }
+    #[test]
+    fn realtime_conversation_started_notification_is_marked_experimental() {
+        let notification = ServerNotification::RealtimeConversationStarted(
+            v2::RealtimeConversationStartedNotification {
+                thread_id: "thr_123".to_string(),
+                session_id: Some("sess_456".to_string()),
+            },
+        );
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);
+        assert_eq!(reason, Some("realtimeConversation/started"));
+    }
+
+    #[test]
+    fn realtime_conversation_output_audio_delta_notification_is_marked_experimental() {
+        let notification = ServerNotification::RealtimeConversationOutputAudioDelta(
+            v2::RealtimeConversationOutputAudioDeltaNotification {
+                thread_id: "thr_123".to_string(),
+                audio: v2::RealtimeConversationAudioChunk {
+                    data: "AQID".to_string(),
+                    sample_rate: 24_000,
+                    num_channels: 1,
+                    samples_per_channel: Some(512),
+                },
+            },
+        );
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);
+        assert_eq!(reason, Some("realtimeConversation/outputAudio/delta"));
     }
 
     #[test]
