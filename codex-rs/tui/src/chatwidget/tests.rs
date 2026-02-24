@@ -6105,6 +6105,33 @@ async fn model_history_effort_updates_for_current_model() {
 }
 
 #[tokio::test]
+async fn plan_mode_model_history_effort_updates_after_model_switch() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.set_model("gpt-5.1-codex-max");
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
+
+    let entry = chat
+        .recent_model_history
+        .iter()
+        .find(|entry| entry.model == "gpt-5.1-codex-max")
+        .expect("expected entry for switched model");
+    assert_eq!(
+        entry,
+        &ModelHistoryEntry {
+            model: "gpt-5.1-codex-max".to_string(),
+            effort: Some(ReasoningEffortConfig::Low),
+        }
+    );
+}
+
+#[tokio::test]
 async fn model_history_other_entry_none_with_single_entry() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());

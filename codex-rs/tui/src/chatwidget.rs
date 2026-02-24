@@ -6568,6 +6568,7 @@ impl ChatWidget {
                 mask.reasoning_effort = plan_mask.reasoning_effort;
             }
         }
+        self.update_current_model_history_effort(effort);
     }
 
     /// Set the reasoning effort in the stored collaboration mode.
