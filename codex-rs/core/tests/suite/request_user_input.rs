@@ -290,16 +290,8 @@ async fn request_user_input_rejected_in_execute_mode_alias() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_user_input_rejected_in_default_mode() -> anyhow::Result<()> {
-    assert_request_user_input_rejected("Default", |model| CollaborationMode {
-        mode: ModeKind::Default,
-        settings: Settings {
-            model,
-            reasoning_effort: None,
-            developer_instructions: None,
-        },
-    })
-    .await
+async fn request_user_input_round_trip_in_default_mode() -> anyhow::Result<()> {
+    request_user_input_round_trip_for_mode(ModeKind::Default).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
