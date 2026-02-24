@@ -1,5 +1,5 @@
 {
-  "models": [
+  "models": [ 
     {
       "prefer_websockets": false,
       "supports_reasoning_summaries": true,
