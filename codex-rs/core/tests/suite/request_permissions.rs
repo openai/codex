@@ -20,6 +20,8 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -174,6 +176,9 @@ fn workspace_write_excluding_tmp() -> SandboxPolicy {
 #[tokio::test(flavor = "current_thread")]
 #[cfg(target_os = "macos")]
 async fn with_additional_permissions_requires_approval_under_on_request() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
@@ -247,6 +252,9 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
 #[tokio::test(flavor = "current_thread")]
 #[cfg(target_os = "macos")]
 async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
@@ -331,6 +339,9 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write()
 #[tokio::test(flavor = "current_thread")]
 #[cfg(target_os = "macos")]
 async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
@@ -415,6 +426,9 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write()
 #[tokio::test(flavor = "current_thread")]
 #[cfg(target_os = "macos")]
 async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = workspace_write_excluding_tmp();
@@ -504,6 +518,7 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
 async fn with_additional_permissions_denied_approval_blocks_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
     let sandbox_policy = workspace_write_excluding_tmp();
