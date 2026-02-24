@@ -213,6 +213,12 @@ impl MessageProcessor {
         session: &mut ConnectionSessionState,
         outbound_initialized: &AtomicBool,
     ) {
+        let request_method = request.method.as_str();
+        tracing::trace!(
+            ?connection_id,
+            request_id = ?request.id,
+            "app-server request: {request_method}"
+        );
         let request_id = ConnectionRequestId {
             connection_id,
             request_id: request.id.clone(),
