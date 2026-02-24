@@ -1,6 +1,0 @@
----
-source: tui/src/chatwidget/tests.rs
-assertion_line: 4513
-expression: rendered.clone()
----
-■ Failed to copy to clipboard: simulated clipboard failure

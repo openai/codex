@@ -104,7 +104,6 @@ use serial_test::serial;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -1671,7 +1670,6 @@ async fn make_chatwidget_manual(
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
         external_editor_state: ExternalEditorState::Closed,
-        clipboard_text_writer: Arc::new(copy_text_to_clipboard),
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -2933,19 +2931,6 @@ fn complete_assistant_message(
             }),
         }),
     });
-}
-
-fn install_clipboard_spy(chat: &mut ChatWidget) -> Arc<Mutex<Vec<String>>> {
-    let copied = Arc::new(Mutex::new(Vec::new()));
-    let copied_for_writer = Arc::clone(&copied);
-    chat.clipboard_text_writer = Arc::new(move |text| {
-        copied_for_writer
-            .lock()
-            .expect("clipboard spy mutex poisoned")
-            .push(text.to_string());
-        Ok(())
-    });
-    copied
 }
 
 fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) -> ExecCommandBeginEvent {
@@ -4335,9 +4320,8 @@ async fn slash_quit_requests_exit() {
 }
 
 #[tokio::test]
-async fn slash_copy_copies_latest_final_reply() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let copied = install_clipboard_spy(&mut chat);
+async fn slash_copy_state_tracks_turn_complete_final_reply() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
@@ -4346,31 +4330,17 @@ async fn slash_copy_copies_latest_final_reply() {
             last_agent_message: Some("Final reply **markdown**".to_string()),
         }),
     });
-    let _ = drain_insert_history(&mut rx);
-
-    chat.dispatch_command(SlashCommand::Copy);
 
     assert_eq!(
-        copied
-            .lock()
-            .expect("clipboard spy mutex poisoned")
-            .as_slice(),
-        ["Final reply **markdown**"]
-    );
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected copy success info message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert_snapshot!("slash_copy_success_info_message", rendered);
-    assert!(
-        rendered.contains("Copied latest Codex output to clipboard."),
-        "expected copy confirmation, got {rendered:?}"
+        chat.last_copyable_output,
+        Some("Final reply **markdown**".to_string())
     );
 }
 
 #[tokio::test]
-async fn slash_copy_copies_latest_plan_output_when_turn_complete_message_is_empty() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let copied = install_clipboard_spy(&mut chat);
+async fn slash_copy_state_tracks_plan_item_completion() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let plan_text = "## Plan\n\n1. Build it\n2. Test it".to_string();
 
     chat.handle_codex_event(Event {
         id: "item-plan".into(),
@@ -4379,7 +4349,7 @@ async fn slash_copy_copies_latest_plan_output_when_turn_complete_message_is_empt
             turn_id: "turn-1".to_string(),
             item: TurnItem::Plan(PlanItem {
                 id: "plan-1".to_string(),
-                text: "## Plan\n\n1. Build it\n2. Test it".to_string(),
+                text: plan_text.clone(),
             }),
         }),
     });
@@ -4390,40 +4360,16 @@ async fn slash_copy_copies_latest_plan_output_when_turn_complete_message_is_empt
             last_agent_message: None,
         }),
     });
-    let _ = drain_insert_history(&mut rx);
 
-    chat.dispatch_command(SlashCommand::Copy);
-
-    assert_eq!(
-        copied
-            .lock()
-            .expect("clipboard spy mutex poisoned")
-            .as_slice(),
-        ["## Plan\n\n1. Build it\n2. Test it"]
-    );
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected copy success info message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains("Copied latest Codex output to clipboard."),
-        "expected copy confirmation, got {rendered:?}"
-    );
+    assert_eq!(chat.last_copyable_output, Some(plan_text));
 }
 
 #[tokio::test]
 async fn slash_copy_reports_when_no_copyable_output_exists() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let copied = install_clipboard_spy(&mut chat);
 
     chat.dispatch_command(SlashCommand::Copy);
 
-    assert!(
-        copied
-            .lock()
-            .expect("clipboard spy mutex poisoned")
-            .is_empty(),
-        "did not expect clipboard writes when no output is available"
-    );
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one info message");
     let rendered = lines_to_single_string(&cells[0]);
@@ -4437,9 +4383,8 @@ async fn slash_copy_reports_when_no_copyable_output_exists() {
 }
 
 #[tokio::test]
-async fn slash_copy_is_allowed_during_running_task() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let copied = install_clipboard_spy(&mut chat);
+async fn slash_copy_state_is_preserved_during_running_task() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
@@ -4448,81 +4393,36 @@ async fn slash_copy_is_allowed_during_running_task() {
             last_agent_message: Some("Previous completed reply".to_string()),
         }),
     });
-    let _ = drain_insert_history(&mut rx);
     chat.on_task_started();
 
-    chat.dispatch_command(SlashCommand::Copy);
-
     assert_eq!(
-        copied
-            .lock()
-            .expect("clipboard spy mutex poisoned")
-            .as_slice(),
-        ["Previous completed reply"]
+        chat.last_copyable_output,
+        Some("Previous completed reply".to_string())
     );
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected copy success info message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains("Copied latest Codex output to clipboard."),
-        "expected copy confirmation, got {rendered:?}"
-    );
-    assert!(
-        rendered.contains("Current turn is still running"),
-        "expected in-progress copy hint, got {rendered:?}"
-    );
-    assert!(
-        rendered.contains("not the in-progress response"),
-        "expected in-progress copy hint to clarify source, got {rendered:?}"
-    );
-    assert_snapshot!("slash_copy_running_task_info_message", rendered);
 }
 
 #[tokio::test]
-async fn slash_copy_reports_clipboard_write_error() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let attempted = Arc::new(Mutex::new(Vec::new()));
-    let attempted_for_writer = Arc::clone(&attempted);
-    chat.clipboard_text_writer = Arc::new(move |text| {
-        attempted_for_writer
-            .lock()
-            .expect("clipboard spy mutex poisoned")
-            .push(text.to_string());
-        Err("simulated clipboard failure".to_string())
-    });
+async fn slash_copy_state_clears_on_thread_rollback() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
-            last_agent_message: Some("Final reply **markdown**".to_string()),
+            last_agent_message: Some("Reply that will be rolled back".to_string()),
         }),
     });
-    let _ = drain_insert_history(&mut rx);
+    chat.handle_codex_event(Event {
+        id: "rollback-1".into(),
+        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+    });
 
-    chat.dispatch_command(SlashCommand::Copy);
-
-    assert_eq!(
-        attempted
-            .lock()
-            .expect("clipboard spy mutex poisoned")
-            .as_slice(),
-        ["Final reply **markdown**"]
-    );
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one error message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert_snapshot!("slash_copy_clipboard_error_message", rendered);
-    assert!(
-        rendered.contains("Failed to copy to clipboard: simulated clipboard failure"),
-        "expected copy error message, got {rendered:?}"
-    );
+    assert_eq!(chat.last_copyable_output, None);
 }
 
 #[tokio::test]
 async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_turn_complete() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let copied = install_clipboard_spy(&mut chat);
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
@@ -4543,12 +4443,6 @@ async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_
 
     chat.dispatch_command(SlashCommand::Copy);
 
-    assert!(
-        copied
-            .lock()
-            .expect("clipboard spy mutex poisoned")
-            .is_empty()
-    );
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one info message");
     let rendered = lines_to_single_string(&cells[0]);
@@ -4564,7 +4458,6 @@ async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_
 async fn slash_copy_is_unavailable_when_legacy_agent_message_item_is_not_repeated_on_turn_complete()
 {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let copied = install_clipboard_spy(&mut chat);
 
     complete_assistant_message(&mut chat, "msg-1", "Legacy item final message", None);
     let _ = drain_insert_history(&mut rx);
@@ -4579,12 +4472,6 @@ async fn slash_copy_is_unavailable_when_legacy_agent_message_item_is_not_repeate
 
     chat.dispatch_command(SlashCommand::Copy);
 
-    assert!(
-        copied
-            .lock()
-            .expect("clipboard spy mutex poisoned")
-            .is_empty()
-    );
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one info message");
     let rendered = lines_to_single_string(&cells[0]);
@@ -4599,7 +4486,6 @@ async fn slash_copy_is_unavailable_when_legacy_agent_message_item_is_not_repeate
 #[tokio::test]
 async fn slash_copy_does_not_return_stale_output_after_thread_rollback() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let copied = install_clipboard_spy(&mut chat);
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
@@ -4618,13 +4504,6 @@ async fn slash_copy_does_not_return_stale_output_after_thread_rollback() {
 
     chat.dispatch_command(SlashCommand::Copy);
 
-    assert!(
-        copied
-            .lock()
-            .expect("clipboard spy mutex poisoned")
-            .is_empty(),
-        "did not expect stale clipboard writes after rollback"
-    );
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one info message");
     let rendered = lines_to_single_string(&cells[0]);

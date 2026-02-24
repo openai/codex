@@ -513,12 +513,6 @@ pub(crate) enum ExternalEditorState {
 /// Quit/interrupt behavior intentionally spans layers: the bottom pane owns local input routing
 /// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
 /// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
-type ClipboardTextWriter = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync + 'static>;
-
-fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
-    clipboard_text::copy_text_to_clipboard(text)
-}
-
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -671,7 +665,6 @@ pub(crate) struct ChatWidget {
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
-    clipboard_text_writer: ClipboardTextWriter,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -2755,7 +2748,6 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
-            clipboard_text_writer: Arc::new(copy_text_to_clipboard),
         };
 
         widget.prefetch_rate_limits();
@@ -2927,7 +2919,6 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
-            clipboard_text_writer: Arc::new(copy_text_to_clipboard),
         };
 
         widget.prefetch_rate_limits();
@@ -3088,7 +3079,6 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
-            clipboard_text_writer: Arc::new(copy_text_to_clipboard),
         };
 
         widget.prefetch_rate_limits();
@@ -3502,7 +3492,7 @@ impl ChatWidget {
                     return;
                 };
 
-                let copy_result = (self.clipboard_text_writer)(text);
+                let copy_result = clipboard_text::copy_text_to_clipboard(text);
 
                 match copy_result {
                     Ok(()) => {

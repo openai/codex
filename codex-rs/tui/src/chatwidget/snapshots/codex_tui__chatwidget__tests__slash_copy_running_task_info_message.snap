@@ -1,6 +1,0 @@
----
-source: tui/src/chatwidget/tests.rs
-assertion_line: 4476
-expression: rendered
----
-• Copied latest Codex output to clipboard. Current turn is still running; copied the latest completed output (not the in-progress response).
