@@ -30,11 +30,7 @@ use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
-use std::env;
 use std::fs;
-use std::path::PathBuf;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 struct CommandResult {
     exit_code: Option<i64>,
@@ -154,15 +150,6 @@ async fn expect_exec_approval(
         EventMsg::TurnComplete(_) => panic!("expected approval request before completion"),
         other => panic!("unexpected event: {other:?}"),
     }
-}
-
-#[cfg(target_os = "macos")]
-fn unique_tmp_path(label: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be after epoch")
-        .as_nanos();
-    env::temp_dir().join(format!("codex-request-permissions-{label}-{nanos}.txt"))
 }
 
 fn workspace_write_excluding_tmp() -> SandboxPolicy {
@@ -357,7 +344,8 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write()
     let test = builder.build(&server).await?;
 
     let requested_write = test.workspace_path("requested-only-tmp.txt");
-    let tmp_write = unique_tmp_path("tmp-widening");
+    let tmp_dir = tempfile::tempdir()?;
+    let tmp_write = tmp_dir.path().join("tmp-widening.txt");
     let _ = fs::remove_file(&requested_write);
     let _ = fs::remove_file(&tmp_write);
 
