@@ -1730,9 +1730,7 @@ async fn make_chatwidget_manual(
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation_state: RealtimeConversationUiState::Stopped,
         realtime_audio_controller: None,
-        realtime_meter_state: RecordingMeterState::new(),
-        realtime_saved_placeholder_text: None,
-        realtime_last_placeholder_text: None,
+        realtime_meter_placeholder_id: None,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)

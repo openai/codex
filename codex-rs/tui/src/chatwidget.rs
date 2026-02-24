@@ -170,6 +170,7 @@ const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and P
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const REALTIME_CONVERSATION_PROMPT: &str =
     "Low-level realtime conversation for TUI audio loop testing.";
+const REALTIME_METER_PLACEHOLDER_ID: &str = "realtime-meter";
 
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
@@ -243,6 +244,7 @@ use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
 use crate::multi_agents;
 use crate::realtime_audio::RealtimeAudioController;
+use crate::realtime_audio::RealtimeMicMeterHandles;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -255,7 +257,6 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
-use crate::voice::RecordingMeterState;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -685,9 +686,7 @@ pub(crate) struct ChatWidget {
     external_editor_state: ExternalEditorState,
     realtime_conversation_state: RealtimeConversationUiState,
     realtime_audio_controller: Option<RealtimeAudioController>,
-    realtime_meter_state: RecordingMeterState,
-    realtime_saved_placeholder_text: Option<String>,
-    realtime_last_placeholder_text: Option<String>,
+    realtime_meter_placeholder_id: Option<String>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -2284,11 +2283,6 @@ impl ChatWidget {
 
     pub(crate) fn pre_draw_tick(&mut self) {
         self.bottom_pane.pre_draw_tick();
-        self.update_realtime_composer_meter();
-        if self.realtime_conversation_state == RealtimeConversationUiState::Working {
-            self.frame_requester
-                .schedule_frame_in(Duration::from_millis(75));
-        }
     }
 
     /// Handle completion of an `AgentMessage` turn item.
@@ -2880,9 +2874,7 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation_state: RealtimeConversationUiState::Stopped,
             realtime_audio_controller: None,
-            realtime_meter_state: RecordingMeterState::new(),
-            realtime_saved_placeholder_text: None,
-            realtime_last_placeholder_text: None,
+            realtime_meter_placeholder_id: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3059,9 +3051,7 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation_state: RealtimeConversationUiState::Stopped,
             realtime_audio_controller: None,
-            realtime_meter_state: RecordingMeterState::new(),
-            realtime_saved_placeholder_text: None,
-            realtime_last_placeholder_text: None,
+            realtime_meter_placeholder_id: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3228,9 +3218,7 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation_state: RealtimeConversationUiState::Stopped,
             realtime_audio_controller: None,
-            realtime_meter_state: RecordingMeterState::new(),
-            realtime_saved_placeholder_text: None,
-            realtime_last_placeholder_text: None,
+            realtime_meter_placeholder_id: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3448,12 +3436,21 @@ impl ChatWidget {
         self.bottom_pane.set_footer_hint_override(items);
     }
 
-    pub(crate) fn set_composer_placeholder_text(&mut self, placeholder: String) {
-        self.bottom_pane.set_composer_placeholder_text(placeholder);
+    pub(crate) fn insert_named_placeholder(&mut self, id: &str, text: &str) {
+        self.bottom_pane.insert_named_placeholder(id, text);
     }
 
-    pub(crate) fn composer_placeholder_text(&self) -> String {
-        self.bottom_pane.composer_placeholder_text()
+    pub(crate) fn update_named_placeholder_in_place(&mut self, id: &str, text: &str) -> bool {
+        let updated = self.bottom_pane.update_named_placeholder_in_place(id, text);
+        if updated {
+            self.request_redraw();
+        }
+        updated
+    }
+
+    pub(crate) fn remove_named_placeholder(&mut self, id: &str) {
+        self.bottom_pane.remove_named_placeholder(id);
+        self.request_redraw();
     }
 
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
@@ -3466,45 +3463,33 @@ impl ChatWidget {
     }
 
     fn enable_realtime_ui(&mut self) {
-        if self.realtime_saved_placeholder_text.is_none() {
-            self.realtime_saved_placeholder_text = Some(self.composer_placeholder_text());
-        }
+        self.disable_realtime_ui();
         self.set_footer_hint_override(Some(vec![(
             "/realtime".to_string(),
             "Stop voice chat".to_string(),
         )]));
-        self.realtime_meter_state = RecordingMeterState::new();
-        self.realtime_last_placeholder_text = None;
-        self.update_realtime_composer_meter();
+        let id = REALTIME_METER_PLACEHOLDER_ID.to_string();
+        self.insert_named_placeholder(&id, "Realtime listening ⠤⠤⠤⠤");
+
+        if let Some(controller) = &self.realtime_audio_controller
+            && let Some(RealtimeMicMeterHandles { last_peak, stop }) = controller.meter_handles()
+        {
+            self.bottom_pane.spawn_live_meter_updates(
+                id.clone(),
+                Some("Realtime listening ".to_string()),
+                last_peak,
+                stop,
+            );
+        }
+
+        self.realtime_meter_placeholder_id = Some(id);
     }
 
     fn disable_realtime_ui(&mut self) {
         self.set_footer_hint_override(None);
-        if let Some(placeholder) = self.realtime_saved_placeholder_text.take() {
-            self.set_composer_placeholder_text(placeholder);
+        if let Some(id) = self.realtime_meter_placeholder_id.take() {
+            self.remove_named_placeholder(&id);
         }
-        self.realtime_meter_state = RecordingMeterState::new();
-        self.realtime_last_placeholder_text = None;
-    }
-
-    fn update_realtime_composer_meter(&mut self) {
-        if self.realtime_conversation_state != RealtimeConversationUiState::Working {
-            return;
-        }
-        let Some(controller) = self.realtime_audio_controller.as_ref() else {
-            return;
-        };
-
-        let meter = self
-            .realtime_meter_state
-            .next_text(controller.last_input_peak());
-        let placeholder = format!("Realtime listening {meter}");
-        if self.realtime_last_placeholder_text.as_ref() == Some(&placeholder) {
-            return;
-        }
-
-        self.realtime_last_placeholder_text = Some(placeholder.clone());
-        self.set_composer_placeholder_text(placeholder);
     }
 
     fn toggle_realtime_conversation(&mut self) {
@@ -7792,14 +7777,6 @@ impl ChatWidget {
         self.bottom_pane.replace_transcription(id, text);
         // Ensure the UI redraws to reflect the updated transcription.
         self.request_redraw();
-    }
-
-    pub(crate) fn update_transcription_in_place(&mut self, id: &str, text: &str) -> bool {
-        let updated = self.bottom_pane.update_transcription_in_place(id, text);
-        if updated {
-            self.request_redraw();
-        }
-        updated
     }
 
     pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {

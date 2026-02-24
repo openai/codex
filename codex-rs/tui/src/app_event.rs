@@ -321,9 +321,9 @@ pub(crate) enum AppEvent {
     /// Re-open the permissions presets popup.
     OpenPermissionsPopup,
 
-    /// Live update for the in-progress voice recording placeholder. Carries
-    /// the placeholder `id` and the text to display (e.g., an ASCII meter).
-    #[cfg(not(target_os = "linux"))]
+    /// Live update for an in-progress named composer placeholder (used by
+    /// voice recording/transcription and realtime mic metering). Carries the
+    /// placeholder `id` and the text to display.
     UpdateRecordingMeter {
         id: String,
         text: String,

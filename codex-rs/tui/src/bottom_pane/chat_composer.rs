@@ -215,8 +215,6 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
-#[cfg(not(target_os = "linux"))]
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 #[cfg(not(target_os = "linux"))]
@@ -1005,14 +1003,22 @@ impl ChatComposer {
         self.placeholder_text = placeholder;
     }
 
-    pub(crate) fn placeholder_text(&self) -> &str {
-        &self.placeholder_text
-    }
-
     /// Move the cursor to the end of the current text buffer.
     pub(crate) fn move_cursor_to_end(&mut self) {
         self.textarea.set_cursor(self.textarea.text().len());
         self.sync_popups();
+    }
+
+    pub(crate) fn insert_named_placeholder(&mut self, id: &str, text: &str) {
+        self.textarea.insert_named_element(text, id.to_string());
+    }
+
+    pub(crate) fn update_named_placeholder_in_place(&mut self, id: &str, text: &str) -> bool {
+        self.textarea.update_named_element_by_id(id, text)
+    }
+
+    pub(crate) fn remove_named_placeholder(&mut self, id: &str) {
+        let _ = self.textarea.replace_element_by_id(id, "");
     }
 
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
@@ -3846,13 +3852,10 @@ impl ChatComposer {
                 self.voice_state.recording_placeholder_id = Some(id);
                 // Spawn metering animation
                 if let Some(v) = &self.voice_state.voice {
-                    let data = v.data_arc();
                     let stop = v.stopped_flag();
-                    let sr = v.sample_rate();
-                    let ch = v.channels();
                     let peak = v.last_peak_arc();
                     if let Some(idref) = &self.voice_state.recording_placeholder_id {
-                        self.spawn_recording_meter(idref.clone(), sr, ch, data, peak, stop);
+                        self.spawn_live_meter_updates(idref.clone(), None, peak, stop);
                     }
                 }
                 true
@@ -3866,12 +3869,10 @@ impl ChatComposer {
         }
     }
 
-    fn spawn_recording_meter(
+    pub(crate) fn spawn_live_meter_updates(
         &self,
         id: String,
-        _sample_rate: u32,
-        _channels: u16,
-        _data: Arc<Mutex<Vec<i16>>>,
+        prefix: Option<String>,
         last_peak: Arc<std::sync::atomic::AtomicU16>,
         stop: Arc<std::sync::atomic::AtomicBool>,
     ) {
@@ -3883,7 +3884,11 @@ impl ChatComposer {
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
-                let text = meter.next_text(last_peak.load(Ordering::Relaxed));
+                let meter_text = meter.next_text(last_peak.load(Ordering::Relaxed));
+                let text = match &prefix {
+                    Some(prefix) => format!("{prefix}{meter_text}"),
+                    None => meter_text,
+                };
                 tx.send(crate::app_event::AppEvent::UpdateRecordingMeter {
                     id: id.clone(),
                     text,
@@ -3951,13 +3956,41 @@ impl ChatComposer {
         let _ = self.textarea.replace_element_by_id(id, text);
     }
 
-    pub fn update_transcription_in_place(&mut self, id: &str, text: &str) -> bool {
-        self.textarea.update_named_element_by_id(id, text)
-    }
-
     pub fn remove_transcription_placeholder(&mut self, id: &str) {
         self.stop_transcription_spinner(id);
         let _ = self.textarea.replace_element_by_id(id, "");
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl ChatComposer {
+    pub(crate) fn spawn_live_meter_updates(
+        &self,
+        id: String,
+        prefix: Option<String>,
+        last_peak: Arc<std::sync::atomic::AtomicU16>,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let tx = self.app_event_tx.clone();
+        std::thread::spawn(move || {
+            use std::time::Duration;
+            let mut meter = crate::voice::RecordingMeterState::new();
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let meter_text = meter.next_text(last_peak.load(Ordering::Relaxed));
+                let text = match &prefix {
+                    Some(prefix) => format!("{prefix}{meter_text}"),
+                    None => meter_text,
+                };
+                tx.send(crate::app_event::AppEvent::UpdateRecordingMeter {
+                    id: id.clone(),
+                    text,
+                });
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
     }
 }
 

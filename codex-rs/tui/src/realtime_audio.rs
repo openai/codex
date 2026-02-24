@@ -15,11 +15,10 @@ use base64::Engine;
 use cpal::traits::DeviceTrait;
 #[cfg(not(test))]
 use std::collections::VecDeque;
-#[cfg(not(test))]
 use std::sync::Arc;
 #[cfg(not(test))]
 use std::sync::Mutex;
-#[cfg(not(test))]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU16;
 #[cfg(not(test))]
 use std::sync::atomic::Ordering;
@@ -46,6 +45,11 @@ pub(crate) struct RealtimeAudioController {
     backend: RealtimeAudioBackend,
 }
 
+pub(crate) struct RealtimeMicMeterHandles {
+    pub(crate) last_peak: Arc<AtomicU16>,
+    pub(crate) stop: Arc<AtomicBool>,
+}
+
 enum RealtimeAudioBackend {
     #[cfg(not(test))]
     Live(LiveRealtimeAudioController),
@@ -59,6 +63,7 @@ struct LiveRealtimeAudioController {
     _output_stream: cpal::Stream,
     playback_state: Arc<Mutex<PlaybackState>>,
     last_input_peak: Arc<AtomicU16>,
+    meter_stop: Arc<AtomicBool>,
 }
 
 impl RealtimeAudioController {
@@ -101,6 +106,7 @@ impl RealtimeAudioController {
                 output_config.channels,
             )));
             let last_input_peak = Arc::new(AtomicU16::new(0));
+            let meter_stop = Arc::new(AtomicBool::new(false));
             let mic_state = Arc::new(Mutex::new(MicCaptureState::new(
                 realtime_audio_op_tx,
                 input_config.sample_rate.0,
@@ -136,6 +142,7 @@ impl RealtimeAudioController {
                     _output_stream: output_stream,
                     playback_state,
                     last_input_peak,
+                    meter_stop,
                 }),
             })
         }
@@ -159,16 +166,22 @@ impl RealtimeAudioController {
         Ok(())
     }
 
-    pub(crate) fn shutdown(self) {}
+    pub(crate) fn shutdown(self) {
+        #[cfg(not(test))]
+        let RealtimeAudioBackend::Live(controller) = &self.backend;
+        #[cfg(not(test))]
+        controller.meter_stop.store(true, Ordering::Relaxed);
+    }
 
-    pub(crate) fn last_input_peak(&self) -> u16 {
+    pub(crate) fn meter_handles(&self) -> Option<RealtimeMicMeterHandles> {
         match &self.backend {
             #[cfg(not(test))]
-            RealtimeAudioBackend::Live(controller) => {
-                controller.last_input_peak.load(Ordering::Relaxed)
-            }
+            RealtimeAudioBackend::Live(controller) => Some(RealtimeMicMeterHandles {
+                last_peak: Arc::clone(&controller.last_input_peak),
+                stop: Arc::clone(&controller.meter_stop),
+            }),
             #[cfg(test)]
-            RealtimeAudioBackend::Stub => 0,
+            RealtimeAudioBackend::Stub => None,
         }
     }
 }
