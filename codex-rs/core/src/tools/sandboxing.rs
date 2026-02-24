@@ -195,32 +195,6 @@ pub(crate) fn default_exec_approval_requirement(
     }
 }
 
-pub(crate) fn approval_requirement_for_sandbox_permissions(
-    sandbox_permissions: SandboxPermissions,
-    exec_approval_requirement: ExecApprovalRequirement,
-    _justification: Option<String>,
-) -> ExecApprovalRequirement {
-    if !sandbox_permissions.uses_additional_permissions() {
-        return exec_approval_requirement;
-    }
-
-    match exec_approval_requirement {
-        ExecApprovalRequirement::Forbidden { reason } => {
-            ExecApprovalRequirement::Forbidden { reason }
-        }
-        ExecApprovalRequirement::NeedsApproval { reason, .. } => {
-            ExecApprovalRequirement::NeedsApproval {
-                reason,
-                proposed_execpolicy_amendment: None,
-            }
-        }
-        ExecApprovalRequirement::Skip { .. } => ExecApprovalRequirement::NeedsApproval {
-            reason: None,
-            proposed_execpolicy_amendment: None,
-        },
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SandboxOverride {
     NoOverride,
@@ -231,6 +205,8 @@ pub(crate) fn sandbox_override_for_first_attempt(
     sandbox_permissions: SandboxPermissions,
     exec_approval_requirement: &ExecApprovalRequirement,
 ) -> SandboxOverride {
+    // ExecPolicy `Allow` can intentionally imply full trust (Skip + bypass_sandbox=true),
+    // which supersedes `with_additional_permissions` sandboxed execution hints.
     if sandbox_permissions.requires_escalated_permissions()
         || matches!(
             exec_approval_requirement,
@@ -441,27 +417,6 @@ mod tests {
 
         assert_eq!(
             requirement,
-            ExecApprovalRequirement::NeedsApproval {
-                reason: None,
-                proposed_execpolicy_amendment: None,
-            }
-        );
-    }
-
-    #[test]
-    fn additional_permissions_force_approval_even_when_execpolicy_skips() {
-        assert_eq!(
-            approval_requirement_for_sandbox_permissions(
-                SandboxPermissions::WithAdditionalPermissions,
-                ExecApprovalRequirement::Skip {
-                    bypass_sandbox: true,
-                    proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                        "git".to_string(),
-                        "status".to_string(),
-                    ])),
-                },
-                Some("need file access".to_string()),
-            ),
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
                 proposed_execpolicy_amendment: None,

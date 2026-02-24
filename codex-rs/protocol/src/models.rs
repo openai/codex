@@ -41,12 +41,14 @@ pub enum SandboxPermissions {
 }
 
 impl SandboxPermissions {
+    /// True if SandboxPermissions requires full unsandboxed execution (i.e. RequireEscalated)
     pub fn requires_escalated_permissions(self) -> bool {
         matches!(self, SandboxPermissions::RequireEscalated)
     }
 
-    pub fn uses_additional_permissions(self) -> bool {
-        matches!(self, SandboxPermissions::WithAdditionalPermissions)
+    /// True if SandboxPermissions requires permissions beyond UseDefault
+    pub fn requires_additional_permissions(self) -> bool {
+        !matches!(self, SandboxPermissions::UseDefault)
     }
 }
 

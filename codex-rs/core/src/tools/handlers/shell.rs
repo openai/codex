@@ -29,7 +29,6 @@ use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::sandboxing::ToolCtx;
-use crate::tools::sandboxing::approval_requirement_for_sandbox_permissions;
 use codex_protocol::models::AdditionalPermissions;
 
 pub struct ShellHandler;
@@ -304,9 +303,7 @@ impl ShellHandler {
         .map_err(FunctionCallError::RespondToModel)?;
 
         // Approval policy guard for explicit escalation in non-OnRequest modes.
-        if exec_params
-            .sandbox_permissions
-            .requires_escalated_permissions()
+        if exec_params.sandbox_permissions.needs_elevated_permissions()
             && !matches!(
                 turn.approval_policy.value(),
                 codex_protocol::protocol::AskForApproval::OnRequest
@@ -355,11 +352,6 @@ impl ShellHandler {
                 prefix_rule,
             })
             .await;
-        let exec_approval_requirement = approval_requirement_for_sandbox_permissions(
-            exec_params.sandbox_permissions,
-            exec_approval_requirement,
-            exec_params.justification.clone(),
-        );
 
         let req = ShellRequest {
             command: exec_params.command.clone(),
