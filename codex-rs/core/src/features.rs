@@ -137,6 +137,8 @@ pub enum Feature {
     SkillApproval,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
+    /// Allow request_user_input in Default collaboration mode.
+    DefaultModeRequestUserInput,
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
@@ -638,6 +640,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "steer",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::DefaultModeRequestUserInput,
+        key: "default_mode_request_user_input",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::CollaborationModes,

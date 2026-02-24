@@ -1636,7 +1636,12 @@ async fn make_chatwidget_manual(
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
-    let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone(), None));
+    let models_manager = Arc::new(ModelsManager::new(
+        codex_home,
+        auth_manager.clone(),
+        None,
+        false,
+    ));
     let reasoning_effort = None;
     let base_mode = CollaborationMode {
         mode: ModeKind::Default,
@@ -1762,6 +1767,7 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         None,
+        false,
     ));
 }
 

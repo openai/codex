@@ -352,7 +352,7 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
         codex_home.path(),
         &server.uri(),
         "never",
-        &BTreeMap::default(),
+        &BTreeMap::from([(Feature::DefaultModeRequestUserInput, true)]),
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
