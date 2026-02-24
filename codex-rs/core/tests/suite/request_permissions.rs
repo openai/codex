@@ -189,7 +189,7 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
     let requested_write = test.workspace_path("requested-but-unused.txt");
     let _ = fs::remove_file(&requested_write);
     let call_id = "request_permissions_skip_approval";
-    let command = "echo request-permissions-skip";
+    let command = "touch requested-but-unused.txt";
     let requested_permissions = AdditionalPermissions {
         fs_read: vec![],
         fs_write: vec![requested_write.clone()],
@@ -236,10 +236,9 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
         result.exit_code,
         result.stdout
     );
-    assert!(result.stdout.contains("request-permissions-skip"));
     assert!(
-        !requested_write.exists(),
-        "echo command should not create requested path"
+        requested_write.exists(),
+        "touch command should create requested path"
     );
 
     Ok(())
