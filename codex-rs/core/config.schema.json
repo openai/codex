@@ -349,6 +349,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "memories": {
+              "type": "boolean"
+            },
             "memory_tool": {
               "type": "boolean"
             },
@@ -410,6 +413,9 @@
               "type": "boolean"
             },
             "use_linux_sandbox_bwrap": {
+              "type": "boolean"
+            },
+            "voice_transcription": {
               "type": "boolean"
             },
             "web_search": {
@@ -1627,6 +1633,9 @@
         "js_repl_tools_only": {
           "type": "boolean"
         },
+        "memories": {
+          "type": "boolean"
+        },
         "memory_tool": {
           "type": "boolean"
         },
@@ -1688,6 +1697,9 @@
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {
+          "type": "boolean"
+        },
+        "voice_transcription": {
           "type": "boolean"
         },
         "web_search": {
