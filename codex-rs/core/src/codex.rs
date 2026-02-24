@@ -2746,15 +2746,21 @@ impl Session {
         // - `ActiveRolloutTurn` tracks the in-progress turn span while we walk forward
         //   through lifecycle events (`TurnStarted` ... `TurnComplete`/`TurnAborted`).
         // - `ReplayedRolloutTurn` is the finalized per-turn metadata we keep after a
-        //   turn ends (whether it had a user message, a `TurnContextItem`, and/or a
-        //   compaction).
+        //   turn ends (whether it had a user message, a `TurnContextItem`, and whether
+        //   any compaction in that span happened before or after the first
+        //   `TurnContextItem` for that turn).
         // - `RolloutReplayMetaSegment` stores the finalized sequence we later
         //   rollback-adjust and reverse-scan to find the last surviving regular turn
         //   context. `CompactionOutsideTurn` is a marker for compaction that happened
-        //   outside any matched turn span; this matters because surviving compaction
-        //   after the last surviving turn span (not merely later than that turn's
-        //   persisted `TurnContextItem` within the same turn) must null
-        //   `reference_context_item` while still preserving `previous_model`.
+        //   outside any matched turn span.
+        //
+        // Explicit replay rule:
+        // - compaction before the first `TurnContextItem` in a turn span is treated as
+        //   preturn compaction for that turn and invalidates
+        //   `reference_context_item` on resume
+        // - compaction after the first `TurnContextItem` in the same turn span is
+        //   treated as mid-turn compaction and does not invalidate that turn's own
+        //   `reference_context_item`
         //
         // `ThreadRolledBack` updates both:
         // - history: drop user turns from reconstructed response items
@@ -2767,14 +2773,16 @@ impl Session {
             turn_id: String,
             saw_user_message: bool,
             turn_context_item: Option<TurnContextItem>,
-            contains_compaction: bool,
+            has_preturn_compaction: bool,
+            has_midturn_compaction: bool,
         }
 
         #[derive(Debug)]
         struct ReplayedRolloutTurn {
             saw_user_message: bool,
             turn_context_item: Option<TurnContextItem>,
-            contains_compaction: bool,
+            has_preturn_compaction: bool,
+            has_midturn_compaction: bool,
         }
 
         #[derive(Debug)]
@@ -2811,7 +2819,11 @@ impl Session {
                         history.replace(rebuilt);
                     }
                     if let Some(active_turn) = active_turn.as_mut() {
-                        active_turn.contains_compaction = true;
+                        if active_turn.turn_context_item.is_none() {
+                            active_turn.has_preturn_compaction = true;
+                        } else {
+                            active_turn.has_midturn_compaction = true;
+                        }
                     } else {
                         replayed_segments.push(RolloutReplayMetaSegment::CompactionOutsideTurn);
                     }
@@ -2842,7 +2854,8 @@ impl Session {
                         turn_id: event.turn_id.clone(),
                         saw_user_message: false,
                         turn_context_item: None,
-                        contains_compaction: false,
+                        has_preturn_compaction: false,
+                        has_midturn_compaction: false,
                     });
                 }
                 RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
@@ -2856,7 +2869,8 @@ impl Session {
                             ReplayedRolloutTurn {
                                 saw_user_message: active_turn.saw_user_message,
                                 turn_context_item: active_turn.turn_context_item,
-                                contains_compaction: active_turn.contains_compaction,
+                                has_preturn_compaction: active_turn.has_preturn_compaction,
+                                has_midturn_compaction: active_turn.has_midturn_compaction,
                             },
                         )));
                     }
@@ -2873,11 +2887,13 @@ impl Session {
                             ReplayedRolloutTurn {
                                 saw_user_message: active_turn.saw_user_message,
                                 turn_context_item: active_turn.turn_context_item,
-                                contains_compaction: active_turn.contains_compaction,
+                                has_preturn_compaction: active_turn.has_preturn_compaction,
+                                has_midturn_compaction: active_turn.has_midturn_compaction,
                             },
                         )));
                     } else if let Some(active_turn) = active_turn.take()
-                        && active_turn.contains_compaction
+                        && (active_turn.has_preturn_compaction
+                            || active_turn.has_midturn_compaction)
                     {
                         // Older lifecycle events may omit `turn_id` on abort. Match the prior
                         // reverse-scan behavior by dropping the active turn span (so we do not
@@ -2919,10 +2935,13 @@ impl Session {
                     }
                     RolloutReplayMetaSegment::Turn(turn) => {
                         if let Some(turn_context_item) = &turn.turn_context_item {
+                            if turn.has_preturn_compaction {
+                                crossed_compaction_after_turn = true;
+                            }
                             previous_regular_turn_context_item = Some(turn_context_item.clone());
                             break;
                         }
-                        if turn.contains_compaction {
+                        if turn.has_preturn_compaction || turn.has_midturn_compaction {
                             crossed_compaction_after_turn = true;
                         }
                     }
@@ -6250,6 +6269,12 @@ async fn try_run_sampling_request(
     // Persist one TurnContext marker per sampling request (not just per user turn) so rollout
     // analysis can reconstruct API-turn boundaries. `run_turn` persists model-visible context
     // diffs/full reinjection earlier in the same regular turn before reaching this path.
+    //
+    // Replay invariant for resume/fork hydration:
+    // compaction events in a turn span that happen before this first persisted TurnContextItem
+    // are treated as preturn compaction for that turn and invalidate
+    // `reference_context_item`, while compaction after this point in the same turn span is
+    // treated as mid-turn compaction and does not invalidate that turn's own baseline.
     let rollout_item = RolloutItem::TurnContext(turn_context.to_turn_context_item());
 
     feedback_tags!(
@@ -7534,6 +7559,76 @@ mod tests {
         assert_eq!(
             session.previous_model().await,
             Some(turn_context.model_info.slug.clone())
+        );
+        assert!(session.reference_context_item().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_resumed_nulls_reference_context_item_for_preturn_compaction_in_same_turn()
+     {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_model = "previous-rollout-model";
+        let previous_context_item = TurnContextItem {
+            turn_id: Some(turn_context.sub_id.clone()),
+            cwd: turn_context.cwd.clone(),
+            approval_policy: turn_context.approval_policy.value(),
+            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            network: None,
+            model: previous_model.to_string(),
+            personality: turn_context.personality,
+            collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+            effort: turn_context.reasoning_effort,
+            summary: turn_context.reasoning_summary,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: Some(turn_context.truncation_policy.into()),
+        };
+        let previous_turn_id = previous_context_item
+            .turn_id
+            .clone()
+            .expect("turn context should have turn_id");
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: previous_turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "seed".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            // Compaction before the first TurnContextItem in this turn is treated as preturn.
+            RolloutItem::Compacted(CompactedItem {
+                message: String::new(),
+                replacement_history: Some(Vec::new()),
+            }),
+            RolloutItem::TurnContext(previous_context_item),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: previous_turn_id,
+                    last_agent_message: None,
+                },
+            )),
+        ];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(
+            session.previous_model().await,
+            Some(previous_model.to_string())
         );
         assert!(session.reference_context_item().await.is_none());
     }
