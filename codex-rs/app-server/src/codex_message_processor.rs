@@ -6572,7 +6572,12 @@ async fn handle_pending_thread_resume_request(
             return;
         }
     };
-    has_in_progress_turn = has_in_progress_turn || latest_turn_is_in_progress(&thread.turns);
+
+    has_in_progress_turn = has_in_progress_turn
+        || thread
+            .turns
+            .iter()
+            .any(|turn| matches!(turn.status, TurnStatus::InProgress));
 
     let status = resolve_thread_status(
         thread_watch_manager
@@ -6644,12 +6649,6 @@ async fn load_thread_for_running_resume_response(
 fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn) {
     turns.retain(|turn| turn.id != active_turn.id);
     turns.push(active_turn);
-}
-
-fn latest_turn_is_in_progress(turns: &[Turn]) -> bool {
-    turns
-        .last()
-        .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress))
 }
 
 fn collect_resume_override_mismatches(
@@ -7589,28 +7588,6 @@ mod tests {
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
         Ok(())
-    }
-
-    #[test]
-    fn latest_turn_is_in_progress_ignores_stale_historical_in_progress_turns() {
-        let turn = |id: &str, status: TurnStatus| Turn {
-            id: id.to_string(),
-            items: Vec::new(),
-            status,
-            error: None,
-        };
-
-        let turns = vec![
-            turn("old", TurnStatus::InProgress),
-            turn("new", TurnStatus::Completed),
-        ];
-        assert!(!latest_turn_is_in_progress(&turns));
-
-        let turns = vec![
-            turn("old", TurnStatus::Completed),
-            turn("new", TurnStatus::InProgress),
-        ];
-        assert!(latest_turn_is_in_progress(&turns));
     }
 
     #[tokio::test]

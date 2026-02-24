@@ -45,6 +45,7 @@ use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
+use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
@@ -994,7 +995,14 @@ impl ChatWidget {
         self.current_status_header = header.clone();
         self.bottom_pane
             .update_status(header, details, details_capitalization, details_max_lines);
-        self.refresh_terminal_title();
+        if self
+            .config
+            .tui_terminal_title
+            .as_ref()
+            .is_some_and(|items| items.iter().any(|item| item == "status"))
+        {
+            self.refresh_terminal_title();
+        }
     }
 
     /// Convenience wrapper around [`Self::set_status`];
@@ -1013,12 +1021,12 @@ impl ChatWidget {
         self.bottom_pane.set_status_line(status_line);
     }
 
-    /// Recomputes footer status-line content from config and current runtime state.
+    /// Recomputes status-line and terminal-title content from config and current runtime state.
     ///
-    /// This method is the status-line orchestrator: it parses configured item identifiers,
-    /// warns once per session about invalid items, updates whether status-line mode is enabled,
-    /// schedules async git-branch lookup when needed, and renders only values that are currently
-    /// available.
+    /// This method is the shared status-surface orchestrator: it parses configured item
+    /// identifiers, warns once per session about invalid items, updates whether status-line mode is
+    /// enabled, schedules async git-branch lookup when needed, and renders only values that are
+    /// currently available.
     ///
     /// The omission behavior is intentional. If selected items are unavailable (for example before
     /// a session id exists or before branch lookup completes), those items are skipped without
@@ -1119,17 +1127,19 @@ impl ChatWidget {
         self.set_status_line(line);
     }
 
+    fn clear_managed_terminal_title(&mut self) -> std::io::Result<()> {
+        if self.last_terminal_title.is_some() {
+            clear_terminal_title()?;
+            self.last_terminal_title = None;
+        }
+
+        Ok(())
+    }
+
     fn refresh_terminal_title_from_selections(&mut self, selections: &StatusSurfaceSelections) {
         if selections.terminal_title_items.is_empty() {
-            if self.last_terminal_title.is_some() {
-                match clear_terminal_title() {
-                    Ok(()) => {
-                        self.last_terminal_title = None;
-                    }
-                    Err(err) => {
-                        tracing::debug!(error = %err, "failed to clear terminal title");
-                    }
-                }
+            if let Err(err) = self.clear_managed_terminal_title() {
+                tracing::debug!(error = %err, "failed to clear terminal title");
             }
             return;
         }
@@ -1146,29 +1156,27 @@ impl ChatWidget {
         }
         match title {
             Some(title) => match set_terminal_title(&title) {
-                Ok(()) => {
+                Ok(SetTerminalTitleResult::Applied) => {
                     self.last_terminal_title = Some(title);
+                }
+                Ok(SetTerminalTitleResult::NoVisibleContent) => {
+                    if let Err(err) = self.clear_managed_terminal_title() {
+                        tracing::debug!(error = %err, "failed to clear terminal title");
+                    }
                 }
                 Err(err) => {
                     tracing::debug!(error = %err, "failed to set terminal title");
                 }
             },
             None => {
-                if self.last_terminal_title.is_some() {
-                    match clear_terminal_title() {
-                        Ok(()) => {
-                            self.last_terminal_title = None;
-                        }
-                        Err(err) => {
-                            tracing::debug!(error = %err, "failed to clear terminal title");
-                        }
-                    }
+                if let Err(err) = self.clear_managed_terminal_title() {
+                    tracing::debug!(error = %err, "failed to clear terminal title");
                 }
             }
         }
     }
 
-    pub(crate) fn refresh_status_line(&mut self) {
+    pub(crate) fn refresh_status_surfaces(&mut self) {
         let selections = self.status_surface_selections();
         self.warn_invalid_status_line_items_once(&selections.invalid_status_line_items);
         self.warn_invalid_terminal_title_items_once(&selections.invalid_terminal_title_items);
@@ -1192,7 +1200,7 @@ impl ChatWidget {
         tracing::info!("status line setup confirmed with items: {items:#?}");
         let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
         self.config.tui_status_line = Some(ids);
-        self.refresh_status_line();
+        self.refresh_status_surfaces();
     }
 
     /// Recomputes and emits the terminal title from config and runtime state.
@@ -1887,7 +1895,7 @@ impl ChatWidget {
         } else {
             self.rate_limit_snapshots_by_limit_id.clear();
         }
-        self.refresh_status_line();
+        self.refresh_status_surfaces();
     }
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
     ///
@@ -2449,7 +2457,7 @@ impl ChatWidget {
 
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
-        self.refresh_status_line();
+        self.refresh_status_surfaces();
     }
 
     fn on_deprecation_notice(&mut self, event: DeprecationNoticeEvent) {
@@ -8120,9 +8128,7 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {
-        if self.last_terminal_title.is_some()
-            && let Err(err) = clear_terminal_title()
-        {
+        if let Err(err) = self.clear_managed_terminal_title() {
             tracing::debug!(error = %err, "failed to clear terminal title on drop");
         }
         self.stop_rate_limit_poller();

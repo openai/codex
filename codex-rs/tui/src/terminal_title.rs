@@ -8,17 +8,24 @@ use ratatui::crossterm::execute;
 
 const MAX_TERMINAL_TITLE_CHARS: usize = 240;
 
-pub(crate) fn set_terminal_title(title: &str) -> io::Result<()> {
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum SetTerminalTitleResult {
+    Applied,
+    NoVisibleContent,
+}
+
+pub(crate) fn set_terminal_title(title: &str) -> io::Result<SetTerminalTitleResult> {
     if !stdout().is_terminal() {
-        return Ok(());
+        return Ok(SetTerminalTitleResult::Applied);
     }
 
     let title = sanitize_terminal_title(title);
     if title.is_empty() {
-        return clear_terminal_title();
+        return Ok(SetTerminalTitleResult::NoVisibleContent);
     }
 
-    execute!(stdout(), SetWindowTitle(title))
+    execute!(stdout(), SetWindowTitle(title))?;
+    Ok(SetTerminalTitleResult::Applied)
 }
 
 pub(crate) fn clear_terminal_title() -> io::Result<()> {

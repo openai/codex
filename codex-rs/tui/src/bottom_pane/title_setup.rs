@@ -70,6 +70,15 @@ impl TerminalTitleItem {
     }
 }
 
+fn parse_terminal_title_items<T>(ids: impl Iterator<Item = T>) -> Option<Vec<TerminalTitleItem>>
+where
+    T: AsRef<str>,
+{
+    ids.map(|id| id.as_ref().parse::<TerminalTitleItem>())
+        .collect::<Result<Vec<_>, _>>()
+        .ok()
+}
+
 /// Interactive view for configuring terminal-title items.
 pub(crate) struct TerminalTitleSetupView {
     picker: MultiSelectPicker,
@@ -114,11 +123,15 @@ impl TerminalTitleSetupView {
             .items(items)
             .enable_ordering()
             .on_preview(|items| {
+                let items = parse_terminal_title_items(
+                    items
+                        .iter()
+                        .filter(|item| item.enabled)
+                        .map(|item| item.id.as_str()),
+                )?;
                 let preview = items
                     .iter()
-                    .filter(|item| item.enabled)
-                    .filter_map(|item| item.id.parse::<TerminalTitleItem>().ok())
-                    .map(|item| item.render())
+                    .map(TerminalTitleItem::render)
                     .collect::<Vec<_>>()
                     .join(" | ");
                 if preview.is_empty() {
@@ -128,19 +141,20 @@ impl TerminalTitleSetupView {
                 }
             })
             .on_change(|items, app_event| {
-                let items = items
-                    .iter()
-                    .filter(|item| item.enabled)
-                    .filter_map(|item| item.id.parse::<TerminalTitleItem>().ok())
-                    .collect::<Vec<_>>();
+                let Some(items) = parse_terminal_title_items(
+                    items
+                        .iter()
+                        .filter(|item| item.enabled)
+                        .map(|item| item.id.as_str()),
+                ) else {
+                    return;
+                };
                 app_event.send(AppEvent::TerminalTitleSetupPreview { items });
             })
             .on_confirm(|ids, app_event| {
-                let items = ids
-                    .iter()
-                    .map(|id| id.parse::<TerminalTitleItem>())
-                    .collect::<Result<Vec<_>, _>>()
-                    .unwrap_or_default();
+                let Some(items) = parse_terminal_title_items(ids.iter().map(String::as_str)) else {
+                    return;
+                };
                 app_event.send(AppEvent::TerminalTitleSetup { items });
             })
             .on_cancel(|app_event| {
@@ -189,6 +203,7 @@ impl Renderable for TerminalTitleSetupView {
 mod tests {
     use super::*;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn render_lines(view: &TerminalTitleSetupView, width: u16) -> String {
@@ -225,5 +240,24 @@ mod tests {
         ];
         let view = TerminalTitleSetupView::new(Some(&selected), tx);
         assert_snapshot!("terminal_title_setup_basic", render_lines(&view, 84));
+    }
+
+    #[test]
+    fn parse_terminal_title_items_preserves_order() {
+        let items = parse_terminal_title_items(["project", "status", "thread"].into_iter());
+        assert_eq!(
+            items,
+            Some(vec![
+                TerminalTitleItem::Project,
+                TerminalTitleItem::Status,
+                TerminalTitleItem::Thread,
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_terminal_title_items_rejects_invalid_ids() {
+        let items = parse_terminal_title_items(["project", "not-a-title-item"].into_iter());
+        assert_eq!(items, None);
     }
 }
