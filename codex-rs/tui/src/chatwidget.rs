@@ -604,7 +604,15 @@ pub(crate) struct ChatWidget {
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
     /// `BottomPane` so the hint text matches the actual shortcut.
     queued_message_edit_binding: KeyBinding,
-    /// Session-local history of the last two distinct models with their latest effort.
+    /// Bounded ring (capacity 2) of the most-recently-used model+effort pairs.
+    ///
+    /// The front entry is always the current (or most-recently-switched-to) model.
+    /// Ctrl+O swaps to the back entry and moves it to the front, giving a
+    /// two-item toggle.  The ring is populated lazily: it stays empty until the
+    /// user first switches models via the picker or until Ctrl+O seeds it from
+    /// the session's initial model.  Effort updates from the effort picker are
+    /// propagated into the matching entry so the toggle restores the latest
+    /// effort the user chose for that model.
     recent_model_history: VecDeque<ModelHistoryEntry>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
@@ -706,6 +714,14 @@ pub(crate) struct UserMessage {
     mention_bindings: Vec<MentionBinding>,
 }
 
+/// A snapshot of a model selection and its associated reasoning effort.
+///
+/// The TUI maintains a bounded ring of at most two of these entries so that
+/// Ctrl+O can flip between the current model and the most-recently-used
+/// alternative without opening the full model picker.  Effort is tracked
+/// alongside the model because users often pair a specific model with a
+/// specific effort level (e.g. "o3 at high, sonnet at medium"), and toggling
+/// should restore the pairing they last used.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ModelHistoryEntry {
     model: String,
@@ -5022,8 +5038,11 @@ impl ChatWidget {
                 collaboration_mode: None,
                 personality: None,
             }));
-            tx.send(AppEvent::UpdateModel(switch_model_for_events.clone()));
-            tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
+            tx.send(AppEvent::UpdateModelSelection {
+                model: switch_model_for_events.clone(),
+                effort: Some(default_effort),
+                scope: crate::app_event::ModelEffortScope::Global,
+            });
         })];
 
         let keep_actions: Vec<SelectionAction> = Vec::new();
@@ -5410,8 +5429,11 @@ impl ChatWidget {
                 return;
             }
 
-            tx.send(AppEvent::UpdateModel(model_for_action.clone()));
-            tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
+            tx.send(AppEvent::UpdateModelSelection {
+                model: model_for_action.clone(),
+                effort: effort_for_action,
+                scope: crate::app_event::ModelEffortScope::Global,
+            });
             tx.send(AppEvent::PersistModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
@@ -5482,14 +5504,20 @@ impl ChatWidget {
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
             let model = model.clone();
             move |tx| {
-                tx.send(AppEvent::UpdateModel(model.clone()));
-                tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+                tx.send(AppEvent::UpdateModelSelection {
+                    model: model.clone(),
+                    effort,
+                    scope: crate::app_event::ModelEffortScope::PlanMode,
+                });
                 tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
             }
         })];
         let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::UpdateModel(model.clone()));
-            tx.send(AppEvent::UpdateReasoningEffort(effort));
+            tx.send(AppEvent::UpdateModelSelection {
+                model: model.clone(),
+                effort,
+                scope: crate::app_event::ModelEffortScope::Global,
+            });
             tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
             tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
             tx.send(AppEvent::PersistModelSelection {
@@ -5655,8 +5683,11 @@ impl ChatWidget {
                         effort: choice_effort,
                     });
                 } else {
-                    tx.send(AppEvent::UpdateModel(model_for_action.clone()));
-                    tx.send(AppEvent::UpdateReasoningEffort(choice_effort));
+                    tx.send(AppEvent::UpdateModelSelection {
+                        model: model_for_action.clone(),
+                        effort: choice_effort,
+                        scope: crate::app_event::ModelEffortScope::Global,
+                    });
                     tx.send(AppEvent::PersistModelSelection {
                         model: model_for_action.clone(),
                         effort: choice_effort,
@@ -5705,9 +5736,11 @@ impl ChatWidget {
         model: String,
         effort: Option<ReasoningEffortConfig>,
     ) {
-        self.app_event_tx.send(AppEvent::UpdateModel(model));
-        self.app_event_tx
-            .send(AppEvent::UpdateReasoningEffort(effort));
+        self.app_event_tx.send(AppEvent::UpdateModelSelection {
+            model,
+            effort,
+            scope: crate::app_event::ModelEffortScope::Global,
+        });
     }
 
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
@@ -6511,6 +6544,12 @@ impl ChatWidget {
     }
 
     /// Set the model in the widget's config copy and stored collaboration mode.
+    ///
+    /// When the model actually changes, the previous model (with its effort at
+    /// the moment of the switch) and the new model are recorded into the
+    /// history ring so that Ctrl+O can toggle between them.  The previous model
+    /// is only recorded when the ring is empty to avoid pushing it to the front
+    /// ahead of the new selection.
     pub(crate) fn set_model(&mut self, model: &str) {
         let previous_model = self.current_model().to_string();
         let previous_effort = self.effective_reasoning_effort();
@@ -6523,6 +6562,8 @@ impl ChatWidget {
             mask.model = Some(model.to_string());
         }
         if previous_model != model {
+            // Seed the ring with the outgoing model so the user has something to
+            // toggle back to even if they never opened the picker before.
             if self.recent_model_history.is_empty() {
                 self.record_model_history_selection(previous_model, previous_effort);
             }
@@ -6534,7 +6575,16 @@ impl ChatWidget {
         self.refresh_model_display();
     }
 
+    /// Lazily populate the history ring with the session's current model if no
+    /// explicit switch has been recorded yet.
+    ///
+    /// This avoids requiring the user to open the model picker before Ctrl+O
+    /// becomes useful: on the first toggle attempt the ring is seeded with the
+    /// initial model so the user only needs one prior switch to have a pair.
     fn seed_model_history_if_empty(&mut self) {
+        if !self.is_session_configured() {
+            return;
+        }
         if self.recent_model_history.is_empty() {
             self.record_model_history_selection(
                 self.current_model().to_string(),
@@ -6543,6 +6593,13 @@ impl ChatWidget {
         }
     }
 
+    /// Record `model` as the most-recently-used entry, pushing it to the front
+    /// of the ring and evicting the oldest entry when the ring exceeds two.
+    ///
+    /// If `model` already exists in the ring it is moved to the front (with its
+    /// effort updated) rather than duplicated, so the ring never contains two
+    /// entries for the same model.  Empty model strings are silently ignored
+    /// because the session may not yet have resolved an effective model name.
     fn record_model_history_selection(
         &mut self,
         model: String,
@@ -6552,6 +6609,7 @@ impl ChatWidget {
             return;
         }
 
+        // Deduplicate: promote existing entry to front rather than adding a second.
         if let Some(existing_idx) = self
             .recent_model_history
             .iter()
@@ -6567,7 +6625,14 @@ impl ChatWidget {
         }
     }
 
+    /// Propagate an effort change into the history ring entry for the current
+    /// model so that toggling away and back restores the latest effort the user
+    /// chose, not the effort that was active when they originally switched to
+    /// the model.
     fn update_current_model_history_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        if !self.is_session_configured() {
+            return;
+        }
         self.seed_model_history_if_empty();
         let current_model = self.current_model().to_string();
         if let Some(entry) = self
@@ -6582,6 +6647,8 @@ impl ChatWidget {
         self.record_model_history_selection(current_model, effort);
     }
 
+    /// Return the history entry that is *not* `current_model`, i.e. the toggle
+    /// target.  Returns `None` when the ring has fewer than two distinct entries.
     fn other_recent_model_entry(&self, current_model: &str) -> Option<ModelHistoryEntry> {
         self.recent_model_history
             .iter()
@@ -7177,6 +7244,17 @@ impl ChatWidget {
         true
     }
 
+    /// Handle Ctrl+O: toggle between the two most-recently-used models.
+    ///
+    /// The toggle restores both the model name and the reasoning effort that
+    /// was active when the user last used that model.  It is a no-op while a
+    /// modal/popup is open, and blocked while a task is running to avoid
+    /// mid-turn model changes.  If the history ring contains fewer than two
+    /// distinct models, an info message is shown instead.
+    ///
+    /// Effort is routed through the correct `AppEvent` variant depending on
+    /// whether the active collaboration mode is Plan (which has its own effort
+    /// knob) or any other mode.
     fn on_ctrl_o(&mut self) {
         if !self.is_session_configured() {
             self.add_info_message(
@@ -7205,14 +7283,17 @@ impl ChatWidget {
             return;
         };
 
-        self.app_event_tx.send(AppEvent::UpdateModel(target.model));
-        if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan {
-            self.app_event_tx
-                .send(AppEvent::UpdatePlanModeReasoningEffort(target.effort));
-        } else {
-            self.app_event_tx
-                .send(AppEvent::UpdateReasoningEffort(target.effort));
-        }
+        let scope =
+            if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan {
+                crate::app_event::ModelEffortScope::PlanMode
+            } else {
+                crate::app_event::ModelEffortScope::Global
+            };
+        self.app_event_tx.send(AppEvent::UpdateModelSelection {
+            model: target.model,
+            effort: target.effort,
+            scope,
+        });
     }
 
     /// True if `key` matches the armed quit shortcut and the window has not expired.

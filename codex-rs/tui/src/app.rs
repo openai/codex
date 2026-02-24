@@ -517,8 +517,11 @@ async fn handle_model_migration_prompt_if_needed(
 
                 config.model = Some(target_model.clone());
                 config.model_reasoning_effort = mapped_effort;
-                app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
-                app_event_tx.send(AppEvent::UpdateReasoningEffort(mapped_effort));
+                app_event_tx.send(AppEvent::UpdateModelSelection {
+                    model: target_model.clone(),
+                    effort: mapped_effort,
+                    scope: crate::app_event::ModelEffortScope::Global,
+                });
                 app_event_tx.send(AppEvent::PersistModelSelection {
                     model: target_model.clone(),
                     effort: mapped_effort,
@@ -1925,12 +1928,21 @@ impl App {
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
-            AppEvent::UpdateReasoningEffort(effort) => {
-                self.on_update_reasoning_effort(effort);
-                self.refresh_status_line();
-            }
-            AppEvent::UpdateModel(model) => {
+            AppEvent::UpdateModelSelection {
+                model,
+                effort,
+                scope,
+            } => {
                 self.chat_widget.set_model(&model);
+                match scope {
+                    crate::app_event::ModelEffortScope::Global => {
+                        self.on_update_reasoning_effort(effort);
+                    }
+                    crate::app_event::ModelEffortScope::PlanMode => {
+                        self.config.plan_mode_reasoning_effort = effort;
+                        self.chat_widget.set_plan_mode_reasoning_effort(effort);
+                    }
+                }
                 self.refresh_status_line();
             }
             AppEvent::UpdateCollaborationMode(mask) => {

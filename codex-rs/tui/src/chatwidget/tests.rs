@@ -2279,15 +2279,13 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::UpdateModel(model) if model == "gpt-5.1-codex-max"
+            AppEvent::UpdateModelSelection {
+                model,
+                effort: Some(_),
+                scope: crate::app_event::ModelEffortScope::Global
+            } if model == "gpt-5.1-codex-max"
         )),
-        "expected model update event; events: {events:?}"
-    );
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
-        "expected reasoning update event; events: {events:?}"
+        "expected atomic model selection update event; events: {events:?}"
     );
 }
 
@@ -2364,15 +2362,13 @@ async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_promp
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::UpdateModel(model) if model == "gpt-5"
+            AppEvent::UpdateModelSelection {
+                model,
+                effort: Some(_),
+                scope: crate::app_event::ModelEffortScope::Global
+            } if model == "gpt-5"
         )),
-        "expected model update event; events: {events:?}"
-    );
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
-        "expected reasoning update event; events: {events:?}"
+        "expected atomic model selection update event; events: {events:?}"
     );
 }
 
@@ -2455,15 +2451,23 @@ async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasonin
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+            AppEvent::UpdateModelSelection {
+                model,
+                effort: Some(ReasoningEffortConfig::High),
+                scope: crate::app_event::ModelEffortScope::PlanMode
+            } if model == "gpt-5.1-codex-max"
         )),
         "expected plan-only reasoning update; events: {events:?}"
     );
     assert!(
-        events
-            .iter()
-            .all(|event| !matches!(event, AppEvent::UpdateReasoningEffort(_))),
-        "did not expect all-modes reasoning update; events: {events:?}"
+        events.iter().all(|event| !matches!(
+            event,
+            AppEvent::UpdateModelSelection {
+                scope: crate::app_event::ModelEffortScope::Global,
+                ..
+            }
+        )),
+        "did not expect global model+effort update; events: {events:?}"
     );
 }
 
@@ -5781,7 +5785,7 @@ async fn server_overloaded_error_does_not_switch_models() {
     });
 
     while let Ok(event) = rx.try_recv() {
-        if let AppEvent::UpdateModel(model) = event {
+        if let AppEvent::UpdateModelSelection { model, .. } = event {
             assert_eq!(
                 model, "gpt-5.2-codex",
                 "did not expect model switch on server-overloaded error"
@@ -6030,11 +6034,83 @@ async fn single_reasoning_option_skips_selection() {
     }
 
     assert!(
-        events
-            .iter()
-            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == ReasoningEffortConfig::High)),
-        "expected reasoning effort to be applied automatically; events: {events:?}"
+        events.iter().any(|ev| matches!(
+            ev,
+            AppEvent::UpdateModelSelection {
+                model,
+                effort: Some(effort),
+                scope: crate::app_event::ModelEffortScope::Global
+            } if model == "model-with-single-reasoning" && *effort == ReasoningEffortConfig::High
+        )),
+        "expected atomic model+effort selection to be applied automatically; events: {events:?}"
     );
+}
+
+#[tokio::test]
+async fn model_history_stays_empty_before_session_configured() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+    assert!(chat.recent_model_history.is_empty());
+}
+
+#[tokio::test]
+async fn model_history_reselect_deduplicates_and_promotes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.record_model_history_selection("gpt-5".to_string(), Some(ReasoningEffortConfig::Low));
+    chat.record_model_history_selection(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+    chat.record_model_history_selection("gpt-5".to_string(), Some(ReasoningEffortConfig::Medium));
+
+    let entries: Vec<ModelHistoryEntry> = chat.recent_model_history.iter().cloned().collect();
+    assert_eq!(
+        entries,
+        vec![
+            ModelHistoryEntry {
+                model: "gpt-5".to_string(),
+                effort: Some(ReasoningEffortConfig::Medium),
+            },
+            ModelHistoryEntry {
+                model: "gpt-5.1-codex-max".to_string(),
+                effort: Some(ReasoningEffortConfig::High),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn model_history_effort_updates_for_current_model() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.set_model("gpt-5.1-codex-max");
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+
+    let entry = chat
+        .recent_model_history
+        .iter()
+        .find(|entry| entry.model == "gpt-5.1-codex-max")
+        .expect("expected entry for switched model");
+    assert_eq!(
+        entry,
+        &ModelHistoryEntry {
+            model: "gpt-5.1-codex-max".to_string(),
+            effort: Some(ReasoningEffortConfig::XHigh),
+        }
+    );
+}
+
+#[tokio::test]
+async fn model_history_other_entry_none_with_single_entry() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.seed_model_history_if_empty();
+    let other = chat.other_recent_model_entry(chat.current_model());
+    assert_eq!(other, None);
 }
 
 #[tokio::test]

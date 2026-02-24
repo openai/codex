@@ -42,6 +42,12 @@ pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModelEffortScope {
+    Global,
+    PlanMode,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -140,11 +146,15 @@ pub(crate) enum AppEvent {
     StopCommitAnimation,
     CommitTick,
 
-    /// Update the current reasoning effort in the running app and widget.
-    UpdateReasoningEffort(Option<ReasoningEffort>),
-
-    /// Update the current model slug in the running app and widget.
-    UpdateModel(String),
+    /// Atomically update the current model and its associated effort.
+    ///
+    /// `scope` controls whether the effort updates the global/default effort
+    /// (`Global`) or the Plan-mode override (`PlanMode`).
+    UpdateModelSelection {
+        model: String,
+        effort: Option<ReasoningEffort>,
+        scope: ModelEffortScope,
+    },
 
     /// Update the active collaboration mask in the running app and widget.
     UpdateCollaborationMode(CollaborationModeMask),
