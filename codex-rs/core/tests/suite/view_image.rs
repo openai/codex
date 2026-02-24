@@ -306,10 +306,7 @@ const png = Buffer.from(
 );
 await fs.writeFile(imagePath, png);
 const out = await codex.tool("view_image", { path: imagePath });
-const imageItem = Array.isArray(out.output)
-  ? out.output.find(item => item?.type === "input_image")
-  : undefined;
-console.log(imageItem?.image_url ?? "");
+console.log(out.output?.body?.text ?? "");
 "#;
 
     let first_response = sse(vec![
@@ -367,9 +364,26 @@ console.log(imageItem?.image_url ?? "");
         Some(false),
         "js_repl call failed unexpectedly: {js_repl_output}"
     );
+
+    let body = req.body_json();
+    let image_message =
+        find_image_message(&body).expect("pending input image message not included in request");
+    let image_url = image_message
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|content| {
+            content.iter().find_map(|span| {
+                if span.get("type").and_then(Value::as_str) == Some("input_image") {
+                    span.get("image_url").and_then(Value::as_str)
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("image_url present");
     assert!(
-        js_repl_output.contains("data:image/png;base64,"),
-        "expected js_repl output to include a png data URL, got {js_repl_output}"
+        image_url.starts_with("data:image/png;base64,"),
+        "expected png data URL, got {image_url}"
     );
 
     Ok(())
