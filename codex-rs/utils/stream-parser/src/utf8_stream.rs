@@ -89,7 +89,7 @@ where
                     Ok(text) => text,
                     Err(prefix_err) => {
                         self.pending_utf8.truncate(old_len);
-                        let error_len = prefix_err.error_len().unwrap_or_else(|| 0);
+                        let error_len = prefix_err.error_len().unwrap_or(0);
                         return Err(Utf8StreamParserError::InvalidUtf8 {
                             valid_up_to: prefix_err.valid_up_to(),
                             error_len,
@@ -125,7 +125,7 @@ where
             let text = match std::str::from_utf8(&self.pending_utf8) {
                 Ok(text) => text,
                 Err(err) => {
-                    let error_len = err.error_len().unwrap_or_else(|| 0);
+                    let error_len = err.error_len().unwrap_or(0);
                     return Err(Utf8StreamParserError::InvalidUtf8 {
                         valid_up_to: err.valid_up_to(),
                         error_len,
