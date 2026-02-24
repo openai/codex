@@ -21,6 +21,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+#[cfg(target_os = "macos")]
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
@@ -155,6 +156,7 @@ async fn expect_exec_approval(
     }
 }
 
+#[cfg(target_os = "macos")]
 fn unique_tmp_path(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
