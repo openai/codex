@@ -224,17 +224,37 @@ fn unix_socket_dir_params(proxy: &ProxyPolicyInputs) -> Vec<(String, PathBuf)> {
 /// When non-empty, the returned string is newline-terminated so callers can
 /// append it directly to larger policy blocks.
 fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
+    let socket_params = unix_socket_path_params(proxy);
+    let has_unix_socket_access = matches!(
+        proxy.unix_domain_socket_policy,
+        UnixDomainSocketPolicy::AllowAll
+    ) || !socket_params.is_empty();
+    if !has_unix_socket_access {
+        return String::new();
+    }
+
+    let mut policy = String::new();
+    policy.push_str("(allow system-socket (socket-domain AF_UNIX))\n");
     if matches!(
         proxy.unix_domain_socket_policy,
         UnixDomainSocketPolicy::AllowAll
     ) {
-        return "(allow network* (subpath \"/\"))\n".to_string();
+        policy.push_str("(allow network-bind (local unix-socket))\n");
+        policy.push_str("(allow network-outbound (remote unix-socket))\n");
+        return policy;
     }
 
-    unix_socket_path_params(proxy)
-        .iter()
-        .map(|param| format!("(allow network* (subpath (param \"{}\")))\n", param.key))
-        .collect()
+    for param in socket_params {
+        policy.push_str(&format!(
+            "(allow network-bind (local unix-socket (path (param \"{}\"))))\n",
+            param.key
+        ));
+        policy.push_str(&format!(
+            "(allow network-outbound (remote unix-socket (path (param \"{}\"))))\n",
+            param.key
+        ));
+    }
+    policy
 }
 
 fn dynamic_network_policy(
@@ -246,8 +266,8 @@ fn dynamic_network_policy(
         let mut policy =
             String::from("; allow outbound access only to configured loopback proxy endpoints\n");
         if proxy.allow_local_binding {
-            policy.push_str("; allow localhost-only binding and loopback traffic\n");
-            policy.push_str("(allow network-bind (local ip \"localhost:*\"))\n");
+            policy.push_str("; allow dual-stack local binding and loopback traffic\n");
+            policy.push_str("(allow network-bind (local ip \"*:*\"))\n");
             policy.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
             policy.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
         }
@@ -465,7 +485,9 @@ fn unix_socket_policy_and_params(
         return (String::new(), Vec::new());
     }
 
-    let mut policy = String::from("; allow outbound connect to explicitly-approved unix sockets\n");
+    let mut policy = String::from(
+        "; allow outbound connect to explicitly-approved unix sockets\n(allow system-socket (socket-domain AF_UNIX))\n",
+    );
     let mut params = Vec::with_capacity(allowed_unix_socket_paths.len());
 
     for (index, path) in allowed_unix_socket_paths.iter().enumerate() {
@@ -674,6 +696,14 @@ mod tests {
             "policy should contain explicit unix-socket allow rule:\n{policy}"
         );
         assert!(
+            policy.contains("(allow system-socket (socket-domain AF_UNIX))"),
+            "policy should allow AF_UNIX socket creation for explicit unix-socket access:\n{policy}"
+        );
+        assert!(
+            !policy.contains("(allow network-bind (local unix-socket"),
+            "wrapper socket access should remain connect-only:\n{policy}"
+        );
+        assert!(
             args.iter()
                 .any(|arg| arg == &format!("-D{param_key}={}", socket_path.to_string_lossy())),
             "args should include unix-socket path param"
@@ -694,8 +724,8 @@ mod tests {
         );
 
         assert!(
-            policy.contains("(allow network-bind (local ip \"localhost:*\"))"),
-            "policy should allow loopback binding when explicitly enabled:\n{policy}"
+            policy.contains("(allow network-bind (local ip \"*:*\"))"),
+            "policy should allow dual-stack loopback binding when explicitly enabled:\n{policy}"
         );
         assert!(
             policy.contains("(allow network-inbound (local ip \"localhost:*\"))"),
@@ -778,8 +808,24 @@ mod tests {
         );
 
         assert!(
-            policy.contains("(allow network* (subpath (param \"UNIX_SOCKET_PATH_0\")))"),
-            "policy should allow explicitly configured unix sockets:\n{policy}"
+            policy.contains("(allow system-socket (socket-domain AF_UNIX))"),
+            "policy should allow AF_UNIX socket creation for configured unix sockets:\n{policy}"
+        );
+        assert!(
+            policy.contains(
+                "(allow network-bind (local unix-socket (path (param \"UNIX_SOCKET_PATH_0\"))))"
+            ),
+            "policy should allow binding explicitly configured unix sockets:\n{policy}"
+        );
+        assert!(
+            policy.contains(
+                "(allow network-outbound (remote unix-socket (path (param \"UNIX_SOCKET_PATH_0\"))))"
+            ),
+            "policy should allow connecting to explicitly configured unix sockets:\n{policy}"
+        );
+        assert!(
+            !policy.contains("(allow network* (subpath"),
+            "policy should no longer use the generic subpath unix-socket rules:\n{policy}"
         );
     }
 
@@ -853,8 +899,20 @@ mod tests {
         );
 
         assert!(
-            policy.contains("(allow network* (subpath \"/\"))"),
-            "policy should allow all unix sockets when flag is enabled:\n{policy}"
+            policy.contains("(allow system-socket (socket-domain AF_UNIX))"),
+            "policy should allow AF_UNIX socket creation when unix sockets are enabled:\n{policy}"
+        );
+        assert!(
+            policy.contains("(allow network-bind (local unix-socket))"),
+            "policy should allow binding unix sockets when enabled:\n{policy}"
+        );
+        assert!(
+            policy.contains("(allow network-outbound (remote unix-socket))"),
+            "policy should allow connecting to unix sockets when enabled:\n{policy}"
+        );
+        assert!(
+            !policy.contains("(allow network* (subpath"),
+            "policy should no longer use the generic subpath unix-socket rules:\n{policy}"
         );
     }
 
