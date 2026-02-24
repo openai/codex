@@ -305,7 +305,8 @@ impl PendingInteractiveReplayState {
             Op::UserInputAnswer { id, .. } => {
                 let mut remove_turn_entry = false;
                 if let Some(call_ids) = self.request_user_input_call_ids_by_turn_id.get_mut(id) {
-                    if let Some(call_id) = call_ids.pop() {
+                    if !call_ids.is_empty() {
+                        let call_id = call_ids.remove(0);
                         self.request_user_input_call_ids.remove(&call_id);
                     }
                     if call_ids.is_empty() {
@@ -3632,6 +3633,45 @@ mod tests {
                     questions: Vec::new(),
                 },
             ),
+        });
+
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.events.len(), 1);
+        assert!(matches!(
+            snapshot.events.first().map(|event| &event.msg),
+            Some(EventMsg::RequestUserInput(ev)) if ev.call_id == "call-2"
+        ));
+    }
+
+    #[test]
+    fn thread_event_snapshot_keeps_newer_request_user_input_pending_when_same_turn_has_queue() {
+        let mut store = ThreadEventStore::new(8);
+        store.push_event(Event {
+            id: "ev-1".to_string(),
+            msg: EventMsg::RequestUserInput(
+                codex_protocol::request_user_input::RequestUserInputEvent {
+                    call_id: "call-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    questions: Vec::new(),
+                },
+            ),
+        });
+        store.push_event(Event {
+            id: "ev-2".to_string(),
+            msg: EventMsg::RequestUserInput(
+                codex_protocol::request_user_input::RequestUserInputEvent {
+                    call_id: "call-2".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    questions: Vec::new(),
+                },
+            ),
+        });
+
+        store.note_outbound_op(&Op::UserInputAnswer {
+            id: "turn-1".to_string(),
+            response: codex_protocol::request_user_input::RequestUserInputResponse {
+                answers: HashMap::new(),
+            },
         });
 
         let snapshot = store.snapshot();
