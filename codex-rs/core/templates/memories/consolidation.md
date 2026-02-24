@@ -260,6 +260,16 @@ Schema rules (strict):
   - If evidence conflicts and validation is unclear, preserve the uncertainty explicitly.
   - In `## General Tips`, cite task references (`[Task 1]`, `[Task 2]`, etc.) when
     merging, deduplicating, or resolving evidence.
+- F) Coverage and uniqueness invariants
+  - INIT mode: every `rollout_summary_file:` listed in `raw_memories.md` must appear in
+    `MEMORY.md` exactly once in some task’s `### rollout_summary_files` list.
+    If you cannot place a rollout cleanly, create a small, low-churn task section for it
+    instead of dropping it.
+  - Both modes: a rollout summary file must not appear in multiple tasks’ rollout lists.
+    If one rollout spans multiple tasks, cite it once under the most primary task and
+    reference it elsewhere only via prose (do not duplicate the file entry).
+  - A single task may cite multiple rollout summaries when they are iterative attempts
+    or follow-ups for the same task.
 
 What to write:
 - Extract the takeaways from rollout summaries and raw_memories, especially sections like
@@ -272,8 +282,10 @@ What to write:
   rollout summary, but still operational and concrete.
 - Use `raw_memories.md` as the routing layer and task inventory.
 - Before writing `MEMORY.md`, build a scratch mapping of `rollout_summary_file -> target
-  task group/task` from the full raw inventory so you can have a better overview. 
-  Note that each rollout summary file can belong to multiple tasks.
+  task group/task` from the full raw inventory so you can have a better overview.
+  Default: each rollout summary file should be assigned to exactly one `## Task <n>`
+  section (pick the primary intent), so the `### rollout_summary_files` index stays
+  deduplicated and usable.
 - Then deep-dive into `rollout_summaries/*.md` when:
   - the task is high-value and needs richer detail,
   - multiple rollouts overlap and need conflict/staleness resolution,
@@ -479,6 +491,10 @@ WORKFLOW
    - Use your best efforts to get the most high-quality memory files
    - Do not be lazy at browsing files in INIT mode; deep-dive high-value rollouts and
      conflicting task families until MEMORY blocks are richer and more useful than raw memories
+   - Mandatory validation (INIT):
+     - After writing, compute set coverage: confirm every `rollout_summary_file:` from
+       `raw_memories.md` appears in `MEMORY.md`, and that no rollout summary file is listed
+       in multiple tasks. If the check fails, fix the file and re-check until it passes.
 
 3) INCREMENTAL UPDATE behavior:
    - Treat `raw_memories.md` as the primary source of NEW signal.
