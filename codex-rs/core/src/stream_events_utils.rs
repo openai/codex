@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
+use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -21,6 +22,15 @@ use codex_protocol::models::ResponseItem;
 use futures::Future;
 use tracing::debug;
 use tracing::instrument;
+
+fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
+    let (without_citations, _citations) = strip_citations(text);
+    if plan_mode {
+        strip_proposed_plan_blocks(&without_citations)
+    } else {
+        without_citations
+    }
+}
 
 /// Handle a completed output item from the model stream, recording it and
 /// queuing any tool execution futures. This records items immediately so
@@ -169,7 +179,7 @@ pub(crate) async fn handle_non_tool_response_item(
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. } => {
             let mut turn_item = parse_turn_item(item)?;
-            if plan_mode && let TurnItem::AgentMessage(agent_message) = &mut turn_item {
+            if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
                 let combined = agent_message
                     .content
                     .iter()
@@ -177,7 +187,7 @@ pub(crate) async fn handle_non_tool_response_item(
                         codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
                     })
                     .collect::<String>();
-                let stripped = strip_proposed_plan_blocks(&combined);
+                let stripped = strip_hidden_assistant_markup(&combined, plan_mode);
                 agent_message.content =
                     vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
             }
@@ -208,12 +218,8 @@ pub(crate) fn last_assistant_message_from_item(
         if combined.is_empty() {
             return None;
         }
-        return if plan_mode {
-            let stripped = strip_proposed_plan_blocks(&combined);
-            (!stripped.trim().is_empty()).then_some(stripped)
-        } else {
-            Some(combined)
-        };
+        let stripped = strip_hidden_assistant_markup(&combined, plan_mode);
+        return (!stripped.trim().is_empty()).then_some(stripped);
     }
     None
 }
@@ -246,5 +252,60 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             })
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::handle_non_tool_response_item;
+    use super::last_assistant_message_from_item;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use pretty_assertions::assert_eq;
+
+    fn assistant_output_text(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: Some("msg-1".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            end_turn: Some(true),
+            phase: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_non_tool_response_item_strips_citations_from_assistant_message() {
+        let item = assistant_output_text("hello<citation>doc1</citation> world");
+
+        let turn_item = handle_non_tool_response_item(&item, false)
+            .await
+            .expect("assistant message should parse");
+
+        let TurnItem::AgentMessage(agent_message) = turn_item else {
+            panic!("expected agent message");
+        };
+        let text = agent_message
+            .content
+            .iter()
+            .map(|entry| match entry {
+                codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+            })
+            .collect::<String>();
+        assert_eq!(text, "hello world");
+    }
+
+    #[test]
+    fn last_assistant_message_from_item_strips_citations_and_plan_blocks() {
+        let item = assistant_output_text(
+            "before<citation>doc1</citation>\n<proposed_plan>\n- x\n</proposed_plan>\nafter",
+        );
+
+        let message = last_assistant_message_from_item(&item, true)
+            .expect("assistant text should remain after stripping");
+
+        assert_eq!(message, "before\nafter");
     }
 }

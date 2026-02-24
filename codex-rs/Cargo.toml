@@ -58,6 +58,7 @@ members = [
     "utils/approval-presets",
     "utils/oss",
     "utils/fuzzy-match",
+    "utils/stream-parser",
     "codex-client",
     "codex-api",
     "state",
@@ -134,6 +135,7 @@ codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-string = { path = "utils/string" }
+codex-utils-stream-parser = { path = "utils/stream-parser" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }

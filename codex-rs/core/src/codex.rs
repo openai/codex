@@ -91,6 +91,9 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::skill_approval::SkillApprovalResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_utils_stream_parser::CitationStreamParser;
+use codex_utils_stream_parser::StreamTextParser;
+use codex_utils_stream_parser::strip_citations;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
@@ -5611,6 +5614,58 @@ impl PlanModeStreamState {
     }
 }
 
+#[derive(Debug, Default)]
+struct AssistantMessageStreamParsers {
+    citations_by_item: HashMap<String, CitationStreamParser>,
+}
+
+#[derive(Debug, Default)]
+struct ParsedAssistantTextDelta {
+    visible_text: String,
+    citations: Vec<String>,
+}
+
+impl AssistantMessageStreamParsers {
+    fn parse_delta(&mut self, item_id: &str, delta: &str) -> ParsedAssistantTextDelta {
+        let parsed = self
+            .citations_by_item
+            .entry(item_id.to_string())
+            .or_default()
+            .push_str(delta);
+        ParsedAssistantTextDelta {
+            visible_text: parsed.visible_text,
+            citations: parsed.extracted,
+        }
+    }
+
+    fn finish_item(&mut self, item_id: &str) -> ParsedAssistantTextDelta {
+        let Some(mut parser) = self.citations_by_item.remove(item_id) else {
+            return ParsedAssistantTextDelta::default();
+        };
+        let parsed = parser.finish();
+        ParsedAssistantTextDelta {
+            visible_text: parsed.visible_text,
+            citations: parsed.extracted,
+        }
+    }
+
+    fn drain_finished(&mut self) -> Vec<(String, ParsedAssistantTextDelta)> {
+        self.citations_by_item
+            .drain()
+            .map(|(item_id, mut parser)| {
+                let parsed = parser.finish();
+                (
+                    item_id,
+                    ParsedAssistantTextDelta {
+                        visible_text: parsed.visible_text,
+                        citations: parsed.extracted,
+                    },
+                )
+            })
+            .collect()
+    }
+}
+
 impl ProposedPlanItemState {
     fn new(turn_id: &str) -> Self {
         Self {
@@ -5813,6 +5868,84 @@ async fn handle_plan_segments(
     }
 }
 
+async fn emit_streamed_assistant_text_delta(
+    sess: &Session,
+    turn_context: &TurnContext,
+    plan_mode_state: Option<&mut PlanModeStreamState>,
+    item_id: &str,
+    delta: String,
+) {
+    if delta.is_empty() {
+        return;
+    }
+    if let Some(state) = plan_mode_state {
+        let segments = state
+            .plan_parsers
+            .assistant_parser_mut(item_id)
+            .parse(&delta);
+        handle_plan_segments(sess, turn_context, state, item_id, segments).await;
+        return;
+    }
+    let event = AgentMessageContentDeltaEvent {
+        thread_id: sess.conversation_id.to_string(),
+        turn_id: turn_context.sub_id.clone(),
+        item_id: item_id.to_string(),
+        delta,
+    };
+    sess.send_event(turn_context, EventMsg::AgentMessageContentDelta(event))
+        .await;
+}
+
+/// Flush buffered citation parser state when an assistant message item ends.
+async fn flush_citation_segments_for_item(
+    sess: &Session,
+    turn_context: &TurnContext,
+    plan_mode_state: Option<&mut PlanModeStreamState>,
+    parsers: &mut AssistantMessageStreamParsers,
+    item_id: &str,
+) {
+    let parsed = parsers.finish_item(item_id);
+    if parsed.visible_text.is_empty() && parsed.citations.is_empty() {
+        return;
+    }
+    // Citation extraction is intentionally local for now; we strip citations from display text
+    // but do not yet surface them in protocol events.
+    let _citations = parsed.citations;
+    emit_streamed_assistant_text_delta(
+        sess,
+        turn_context,
+        plan_mode_state,
+        item_id,
+        parsed.visible_text,
+    )
+    .await;
+}
+
+/// Flush any remaining buffered citation parser state at response completion.
+async fn flush_citation_segments_all(
+    sess: &Session,
+    turn_context: &TurnContext,
+    mut plan_mode_state: Option<&mut PlanModeStreamState>,
+    parsers: &mut AssistantMessageStreamParsers,
+) {
+    for (item_id, parsed) in parsers.drain_finished() {
+        if parsed.visible_text.is_empty() && parsed.citations.is_empty() {
+            continue;
+        }
+        // Citation extraction is intentionally local for now; we strip citations from display text
+        // but do not yet surface them in protocol events.
+        let _citations = parsed.citations;
+        emit_streamed_assistant_text_delta(
+            sess,
+            turn_context,
+            plan_mode_state.as_deref_mut(),
+            &item_id,
+            parsed.visible_text,
+        )
+        .await;
+    }
+}
+
 /// Flush any buffered proposed-plan segments when a specific assistant message ends.
 async fn flush_proposed_plan_segments_for_item(
     sess: &Session,
@@ -5862,6 +5995,7 @@ async fn maybe_complete_plan_item_from_message(
             }
         }
         if let Some(plan_text) = extract_proposed_plan_text(&text) {
+            let (plan_text, _citations) = strip_citations(&plan_text);
             if !state.plan_item_state.started {
                 state.plan_item_state.start(sess, turn_context).await;
             }
@@ -6050,6 +6184,7 @@ async fn try_run_sampling_request(
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
+    let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::default();
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
@@ -6089,6 +6224,19 @@ async fn try_run_sampling_request(
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
                 let previously_active_item = active_item.take();
+                if let Some(previous) = previously_active_item.as_ref()
+                    && matches!(previous, TurnItem::AgentMessage(_))
+                {
+                    let item_id = previous.id();
+                    flush_citation_segments_for_item(
+                        &sess,
+                        &turn_context,
+                        plan_mode_state.as_mut(),
+                        &mut assistant_message_stream_parsers,
+                        &item_id,
+                    )
+                    .await;
+                }
                 if let Some(state) = plan_mode_state.as_mut() {
                     if let Some(previous) = previously_active_item.as_ref() {
                         let item_id = previous.id();
@@ -6175,6 +6323,13 @@ async fn try_run_sampling_request(
                 token_usage,
                 can_append: _,
             } => {
+                flush_citation_segments_all(
+                    &sess,
+                    &turn_context,
+                    plan_mode_state.as_mut(),
+                    &mut assistant_message_stream_parsers,
+                )
+                .await;
                 if let Some(state) = plan_mode_state.as_mut() {
                     flush_proposed_plan_segments_all(&sess, &turn_context, state).await;
                 }
@@ -6194,14 +6349,22 @@ async fn try_run_sampling_request(
                 // UI will show a selection popup from the final ReviewOutput.
                 if let Some(active) = active_item.as_ref() {
                     let item_id = active.id();
-                    if let Some(state) = plan_mode_state.as_mut()
-                        && matches!(active, TurnItem::AgentMessage(_))
-                    {
-                        let segments = state
-                            .plan_parsers
-                            .assistant_parser_mut(&item_id)
-                            .parse(&delta);
-                        handle_plan_segments(&sess, &turn_context, state, &item_id, segments).await;
+                    if matches!(active, TurnItem::AgentMessage(_)) {
+                        let parsed = assistant_message_stream_parsers.parse_delta(&item_id, &delta);
+                        if !parsed.citations.is_empty() {
+                            // Citation extraction is intentionally local for now; we strip
+                            // citations from display text but do not yet surface them in protocol
+                            // events.
+                            let _citations = parsed.citations;
+                        }
+                        emit_streamed_assistant_text_delta(
+                            &sess,
+                            &turn_context,
+                            plan_mode_state.as_mut(),
+                            &item_id,
+                            parsed.visible_text,
+                        )
+                        .await;
                     } else {
                         let event = AgentMessageContentDeltaEvent {
                             thread_id: sess.conversation_id.to_string(),
@@ -6284,23 +6447,10 @@ async fn try_run_sampling_request(
 }
 
 pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
-    responses.iter().rev().find_map(|item| {
-        if let ResponseItem::Message { role, content, .. } = item {
-            if role == "assistant" {
-                content.iter().rev().find_map(|ci| {
-                    if let ContentItem::OutputText { text } = ci {
-                        Some(text.clone())
-                    } else {
-                        None
-                    }
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    })
+    responses
+        .iter()
+        .rev()
+        .find_map(|item| last_assistant_message_from_item(item, false))
 }
 
 use crate::memories::prompts::build_memory_tool_developer_instructions;
