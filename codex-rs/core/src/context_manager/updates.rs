@@ -5,6 +5,7 @@ use codex_execpolicy::Policy;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
 
@@ -12,16 +13,19 @@ fn build_environment_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
     shell: &Shell,
+    exec_policy: &Policy,
 ) -> Option<ResponseItem> {
     let prev = previous?;
     let prev_context = EnvironmentContext::from_turn_context_item(prev, shell);
-    let next_context = EnvironmentContext::from_turn_context(next, shell);
+    let approved_prefix_rules = format_allow_prefixes(exec_policy.get_allowed_prefixes());
+    let next_context =
+        EnvironmentContext::from_turn_context(next, shell, approved_prefix_rules.clone());
     if prev_context.equals_except_shell(&next_context) {
         return None;
     }
 
     Some(ResponseItem::from(
-        EnvironmentContext::diff_from_turn_context_item(prev, next, shell),
+        EnvironmentContext::diff_from_turn_context_item(prev, next, shell, approved_prefix_rules),
     ))
 }
 
@@ -132,7 +136,7 @@ pub(crate) fn build_settings_update_items(
     {
         update_items.push(model_instructions_item);
     }
-    if let Some(env_item) = build_environment_update_item(previous, next, shell) {
+    if let Some(env_item) = build_environment_update_item(previous, next, shell, exec_policy) {
         update_items.push(env_item);
     }
     if let Some(permissions_item) = build_permissions_update_item(previous, next, exec_policy) {

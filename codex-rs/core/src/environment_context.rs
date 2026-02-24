@@ -16,6 +16,7 @@ pub(crate) struct EnvironmentContext {
     pub cwd: Option<PathBuf>,
     pub shell: Shell,
     pub network: Option<NetworkContext>,
+    pub approved_prefix_rules: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -25,11 +26,17 @@ pub(crate) struct NetworkContext {
 }
 
 impl EnvironmentContext {
-    pub fn new(cwd: Option<PathBuf>, shell: Shell, network: Option<NetworkContext>) -> Self {
+    pub fn new(
+        cwd: Option<PathBuf>,
+        shell: Shell,
+        network: Option<NetworkContext>,
+        approved_prefix_rules: Option<String>,
+    ) -> Self {
         Self {
             cwd,
             shell,
             network,
+            approved_prefix_rules,
         }
     }
 
@@ -40,19 +47,24 @@ impl EnvironmentContext {
         let EnvironmentContext {
             cwd,
             network,
+            approved_prefix_rules,
             // should compare all fields except shell
             shell: _,
         } = other;
-        self.cwd == *cwd && self.network == *network
+        self.cwd == *cwd
+            && self.network == *network
+            && self.approved_prefix_rules == *approved_prefix_rules
     }
 
     pub fn diff_from_turn_context_item(
         before: &TurnContextItem,
         after: &TurnContext,
         shell: &Shell,
+        approved_prefix_rules: Option<String>,
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
         let after_network = Self::network_from_turn_context(after);
+        let before_approved_prefix_rules = before.approved_prefix_rules.clone();
         let cwd = if before.cwd != after.cwd {
             Some(after.cwd.clone())
         } else {
@@ -63,14 +75,24 @@ impl EnvironmentContext {
         } else {
             before_network
         };
-        EnvironmentContext::new(cwd, shell.clone(), network)
+        let approved_prefix_rules = if before_approved_prefix_rules != approved_prefix_rules {
+            approved_prefix_rules
+        } else {
+            before_approved_prefix_rules
+        };
+        EnvironmentContext::new(cwd, shell.clone(), network, approved_prefix_rules)
     }
 
-    pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
+    pub fn from_turn_context(
+        turn_context: &TurnContext,
+        shell: &Shell,
+        approved_prefix_rules: Option<String>,
+    ) -> Self {
         Self::new(
             Some(turn_context.cwd.clone()),
             shell.clone(),
             Self::network_from_turn_context(turn_context),
+            approved_prefix_rules,
         )
     }
 
@@ -79,6 +101,7 @@ impl EnvironmentContext {
             Some(turn_context_item.cwd.clone()),
             shell.clone(),
             Self::network_from_turn_context_item(turn_context_item),
+            turn_context_item.approved_prefix_rules.clone(),
         )
     }
 
@@ -145,6 +168,13 @@ impl EnvironmentContext {
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
         }
+        if let Some(approved_prefix_rules) = self.approved_prefix_rules {
+            lines.push("  <approved_prefix_rules>".to_string());
+            for line in approved_prefix_rules.lines() {
+                lines.push(format!("    {line}"));
+            }
+            lines.push("  </approved_prefix_rules>".to_string());
+        }
         lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());
         lines.join("\n")
     }
@@ -183,7 +213,7 @@ mod tests {
     #[test]
     fn serialize_workspace_write_environment_context() {
         let cwd = test_path_buf("/repo");
-        let context = EnvironmentContext::new(Some(cwd.clone()), fake_shell(), None);
+        let context = EnvironmentContext::new(Some(cwd.clone()), fake_shell(), None, None);
 
         let expected = format!(
             r#"<environment_context>
@@ -202,8 +232,12 @@ mod tests {
             allowed_domains: vec!["api.example.com".to_string(), "*.openai.com".to_string()],
             denied_domains: vec!["blocked.example.com".to_string()],
         };
-        let context =
-            EnvironmentContext::new(Some(test_path_buf("/repo")), fake_shell(), Some(network));
+        let context = EnvironmentContext::new(
+            Some(test_path_buf("/repo")),
+            fake_shell(),
+            Some(network),
+            None,
+        );
 
         let expected = format!(
             r#"<environment_context>
@@ -223,7 +257,7 @@ mod tests {
 
     #[test]
     fn serialize_read_only_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell(), None);
+        let context = EnvironmentContext::new(None, fake_shell(), None, None);
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -234,7 +268,7 @@ mod tests {
 
     #[test]
     fn serialize_external_sandbox_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell(), None);
+        let context = EnvironmentContext::new(None, fake_shell(), None, None);
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -245,7 +279,7 @@ mod tests {
 
     #[test]
     fn serialize_external_sandbox_with_restricted_network_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell(), None);
+        let context = EnvironmentContext::new(None, fake_shell(), None, None);
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -256,7 +290,7 @@ mod tests {
 
     #[test]
     fn serialize_full_access_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell(), None);
+        let context = EnvironmentContext::new(None, fake_shell(), None, None);
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -266,24 +300,51 @@ mod tests {
     }
 
     #[test]
+    fn serialize_environment_context_with_approved_prefix_rules() {
+        let context = EnvironmentContext::new(
+            Some(test_path_buf("/repo")),
+            fake_shell(),
+            None,
+            Some("- [\"mkdir\"]\n- [\"gh\", \"api\"]".to_string()),
+        );
+
+        let expected = r#"<environment_context>
+  <cwd>/repo</cwd>
+  <shell>bash</shell>
+  <approved_prefix_rules>
+    - ["mkdir"]
+    - ["gh", "api"]
+  </approved_prefix_rules>
+</environment_context>"#;
+
+        assert_eq!(context.serialize_to_xml(), expected);
+    }
+
+    #[test]
     fn equals_except_shell_compares_cwd() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
+        let context1 =
+            EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None, None);
+        let context2 =
+            EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None, None);
         assert!(context1.equals_except_shell(&context2));
     }
 
     #[test]
     fn equals_except_shell_ignores_sandbox_policy() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
+        let context1 =
+            EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None, None);
+        let context2 =
+            EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None, None);
 
         assert!(context1.equals_except_shell(&context2));
     }
 
     #[test]
     fn equals_except_shell_compares_cwd_differences() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo1")), fake_shell(), None);
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo2")), fake_shell(), None);
+        let context1 =
+            EnvironmentContext::new(Some(PathBuf::from("/repo1")), fake_shell(), None, None);
+        let context2 =
+            EnvironmentContext::new(Some(PathBuf::from("/repo2")), fake_shell(), None, None);
 
         assert!(!context1.equals_except_shell(&context2));
     }
@@ -298,6 +359,7 @@ mod tests {
                 shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
             },
             None,
+            None,
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
@@ -307,8 +369,27 @@ mod tests {
                 shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
             },
             None,
+            None,
         );
 
         assert!(context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn equals_except_shell_compares_approved_prefix_rules() {
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            fake_shell(),
+            None,
+            Some("- [\"mkdir\"]".to_string()),
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            fake_shell(),
+            None,
+            Some("- [\"gh\", \"api\"]".to_string()),
+        );
+
+        assert!(!context1.equals_except_shell(&context2));
     }
 }
