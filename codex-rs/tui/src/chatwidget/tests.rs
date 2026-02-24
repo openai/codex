@@ -1671,7 +1671,7 @@ async fn make_chatwidget_manual(
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
         external_editor_state: ExternalEditorState::Closed,
-        clipboard_text_writer_override: None,
+        clipboard_text_writer: Arc::new(copy_text_to_clipboard),
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -2938,13 +2938,13 @@ fn complete_assistant_message(
 fn install_clipboard_spy(chat: &mut ChatWidget) -> Arc<Mutex<Vec<String>>> {
     let copied = Arc::new(Mutex::new(Vec::new()));
     let copied_for_writer = Arc::clone(&copied);
-    chat.clipboard_text_writer_override = Some(Arc::new(move |text| {
+    chat.clipboard_text_writer = Arc::new(move |text| {
         copied_for_writer
             .lock()
             .expect("clipboard spy mutex poisoned")
             .push(text.to_string());
         Ok(())
-    }));
+    });
     copied
 }
 
@@ -4429,7 +4429,9 @@ async fn slash_copy_reports_when_no_copyable_output_exists() {
     let rendered = lines_to_single_string(&cells[0]);
     assert_snapshot!("slash_copy_no_output_info_message", rendered);
     assert!(
-        rendered.contains("No completed Codex output available to copy yet."),
+        rendered.contains(
+            "`/copy` is unavailable before the first Codex output or right after a rollback."
+        ),
         "expected no-output message, got {rendered:?}"
     );
 }
@@ -4481,13 +4483,13 @@ async fn slash_copy_reports_clipboard_write_error() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let attempted = Arc::new(Mutex::new(Vec::new()));
     let attempted_for_writer = Arc::clone(&attempted);
-    chat.clipboard_text_writer_override = Some(Arc::new(move |text| {
+    chat.clipboard_text_writer = Arc::new(move |text| {
         attempted_for_writer
             .lock()
             .expect("clipboard spy mutex poisoned")
             .push(text.to_string());
         Err("simulated clipboard failure".to_string())
-    }));
+    });
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
@@ -4518,7 +4520,7 @@ async fn slash_copy_reports_clipboard_write_error() {
 }
 
 #[tokio::test]
-async fn slash_copy_uses_legacy_agent_message_when_turn_complete_last_message_is_missing() {
+async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_turn_complete() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let copied = install_clipboard_spy(&mut chat);
 
@@ -4541,17 +4543,26 @@ async fn slash_copy_uses_legacy_agent_message_when_turn_complete_last_message_is
 
     chat.dispatch_command(SlashCommand::Copy);
 
-    assert_eq!(
+    assert!(
         copied
             .lock()
             .expect("clipboard spy mutex poisoned")
-            .as_slice(),
-        ["Legacy final message"]
+            .is_empty()
+    );
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(
+            "`/copy` is unavailable before the first Codex output or right after a rollback."
+        ),
+        "expected unavailable message, got {rendered:?}"
     );
 }
 
 #[tokio::test]
-async fn slash_copy_uses_legacy_agent_message_item_when_turn_complete_last_message_is_missing() {
+async fn slash_copy_is_unavailable_when_legacy_agent_message_item_is_not_repeated_on_turn_complete()
+{
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let copied = install_clipboard_spy(&mut chat);
 
@@ -4568,12 +4579,20 @@ async fn slash_copy_uses_legacy_agent_message_item_when_turn_complete_last_messa
 
     chat.dispatch_command(SlashCommand::Copy);
 
-    assert_eq!(
+    assert!(
         copied
             .lock()
             .expect("clipboard spy mutex poisoned")
-            .as_slice(),
-        ["Legacy item final message"]
+            .is_empty()
+    );
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(
+            "`/copy` is unavailable before the first Codex output or right after a rollback."
+        ),
+        "expected unavailable message, got {rendered:?}"
     );
 }
 
@@ -4610,7 +4629,9 @@ async fn slash_copy_does_not_return_stale_output_after_thread_rollback() {
     assert_eq!(cells.len(), 1, "expected one info message");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("No completed Codex output available to copy yet."),
+        rendered.contains(
+            "`/copy` is unavailable before the first Codex output or right after a rollback."
+        ),
         "expected rollback-cleared copy state message, got {rendered:?}"
     );
 }

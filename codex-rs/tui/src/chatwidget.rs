@@ -513,8 +513,11 @@ pub(crate) enum ExternalEditorState {
 /// Quit/interrupt behavior intentionally spans layers: the bottom pane owns local input routing
 /// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
 /// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
-#[cfg(test)]
-type ClipboardTextWriterOverride = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync + 'static>;
+type ClipboardTextWriter = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync + 'static>;
+
+fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
+    clipboard_text::copy_text_to_clipboard(text).map_err(|e| e.to_string())
+}
 
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
@@ -668,8 +671,7 @@ pub(crate) struct ChatWidget {
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
-    #[cfg(test)]
-    clipboard_text_writer_override: Option<ClipboardTextWriterOverride>,
+    clipboard_text_writer: ClipboardTextWriter,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -1225,14 +1227,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_agent_message(&mut self, message: String, phase: Option<MessagePhase>) {
-        let should_capture_copyable_output = match phase {
-            Some(MessagePhase::FinalAnswer) | None => true,
-            Some(MessagePhase::Commentary) => false,
-        };
-        if should_capture_copyable_output && !message.trim().is_empty() {
-            self.last_copyable_output = Some(message.clone());
-        }
+    fn on_agent_message(&mut self, message: String, _phase: Option<MessagePhase>) {
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
         if self.stream_controller.is_none() && !message.is_empty() {
@@ -2247,27 +2242,11 @@ impl ChatWidget {
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
     fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
-        let should_capture_copyable_output = match item.phase.as_ref() {
-            Some(MessagePhase::FinalAnswer) | None => true,
-            Some(MessagePhase::Commentary) => false,
-        };
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
             Some(MessagePhase::FinalAnswer) | None => false,
             Some(MessagePhase::Commentary) => true,
         };
-        if should_capture_copyable_output {
-            let text = item
-                .content
-                .into_iter()
-                .map(|entry| match entry {
-                    codex_protocol::items::AgentMessageContent::Text { text } => text,
-                })
-                .collect::<String>();
-            if !text.trim().is_empty() {
-                self.last_copyable_output = Some(text);
-            }
-        }
         self.maybe_restore_status_indicator_after_stream_idle();
     }
 
@@ -2776,8 +2755,7 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
-            #[cfg(test)]
-            clipboard_text_writer_override: None,
+            clipboard_text_writer: Arc::new(copy_text_to_clipboard),
         };
 
         widget.prefetch_rate_limits();
@@ -2949,8 +2927,7 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
-            #[cfg(test)]
-            clipboard_text_writer_override: None,
+            clipboard_text_writer: Arc::new(copy_text_to_clipboard),
         };
 
         widget.prefetch_rate_limits();
@@ -3111,8 +3088,7 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
-            #[cfg(test)]
-            clipboard_text_writer_override: None,
+            clipboard_text_writer: Arc::new(copy_text_to_clipboard),
         };
 
         widget.prefetch_rate_limits();
@@ -3519,21 +3495,14 @@ impl ChatWidget {
             SlashCommand::Copy => {
                 let Some(text) = self.last_copyable_output.as_deref() else {
                     self.add_info_message(
-                        "No completed Codex output available to copy yet.".to_string(),
+                        "`/copy` is unavailable before the first Codex output or right after a rollback."
+                            .to_string(),
                         None,
                     );
                     return;
                 };
 
-                #[cfg(test)]
-                let copy_result = if let Some(writer) = &self.clipboard_text_writer_override {
-                    writer(text)
-                } else {
-                    clipboard_text::copy_text_to_clipboard(text).map_err(|e| e.to_string())
-                };
-                #[cfg(not(test))]
-                let copy_result =
-                    clipboard_text::copy_text_to_clipboard(text).map_err(|e| e.to_string());
+                let copy_result = (self.clipboard_text_writer)(text);
 
                 match copy_result {
                     Ok(()) => {
