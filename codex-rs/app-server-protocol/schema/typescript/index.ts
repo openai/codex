@@ -132,6 +132,8 @@ export type { ModelRerouteReason } from "./ModelRerouteReason";
 export type { NetworkAccess } from "./NetworkAccess";
 export type { NetworkApprovalContext } from "./NetworkApprovalContext";
 export type { NetworkApprovalProtocol } from "./NetworkApprovalProtocol";
+export type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
+export type { NetworkPolicyRuleAction } from "./NetworkPolicyRuleAction";
 export type { NewConversationParams } from "./NewConversationParams";
 export type { NewConversationResponse } from "./NewConversationResponse";
 export type { ParsedCommand } from "./ParsedCommand";

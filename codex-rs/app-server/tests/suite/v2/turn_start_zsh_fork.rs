@@ -3,7 +3,7 @@
 // Running these tests with the patched zsh fork:
 //
 // The suite resolves the shared test-only zsh DotSlash file at
-// `exec-server/tests/suite/zsh` via DotSlash on first use, so `dotslash` and
+// `app-server/tests/suite/zsh` via DotSlash on first use, so `dotslash` and
 // network access are required the first time the artifact is fetched.
 
 use anyhow::Result;
@@ -741,7 +741,7 @@ stream_max_retries = 0
 
 fn find_test_zsh_path() -> Result<Option<std::path::PathBuf>> {
     let repo_root = codex_utils_cargo_bin::repo_root()?;
-    let dotslash_zsh = repo_root.join("codex-rs/exec-server/tests/suite/zsh");
+    let dotslash_zsh = repo_root.join("codex-rs/app-server/tests/suite/zsh");
     if !dotslash_zsh.is_file() {
         eprintln!(
             "skipping zsh fork test: shared zsh DotSlash file not found at {}",

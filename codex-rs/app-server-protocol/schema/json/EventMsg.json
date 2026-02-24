@@ -1662,6 +1662,16 @@
                 "null"
               ]
             },
+            "proposed_network_policy_amendments": {
+              "description": "Proposed network policy amendments (for example allow/deny this host in future).",
+              "items": {
+                "$ref": "#/definitions/NetworkPolicyAmendment"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
             "reason": {
               "description": "Optional human-readable reason for the approval (e.g. retry without sandbox).",
               "type": [
@@ -3634,6 +3644,28 @@
         "https",
         "socks5_tcp",
         "socks5_udp"
+      ],
+      "type": "string"
+    },
+    "NetworkPolicyAmendment": {
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/NetworkPolicyRuleAction"
+        },
+        "host": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "host"
+      ],
+      "type": "object"
+    },
+    "NetworkPolicyRuleAction": {
+      "enum": [
+        "allow",
+        "deny"
       ],
       "type": "string"
     },
@@ -6901,6 +6933,16 @@
           "description": "Proposed execpolicy amendment that can be applied to allow future runs.",
           "items": {
             "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "proposed_network_policy_amendments": {
+          "description": "Proposed network policy amendments (for example allow/deny this host in future).",
+          "items": {
+            "$ref": "#/definitions/NetworkPolicyAmendment"
           },
           "type": [
             "array",
