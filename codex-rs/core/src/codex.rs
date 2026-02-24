@@ -92,10 +92,9 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::skill_approval::SkillApprovalResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
-use codex_utils_stream_parser::CitationStreamParser;
-use codex_utils_stream_parser::ProposedPlanParser;
+use codex_utils_stream_parser::AssistantTextChunk;
+use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
-use codex_utils_stream_parser::StreamTextParser;
 use codex_utils_stream_parser::extract_proposed_plan_text;
 use codex_utils_stream_parser::strip_citations;
 use futures::future::BoxFuture;
@@ -5587,21 +5586,10 @@ impl PlanModeStreamState {
 #[derive(Debug, Default)]
 struct AssistantMessageStreamParsers {
     plan_mode: bool,
-    parsers_by_item: HashMap<String, AssistantMessageItemParsers>,
+    parsers_by_item: HashMap<String, AssistantTextStreamParser>,
 }
 
-#[derive(Debug, Default)]
-struct AssistantMessageItemParsers {
-    citations: CitationStreamParser,
-    plan: ProposedPlanParser,
-}
-
-#[derive(Debug, Default)]
-struct ParsedAssistantTextDelta {
-    visible_text: String,
-    citations: Vec<String>,
-    plan_segments: Vec<ProposedPlanSegment>,
-}
+type ParsedAssistantTextDelta = AssistantTextChunk;
 
 impl AssistantMessageStreamParsers {
     fn new(plan_mode: bool) -> Self {
@@ -5611,88 +5599,36 @@ impl AssistantMessageStreamParsers {
         }
     }
 
-    fn parse_visible_text(
-        parser: &mut AssistantMessageItemParsers,
-        text: String,
-        plan_mode: bool,
-    ) -> ParsedAssistantTextDelta {
-        if !plan_mode {
-            return ParsedAssistantTextDelta {
-                visible_text: text,
-                ..ParsedAssistantTextDelta::default()
-            };
-        }
-        let plan_chunk = parser.plan.push_str(&text);
-        ParsedAssistantTextDelta {
-            visible_text: plan_chunk.visible_text,
-            plan_segments: plan_chunk.extracted,
-            ..ParsedAssistantTextDelta::default()
-        }
-    }
-
-    fn parser_mut(&mut self, item_id: &str) -> &mut AssistantMessageItemParsers {
-        self.parsers_by_item.entry(item_id.to_string()).or_default()
+    fn parser_mut(&mut self, item_id: &str) -> &mut AssistantTextStreamParser {
+        let plan_mode = self.plan_mode;
+        self.parsers_by_item
+            .entry(item_id.to_string())
+            .or_insert_with(|| AssistantTextStreamParser::new(plan_mode))
     }
 
     fn seed_item_text(&mut self, item_id: &str, text: &str) -> ParsedAssistantTextDelta {
         if text.is_empty() {
             return ParsedAssistantTextDelta::default();
         }
-        let plan_mode = self.plan_mode;
-        let parser = self.parser_mut(item_id);
-        let parsed = parser.citations.push_str(text);
-        let mut out = Self::parse_visible_text(parser, parsed.visible_text, plan_mode);
-        out.citations = parsed.extracted;
-        out
+        self.parser_mut(item_id).push_str(text)
     }
 
     fn parse_delta(&mut self, item_id: &str, delta: &str) -> ParsedAssistantTextDelta {
-        let plan_mode = self.plan_mode;
-        let parser = self.parser_mut(item_id);
-        let parsed = parser.citations.push_str(delta);
-        let mut out = Self::parse_visible_text(parser, parsed.visible_text, plan_mode);
-        out.citations = parsed.extracted;
-        out
+        self.parser_mut(item_id).push_str(delta)
     }
 
     fn finish_item(&mut self, item_id: &str) -> ParsedAssistantTextDelta {
         let Some(mut parser) = self.parsers_by_item.remove(item_id) else {
             return ParsedAssistantTextDelta::default();
         };
-        let parsed = parser.citations.finish();
-        let mut out = Self::parse_visible_text(&mut parser, parsed.visible_text, self.plan_mode);
-        if self.plan_mode {
-            let mut tail = parser.plan.finish();
-            if !tail.is_empty() {
-                out.visible_text.push_str(&tail.visible_text);
-                out.plan_segments.append(&mut tail.extracted);
-            }
-        }
-        out.citations = parsed.extracted;
-        out
+        parser.finish()
     }
 
     fn drain_finished(&mut self) -> Vec<(String, ParsedAssistantTextDelta)> {
         let parsers_by_item = std::mem::take(&mut self.parsers_by_item);
         parsers_by_item
             .into_iter()
-            .map(|(item_id, mut parser)| {
-                let parsed = {
-                    let parsed = parser.citations.finish();
-                    let mut out =
-                        Self::parse_visible_text(&mut parser, parsed.visible_text, self.plan_mode);
-                    if self.plan_mode {
-                        let mut tail = parser.plan.finish();
-                        if !tail.is_empty() {
-                            out.visible_text.push_str(&tail.visible_text);
-                            out.plan_segments.append(&mut tail.extracted);
-                        }
-                    }
-                    out.citations = parsed.extracted;
-                    out
-                };
-                (item_id, parsed)
-            })
+            .map(|(item_id, mut parser)| (item_id, parser.finish()))
             .collect()
     }
 }
@@ -5906,10 +5842,7 @@ async fn emit_streamed_assistant_text_delta(
     item_id: &str,
     parsed: ParsedAssistantTextDelta,
 ) {
-    if parsed.visible_text.is_empty()
-        && parsed.plan_segments.is_empty()
-        && parsed.citations.is_empty()
-    {
+    if parsed.is_empty() {
         return;
     }
     if !parsed.citations.is_empty() {

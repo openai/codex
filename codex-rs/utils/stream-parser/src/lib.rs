@@ -1,3 +1,4 @@
+mod assistant_text;
 mod citation;
 mod inline_hidden_tag;
 mod proposed_plan;
@@ -5,6 +6,8 @@ mod stream_text;
 mod tagged_line_parser;
 mod utf8_stream;
 
+pub use assistant_text::AssistantTextChunk;
+pub use assistant_text::AssistantTextStreamParser;
 pub use citation::CitationStreamParser;
 pub use citation::strip_citations;
 pub use inline_hidden_tag::ExtractedInlineTag;
