@@ -108,10 +108,9 @@ where
         loop {
             if let Some(close) = self.active.as_ref().map(|active| active.close) {
                 if let Some(close_idx) = self.pending.find(close) {
-                    let mut active = self
-                        .active
-                        .take()
-                        .expect("active tag must exist while closing");
+                    let Some(mut active) = self.active.take() else {
+                        continue;
+                    };
                     active.content.push_str(&self.pending[..close_idx]);
                     out.extracted.push(ExtractedInlineTag {
                         tag: active.tag,
