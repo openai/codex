@@ -2238,7 +2238,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
- "codex-core",
  "codex-execpolicy",
  "codex-protocol",
  "libc",
