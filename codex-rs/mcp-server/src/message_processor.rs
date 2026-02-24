@@ -62,6 +62,9 @@ impl MessageProcessor {
             auth_manager,
             SessionSource::Mcp,
             config.model_catalog.clone(),
+            config
+                .features
+                .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
         ));
         Self {
             outgoing,

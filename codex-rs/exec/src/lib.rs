@@ -396,6 +396,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         auth_manager.clone(),
         SessionSource::Exec,
         config.model_catalog.clone(),
+        config
+            .features
+            .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
     ));
     let default_model = thread_manager
         .get_models_manager()

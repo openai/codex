@@ -1,6 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::features::Feature;
 use codex_protocol::config_types::WebSearchMode;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
@@ -40,7 +39,6 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
                 .web_search_mode
                 .set(WebSearchMode::Cached)
                 .expect("test web_search_mode should satisfy constraints");
-            config.features.enable(Feature::CollaborationModes);
         });
     let test = builder
         .build(&server)

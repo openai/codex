@@ -177,6 +177,9 @@ impl MessageProcessor {
             auth_manager.clone(),
             SessionSource::VSCode,
             config.model_catalog.clone(),
+            config
+                .features
+                .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
         ));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
