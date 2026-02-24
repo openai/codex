@@ -3,7 +3,7 @@
 // This is an instance of the fork of Bash that we bundle with
 // https://www.npmjs.com/package/@openai/codex-shell-tool-mcp.
 // Fetching the prebuilt version via DotSlash makes it easier to write
-// integration tests for the MCP server.
+// integration tests for shell execution flows.
 //
 // TODO(mbolin): Currently, we use a .tgz artifact that includes binaries for
 // multiple platforms, but we could save a bit of space by making arch-specific

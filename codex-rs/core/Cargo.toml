@@ -59,7 +59,6 @@ eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 indexmap = { workspace = true }
-indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
 libc = { workspace = true }
 notify = { workspace = true }

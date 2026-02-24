@@ -30,8 +30,9 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio_tungstenite::accept_async;
+use tokio_tungstenite::accept_async_with_config;
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
@@ -307,13 +308,14 @@ async fn run_websocket_connection(
     stream: TcpStream,
     transport_event_tx: mpsc::Sender<TransportEvent>,
 ) {
-    let websocket_stream = match accept_async(stream).await {
-        Ok(stream) => stream,
-        Err(err) => {
-            warn!("failed to complete websocket handshake: {err}");
-            return;
-        }
-    };
+    let websocket_stream =
+        match accept_async_with_config(stream, Some(WebSocketConfig::default())).await {
+            Ok(stream) => stream,
+            Err(err) => {
+                warn!("failed to complete websocket handshake: {err}");
+                return;
+            }
+        };
 
     let (writer_tx, writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
     let writer_tx_for_reader = writer_tx.clone();

@@ -394,6 +394,9 @@
             "shell_zsh_fork": {
               "type": "boolean"
             },
+            "skill_approval": {
+              "type": "boolean"
+            },
             "skill_env_var_dependency_prompt": {
               "type": "boolean"
             },
@@ -413,6 +416,9 @@
               "type": "boolean"
             },
             "use_linux_sandbox_bwrap": {
+              "type": "boolean"
+            },
+            "voice_transcription": {
               "type": "boolean"
             },
             "web_search": {
@@ -1675,6 +1681,9 @@
         "shell_zsh_fork": {
           "type": "boolean"
         },
+        "skill_approval": {
+          "type": "boolean"
+        },
         "skill_env_var_dependency_prompt": {
           "type": "boolean"
         },
@@ -1694,6 +1703,9 @@
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {
+          "type": "boolean"
+        },
+        "voice_transcription": {
           "type": "boolean"
         },
         "web_search": {

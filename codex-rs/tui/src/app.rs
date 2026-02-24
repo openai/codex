@@ -104,6 +104,10 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
 
+mod pending_interactive_replay;
+
+use self::pending_interactive_replay::PendingInteractiveReplayState;
+
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 /// Baseline cadence for periodic stream commit animation ticks.
@@ -252,6 +256,7 @@ struct ThreadEventStore {
     session_configured: Option<Event>,
     buffer: VecDeque<Event>,
     user_message_ids: HashSet<String>,
+    pending_interactive_replay: PendingInteractiveReplayState,
     capacity: usize,
     active: bool,
 }
@@ -262,6 +267,7 @@ impl ThreadEventStore {
             session_configured: None,
             buffer: VecDeque::new(),
             user_message_ids: HashSet::new(),
+            pending_interactive_replay: PendingInteractiveReplayState::default(),
             capacity,
             active: false,
         }
@@ -274,6 +280,7 @@ impl ThreadEventStore {
     }
 
     fn push_event(&mut self, event: Event) {
+        self.pending_interactive_replay.note_event(&event);
         match &event.msg {
             EventMsg::SessionConfigured(_) => {
                 self.session_configured = Some(event);
@@ -308,18 +315,37 @@ impl ThreadEventStore {
         self.buffer.push_back(event);
         if self.buffer.len() > self.capacity
             && let Some(removed) = self.buffer.pop_front()
-            && matches!(removed.msg, EventMsg::UserMessage(_))
-            && !removed.id.is_empty()
         {
-            self.user_message_ids.remove(&removed.id);
+            self.pending_interactive_replay.note_evicted_event(&removed);
+            if matches!(removed.msg, EventMsg::UserMessage(_)) && !removed.id.is_empty() {
+                self.user_message_ids.remove(&removed.id);
+            }
         }
     }
 
     fn snapshot(&self) -> ThreadEventSnapshot {
         ThreadEventSnapshot {
             session_configured: self.session_configured.clone(),
-            events: self.buffer.iter().cloned().collect(),
+            // Thread switches replay buffered events into a rebuilt ChatWidget. Only replay
+            // interactive prompts that are still pending, or answered approvals/input will reappear.
+            events: self
+                .buffer
+                .iter()
+                .filter(|event| {
+                    self.pending_interactive_replay
+                        .should_replay_snapshot_event(event)
+                })
+                .cloned()
+                .collect(),
         }
+    }
+
+    fn note_outbound_op(&mut self, op: &Op) {
+        self.pending_interactive_replay.note_outbound_op(op);
+    }
+
+    fn op_can_change_pending_replay_state(op: &Op) -> bool {
+        PendingInteractiveReplayState::op_can_change_state(op)
     }
 }
 
@@ -806,6 +832,20 @@ impl App {
             self.set_thread_active(active_id, false).await;
         }
         self.active_thread_rx = None;
+    }
+
+    async fn note_active_thread_outbound_op(&mut self, op: &Op) {
+        if !ThreadEventStore::op_can_change_pending_replay_state(op) {
+            return;
+        }
+        let Some(thread_id) = self.active_thread_id else {
+            return;
+        };
+        let Some(channel) = self.thread_event_channels.get(&thread_id) else {
+            return;
+        };
+        let mut store = channel.store.lock().await;
+        store.note_outbound_op(op);
     }
 
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
@@ -1547,6 +1587,8 @@ impl App {
                     {
                         return Ok(AppRunControl::Continue);
                     }
+                    // Allow widgets to process any pending timers before rendering.
+                    self.chat_widget.pre_draw_tick();
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
@@ -1814,7 +1856,12 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
-                self.chat_widget.submit_op(op);
+                let replay_state_op =
+                    ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
+                let submitted = self.chat_widget.submit_op(op);
+                if submitted && let Some(op) = replay_state_op.as_ref() {
+                    self.note_active_thread_outbound_op(op).await;
+                }
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
@@ -2703,6 +2750,22 @@ impl App {
                     ));
                 }
             },
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::TranscriptionComplete { id, text } => {
+                self.chat_widget.replace_transcription(&id, &text);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::TranscriptionFailed { id, error: _ } => {
+                self.chat_widget.remove_transcription_placeholder(&id);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::UpdateRecordingMeter { id, text } => {
+                // Update in place to preserve the element id for subsequent frames.
+                let updated = self.chat_widget.update_transcription_in_place(&id, &text);
+                if updated {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
             AppEvent::StatusLineSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
                 let edit = codex_core::config::edit::status_line_items_edit(&ids);
@@ -3106,7 +3169,7 @@ impl App {
                 self.chat_widget.handle_key_event(key_event);
             }
             _ => {
-                // Ignore Release key events.
+                self.chat_widget.handle_key_event(key_event);
             }
         };
     }
@@ -3860,7 +3923,7 @@ mod tests {
             .await
             .expect("config");
 
-        let available_models = all_model_presets();
+        let mut available_models = all_model_presets();
         let current = available_models
             .iter()
             .find(|preset| preset.model == "gpt-5.1-codex")
@@ -3872,6 +3935,13 @@ mod tests {
         );
 
         let upgrade = current.upgrade.as_ref().expect("upgrade configured");
+        // Test "hidden current model still prompts" even if bundled
+        // catalog data changes the target model's picker visibility.
+        available_models
+            .iter_mut()
+            .find(|preset| preset.model == upgrade.id)
+            .expect("upgrade target present")
+            .show_in_picker = true;
         assert!(
             should_show_model_migration_prompt(
                 &current.model,

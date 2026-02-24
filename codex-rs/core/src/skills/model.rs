@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::config::Permissions;
 use codex_protocol::protocol::SkillScope;
@@ -68,6 +70,8 @@ pub struct SkillLoadOutcome {
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillError>,
     pub disabled_paths: HashSet<PathBuf>,
+    pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<PathBuf, SkillMetadata>>,
+    pub(crate) implicit_skills_by_doc_path: Arc<HashMap<PathBuf, SkillMetadata>>,
 }
 
 impl SkillLoadOutcome {
