@@ -604,6 +604,7 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_protocol::protocol::NetworkApprovalProtocol;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -817,6 +818,7 @@ mod tests {
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
         let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(100)));
         view.render(Rect::new(0, 0, 100, view.desired_height(100)), &mut buf);
+        assert_snapshot!("network_exec_prompt", format!("{buf:?}"));
 
         let rendered: Vec<String> = (0..buf.area.height)
             .map(|row| {

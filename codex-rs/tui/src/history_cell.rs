@@ -836,8 +836,8 @@ pub fn new_approval_decision_cell(
                 "✔ ".green(),
                 vec![
                     "You ".into(),
-                    "approved".bold(),
-                    " codex to always allow network access to ".into(),
+                    "persisted".bold(),
+                    " Codex network access to ".into(),
                     Span::from(network_policy_amendment.host).dim(),
                 ],
             ),
