@@ -254,24 +254,29 @@ pub(crate) async fn handle_audio(
 
 fn realtime_text_from_conversation_item(item: &Value) -> Option<String> {
     match item.get("type").and_then(Value::as_str) {
-        Some("message") => {
-            if item.get("role").and_then(Value::as_str) != Some("assistant") {
-                return None;
-            }
-            let content = item.get("content")?.as_array()?;
-            let text = content
-                .iter()
-                .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("text"))
-                .filter_map(|entry| entry.get("text").and_then(Value::as_str))
-                .collect::<String>();
-            if text.is_empty() { None } else { Some(text) }
-        }
-        Some("spawn_transcript") => item
-            .get("delta_user_transcript")
-            .and_then(Value::as_str)
-            .and_then(|text| (!text.is_empty()).then(|| text.to_string())),
+        Some("message") => extract_assistant_message_text(item),
+        Some("spawn_transcript") => extract_spawn_transcript_delta(item),
         Some(_) | None => None,
     }
+}
+
+fn extract_assistant_message_text(item: &Value) -> Option<String> {
+    if item.get("role").and_then(Value::as_str) != Some("assistant") {
+        return None;
+    }
+    let content = item.get("content")?.as_array()?;
+    let text = content
+        .iter()
+        .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|entry| entry.get("text").and_then(Value::as_str))
+        .collect::<String>();
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn extract_spawn_transcript_delta(item: &Value) -> Option<String> {
+    item.get("delta_user_transcript")
+        .and_then(Value::as_str)
+        .and_then(|text| (!text.is_empty()).then(|| text.to_string()))
 }
 
 pub(crate) async fn handle_text(

@@ -171,6 +171,8 @@ const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const REALTIME_CONVERSATION_PROMPT: &str =
     "Low-level realtime conversation for TUI audio loop testing.";
 const REALTIME_METER_PLACEHOLDER_ID: &str = "realtime-meter";
+const REALTIME_LISTENING_PLACEHOLDER_TEXT: &str = "Realtime listening ⠤⠤⠤⠤";
+const REALTIME_LISTENING_PREFIX_TEXT: &str = "Realtime listening ";
 
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
@@ -3452,14 +3454,14 @@ impl ChatWidget {
             "Stop voice chat".to_string(),
         )]));
         let id = REALTIME_METER_PLACEHOLDER_ID.to_string();
-        self.replace_transcription(&id, "Realtime listening ⠤⠤⠤⠤");
+        self.replace_transcription(&id, REALTIME_LISTENING_PLACEHOLDER_TEXT);
 
         if let Some(controller) = &self.realtime_audio_controller
             && let Some(RealtimeMicMeterHandles { last_peak, stop }) = controller.meter_handles()
         {
             self.bottom_pane.spawn_live_meter_updates(
                 id.clone(),
-                Some("Realtime listening ".to_string()),
+                Some(REALTIME_LISTENING_PREFIX_TEXT.to_string()),
                 last_peak,
                 stop,
             );
