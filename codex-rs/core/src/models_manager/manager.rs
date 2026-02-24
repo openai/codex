@@ -68,7 +68,10 @@ impl ModelsManager {
         let has_custom_model_catalog = model_catalog.is_some();
         let remote_models = model_catalog
             .map(|catalog| catalog.models)
-            .unwrap_or_else(|| Self::load_remote_models_from_file().unwrap_or_default());
+            .unwrap_or_else(|| {
+                Self::load_remote_models_from_file()
+                    .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}"))
+            });
         Self {
             remote_models: RwLock::new(remote_models),
             has_custom_model_catalog,
@@ -336,7 +339,10 @@ impl ModelsManager {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         Self {
-            remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
+            remote_models: RwLock::new(
+                Self::load_remote_models_from_file()
+                    .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}")),
+            ),
             has_custom_model_catalog: false,
             auth_manager,
             etag: RwLock::new(None),
