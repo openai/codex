@@ -1468,6 +1468,7 @@ dependencies = [
  "anyhow",
  "codex-apply-patch",
  "codex-linux-sandbox",
+ "codex-shell-escalation",
  "codex-utils-home-dir",
  "dotenvy",
  "tempfile",
@@ -1713,6 +1714,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-secrets",
  "codex-shell-command",
+ "codex-shell-escalation",
  "codex-skills",
  "codex-state",
  "codex-utils-absolute-path",
@@ -2039,6 +2041,7 @@ dependencies = [
  "async-trait",
  "clap",
  "codex-utils-absolute-path",
+ "codex-utils-home-dir",
  "codex-utils-rustls-provider",
  "globset",
  "pretty_assertions",
@@ -2528,7 +2531,9 @@ name = "codex-utils-sleep-inhibitor"
 version = "0.0.0"
 dependencies = [
  "core-foundation 0.9.4",
+ "libc",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

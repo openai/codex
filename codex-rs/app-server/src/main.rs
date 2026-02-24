@@ -24,11 +24,6 @@ struct AppServerArgs {
 
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
-        // Run wrapper mode only after arg0 dispatch so `codex-linux-sandbox`
-        // invocations don't get misclassified as zsh exec-wrapper calls.
-        if codex_core::maybe_run_zsh_exec_wrapper_mode()? {
-            return Ok(());
-        }
         let args = AppServerArgs::parse();
         let managed_config_path = managed_config_path_from_debug_env();
         let loader_overrides = LoaderOverrides {

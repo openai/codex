@@ -64,7 +64,7 @@ pub mod stopwatch;
 
 pub use self::core_shell_escalation::ShellActionProvider;
 pub use self::core_shell_escalation::ShellPolicyFactory;
-pub use self::escalate_client::run;
+pub use self::escalate_client::run_shell_escalation_execve_wrapper;
 pub use self::escalate_protocol::EscalateAction;
 pub use self::escalate_server::EscalationPolicyFactory;
 pub use self::escalate_server::ExecParams;

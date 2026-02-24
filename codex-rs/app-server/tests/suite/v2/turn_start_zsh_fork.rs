@@ -35,7 +35,6 @@ use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -444,32 +443,17 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         return Ok(());
     }
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
-    let zsh_path_for_config = {
-        // App-server config accepts only a zsh path, not extra argv. Use a
-        // wrapper so this test can force `-df` and downgrade `-lc` to `-c`
-        // to avoid rc/login-shell startup noise.
-        let path = workspace.join("zsh-no-rc");
-        std::fs::write(
-            &path,
-            format!(
-                r#"#!/bin/sh
-if [ "$1" = "-lc" ]; then
-  shift
-  set -- -c "$@"
-fi
-exec "{}" -df "$@"
-"#,
-                zsh_path.display()
-            ),
-        )?;
-        let mut permissions = std::fs::metadata(&path)?.permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&path, permissions)?;
-        path
-    };
-
+    let first_file = workspace.join("first.txt");
+    let second_file = workspace.join("second.txt");
+    std::fs::write(&first_file, "one")?;
+    std::fs::write(&second_file, "two")?;
+    let shell_command = format!(
+        "/bin/rm {} && /bin/rm {}",
+        first_file.display(),
+        second_file.display()
+    );
     let tool_call_arguments = serde_json::to_string(&serde_json::json!({
-        "command": "/usr/bin/true && /usr/bin/true",
+        "command": shell_command,
         "workdir": serde_json::Value::Null,
         "timeout_ms": 5000
     }))?;
@@ -495,13 +479,13 @@ exec "{}" -df "$@"
     create_config_toml(
         &codex_home,
         &server.uri(),
-        "on-request",
+        "untrusted",
         &BTreeMap::from([
             (Feature::ShellZshFork, true),
             (Feature::UnifiedExec, false),
             (Feature::ShellSnapshot, false),
         ]),
-        &zsh_path_for_config,
+        &zsh_path,
     )?;
 
     let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace).await?;
@@ -525,21 +509,17 @@ exec "{}" -df "$@"
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
-                text: "run true true".to_string(),
+                text: "remove both files".to_string(),
                 text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
-            approval_policy: Some(codex_app_server_protocol::AskForApproval::OnRequest),
-            sandbox_policy: Some(if cfg!(target_os = "linux") {
-                // The zsh exec-bridge wrapper uses a Unix socket back to the parent
-                // process. Linux restricted sandbox seccomp denies connect(2), so use
-                // full access here; this test is validating zsh approval/decline
-                // behavior, not Linux sandboxing.
-                codex_app_server_protocol::SandboxPolicy::DangerFullAccess
-            } else {
-                codex_app_server_protocol::SandboxPolicy::ReadOnly {
-                    access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
-                }
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![workspace.clone().try_into()?],
+                read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
             }),
             model: Some("mock-model".to_string()),
             effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
@@ -554,7 +534,8 @@ exec "{}" -df "$@"
     .await??;
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
 
-    let mut approval_ids = Vec::new();
+    let mut approved_subcommand_strings = Vec::new();
+    let mut approved_subcommand_ids = Vec::new();
     let mut saw_parent_approval = false;
     let target_decisions = [
         CommandExecutionApprovalDecision::Accept,
@@ -573,37 +554,44 @@ exec "{}" -df "$@"
         };
         assert_eq!(params.item_id, "call-zsh-fork-subcommand-decline");
         assert_eq!(params.thread_id, thread.id);
-        let is_target_subcommand = params.command.as_deref() == Some("/usr/bin/true");
+        let approval_command = params
+            .command
+            .as_deref()
+            .expect("approval command should be present");
+        let is_target_subcommand = (approval_command.starts_with("/bin/rm ")
+            || approval_command.starts_with("/usr/bin/rm "))
+            && (approval_command.contains(&first_file.display().to_string())
+                || approval_command.contains(&second_file.display().to_string()));
         if is_target_subcommand {
-            approval_ids.push(
+            assert!(
+                approval_command.contains(&first_file.display().to_string())
+                    || approval_command.contains(&second_file.display().to_string()),
+                "expected zsh subcommand approval for one of the rm commands, got: {approval_command}"
+            );
+            approved_subcommand_ids.push(
                 params
                     .approval_id
                     .clone()
                     .expect("approval_id must be present for zsh subcommand approvals"),
             );
+            approved_subcommand_strings.push(approval_command.to_string());
         }
+        let is_parent_approval = approval_command.contains(&zsh_path.display().to_string())
+            && approval_command.contains(&shell_command);
         let decision = if is_target_subcommand {
             let decision = target_decisions[target_decision_index].clone();
             target_decision_index += 1;
             decision
-        } else {
-            let command = params
-                .command
-                .as_deref()
-                .expect("approval command should be present");
+        } else if is_parent_approval {
             assert!(
                 !saw_parent_approval,
-                "unexpected extra non-target approval: {command}"
-            );
-            assert!(
-                command.contains("zsh-no-rc"),
-                "expected parent zsh wrapper approval, got: {command}"
-            );
-            assert!(
-                command.contains("/usr/bin/true && /usr/bin/true"),
-                "expected tool command in parent approval, got: {command}"
+                "unexpected extra non-target approval: {approval_command}"
             );
             saw_parent_approval = true;
+            CommandExecutionApprovalDecision::Accept
+        } else {
+            // Login shells may run startup helpers (for example path_helper on macOS)
+            // before the parent shell command or target subcommands are reached.
             CommandExecutionApprovalDecision::Accept
         };
         mcp.send_response(
@@ -613,8 +601,15 @@ exec "{}" -df "$@"
         .await?;
     }
 
-    assert_eq!(approval_ids.len(), 2);
-    assert_ne!(approval_ids[0], approval_ids[1]);
+    assert!(
+        saw_parent_approval,
+        "expected parent shell approval request"
+    );
+    assert_eq!(approved_subcommand_ids.len(), 2);
+    assert_ne!(approved_subcommand_ids[0], approved_subcommand_ids[1]);
+    assert_eq!(approved_subcommand_strings.len(), 2);
+    assert!(approved_subcommand_strings[0].contains(&first_file.display().to_string()));
+    assert!(approved_subcommand_strings[1].contains(&second_file.display().to_string()));
     let parent_completed_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
             let completed_notif = mcp
