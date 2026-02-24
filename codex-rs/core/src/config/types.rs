@@ -696,6 +696,11 @@ pub struct Tui {
     /// Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.
     #[serde(default)]
     pub theme: Option<String>,
+
+    /// Persisted two-entry model toggle ring for TUI model switching.
+    #[serde(default)]
+    #[schemars(length(max = 2))]
+    pub model_toggle_pair: Option<Vec<ModelTogglePairEntry>>,
 }
 
 const fn default_true() -> bool {

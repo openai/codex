@@ -26,7 +26,7 @@ pub enum ConfigEdit {
         model: Option<String>,
         effort: Option<ReasoningEffort>,
     },
-    /// Persist the two-entry model toggle pair at top-level config.
+    /// Persist the two-entry model toggle pair under `[tui]`.
     SetModelTogglePair {
         pair: Option<Vec<ModelTogglePairEntry>>,
     },
@@ -319,11 +319,11 @@ impl ConfigDocument {
                     }
                     self.write_value(
                         Scope::Global,
-                        &["model_toggle_pair"],
+                        &["tui", "model_toggle_pair"],
                         TomlItem::ArrayOfTables(tables),
                     )
                 }
-                _ => self.clear(Scope::Global, &["model_toggle_pair"]),
+                _ => self.clear(Scope::Global, &["tui", "model_toggle_pair"]),
             }),
             ConfigEdit::SetModelPersonality { personality } => Ok(self.write_profile_value(
                 &["personality"],
@@ -1805,7 +1805,9 @@ model_reasoning_effort = "high"
         let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         let config: TomlValue = toml::from_str(&raw).expect("parse config");
         let pair_array = config
-            .get("model_toggle_pair")
+            .get("tui")
+            .and_then(TomlValue::as_table)
+            .and_then(|tui| tui.get("model_toggle_pair"))
             .and_then(TomlValue::as_array)
             .expect("model_toggle_pair array");
         assert_eq!(pair_array.len(), 2);
@@ -1833,7 +1835,11 @@ model_reasoning_effort = "high"
         let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         let config: TomlValue = toml::from_str(&raw).expect("parse config");
         assert!(
-            config.get("model_toggle_pair").is_none(),
+            config
+                .get("tui")
+                .and_then(TomlValue::as_table)
+                .and_then(|tui| tui.get("model_toggle_pair"))
+                .is_none(),
             "expected model_toggle_pair to be removed"
         );
     }

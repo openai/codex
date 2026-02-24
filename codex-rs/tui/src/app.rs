@@ -4154,7 +4154,9 @@ mod tests {
         let raw = std::fs::read_to_string(config_path)?;
         let parsed: toml::Value = toml::from_str(&raw)?;
         let pair = parsed
-            .get("model_toggle_pair")
+            .get("tui")
+            .and_then(toml::Value::as_table)
+            .and_then(|tui| tui.get("model_toggle_pair"))
             .and_then(toml::Value::as_array)
             .expect("model_toggle_pair persisted");
         let selected_entry_has_high_effort = pair.iter().any(|entry| {

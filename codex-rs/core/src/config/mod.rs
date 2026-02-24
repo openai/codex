@@ -972,9 +972,6 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
-    /// Persisted two-entry model toggle ring (global scope only).
-    #[schemars(length(max = 2))]
-    pub model_toggle_pair: Option<Vec<ModelTogglePairEntry>>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
 
@@ -2002,23 +1999,29 @@ impl Config {
         } else {
             network.enabled().then_some(network)
         };
-        let model_toggle_pair = cfg.model_toggle_pair.map(|entries| {
-            let mut sanitized: Vec<ModelTogglePairEntry> = Vec::with_capacity(2);
-            for entry in entries {
-                let model = entry.model.trim();
-                if model.is_empty() || sanitized.iter().any(|candidate| candidate.model == model) {
-                    continue;
+        let model_toggle_pair = cfg
+            .tui
+            .as_ref()
+            .and_then(|tui| tui.model_toggle_pair.clone())
+            .map(|entries| {
+                let mut sanitized: Vec<ModelTogglePairEntry> = Vec::with_capacity(2);
+                for entry in entries {
+                    let model = entry.model.trim();
+                    if model.is_empty()
+                        || sanitized.iter().any(|candidate| candidate.model == model)
+                    {
+                        continue;
+                    }
+                    sanitized.push(ModelTogglePairEntry {
+                        model: model.to_string(),
+                        effort: entry.effort,
+                    });
+                    if sanitized.len() == 2 {
+                        break;
+                    }
                 }
-                sanitized.push(ModelTogglePairEntry {
-                    model: model.to_string(),
-                    effort: entry.effort,
-                });
-                if sanitized.len() == 2 {
-                    break;
-                }
-            }
-            sanitized
-        });
+                sanitized
+            });
 
         let config = Self {
             model,
@@ -2600,6 +2603,7 @@ theme = "dracula"
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
                 theme: None,
+                model_toggle_pair: None,
             }
         );
     }

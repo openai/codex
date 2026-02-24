@@ -1397,6 +1397,15 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
+        "model_toggle_pair": {
+          "default": null,
+          "description": "Persisted two-entry model toggle ring for TUI model switching.",
+          "items": {
+            "$ref": "#/definitions/ModelTogglePairEntry"
+          },
+          "maxItems": 2,
+          "type": "array"
+        },
         "notification_method": {
           "allOf": [
             {
@@ -1906,14 +1915,6 @@
     "model_supports_reasoning_summaries": {
       "description": "Override to force-enable reasoning summaries for the configured model.",
       "type": "boolean"
-    },
-    "model_toggle_pair": {
-      "description": "Persisted two-entry model toggle ring (global scope only).",
-      "items": {
-        "$ref": "#/definitions/ModelTogglePairEntry"
-      },
-      "maxItems": 2,
-      "type": "array"
     },
     "model_verbosity": {
       "allOf": [
