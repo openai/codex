@@ -696,6 +696,124 @@ async fn plan_mode_streaming_citations_are_stripped_across_added_deltas_and_done
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_mode_streaming_proposed_plan_tag_split_across_added_and_delta_is_parsed()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex {
+        codex,
+        session_configured,
+        ..
+    } = test_codex().build(&server).await?;
+
+    let added_text = "Intro\n<proposed";
+    let deltas = ["_plan>\n- Step 1\n</proposed_plan>\nOutro"];
+    let full_message = format!("{added_text}{}", deltas.concat());
+
+    let mut events = vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("msg-1", added_text),
+    ];
+    for delta in deltas {
+        events.push(ev_output_text_delta(delta));
+    }
+    events.push(ev_assistant_message("msg-1", &full_message));
+    events.push(ev_completed("resp-1"));
+    mount_sse_once(&server, sse(events)).await;
+
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: session_configured.model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please plan".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: std::env::current_dir()?,
+            approval_policy: codex_protocol::protocol::AskForApproval::Never,
+            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+            model: session_configured.model.clone(),
+            effort: None,
+            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            collaboration_mode: Some(collaboration_mode),
+            personality: None,
+        })
+        .await?;
+
+    let mut agent_started = None;
+    let mut agent_completed = None;
+    let mut plan_started = None;
+    let mut plan_completed = None;
+    let mut agent_deltas = Vec::new();
+    let mut plan_deltas = Vec::new();
+
+    loop {
+        let ev = wait_for_event(&codex, |_| true).await;
+        match ev {
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) => agent_started = Some(item),
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::Plan(item),
+                ..
+            }) => plan_started = Some(item),
+            EventMsg::AgentMessageContentDelta(event) => agent_deltas.push(event.delta),
+            EventMsg::PlanDelta(event) => plan_deltas.push(event.delta),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(item),
+                ..
+            }) => agent_completed = Some(item),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::Plan(item),
+                ..
+            }) => plan_completed = Some(item),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let agent_started = agent_started.expect("agent item start should be emitted");
+    let agent_completed = agent_completed.expect("agent item completion should be emitted");
+    let plan_started = plan_started.expect("plan item start should be emitted");
+    let plan_completed = plan_completed.expect("plan item completion should be emitted");
+
+    let agent_started_text: String = agent_started
+        .content
+        .iter()
+        .map(|entry| match entry {
+            AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect();
+    let agent_completed_text: String = agent_completed
+        .content
+        .iter()
+        .map(|entry| match entry {
+            AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect();
+
+    assert_eq!(agent_started_text, "Intro\n");
+    assert_eq!(agent_deltas.concat(), "Outro");
+    assert_eq!(agent_completed_text, "Intro\nOutro");
+    assert_eq!(plan_started.text, "");
+    assert_eq!(plan_deltas.concat(), "- Step 1\n");
+    assert_eq!(plan_completed.text, "- Step 1\n");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
