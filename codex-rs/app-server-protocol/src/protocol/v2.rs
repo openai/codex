@@ -633,6 +633,47 @@ pub struct ConfigRequirementsReadResponse {
     pub requirements: Option<ConfigRequirements>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum ExternalAgentConfigMigrationType {
+    #[serde(rename = "AGENTS_MD")]
+    #[ts(rename = "AGENTS_MD")]
+    AgentsMd,
+    #[serde(rename = "CONFIG")]
+    #[ts(rename = "CONFIG")]
+    Config,
+    #[serde(rename = "SKILLS")]
+    #[ts(rename = "SKILLS")]
+    Skills,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigMigrationItem {
+    pub migration_type: ExternalAgentConfigMigrationType,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigDetectResponse {
+    pub items: Vec<ExternalAgentConfigMigrationItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportParams {
+    pub migration_types: Vec<ExternalAgentConfigMigrationType>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportResponse {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

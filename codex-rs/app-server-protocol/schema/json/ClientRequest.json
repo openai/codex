@@ -376,6 +376,28 @@
       },
       "type": "object"
     },
+    "ExternalAgentConfigImportParams": {
+      "properties": {
+        "migrationTypes": {
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigMigrationType"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "migrationTypes"
+      ],
+      "type": "object"
+    },
+    "ExternalAgentConfigMigrationType": {
+      "enum": [
+        "AGENTS_MD",
+        "CONFIG",
+        "SKILLS"
+      ],
+      "type": "string"
+    },
     "FeedbackUploadParams": {
       "properties": {
         "classification": {
@@ -3388,6 +3410,53 @@
         "params"
       ],
       "title": "Config/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "externalAgentConfig/detect"
+          ],
+          "title": "ExternalAgentConfig/detectRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "ExternalAgentConfig/detectRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "externalAgentConfig/import"
+          ],
+          "title": "ExternalAgentConfig/importRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ExternalAgentConfigImportParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ExternalAgentConfig/importRequest",
       "type": "object"
     },
     {

@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ExternalAgentConfigMigrationItem": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "migrationType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationType"
+        }
+      },
+      "required": [
+        "description",
+        "migrationType"
+      ],
+      "type": "object"
+    },
+    "ExternalAgentConfigMigrationType": {
+      "enum": [
+        "AGENTS_MD",
+        "CONFIG",
+        "SKILLS"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/definitions/ExternalAgentConfigMigrationItem"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "ExternalAgentConfigDetectResponse",
+  "type": "object"
+}

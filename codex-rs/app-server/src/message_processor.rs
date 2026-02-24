@@ -9,6 +9,7 @@ use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -23,6 +24,7 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
+use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -125,6 +127,7 @@ pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_message_processor: CodexMessageProcessor,
     config_api: ConfigApi,
+    external_agent_config_api: ExternalAgentConfigApi,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
 }
@@ -196,11 +199,13 @@ impl MessageProcessor {
             loader_overrides,
             cloud_requirements,
         );
+        let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
 
         Self {
             outgoing,
             codex_message_processor,
             config_api,
+            external_agent_config_api,
             config,
             config_warnings: Arc::new(config_warnings),
         }
@@ -356,6 +361,26 @@ impl MessageProcessor {
                 )
                 .await;
             }
+            ClientRequest::ExternalAgentConfigDetect {
+                request_id,
+                params: _,
+            } => {
+                self.handle_external_agent_config_detect(ConnectionRequestId {
+                    connection_id,
+                    request_id,
+                })
+                .await;
+            }
+            ClientRequest::ExternalAgentConfigImport { request_id, params } => {
+                self.handle_external_agent_config_import(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
             ClientRequest::ConfigValueWrite { request_id, params } => {
                 self.handle_config_value_write(
                     ConnectionRequestId {
@@ -476,6 +501,24 @@ impl MessageProcessor {
 
     async fn handle_config_requirements_read(&self, request_id: ConnectionRequestId) {
         match self.config_api.config_requirements_read().await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_external_agent_config_detect(&self, request_id: ConnectionRequestId) {
+        match self.external_agent_config_api.detect().await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_external_agent_config_import(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ExternalAgentConfigImportParams,
+    ) {
+        match self.external_agent_config_api.import(params).await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
