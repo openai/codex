@@ -456,7 +456,6 @@ jobs:
           mkdir -p "$staging" "$staging/vendor"
           cp shell-tool-mcp/README.md "$staging/"
           cp shell-tool-mcp/package.json "$staging/"
-          cp -R shell-tool-mcp/bin "$staging/"
 
           found_vendor="false"
           shopt -s nullglob
