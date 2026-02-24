@@ -1,6 +1,23 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "AdditionalPermissions": {
+      "properties": {
+        "fs_read": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fs_write": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "AgentMessageContent": {
       "oneOf": [
         {
@@ -2674,6 +2691,17 @@
         },
         {
           "properties": {
+            "additional_permissions": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/AdditionalPermissions"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional additional filesystem permissions requested for this command."
+            },
             "approval_id": {
               "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
               "type": [

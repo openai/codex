@@ -2039,6 +2039,7 @@ dependencies = [
  "async-trait",
  "clap",
  "codex-utils-absolute-path",
+ "codex-utils-home-dir",
  "codex-utils-rustls-provider",
  "globset",
  "pretty_assertions",

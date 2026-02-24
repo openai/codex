@@ -99,6 +99,8 @@ mod read_file;
 mod realtime_conversation;
 mod remote_models;
 mod request_compression;
+#[cfg(not(target_os = "windows"))]
+mod request_permissions;
 mod request_user_input;
 mod resume;
 mod resume_warning;

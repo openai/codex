@@ -40,6 +40,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_mode: Option<WebSearchMode>,
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
+    pub request_permission_enabled: bool,
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
@@ -67,6 +68,7 @@ impl ToolsConfig {
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = true;
         let include_search_tool = features.enabled(Feature::Apps);
+        let request_permission_enabled = features.enabled(Feature::RequestPermissions);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -102,6 +104,7 @@ impl ToolsConfig {
             web_search_mode: *web_search_mode,
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
+            request_permission_enabled,
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
@@ -177,14 +180,18 @@ impl From<JsonSchema> for AdditionalProperties {
     }
 }
 
-fn create_approval_parameters() -> BTreeMap<String, JsonSchema> {
+fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<String, JsonSchema> {
     let mut properties = BTreeMap::from([
         (
             "sandbox_permissions".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
-                        .to_string(),
+                    if request_permission_enabled {
+                        "Sandbox permissions for the command. Use \"with_additional_permissions\" to request additional sandboxed filesystem access (preferred), or \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
+                    } else {
+                        "Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
+                    }
+                    .to_string(),
                 ),
             },
         ),
@@ -201,24 +208,55 @@ fn create_approval_parameters() -> BTreeMap<String, JsonSchema> {
                 ),
             },
         ),
+        (
+            "prefix_rule".to_string(),
+            JsonSchema::Array {
+                items: Box::new(JsonSchema::String { description: None }),
+                description: Some(
+                    r#"Only specify when sandbox_permissions is `require_escalated`.
+                        Suggest a prefix command pattern that will allow you to fulfill similar requests from the user in the future.
+                        Should be a short but reasonable prefix, e.g. [\"git\", \"pull\"] or [\"uv\", \"run\"] or [\"pytest\"]."#.to_string(),
+                ),
+            },
+        )
     ]);
 
-    properties.insert(
-        "prefix_rule".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::String { description: None }),
-            description: Some(
-                r#"Only specify when sandbox_permissions is `require_escalated`.
-                    Suggest a prefix command pattern that will allow you to fulfill similar requests from the user in the future.
-                    Should be a short but reasonable prefix, e.g. [\"git\", \"pull\"] or [\"uv\", \"run\"] or [\"pytest\"]."#.to_string(),
-            ),
-        },
-    );
+    if request_permission_enabled {
+        properties.insert(
+            "additional_permissions".to_string(),
+            JsonSchema::Object {
+                properties: BTreeMap::from([
+                    (
+                        "fs_read".to_string(),
+                        JsonSchema::Array {
+                            items: Box::new(JsonSchema::String { description: None }),
+                            description: Some(
+                                "Additional filesystem paths to grant read access for this command."
+                                    .to_string(),
+                            ),
+                        },
+                    ),
+                    (
+                        "fs_write".to_string(),
+                        JsonSchema::Array {
+                            items: Box::new(JsonSchema::String { description: None }),
+                            description: Some(
+                                "Additional filesystem paths to grant write access for this command."
+                                    .to_string(),
+                            ),
+                        },
+                    ),
+                ]),
+                required: None,
+                additional_properties: Some(false.into()),
+            },
+        );
+    }
 
     properties
 }
 
-fn create_exec_command_tool(allow_login_shell: bool) -> ToolSpec {
+fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "cmd".to_string(),
@@ -278,7 +316,7 @@ fn create_exec_command_tool(allow_login_shell: bool) -> ToolSpec {
             },
         );
     }
-    properties.extend(create_approval_parameters());
+    properties.extend(create_approval_parameters(request_permission_enabled));
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
@@ -341,7 +379,7 @@ fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
-fn create_shell_tool() -> ToolSpec {
+fn create_shell_tool(request_permission_enabled: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "command".to_string(),
@@ -363,7 +401,7 @@ fn create_shell_tool() -> ToolSpec {
             },
         ),
     ]);
-    properties.extend(create_approval_parameters());
+    properties.extend(create_approval_parameters(request_permission_enabled));
 
     let description  = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
@@ -394,7 +432,10 @@ Examples of valid command strings:
     })
 }
 
-fn create_shell_command_tool(allow_login_shell: bool) -> ToolSpec {
+fn create_shell_command_tool(
+    allow_login_shell: bool,
+    request_permission_enabled: bool,
+) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "command".to_string(),
@@ -428,7 +469,7 @@ fn create_shell_command_tool(allow_login_shell: bool) -> ToolSpec {
             },
         );
     }
-    properties.extend(create_approval_parameters());
+    properties.extend(create_approval_parameters(request_permission_enabled));
 
     let description = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output.
@@ -1464,17 +1505,21 @@ pub(crate) fn build_specs(
     let search_tool_handler = Arc::new(SearchToolBm25Handler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
+    let request_permission_enabled = config.request_permission_enabled;
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
-            builder.push_spec_with_parallel_support(create_shell_tool(), true);
+            builder.push_spec_with_parallel_support(
+                create_shell_tool(request_permission_enabled),
+                true,
+            );
         }
         ConfigShellToolType::Local => {
             builder.push_spec_with_parallel_support(ToolSpec::LocalShell {}, true);
         }
         ConfigShellToolType::UnifiedExec => {
             builder.push_spec_with_parallel_support(
-                create_exec_command_tool(config.allow_login_shell),
+                create_exec_command_tool(config.allow_login_shell, request_permission_enabled),
                 true,
             );
             builder.push_spec(create_write_stdin_tool());
@@ -1486,7 +1531,7 @@ pub(crate) fn build_specs(
         }
         ConfigShellToolType::ShellCommand => {
             builder.push_spec_with_parallel_support(
-                create_shell_command_tool(config.allow_login_shell),
+                create_shell_command_tool(config.allow_login_shell, request_permission_enabled),
                 true,
             );
         }
@@ -1833,7 +1878,7 @@ mod tests {
         // Build expected from the same helpers used by the builder.
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
         for spec in [
-            create_exec_command_tool(true),
+            create_exec_command_tool(true, false),
             create_write_stdin_tool(),
             PLAN_TOOL.clone(),
             create_request_user_input_tool(),
@@ -2749,7 +2794,7 @@ mod tests {
 
     #[test]
     fn test_shell_tool() {
-        let tool = super::create_shell_tool();
+        let tool = super::create_shell_tool(false);
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool
@@ -2778,8 +2823,29 @@ Examples of valid command strings:
     }
 
     #[test]
+    fn shell_tool_with_request_permission_includes_additional_permissions() {
+        let tool = super::create_shell_tool(true);
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+            panic!("expected function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("expected object parameters");
+        };
+
+        assert!(properties.contains_key("additional_permissions"));
+
+        let Some(JsonSchema::String {
+            description: Some(description),
+        }) = properties.get("sandbox_permissions")
+        else {
+            panic!("expected sandbox_permissions description");
+        };
+        assert!(description.contains("with_additional_permissions"));
+    }
+
+    #[test]
     fn test_shell_command_tool() {
-        let tool = super::create_shell_command_tool(true);
+        let tool = super::create_shell_command_tool(true, false);
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool

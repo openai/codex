@@ -211,7 +211,7 @@ fn shell_event_with_prefix_rule(
         "command": command,
         "timeout_ms": timeout_ms,
     });
-    if sandbox_permissions.requires_escalated_permissions() {
+    if sandbox_permissions.requires_additional_permissions() {
         args["sandbox_permissions"] = json!(sandbox_permissions);
     }
     if let Some(prefix_rule) = prefix_rule {
@@ -234,7 +234,7 @@ fn exec_command_event(
     if let Some(yield_time_ms) = yield_time_ms {
         args["yield_time_ms"] = json!(yield_time_ms);
     }
-    if sandbox_permissions.requires_escalated_permissions() {
+    if sandbox_permissions.requires_additional_permissions() {
         args["sandbox_permissions"] = json!(sandbox_permissions);
         let reason = justification.unwrap_or(DEFAULT_UNIFIED_EXEC_JUSTIFICATION);
         args["justification"] = json!(reason);

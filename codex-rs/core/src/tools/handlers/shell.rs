@@ -9,6 +9,7 @@ use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
@@ -22,6 +23,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
@@ -29,6 +31,7 @@ use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use codex_protocol::models::AdditionalPermissions;
 
 pub struct ShellHandler;
 
@@ -37,6 +40,7 @@ pub struct ShellCommandHandler;
 struct RunExecLikeArgs {
     tool_name: String,
     exec_params: ExecParams,
+    additional_permissions: Option<AdditionalPermissions>,
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::codex::Session>,
     turn: Arc<TurnContext>,
@@ -155,6 +159,7 @@ impl ToolHandler for ShellHandler {
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
                     exec_params,
+                    additional_permissions: params.additional_permissions.clone(),
                     prefix_rule,
                     session,
                     turn,
@@ -170,6 +175,7 @@ impl ToolHandler for ShellHandler {
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
                     exec_params,
+                    additional_permissions: None,
                     prefix_rule: None,
                     session,
                     turn,
@@ -245,6 +251,7 @@ impl ToolHandler for ShellCommandHandler {
         ShellHandler::run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,
+            additional_permissions: params.additional_permissions.clone(),
             prefix_rule,
             session,
             turn,
@@ -261,6 +268,7 @@ impl ShellHandler {
         let RunExecLikeArgs {
             tool_name,
             exec_params,
+            additional_permissions,
             prefix_rule,
             session,
             turn,
@@ -282,10 +290,20 @@ impl ShellHandler {
             }
         }
 
+        let request_permission_enabled = session.features().enabled(Feature::RequestPermissions);
+        let normalized_additional_permissions = normalize_and_validate_additional_permissions(
+            request_permission_enabled,
+            turn.approval_policy.value(),
+            exec_params.sandbox_permissions,
+            additional_permissions,
+            &exec_params.cwd,
+        )
+        .map_err(FunctionCallError::RespondToModel)?;
+
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
             .sandbox_permissions
-            .requires_escalated_permissions()
+            .requires_additional_permissions()
             && !matches!(
                 turn.approval_policy.value(),
                 codex_protocol::protocol::AskForApproval::OnRequest
@@ -365,6 +383,7 @@ impl ShellHandler {
             explicit_env_overrides,
             network: exec_params.network.clone(),
             sandbox_permissions: exec_params.sandbox_permissions,
+            additional_permissions: normalized_additional_permissions,
             justification: exec_params.justification.clone(),
             exec_approval_requirement,
         };
@@ -486,6 +505,7 @@ mod tests {
             login,
             timeout_ms,
             sandbox_permissions: Some(sandbox_permissions),
+            additional_permissions: None,
             prefix_rule: None,
             justification: justification.clone(),
         };
@@ -545,6 +565,7 @@ mod tests {
             login: None,
             timeout_ms: None,
             sandbox_permissions: None,
+            additional_permissions: None,
             prefix_rule: None,
             justification: None,
         };

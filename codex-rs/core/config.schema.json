@@ -370,6 +370,9 @@
             "remote_models": {
               "type": "boolean"
             },
+            "request_permissions": {
+              "type": "boolean"
+            },
             "request_rule": {
               "type": "boolean"
             },
@@ -1655,6 +1658,9 @@
           "type": "boolean"
         },
         "remote_models": {
+          "type": "boolean"
+        },
+        "request_permissions": {
           "type": "boolean"
         },
         "request_rule": {
