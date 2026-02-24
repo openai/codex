@@ -57,6 +57,10 @@ async fn make_config_for_test(
     .await
 }
 
+async fn write_local_mcp_json(dir: &Path, contents: &str) -> std::io::Result<()> {
+    tokio::fs::write(dir.join("mcp.json"), contents).await
+}
+
 #[tokio::test]
 async fn cli_overrides_resolve_relative_paths_against_cwd() -> std::io::Result<()> {
     let codex_home = tempdir().expect("tempdir");
@@ -1244,6 +1248,305 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
         .and_then(TomlValue::as_str)
         .expect("foo entry");
     assert_eq!(foo, "child");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cwd_local_mcp_json_overrides_other_mcp_server_entries() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        project_root.join(".codex").join(CONFIG_TOML_FILE),
+        r#"[mcp_servers.docs]
+command = "root-server"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        nested.join(".codex").join(CONFIG_TOML_FILE),
+        r#"[mcp_servers.docs]
+command = "child-server"
+"#,
+    )
+    .await?;
+    write_local_mcp_json(
+        &nested,
+        r#"{
+  "mcpServers": {
+    "docs": { "command": "local-server" },
+    "from_local_only": { "command": "local-only-server" }
+  }
+}"#,
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    let user_config_path = codex_home.join(CONFIG_TOML_FILE);
+    let user_config_contents = tokio::fs::read_to_string(&user_config_path).await?;
+    tokio::fs::write(
+        &user_config_path,
+        format!(
+            r#"[mcp_servers.docs]
+command = "user-server"
+{user_config_contents}"#
+        ),
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let effective = layers.effective_config();
+    let mcp_servers = effective
+        .get("mcp_servers")
+        .and_then(TomlValue::as_table)
+        .expect("mcp_servers");
+    let docs = mcp_servers
+        .get("docs")
+        .and_then(TomlValue::as_table)
+        .expect("docs");
+    assert_eq!(
+        docs.get("command"),
+        Some(&TomlValue::String("local-server".to_string()))
+    );
+    let local_only = mcp_servers
+        .get("from_local_only")
+        .and_then(TomlValue::as_table)
+        .expect("from_local_only");
+    assert_eq!(
+        local_only.get("command"),
+        Some(&TomlValue::String("local-only-server".to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cwd_local_mcp_json_direct_shape_is_supported_without_dot_codex() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    write_local_mcp_json(
+        &nested,
+        r#"{
+  "docs": { "command": "direct-server" }
+}"#,
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let effective = layers.effective_config();
+    let mcp_servers = effective
+        .get("mcp_servers")
+        .and_then(TomlValue::as_table)
+        .expect("mcp_servers");
+    let docs = mcp_servers
+        .get("docs")
+        .and_then(TomlValue::as_table)
+        .expect("docs");
+    assert_eq!(
+        docs.get("command"),
+        Some(&TomlValue::String("direct-server".to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cwd_local_mcp_json_is_disabled_when_project_is_untrusted() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    write_local_mcp_json(
+        &nested,
+        r#"{
+  "docs": { "command": "disabled-server" }
+}"#,
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Untrusted, None).await?;
+    let user_config_path = codex_home.join(CONFIG_TOML_FILE);
+    let user_config_contents = tokio::fs::read_to_string(&user_config_path).await?;
+    tokio::fs::write(
+        &user_config_path,
+        format!("foo = \"user\"\n{user_config_contents}"),
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 1);
+    assert!(project_layers[0].disabled_reason.is_some());
+    assert_eq!(
+        layers.effective_config().get("foo"),
+        Some(&TomlValue::String("user".to_string()))
+    );
+    assert!(layers.effective_config().get("mcp_servers").is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_local_mcp_json_fails_for_trusted_projects() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    write_local_mcp_json(&nested, "{").await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let err = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await
+    .expect_err("expected invalid mcp.json to fail for trusted project");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("mcp.json"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_local_mcp_json_is_ignored_when_project_is_untrusted() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    write_local_mcp_json(&nested, "{").await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Untrusted, None).await?;
+    let user_config_path = codex_home.join(CONFIG_TOML_FILE);
+    let user_config_contents = tokio::fs::read_to_string(&user_config_path).await?;
+    tokio::fs::write(
+        &user_config_path,
+        format!("foo = \"user\"\n{user_config_contents}"),
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+    let project_layers: Vec<_> = layers
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 1);
+    assert!(project_layers[0].disabled_reason.is_some());
+    assert_eq!(
+        layers.effective_config().get("foo"),
+        Some(&TomlValue::String("user".to_string()))
+    );
+    assert!(layers.effective_config().get("mcp_servers").is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_mcp_json_rejects_inline_bearer_token() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    write_local_mcp_json(
+        &nested,
+        r#"{
+  "docs": {
+    "url": "https://example.com/mcp",
+    "bearer_token": "secret"
+  }
+}"#,
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let err = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await
+    .expect_err("expected bearer_token entry to fail");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("bearer_token"));
 
     Ok(())
 }

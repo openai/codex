@@ -7,6 +7,7 @@ mod tests;
 
 use crate::config::ConfigToml;
 use crate::config::deserialize_config_toml_with_base;
+use crate::config::types::McpServerConfig;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use crate::git_info::resolve_root_git_project_for_trust;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -64,6 +65,7 @@ pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 const DEFAULT_PROGRAM_DATA_DIR_WINDOWS: &str = r"C:\ProgramData";
 
 const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
+const LOCAL_MCP_JSON_FILE: &str = "mcp.json";
 
 pub(crate) async fn first_layer_config_error(layers: &ConfigLayerStack) -> Option<ConfigError> {
     codex_config::first_layer_config_error::<ConfigToml>(layers, CONFIG_TOML_FILE).await
@@ -94,7 +96,7 @@ pub(crate) async fn first_layer_config_error_from_entries(
 /// - system    `/etc/codex/config.toml` (Unix) or
 ///   `%ProgramData%\OpenAI\Codex\config.toml` (Windows)
 /// - user      `${CODEX_HOME}/config.toml`
-/// - cwd       `${PWD}/config.toml` (loaded but disabled when the directory is untrusted)
+/// - cwd       `${PWD}/config.toml` and `${PWD}/mcp.json` (loaded but disabled when the directory is untrusted)
 /// - tree      parent directories up to root looking for `./.codex/config.toml` (loaded but disabled when untrusted)
 /// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` (loaded but disabled when untrusted)
 /// - runtime   e.g., --config flags, model selector in UI
@@ -645,17 +647,56 @@ fn project_layer_entry(
     dot_codex_folder: &AbsolutePathBuf,
     layer_dir: &AbsolutePathBuf,
     config: TomlValue,
-    config_toml_exists: bool,
+    project_config_exists: bool,
 ) -> ConfigLayerEntry {
     let source = ConfigLayerSource::Project {
         dot_codex_folder: dot_codex_folder.clone(),
     };
 
-    if config_toml_exists && let Some(reason) = trust_context.disabled_reason_for_dir(layer_dir) {
+    if project_config_exists && let Some(reason) = trust_context.disabled_reason_for_dir(layer_dir)
+    {
         ConfigLayerEntry::new_disabled(source, config, reason)
     } else {
         ConfigLayerEntry::new(source, config)
     }
+}
+
+fn local_mcp_parse_error(path: &Path, detail: impl std::fmt::Display) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "Error parsing local MCP config file {}: {detail}",
+            path.display()
+        ),
+    )
+}
+
+fn parse_local_mcp_json_file(
+    local_mcp_file: &AbsolutePathBuf,
+    contents: &str,
+) -> io::Result<TomlValue> {
+    let value: serde_json::Value = serde_json::from_str(contents)
+        .map_err(|err| local_mcp_parse_error(local_mcp_file.as_path(), err))?;
+    let Some(top_level) = value.as_object() else {
+        return Err(local_mcp_parse_error(
+            local_mcp_file.as_path(),
+            "expected a top-level object",
+        ));
+    };
+
+    let servers_value = top_level
+        .get("mcpServers")
+        .cloned()
+        .unwrap_or_else(|| value.clone());
+    let servers: std::collections::HashMap<String, McpServerConfig> =
+        serde_json::from_value(servers_value)
+            .map_err(|err| local_mcp_parse_error(local_mcp_file.as_path(), err))?;
+    let mcp_servers_value = TomlValue::try_from(servers)
+        .map_err(|err| local_mcp_parse_error(local_mcp_file.as_path(), err))?;
+
+    let mut local_mcp_layer = toml::map::Map::new();
+    local_mcp_layer.insert("mcp_servers".to_string(), mcp_servers_value);
+    Ok(TomlValue::Table(local_mcp_layer))
 }
 
 async fn project_trust_context(
@@ -801,75 +842,119 @@ async fn load_project_layers(
 
     let mut layers = Vec::new();
     for dir in dirs {
-        let dot_codex = dir.join(".codex");
-        if !tokio::fs::metadata(&dot_codex)
-            .await
-            .map(|meta| meta.is_dir())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-
         let layer_dir = AbsolutePathBuf::from_absolute_path(dir)?;
         let decision = trust_context.decision_for_dir(&layer_dir);
-        let dot_codex_abs = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
+        let dot_codex_abs = layer_dir.join(".codex")?;
         let dot_codex_normalized =
             normalize_path(dot_codex_abs.as_path()).unwrap_or_else(|_| dot_codex_abs.to_path_buf());
         if dot_codex_abs == codex_home_abs || dot_codex_normalized == codex_home_normalized {
             continue;
         }
-        let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
-        match tokio::fs::read_to_string(&config_file).await {
-            Ok(contents) => {
-                let config: TomlValue = match toml::from_str(&contents) {
-                    Ok(config) => config,
-                    Err(e) => {
-                        if decision.is_trusted() {
-                            let config_file_display = config_file.as_path().display();
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                format!(
-                                    "Error parsing project config file {config_file_display}: {e}"
-                                ),
+
+        let mut local_mcp_layer = None;
+        let mut local_mcp_exists = false;
+        if layer_dir.as_path() == cwd.as_path() {
+            let local_mcp_file = layer_dir.join(LOCAL_MCP_JSON_FILE)?;
+            match tokio::fs::read_to_string(local_mcp_file.as_path()).await {
+                Ok(contents) => {
+                    local_mcp_exists = true;
+                    match parse_local_mcp_json_file(&local_mcp_file, &contents) {
+                        Ok(parsed) => local_mcp_layer = Some(parsed),
+                        Err(err) => {
+                            if decision.is_trusted() {
+                                return Err(err);
+                            }
+                            layers.push(project_layer_entry(
+                                trust_context,
+                                &dot_codex_abs,
+                                &layer_dir,
+                                TomlValue::Table(toml::map::Map::new()),
+                                true,
                             ));
+                            continue;
                         }
-                        layers.push(project_layer_entry(
-                            trust_context,
-                            &dot_codex_abs,
-                            &layer_dir,
-                            TomlValue::Table(toml::map::Map::new()),
-                            true,
-                        ));
-                        continue;
                     }
-                };
-                let config =
-                    resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                let entry =
-                    project_layer_entry(trust_context, &dot_codex_abs, &layer_dir, config, true);
-                layers.push(entry);
-            }
-            Err(err) => {
-                if err.kind() == io::ErrorKind::NotFound {
-                    // If there is no config.toml file, record an empty entry
-                    // for this project layer, as this may still have subfolders
-                    // that are significant in the overall ConfigLayerStack.
-                    layers.push(project_layer_entry(
-                        trust_context,
-                        &dot_codex_abs,
-                        &layer_dir,
-                        TomlValue::Table(toml::map::Map::new()),
-                        false,
-                    ));
-                } else {
-                    let config_file_display = config_file.as_path().display();
-                    return Err(io::Error::new(
-                        err.kind(),
-                        format!("Failed to read project config file {config_file_display}: {err}"),
-                    ));
+                }
+                Err(err) => {
+                    if err.kind() != io::ErrorKind::NotFound {
+                        let local_mcp_display = local_mcp_file.as_path().display();
+                        return Err(io::Error::new(
+                            err.kind(),
+                            format!(
+                                "Failed to read local MCP config file {local_mcp_display}: {err}"
+                            ),
+                        ));
+                    }
                 }
             }
         }
+
+        let dot_codex_exists = tokio::fs::metadata(dot_codex_abs.as_path())
+            .await
+            .map(|meta| meta.is_dir())
+            .unwrap_or(false);
+        if !dot_codex_exists && local_mcp_layer.is_none() {
+            continue;
+        }
+
+        let mut layer_config = TomlValue::Table(toml::map::Map::new());
+        let mut config_toml_exists = false;
+        if dot_codex_exists {
+            let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
+            match tokio::fs::read_to_string(&config_file).await {
+                Ok(contents) => {
+                    config_toml_exists = true;
+                    let config: TomlValue = match toml::from_str(&contents) {
+                        Ok(config) => config,
+                        Err(e) => {
+                            if decision.is_trusted() {
+                                let config_file_display = config_file.as_path().display();
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    format!(
+                                        "Error parsing project config file {config_file_display}: {e}"
+                                    ),
+                                ));
+                            }
+                            layers.push(project_layer_entry(
+                                trust_context,
+                                &dot_codex_abs,
+                                &layer_dir,
+                                TomlValue::Table(toml::map::Map::new()),
+                                true,
+                            ));
+                            continue;
+                        }
+                    };
+                    let config =
+                        resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
+                    merge_toml_values(&mut layer_config, &config);
+                }
+                Err(err) => {
+                    if err.kind() != io::ErrorKind::NotFound {
+                        let config_file_display = config_file.as_path().display();
+                        return Err(io::Error::new(
+                            err.kind(),
+                            format!(
+                                "Failed to read project config file {config_file_display}: {err}"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some(local_mcp_layer) = local_mcp_layer {
+            merge_toml_values(&mut layer_config, &local_mcp_layer);
+        }
+
+        layers.push(project_layer_entry(
+            trust_context,
+            &dot_codex_abs,
+            &layer_dir,
+            layer_config,
+            config_toml_exists || local_mcp_exists,
+        ));
     }
 
     Ok(layers)

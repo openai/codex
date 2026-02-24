@@ -12,6 +12,13 @@ Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the c
 
 - https://developers.openai.com/codex/config-reference
 
+Codex also supports a local `mcp.json` file in the current working directory for project-scoped MCP servers. Supported shapes are either:
+
+- `{ "mcpServers": { ... } }`
+- `{ ... }` (direct server map)
+
+When `mcp.json` and `mcp_servers` define the same server name, `mcp.json` wins for that session. Local project config is trust-gated the same way as other project config.
+
 ## Apps (Connectors)
 
 Use `$` in the composer to insert a ChatGPT connector; the popover lists accessible
