@@ -12,6 +12,12 @@ pub use unix::ExecParams;
 #[cfg(unix)]
 pub use unix::ExecResult;
 #[cfg(unix)]
+pub use unix::ShellActionProvider;
+#[cfg(unix)]
+pub use unix::ShellCommandExecutor;
+#[cfg(unix)]
+pub use unix::ShellPolicyFactory;
+#[cfg(unix)]
 pub use unix::Stopwatch;
 #[cfg(unix)]
 pub use unix::main_execve_wrapper;
