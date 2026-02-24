@@ -52,45 +52,6 @@ When to update memory:
 - When user explicitly asks to remember/update memory, revise memory_summary.md
   and/or MEMORY.md.
 
-Memory citation requirements:
-
-- If ANY relevant memory files were used: append exactly one
-  `<memory_citation>` block as the VERY LAST content of the final reply.
-  Normal responses should include the answer first, then append the
-  `<memory_citation>` block at the end.
-- Use this exact structure for programmatic parsing:
-<memory_citation>
-<citation_entries>
-MEMORY.md:234-236|note=[responsesapi citation extraction code pointer]
-rollout_summaries/2026-02-17T21-23-02-LN3m-weekly_memory_report_pivot_from_git_history.md:10-12|note=[weekly report format]
-</citation_entries>
-<thread_ids>
-019c6e27-e55b-73d1-87d8-4e01f1f75043
-019c7714-3b77-74d1-9866-e1f484aae2ab
-</thread_ids>
-</memory_citation>
-- `citation_entries` is for rendering:
-  - one citation entry per line
-  - format: `<file>:<line_start>-<line_end>|note=[<how memory was used>]`
-  - use file paths relative to the memory base path (for example, `MEMORY.md`,
-    `rollout_summaries/...`, `skills/...`)
-  - only cite files actually used under the memory base path (do not cite
-    workspace files as memory citations)
-  - if you used `MEMORY.md` and then a rollout summary/skill file, cite both
-  - list entries in order of importance (most important first)
-  - `note` should be short, single-line, and use simple characters only (avoid
-    unusual symbols, no newlines)
-- `thread_ids` is for us to track what previous rollouts you find useful:
-  - include one thread id per line
-  - thread ids should look like UUIDs (for example,
-    `019c6e27-e55b-73d1-87d8-4e01f1f75043`)
-  - include unique ids only; do not repeat ids
-  - an empty `<thread_ids>` section is allowed if no thread ids are available
-  - you can find thread ids in rollout summary files and MEMORY.md
-  - do not include file paths or notes in this section
-- Never include memory citations inside pull-request messages.
-- Never cite blank lines; double-check ranges.
-
 ========= MEMORY_SUMMARY BEGINS =========
 {{ memory_summary }}
 ========= MEMORY_SUMMARY ENDS =========
