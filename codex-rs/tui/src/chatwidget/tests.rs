@@ -6144,13 +6144,14 @@ async fn model_history_other_entry_none_with_single_entry() {
 #[tokio::test]
 async fn session_configured_uses_persisted_pair_other_when_default_present() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let default_model = chat.current_model().to_string();
     chat.config.model_toggle_pair = Some(vec![
         ModelTogglePairEntry {
             model: "o3".to_string(),
             effort: Some(ReasoningEffortConfig::High),
         },
         ModelTogglePairEntry {
-            model: "gpt-5".to_string(),
+            model: default_model.clone(),
             effort: Some(ReasoningEffortConfig::Low),
         },
     ]);
@@ -6159,7 +6160,7 @@ async fn session_configured_uses_persisted_pair_other_when_default_present() {
         session_id: ThreadId::new(),
         forked_from_id: None,
         thread_name: None,
-        model: "gpt-5".to_string(),
+        model: default_model.clone(),
         model_provider_id: "openai".to_string(),
         approval_policy: AskForApproval::Never,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
@@ -6177,7 +6178,7 @@ async fn session_configured_uses_persisted_pair_other_when_default_present() {
         entries,
         vec![
             ModelHistoryEntry {
-                model: "gpt-5".to_string(),
+                model: default_model.clone(),
                 effort: Some(ReasoningEffortConfig::Medium),
             },
             ModelHistoryEntry {
@@ -6191,6 +6192,7 @@ async fn session_configured_uses_persisted_pair_other_when_default_present() {
 #[tokio::test]
 async fn session_configured_replaces_current_when_default_not_in_persisted_pair() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let default_model = chat.current_model().to_string();
     chat.config.model_toggle_pair = Some(vec![
         ModelTogglePairEntry {
             model: "o3".to_string(),
@@ -6206,7 +6208,7 @@ async fn session_configured_replaces_current_when_default_not_in_persisted_pair(
         session_id: ThreadId::new(),
         forked_from_id: None,
         thread_name: None,
-        model: "gpt-5".to_string(),
+        model: default_model.clone(),
         model_provider_id: "openai".to_string(),
         approval_policy: AskForApproval::Never,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
@@ -6224,7 +6226,7 @@ async fn session_configured_replaces_current_when_default_not_in_persisted_pair(
         entries,
         vec![
             ModelHistoryEntry {
-                model: "gpt-5".to_string(),
+                model: default_model.clone(),
                 effort: Some(ReasoningEffortConfig::Medium),
             },
             ModelHistoryEntry {
