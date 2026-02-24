@@ -50,6 +50,7 @@ impl ExternalAgentConfigApi {
         }
 
         let settings_json = self.claude_home.join("settings.json");
+        // TODO: check if the migratable fields exists in the settings.json and the mapped config.toml fields are empty
         if settings_json.is_file() {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Config,
