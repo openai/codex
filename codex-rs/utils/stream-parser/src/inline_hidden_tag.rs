@@ -52,6 +52,16 @@ where
             !specs.is_empty(),
             "InlineHiddenTagParser requires at least one tag spec"
         );
+        for spec in &specs {
+            assert!(
+                !spec.open.is_empty(),
+                "InlineHiddenTagParser requires non-empty open delimiters"
+            );
+            assert!(
+                !spec.close.is_empty(),
+                "InlineHiddenTagParser requires non-empty close delimiters"
+            );
+        }
         Self {
             specs,
             pending: String::new(),
@@ -289,5 +299,25 @@ mod tests {
         assert_eq!(out.extracted.len(), 1);
         assert_eq!(out.extracted[0].tag, Tag::B);
         assert_eq!(out.extracted[0].content, "y");
+    }
+
+    #[test]
+    #[should_panic(expected = "non-empty open delimiters")]
+    fn generic_inline_parser_rejects_empty_open_delimiter() {
+        let _ = InlineHiddenTagParser::new(vec![InlineTagSpec {
+            tag: Tag::A,
+            open: "",
+            close: "</a>",
+        }]);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-empty close delimiters")]
+    fn generic_inline_parser_rejects_empty_close_delimiter() {
+        let _ = InlineHiddenTagParser::new(vec![InlineTagSpec {
+            tag: Tag::A,
+            open: "<a>",
+            close: "",
+        }]);
     }
 }

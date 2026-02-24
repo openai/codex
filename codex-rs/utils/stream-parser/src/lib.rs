@@ -1,11 +1,3 @@
-//! Streaming parsers for text that arrives in chunks.
-//!
-//! This crate is intentionally small and dependency-free. It provides:
-//! - a generic [`StreamTextParser`] trait for incremental text parsers, and
-//! - reusable parsers for hidden inline tags such as `<citation>...</citation>`.
-//!
-//! See the crate `README.md` for usage examples and extension guidance.
-
 mod citation;
 mod inline_hidden_tag;
 mod stream_text;

@@ -92,5 +92,9 @@ assert_eq!(out.extracted[0].content, "x");
 - No tag attributes
 - No nested tag support
 - Unterminated open tags are auto-closed on `finish()` (buffered content is returned as extracted)
+- `Utf8StreamParser::push_bytes(...)` rolls back the entire pushed chunk on invalid UTF-8 so the
+  wrapped parser does not observe a partial prefix from that chunk
+- `Utf8StreamParser::into_inner()` returns an error if undecoded UTF-8 bytes are still buffered;
+  use `into_inner_lossy()` only if you intentionally want to drop buffered partial bytes
 - `StreamTextParser::push_str(...)` accepts only valid UTF-8 (`&str`); use `Utf8StreamParser` if your
   upstream source yields raw bytes

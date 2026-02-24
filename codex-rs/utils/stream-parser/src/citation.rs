@@ -15,6 +15,9 @@ const CITATION_CLOSE: &str = "</citation>";
 ///
 /// This is a thin convenience wrapper around [`InlineHiddenTagParser`]. It returns citation bodies
 /// as plain strings and omits the citation tags from visible text.
+///
+/// Matching is literal and non-nested. If EOF is reached before a closing `</citation>`, the
+/// parser auto-closes the tag and returns the buffered body as an extracted citation.
 #[derive(Debug)]
 pub struct CitationStreamParser {
     inner: InlineHiddenTagParser<CitationTag>,
@@ -59,6 +62,9 @@ impl StreamTextParser for CitationStreamParser {
 }
 
 /// Strip citation tags from a complete string and return `(visible_text, citations)`.
+///
+/// This uses [`CitationStreamParser`] internally, so it inherits the same semantics:
+/// literal, non-nested matching and auto-closing unterminated citations at EOF.
 pub fn strip_citations(text: &str) -> (String, Vec<String>) {
     let mut parser = CitationStreamParser::new();
     let mut out = parser.push_str(text);
@@ -145,5 +151,22 @@ mod tests {
 
         assert_eq!(visible, "abc");
         assert_eq!(citations, vec!["one".to_string(), "two".to_string()]);
+    }
+
+    #[test]
+    fn strip_citations_auto_closes_unterminated_citation_at_eof() {
+        let (visible, citations) = strip_citations("x<citation>y");
+
+        assert_eq!(visible, "x");
+        assert_eq!(citations, vec!["y".to_string()]);
+    }
+
+    #[test]
+    fn citation_parser_does_not_support_nested_tags() {
+        let (visible, citations) =
+            strip_citations("a<citation>x<citation>y</citation>z</citation>b");
+
+        assert_eq!(visible, "az</citation>b");
+        assert_eq!(citations, vec!["x<citation>y".to_string()]);
     }
 }

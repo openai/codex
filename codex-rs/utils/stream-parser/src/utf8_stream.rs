@@ -58,6 +58,11 @@ where
         }
     }
 
+    /// Feed a raw byte chunk.
+    ///
+    /// If the chunk contains invalid UTF-8, this returns an error and rolls back the entire
+    /// pushed chunk so callers can decide how to recover without the inner parser seeing a partial
+    /// prefix from that chunk.
     pub fn push_bytes(
         &mut self,
         chunk: &[u8],
@@ -143,7 +148,31 @@ where
         Ok(out)
     }
 
-    pub fn into_inner(self) -> P {
+    /// Return the wrapped parser if no undecoded UTF-8 bytes are buffered.
+    ///
+    /// Use [`Self::finish`] first if you want to flush buffered text into the wrapped parser.
+    pub fn into_inner(self) -> Result<P, Utf8StreamParserError> {
+        if self.pending_utf8.is_empty() {
+            return Ok(self.inner);
+        }
+        match std::str::from_utf8(&self.pending_utf8) {
+            Ok(_) => Ok(self.inner),
+            Err(err) => {
+                if let Some(error_len) = err.error_len() {
+                    return Err(Utf8StreamParserError::InvalidUtf8 {
+                        valid_up_to: err.valid_up_to(),
+                        error_len,
+                    });
+                }
+                Err(Utf8StreamParserError::IncompleteUtf8AtEof)
+            }
+        }
+    }
+
+    /// Return the wrapped parser without validating or flushing buffered undecoded bytes.
+    ///
+    /// This may drop a partial UTF-8 code point that was buffered across chunk boundaries.
+    pub fn into_inner_lossy(self) -> P {
         self.inner
     }
 }
@@ -154,6 +183,7 @@ mod tests {
     use super::Utf8StreamParserError;
     use crate::CitationStreamParser;
     use crate::StreamTextChunk;
+    use crate::StreamTextParser;
 
     use pretty_assertions::assert_eq;
 
@@ -224,6 +254,31 @@ mod tests {
     }
 
     #[test]
+    fn utf8_stream_parser_rolls_back_entire_chunk_when_invalid_byte_follows_valid_prefix() {
+        let mut parser = Utf8StreamParser::new(CitationStreamParser::new());
+
+        let err = match parser.push_bytes(b"ok\xFF") {
+            Ok(out) => panic!("invalid byte should error, got output: {out:?}"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err,
+            Utf8StreamParserError::InvalidUtf8 {
+                valid_up_to: 2,
+                error_len: 1,
+            }
+        );
+
+        let next = match parser.push_bytes(b"!") {
+            Ok(out) => out,
+            Err(err) => panic!("parser should recover after rollback: {err}"),
+        };
+
+        assert_eq!(next.visible_text, "!");
+        assert!(next.extracted.is_empty());
+    }
+
+    #[test]
     fn utf8_stream_parser_errors_on_incomplete_code_point_at_eof() {
         let mut parser = Utf8StreamParser::new(CitationStreamParser::new());
 
@@ -238,5 +293,37 @@ mod tests {
             Err(err) => err,
         };
         assert_eq!(err, Utf8StreamParserError::IncompleteUtf8AtEof);
+    }
+
+    #[test]
+    fn utf8_stream_parser_into_inner_errors_when_partial_code_point_is_buffered() {
+        let mut parser = Utf8StreamParser::new(CitationStreamParser::new());
+
+        let out = match parser.push_bytes(&[0xC3]) {
+            Ok(out) => out,
+            Err(err) => panic!("partial code point should be buffered: {err}"),
+        };
+        assert!(out.is_empty());
+
+        let err = match parser.into_inner() {
+            Ok(_) => panic!("buffered partial code point should be rejected"),
+            Err(err) => err,
+        };
+        assert_eq!(err, Utf8StreamParserError::IncompleteUtf8AtEof);
+    }
+
+    #[test]
+    fn utf8_stream_parser_into_inner_lossy_drops_buffered_partial_code_point() {
+        let mut parser = Utf8StreamParser::new(CitationStreamParser::new());
+
+        let out = match parser.push_bytes(&[0xC3]) {
+            Ok(out) => out,
+            Err(err) => panic!("partial code point should be buffered: {err}"),
+        };
+        assert!(out.is_empty());
+
+        let mut inner = parser.into_inner_lossy();
+        let tail = inner.finish();
+        assert!(tail.is_empty());
     }
 }

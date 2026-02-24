@@ -6466,6 +6466,17 @@ async fn try_run_sampling_request(
         }
     };
 
+    flush_citation_segments_all(
+        &sess,
+        &turn_context,
+        plan_mode_state.as_mut(),
+        &mut assistant_message_stream_parsers,
+    )
+    .await;
+    if let Some(state) = plan_mode_state.as_mut() {
+        flush_proposed_plan_segments_all(&sess, &turn_context, state).await;
+    }
+
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
 
     if should_emit_turn_diff {

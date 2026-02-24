@@ -227,7 +227,7 @@ pub(crate) fn last_assistant_message_from_item(
         }
         let stripped = strip_hidden_assistant_markup(&combined, plan_mode);
         if stripped.trim().is_empty() {
-            return Some(String::new());
+            return None;
         }
         return Some(stripped);
     }
@@ -320,12 +320,16 @@ mod tests {
     }
 
     #[test]
-    fn last_assistant_message_from_item_returns_empty_string_for_citation_only_message() {
+    fn last_assistant_message_from_item_returns_none_for_citation_only_message() {
         let item = assistant_output_text("<citation>doc1</citation>");
 
-        let message = last_assistant_message_from_item(&item, false)
-            .expect("assistant item should still count as latest message");
+        assert_eq!(last_assistant_message_from_item(&item, false), None);
+    }
 
-        assert_eq!(message, "");
+    #[test]
+    fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() {
+        let item = assistant_output_text("<proposed_plan>\n- x\n</proposed_plan>");
+
+        assert_eq!(last_assistant_message_from_item(&item, true), None);
     }
 }
