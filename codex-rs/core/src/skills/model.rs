@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::config::Permissions;
+use crate::skills::invocation_utils::ImplicitInvocationContext;
 use codex_protocol::protocol::SkillScope;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +70,7 @@ pub struct SkillLoadOutcome {
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillError>,
     pub disabled_paths: HashSet<PathBuf>,
+    pub(crate) implicit_invocation_context: Option<Arc<ImplicitInvocationContext>>,
 }
 
 impl SkillLoadOutcome {
