@@ -96,7 +96,12 @@ pub struct Cli {
     pub json: bool,
 
     /// Specifies file where the last message from the agent should be written.
-    #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]
+    #[arg(
+        long = "output-last-message",
+        short = 'o',
+        value_name = "FILE",
+        global = true
+    )]
     pub last_message_file: Option<PathBuf>,
 
     /// Initial instructions for the agent. If not provided as an argument (or
@@ -282,5 +287,28 @@ mod tests {
             }
         });
         assert_eq!(effective_prompt.as_deref(), Some(PROMPT));
+    }
+
+    #[test]
+    fn resume_accepts_output_last_message_flag_after_subcommand() {
+        const PROMPT: &str = "echo resume-with-output-file";
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "resume",
+            "session-123",
+            "-o",
+            "/tmp/resume-output.md",
+            PROMPT,
+        ]);
+
+        assert_eq!(
+            cli.last_message_file,
+            Some(PathBuf::from("/tmp/resume-output.md"))
+        );
+        let Some(Command::Resume(args)) = cli.command else {
+            panic!("expected resume command");
+        };
+        assert_eq!(args.session_id.as_deref(), Some("session-123"));
+        assert_eq!(args.prompt.as_deref(), Some(PROMPT));
     }
 }

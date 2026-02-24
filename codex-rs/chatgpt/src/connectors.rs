@@ -220,9 +220,11 @@ async fn list_directory_connectors(config: &Config) -> anyhow::Result<Vec<Direct
         let path = match next_token.as_deref() {
             Some(token) => {
                 let encoded_token = urlencoding::encode(token);
-                format!("/connectors/directory/list?tier=categorized&token={encoded_token}")
+                format!(
+                    "/connectors/directory/list?tier=categorized&token={encoded_token}&external_logos=true"
+                )
             }
-            None => "/connectors/directory/list?tier=categorized".to_string(),
+            None => "/connectors/directory/list?tier=categorized&external_logos=true".to_string(),
         };
         let response: DirectoryListResponse =
             chatgpt_get_request_with_timeout(config, path, Some(DIRECTORY_CONNECTORS_TIMEOUT))
@@ -247,7 +249,7 @@ async fn list_directory_connectors(config: &Config) -> anyhow::Result<Vec<Direct
 async fn list_workspace_connectors(config: &Config) -> anyhow::Result<Vec<DirectoryApp>> {
     let response: anyhow::Result<DirectoryListResponse> = chatgpt_get_request_with_timeout(
         config,
-        "/connectors/directory/list_workspace".to_string(),
+        "/connectors/directory/list_workspace?external_logos=true".to_string(),
         Some(DIRECTORY_CONNECTORS_TIMEOUT),
     )
     .await;

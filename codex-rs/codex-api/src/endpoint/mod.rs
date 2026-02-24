@@ -1,4 +1,3 @@
-pub mod aggregate;
 pub mod compact;
 pub mod memories;
 pub mod models;

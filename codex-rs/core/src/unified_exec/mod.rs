@@ -29,6 +29,7 @@ use std::sync::Weak;
 use std::time::Duration;
 
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::models::AdditionalPermissions;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
@@ -89,6 +90,7 @@ pub(crate) struct ExecCommandRequest {
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<AdditionalPermissions>,
     pub justification: Option<String>,
     pub prefix_rule: Option<Vec<String>>,
 }
@@ -193,8 +195,12 @@ mod tests {
 
     async fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
         let (session, mut turn) = make_session_and_context().await;
-        turn.approval_policy = AskForApproval::Never;
-        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("test setup should allow updating approval policy");
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
         (Arc::new(session), Arc::new(turn))
     }
 
@@ -225,6 +231,7 @@ mod tests {
                     network: None,
                     tty: true,
                     sandbox_permissions: SandboxPermissions::UseDefault,
+                    additional_permissions: None,
                     justification: None,
                     prefix_rule: None,
                 },

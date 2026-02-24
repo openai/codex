@@ -47,6 +47,7 @@ pub(crate) struct ThreadState {
     pub(crate) turn_summary: TurnSummary,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
+    pub(crate) listener_generation: u64,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
     listener_thread: Option<Weak<CodexThread>>,
@@ -65,14 +66,15 @@ impl ThreadState {
         &mut self,
         cancel_tx: oneshot::Sender<()>,
         conversation: &Arc<CodexThread>,
-    ) -> mpsc::UnboundedReceiver<ThreadListenerCommand> {
+    ) -> (mpsc::UnboundedReceiver<ThreadListenerCommand>, u64) {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
         }
+        self.listener_generation = self.listener_generation.wrapping_add(1);
         let (listener_command_tx, listener_command_rx) = mpsc::unbounded_channel();
         self.listener_command_tx = Some(listener_command_tx);
         self.listener_thread = Some(Arc::downgrade(conversation));
-        listener_command_rx
+        (listener_command_rx, self.listener_generation)
     }
 
     pub(crate) fn clear_listener(&mut self) {
@@ -173,7 +175,13 @@ impl ThreadStateManager {
                 thread_state.remove_connection(subscription_state.connection_id);
             }
             if thread_state.subscribed_connection_ids().is_empty() {
-                thread_state.clear_listener();
+                tracing::debug!(
+                    thread_id = %thread_id,
+                    subscription_id = %subscription_id,
+                    connection_id = ?subscription_state.connection_id,
+                    listener_generation = thread_state.listener_generation,
+                    "retaining thread listener after last subscription removed"
+                );
             }
         }
         Some(thread_id)
@@ -181,7 +189,15 @@ impl ThreadStateManager {
 
     pub(crate) async fn remove_thread_state(&mut self, thread_id: ThreadId) {
         if let Some(thread_state) = self.thread_states.remove(&thread_id) {
-            thread_state.lock().await.clear_listener();
+            let mut thread_state = thread_state.lock().await;
+            tracing::debug!(
+                thread_id = %thread_id,
+                listener_generation = thread_state.listener_generation,
+                had_listener = thread_state.cancel_tx.is_some(),
+                had_active_turn = thread_state.active_turn_snapshot().is_some(),
+                "clearing thread listener during thread-state teardown"
+            );
+            thread_state.clear_listener();
         }
         self.subscription_state_by_id
             .retain(|_, state| state.thread_id != thread_id);
@@ -252,7 +268,11 @@ impl ThreadStateManager {
                 let mut thread_state = thread_state.lock().await;
                 thread_state.remove_connection(connection_id);
                 if thread_state.subscribed_connection_ids().is_empty() {
-                    thread_state.clear_listener();
+                    tracing::debug!(
+                        connection_id = ?connection_id,
+                        listener_generation = thread_state.listener_generation,
+                        "retaining thread listener after connection disconnect left zero subscribers"
+                    );
                 }
             }
             return;
@@ -263,7 +283,12 @@ impl ThreadStateManager {
                 let mut thread_state = thread_state.lock().await;
                 thread_state.remove_connection(connection_id);
                 if thread_state.subscribed_connection_ids().is_empty() {
-                    thread_state.clear_listener();
+                    tracing::debug!(
+                        thread_id = %thread_id,
+                        connection_id = ?connection_id,
+                        listener_generation = thread_state.listener_generation,
+                        "retaining thread listener after connection disconnect left zero subscribers"
+                    );
                 }
             }
         }

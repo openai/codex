@@ -150,7 +150,7 @@ Example with notification opt-out:
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
 - `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); returns `{ started: true }` immediately and later emits `windowsSandbox/setupCompleted`.
-- `feedback/upload` — submit a feedback report (classification + optional reason/logs and conversation_id); returns the tracking thread id.
+- `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `config/read` — fetch the effective config on disk after resolving config layering.
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.

@@ -445,6 +445,10 @@ impl Tui {
         self.frame_requester().schedule_frame();
     }
 
+    pub fn clear_pending_history_lines(&mut self) {
+        self.pending_history_lines.clear();
+    }
+
     pub fn draw(
         &mut self,
         height: u16,

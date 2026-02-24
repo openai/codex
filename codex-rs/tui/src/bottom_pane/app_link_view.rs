@@ -10,6 +10,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use ratatui::widgets::Wrap;
 use textwrap::wrap;
 
 use super::CancellationEvent;
@@ -24,7 +25,8 @@ use crate::key_hint;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::user_message_style;
-use crate::wrapping::word_wrap_lines;
+use crate::wrapping::RtOptions;
+use crate::wrapping::adaptive_wrap_lines;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppLinkScreen {
@@ -234,7 +236,10 @@ impl AppLinkView {
         lines.push(Line::from(""));
         lines.push(Line::from(vec!["Setup URL:".dim()]));
         let url_line = Line::from(vec![self.url.clone().cyan().underlined()]);
-        lines.extend(word_wrap_lines(vec![url_line], usable_width));
+        lines.extend(adaptive_wrap_lines(
+            vec![url_line],
+            RtOptions::new(usable_width),
+        ));
 
         lines
     }
@@ -374,8 +379,12 @@ impl crate::render::renderable::Renderable for AppLinkView {
     fn desired_height(&self, width: u16) -> u16 {
         let content_width = width.saturating_sub(4).max(1);
         let content_lines = self.content_lines(content_width);
+        let content_rows = Paragraph::new(content_lines)
+            .wrap(Wrap { trim: false })
+            .line_count(content_width)
+            .max(1) as u16;
         let action_rows_height = self.action_rows_height(content_width);
-        content_lines.len() as u16 + action_rows_height + 3
+        content_rows + action_rows_height + 3
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -398,7 +407,9 @@ impl crate::render::renderable::Renderable for AppLinkView {
         let inner = content_area.inset(Insets::vh(1, 2));
         let content_width = inner.width.max(1);
         let lines = self.content_lines(content_width);
-        Paragraph::new(lines).render(inner, buf);
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(inner, buf);
 
         if actions_area.height > 0 {
             let actions_area = Rect {
@@ -435,6 +446,7 @@ impl crate::render::renderable::Renderable for AppLinkView {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::render::renderable::Renderable;
     use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
@@ -491,6 +503,94 @@ mod tests {
         assert_eq!(
             view.action_labels(),
             vec!["Manage on ChatGPT", "Enable app", "Back"]
+        );
+    }
+
+    #[test]
+    fn install_confirmation_does_not_split_long_url_like_token_without_scheme() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let url_like =
+            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: url_like.to_string(),
+                is_installed: true,
+                is_enabled: true,
+            },
+            tx,
+        );
+        view.screen = AppLinkScreen::InstallConfirmation;
+
+        let rendered: Vec<String> = view
+            .content_lines(40)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect();
+
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(url_like))
+                .count(),
+            1,
+            "expected full URL-like token in one rendered line, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn install_confirmation_render_keeps_url_tail_visible_when_narrow() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let url = "https://example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path/tail42";
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: url.to_string(),
+                is_installed: true,
+                is_enabled: true,
+            },
+            tx,
+        );
+        view.screen = AppLinkScreen::InstallConfirmation;
+
+        let width: u16 = 36;
+        let height = view.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let rendered_blob = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| {
+                        let symbol = buf[(x, y)].symbol();
+                        if symbol.is_empty() {
+                            ' '
+                        } else {
+                            symbol.chars().next().unwrap_or(' ')
+                        }
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered_blob.contains("tail42"),
+            "expected wrapped setup URL tail to remain visible in narrow pane, got:\n{rendered_blob}"
         );
     }
 }
