@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
-/// 'exec-server escalate' reads this to find the inherited FD for the escalate socket.
+/// Exec wrappers read this to find the inherited FD for the escalation socket.
 pub const ESCALATE_SOCKET_ENV_VAR: &str = "CODEX_ESCALATE_SOCKET";
 
 /// Patched shells use this to wrap exec() calls.

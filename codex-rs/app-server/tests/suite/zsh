@@ -3,7 +3,7 @@
 // This is the patched zsh fork built by
 // `.github/workflows/shell-tool-mcp.yml` for the shell-tool-mcp package.
 // Fetching the prebuilt version via DotSlash makes it easier to write
-// integration tests that exercise the zsh fork behavior in exec-server tests.
+// integration tests that exercise the zsh fork behavior in app-server tests.
 //
 // TODO(mbolin): Currently, we use a .tgz artifact that includes binaries for
 // multiple platforms, but we could save a bit of space by making arch-specific
