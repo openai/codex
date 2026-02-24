@@ -610,6 +610,8 @@ pub(crate) struct ChatWidget {
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
     /// `BottomPane` so the hint text matches the actual shortcut.
     queued_message_edit_binding: KeyBinding,
+    /// Session-local history of the last two distinct models with their latest effort.
+    recent_model_history: VecDeque<ModelHistoryEntry>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
@@ -710,6 +712,12 @@ pub(crate) struct UserMessage {
     remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ModelHistoryEntry {
+    model: String,
+    effort: Option<ReasoningEffortConfig>,
 }
 
 impl From<String> for UserMessage {
@@ -2844,6 +2852,7 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
+            recent_model_history: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -3025,6 +3034,7 @@ impl ChatWidget {
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
+            recent_model_history: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -3187,6 +3197,7 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
+            recent_model_history: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -3272,6 +3283,15 @@ impl ChatWidget {
                 self.bottom_pane.clear_quit_shortcut_hint();
                 self.quit_shortcut_expires_at = None;
                 self.quit_shortcut_key = None;
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'o') => {
+                self.on_ctrl_o();
+                return;
             }
             KeyEvent {
                 code: KeyCode::Char(c),
@@ -6602,6 +6622,7 @@ impl ChatWidget {
                 mask.reasoning_effort = plan_mask.reasoning_effort;
             }
         }
+        self.update_current_model_history_effort(effort);
     }
 
     /// Set the reasoning effort in the stored collaboration mode.
@@ -6617,6 +6638,7 @@ impl ChatWidget {
             // Plan reasoning is controlled by the Plan preset and Plan-only override updates.
             mask.reasoning_effort = Some(effort);
         }
+        self.update_current_model_history_effort(effort);
     }
 
     /// Set the personality in the widget's config copy.
@@ -6631,6 +6653,8 @@ impl ChatWidget {
 
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
+        let previous_model = self.current_model().to_string();
+        let previous_effort = self.effective_reasoning_effort();
         self.current_collaboration_mode =
             self.current_collaboration_mode
                 .with_updates(Some(model.to_string()), None, None);
@@ -6639,7 +6663,71 @@ impl ChatWidget {
         {
             mask.model = Some(model.to_string());
         }
+        if previous_model != model {
+            if self.recent_model_history.is_empty() {
+                self.record_model_history_selection(previous_model, previous_effort);
+            }
+            self.record_model_history_selection(
+                model.to_string(),
+                self.effective_reasoning_effort(),
+            );
+        }
         self.refresh_model_display();
+    }
+
+    fn seed_model_history_if_empty(&mut self) {
+        if self.recent_model_history.is_empty() {
+            self.record_model_history_selection(
+                self.current_model().to_string(),
+                self.effective_reasoning_effort(),
+            );
+        }
+    }
+
+    fn record_model_history_selection(
+        &mut self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
+        if model.is_empty() {
+            return;
+        }
+
+        if let Some(existing_idx) = self
+            .recent_model_history
+            .iter()
+            .position(|entry| entry.model == model)
+        {
+            let _ = self.recent_model_history.remove(existing_idx);
+        }
+
+        self.recent_model_history
+            .push_front(ModelHistoryEntry { model, effort });
+        while self.recent_model_history.len() > 2 {
+            let _ = self.recent_model_history.pop_back();
+        }
+    }
+
+    fn update_current_model_history_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        self.seed_model_history_if_empty();
+        let current_model = self.current_model().to_string();
+        if let Some(entry) = self
+            .recent_model_history
+            .iter_mut()
+            .find(|entry| entry.model == current_model)
+        {
+            entry.effort = effort;
+            return;
+        }
+
+        self.record_model_history_selection(current_model, effort);
+    }
+
+    fn other_recent_model_entry(&self, current_model: &str) -> Option<ModelHistoryEntry> {
+        self.recent_model_history
+            .iter()
+            .find(|entry| entry.model != current_model)
+            .cloned()
     }
 
     pub(crate) fn current_model(&self) -> &str {
@@ -7228,6 +7316,44 @@ impl ChatWidget {
 
         self.arm_quit_shortcut(key);
         true
+    }
+
+    fn on_ctrl_o(&mut self) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Model toggle is disabled until startup completes.".to_string(),
+                None,
+            );
+            return;
+        }
+
+        if !self.bottom_pane.no_modal_or_popup_active() {
+            return;
+        }
+
+        if self.bottom_pane.is_task_running() {
+            self.add_info_message(
+                "Cannot switch model while a task is running. Wait for completion, then press Ctrl+O again.".to_string(),
+                None,
+            );
+            return;
+        }
+
+        self.seed_model_history_if_empty();
+        let current_model = self.current_model().to_string();
+        let Some(target) = self.other_recent_model_entry(&current_model) else {
+            self.add_info_message("No previous model to toggle to yet.".to_string(), None);
+            return;
+        };
+
+        self.app_event_tx.send(AppEvent::UpdateModel(target.model));
+        if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan {
+            self.app_event_tx
+                .send(AppEvent::UpdatePlanModeReasoningEffort(target.effort));
+        } else {
+            self.app_event_tx
+                .send(AppEvent::UpdateReasoningEffort(target.effort));
+        }
     }
 
     /// True if `key` matches the armed quit shortcut and the window has not expired.
