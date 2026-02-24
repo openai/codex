@@ -40,6 +40,7 @@ use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -826,12 +827,15 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             );
         }
 
-        // If the user has not piped the final message to a file, they will see
-        // it twice: once written to stderr as part of the normal event
-        // processing, and once here on stdout. We print the token summary above
-        // to help break up the output visually in that case.
+        // The agent message was already printed to stderr during streaming.
+        // Only repeat it on stdout when stdout is redirected to a file or
+        // pipe so that `codex exec "…" > out.txt` captures the final message.
+        // When stdout is a terminal, printing it again would produce confusing
+        // duplicate output (see https://github.com/openai/codex/issues/12566).
         #[allow(clippy::print_stdout)]
-        if let Some(message) = &self.final_message {
+        if let Some(message) = &self.final_message
+            && !std::io::stdout().is_terminal()
+        {
             if message.ends_with('\n') {
                 print!("{message}");
             } else {
