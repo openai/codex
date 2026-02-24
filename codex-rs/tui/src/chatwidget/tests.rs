@@ -6201,8 +6201,8 @@ async fn session_configured_replaces_current_when_default_not_in_persisted_pair(
                 effort: Some(ReasoningEffortConfig::Medium),
             },
             ModelHistoryEntry {
-                model: "gpt-4.1".to_string(),
-                effort: Some(ReasoningEffortConfig::Low),
+                model: "o3".to_string(),
+                effort: Some(ReasoningEffortConfig::High),
             },
         ]
     );

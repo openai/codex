@@ -1934,6 +1934,8 @@ impl App {
                 effort,
                 scope,
             } => {
+                let should_persist_toggle_pair =
+                    matches!(scope, crate::app_event::ModelEffortScope::Global);
                 self.chat_widget.set_model(&model);
                 match scope {
                     crate::app_event::ModelEffortScope::Global => {
@@ -1945,7 +1947,9 @@ impl App {
                     }
                 }
                 self.refresh_status_line();
-                self.persist_model_toggle_pair().await;
+                if should_persist_toggle_pair {
+                    self.persist_model_toggle_pair().await;
+                }
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
@@ -2520,7 +2524,6 @@ impl App {
                 self.config.plan_mode_reasoning_effort = effort;
                 self.chat_widget.set_plan_mode_reasoning_effort(effort);
                 self.refresh_status_line();
-                self.persist_model_toggle_pair().await;
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)

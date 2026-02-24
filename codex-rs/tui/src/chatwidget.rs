@@ -1183,7 +1183,7 @@ impl ChatWidget {
                         model: default_model,
                         effort: default_effort,
                     };
-                    let other = persisted.get(1).cloned();
+                    let other = persisted.first().cloned();
                     (current, other)
                 };
 
@@ -6568,7 +6568,6 @@ impl ChatWidget {
                 mask.reasoning_effort = plan_mask.reasoning_effort;
             }
         }
-        self.update_current_model_history_effort(effort);
     }
 
     /// Set the reasoning effort in the stored collaboration mode.
