@@ -643,12 +643,40 @@ fn strong_emphasis() {
 fn link() {
     let text = render_markdown_text("[Link](https://example.com)");
     let expected = Text::from(Line::from_iter([
-        "Link".into(),
+        "Link".cyan().underlined(),
         " (".into(),
         "https://example.com".cyan().underlined(),
         ")".into(),
     ]));
     assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_hides_destination() {
+    let text =
+        render_markdown_text("[markdown_render.rs:74](/Users/pash/code/codex/codex-rs/tui/src/markdown_render.rs:74)");
+    let expected = Text::from(Line::from("markdown_render.rs:74".cyan().underlined()));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn markdown_render_file_link_snapshot() {
+    let text = render_markdown_text(
+        "See [markdown_render.rs:74](/Users/pash/code/codex/codex-rs/tui/src/markdown_render.rs:74).",
+    );
+    let rendered = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_snapshot!(rendered);
 }
 
 #[test]
