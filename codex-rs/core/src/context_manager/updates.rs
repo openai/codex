@@ -44,7 +44,7 @@ fn build_permissions_update_item(
             next.approval_policy.value(),
             exec_policy,
             &next.cwd,
-            next.features.enabled(Feature::RequestPermission),
+            next.features.enabled(Feature::RequestPermissions),
         )
         .into(),
     )

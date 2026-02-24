@@ -165,7 +165,7 @@ impl ToolHandler for UnifiedExecHandler {
                 } = args;
 
                 let request_permission_enabled =
-                    session.features().enabled(Feature::RequestPermission);
+                    session.features().enabled(Feature::RequestPermissions);
 
                 if sandbox_permissions.requires_additional_permissions()
                     && !matches!(

@@ -2950,7 +2950,7 @@ impl Session {
                 turn_context.approval_policy.value(),
                 self.services.exec_policy.current().as_ref(),
                 &turn_context.cwd,
-                turn_context.features.enabled(Feature::RequestPermission),
+                turn_context.features.enabled(Feature::RequestPermissions),
             )
             .into(),
         );

@@ -292,7 +292,7 @@ impl ShellHandler {
             }
         }
 
-        let request_permission_enabled = session.features().enabled(Feature::RequestPermission);
+        let request_permission_enabled = session.features().enabled(Feature::RequestPermissions);
         let normalized_additional_permissions = normalize_and_validate_additional_permissions(
             request_permission_enabled,
             turn.approval_policy.value(),
