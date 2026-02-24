@@ -292,6 +292,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_realtime_conversation_enabled(&mut self, enabled: bool) {
+        self.composer.set_realtime_conversation_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_voice_transcription_enabled(&mut self, enabled: bool) {
         self.composer.set_voice_transcription_enabled(enabled);
         self.request_redraw();
@@ -1007,6 +1012,13 @@ impl BottomPane {
 
 #[cfg(not(target_os = "linux"))]
 impl BottomPane {
+    pub(crate) fn insert_transcription_placeholder(&mut self, text: &str) -> String {
+        let id = self.composer.insert_transcription_placeholder(text);
+        self.composer.sync_popups();
+        self.request_redraw();
+        id
+    }
+
     pub(crate) fn replace_transcription(&mut self, id: &str, text: &str) {
         self.composer.replace_transcription(id, text);
         self.composer.sync_popups();

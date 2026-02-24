@@ -49,6 +49,7 @@ pub enum SlashCommand {
     Clean,
     Clear,
     Personality,
+    Realtime,
     TestApproval,
     // Debugging commands.
     #[strum(serialize = "debug-m-drop")]
@@ -85,6 +86,7 @@ impl SlashCommand {
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Personality => "choose a communication style for Codex",
+            SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
@@ -157,6 +159,7 @@ impl SlashCommand {
             | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
+            SlashCommand::Realtime => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent => true,
             SlashCommand::Statusline => false,
