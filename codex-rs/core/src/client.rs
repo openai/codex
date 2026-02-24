@@ -144,7 +144,7 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     disable_websockets: AtomicBool,
-    cached_websocket_connection: StdMutex<Option<ApiWebSocketConnection>>,
+    cached_websocket_session: StdMutex<WebsocketSession>,
 }
 
 /// Resolved API client setup for a single request attempt.
@@ -189,9 +189,7 @@ pub struct ModelClient {
 /// contract and can cause routing bugs.
 pub struct ModelClientSession {
     client: ModelClient,
-    connection: Option<ApiWebSocketConnection>,
-    websocket_last_request: Option<ResponsesApiRequest>,
-    websocket_last_response_rx: Option<oneshot::Receiver<LastResponse>>,
+    websocket_session: WebsocketSession,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -210,6 +208,23 @@ struct LastResponse {
     response_id: String,
     items_added: Vec<ResponseItem>,
     can_append: bool,
+}
+
+#[derive(Debug)]
+struct WebsocketSession {
+    connection: Option<ApiWebSocketConnection>,
+    last_request: Option<ResponsesApiRequest>,
+    last_response_rx: Option<oneshot::Receiver<LastResponse>>,
+}
+
+impl Default for WebsocketSession {
+    fn default() -> Self {
+        Self {
+            connection: None,
+            last_request: None,
+            last_response_rx: None,
+        }
+    }
 }
 
 enum WebsocketStreamOutcome {
@@ -246,7 +261,7 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 disable_websockets: AtomicBool::new(false),
-                cached_websocket_connection: StdMutex::new(None),
+                cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
         }
     }
@@ -258,27 +273,26 @@ impl ModelClient {
     pub fn new_session(&self) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),
-            connection: self.take_cached_websocket_connection(),
-            websocket_last_request: None,
-            websocket_last_response_rx: None,
+            websocket_session: self.take_cached_websocket_session(),
             turn_state: Arc::new(OnceLock::new()),
         }
     }
 
-    fn take_cached_websocket_connection(&self) -> Option<ApiWebSocketConnection> {
-        self.state
-            .cached_websocket_connection
+    fn take_cached_websocket_session(&self) -> WebsocketSession {
+        let mut cached_websocket_session = self
+            .state
+            .cached_websocket_session
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut *cached_websocket_session)
     }
 
-    fn store_cached_websocket_connection(&self, connection: ApiWebSocketConnection) {
+    fn store_cached_websocket_session(&self, websocket_session: WebsocketSession) {
         *self
             .state
-            .cached_websocket_connection
+            .cached_websocket_session
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(connection);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = websocket_session;
     }
 
     /// Compacts the current conversation history using the Compact endpoint.
@@ -490,9 +504,9 @@ impl ModelClient {
 
 impl Drop for ModelClientSession {
     fn drop(&mut self) {
-        if let Some(connection) = self.connection.take() {
-            self.client.store_cached_websocket_connection(connection);
-        }
+        let websocket_session = std::mem::take(&mut self.websocket_session);
+        self.client
+            .store_cached_websocket_session(websocket_session);
     }
 }
 
@@ -604,7 +618,7 @@ impl ModelClientSession {
         // We only append when non-input request fields are unchanged and `input` is a strict
         // extension of the previous known input. Server-returned output items are treated as part
         // of the baseline so we do not resend them.
-        let previous_request = self.websocket_last_request.as_ref()?;
+        let previous_request = self.websocket_session.last_request.as_ref()?;
         let mut previous_without_input = previous_request.clone();
         previous_without_input.input.clear();
         let mut request_without_input = request.clone();
@@ -633,7 +647,8 @@ impl ModelClientSession {
     }
 
     fn get_last_response(&mut self) -> Option<LastResponse> {
-        self.websocket_last_response_rx
+        self.websocket_session
+            .last_response_rx
             .take()
             .and_then(|mut receiver| match receiver.try_recv() {
                 Ok(last_response) => Some(last_response),
@@ -694,7 +709,7 @@ impl ModelClientSession {
         let Some(ws_version) = self.client.active_ws_version(model_info) else {
             return Ok(());
         };
-        if self.connection.is_some() {
+        if self.websocket_session.connection.is_some() {
             return Ok(());
         }
 
@@ -715,7 +730,7 @@ impl ModelClientSession {
                 None,
             )
             .await?;
-        self.connection = Some(connection);
+        self.websocket_session.connection = Some(connection);
         Ok(())
     }
     /// Returns a websocket connection for this turn.
@@ -728,14 +743,14 @@ impl ModelClientSession {
         turn_metadata_header: Option<&str>,
         options: &ApiResponsesOptions,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
-        let needs_new = match self.connection.as_ref() {
+        let needs_new = match self.websocket_session.connection.as_ref() {
             Some(conn) => conn.is_closed().await,
             None => true,
         };
 
         if needs_new {
-            self.websocket_last_request = None;
-            self.websocket_last_response_rx = None;
+            self.websocket_session.last_request = None;
+            self.websocket_session.last_response_rx = None;
             let turn_state = options
                 .turn_state
                 .clone()
@@ -751,12 +766,15 @@ impl ModelClientSession {
                     turn_metadata_header,
                 )
                 .await?;
-            self.connection = Some(new_conn);
+            self.websocket_session.connection = Some(new_conn);
         }
 
-        self.connection.as_ref().ok_or(ApiError::Stream(
-            "websocket connection is unavailable".to_string(),
-        ))
+        self.websocket_session
+            .connection
+            .as_ref()
+            .ok_or(ApiError::Stream(
+                "websocket connection is unavailable".to_string(),
+            ))
     }
 
     fn responses_request_compression(&self, auth: Option<&crate::auth::CodexAuth>) -> Compression {
@@ -902,8 +920,9 @@ impl ModelClientSession {
             }
 
             let ws_request = self.prepare_websocket_request(ws_payload, &request, ws_version);
-            self.websocket_last_request = Some(request);
+            self.websocket_session.last_request = Some(request);
             let stream_result = self
+                .websocket_session
                 .connection
                 .as_ref()
                 .ok_or_else(|| {
@@ -916,7 +935,7 @@ impl ModelClientSession {
                 .map_err(map_api_error)?;
             let (stream, last_request_rx) =
                 map_response_stream(stream_result, otel_manager.clone());
-            self.websocket_last_response_rx = Some(last_request_rx);
+            self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
         }
     }
@@ -951,7 +970,7 @@ impl ModelClientSession {
         let Some(ws_version) = self.client.active_ws_version(model_info) else {
             return Ok(());
         };
-        if self.websocket_last_request.is_some() {
+        if self.websocket_session.last_request.is_some() {
             return Ok(());
         }
 
@@ -1068,9 +1087,9 @@ impl ModelClientSession {
                 &[("from_wire_api", "responses_websocket")],
             );
 
-            self.connection = None;
-            self.websocket_last_request = None;
-            self.websocket_last_response_rx = None;
+            self.websocket_session.connection = None;
+            self.websocket_session.last_request = None;
+            self.websocket_session.last_response_rx = None;
         }
         activated
     }
