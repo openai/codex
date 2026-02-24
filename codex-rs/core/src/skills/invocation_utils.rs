@@ -7,8 +7,21 @@ use crate::analytics_client::SkillInvocation;
 use crate::analytics_client::build_track_events_context;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::features::Feature;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
+use codex_protocol::protocol::ReviewDecision;
+use serde::Serialize;
+
+pub(crate) const SKILL_APPROVAL_DECLINED_MESSAGE: &str =
+    "This script is part of the skill and the user declined the skill usage";
+
+#[derive(Debug, Serialize)]
+struct SkillApprovalCacheKey {
+    skill_name: String,
+    skill_path: PathBuf,
+    skill_scope: codex_protocol::protocol::SkillScope,
+}
 
 pub(crate) fn build_implicit_skill_path_indexes(
     skills: Vec<SkillMetadata>,
@@ -41,8 +54,11 @@ fn detect_implicit_skill_invocation_for_command(
     let workdir = normalize_path(workdir.as_path());
     let tokens = tokenize_command(command);
 
-    if let Some(candidate) = detect_skill_script_run(outcome, tokens.as_slice(), workdir.as_path())
-    {
+    if let Some(candidate) = detect_implicit_skill_script_invocation_for_tokens(
+        outcome,
+        tokens.as_slice(),
+        workdir.as_path(),
+    ) {
         return Some(candidate);
     }
 
@@ -51,6 +67,82 @@ fn detect_implicit_skill_invocation_for_command(
     }
 
     None
+}
+
+pub(crate) fn detect_implicit_skill_script_invocation_for_command(
+    outcome: &SkillLoadOutcome,
+    command: &str,
+    workdir: &Path,
+) -> Option<SkillMetadata> {
+    let tokens = tokenize_command(command);
+
+    detect_implicit_skill_script_invocation_for_tokens(outcome, tokens.as_slice(), workdir)
+}
+
+pub(crate) fn detect_implicit_skill_script_invocation_for_tokens(
+    outcome: &SkillLoadOutcome,
+    command: &[String],
+    workdir: &Path,
+) -> Option<SkillMetadata> {
+    detect_skill_script_run(outcome, command, workdir)
+}
+
+fn tokenize_command(command: &str) -> Vec<String> {
+    shlex::split(command).unwrap_or_else(|| {
+        command
+            .split_whitespace()
+            .map(std::string::ToString::to_string)
+            .collect()
+    })
+}
+
+pub(crate) async fn ensure_skill_approval_for_command(
+    sess: &Session,
+    turn_context: &TurnContext,
+    item_id: &str,
+    command: &str,
+    workdir: &Path,
+) -> bool {
+    if !turn_context.features.enabled(Feature::SkillApproval) {
+        return true;
+    }
+
+    let workdir = normalize_path(workdir);
+    let Some(skill) = detect_implicit_skill_script_invocation_for_command(
+        turn_context.turn_skills.outcome.as_ref(),
+        command,
+        workdir.as_path(),
+    ) else {
+        return true;
+    };
+
+    let cache_key = SkillApprovalCacheKey {
+        skill_name: skill.name.clone(),
+        skill_path: skill.path.clone(),
+        skill_scope: skill.scope,
+    };
+    let already_approved = {
+        let store = sess.services.tool_approvals.lock().await;
+        matches!(
+            store.get(&cache_key),
+            Some(ReviewDecision::ApprovedForSession)
+        )
+    };
+    if already_approved {
+        return true;
+    }
+
+    let approved = sess
+        .request_skill_approval(turn_context, item_id.to_string(), skill.name)
+        .await
+        .is_some_and(|response| response.approved);
+    if !approved {
+        return false;
+    }
+
+    let mut store = sess.services.tool_approvals.lock().await;
+    store.put(cache_key, ReviewDecision::ApprovedForSession);
+    true
 }
 
 pub(crate) async fn maybe_emit_implicit_skill_invocation(
@@ -113,15 +205,6 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
             ),
             vec![invocation],
         );
-}
-
-fn tokenize_command(command: &str) -> Vec<String> {
-    shlex::split(command).unwrap_or_else(|| {
-        command
-            .split_whitespace()
-            .map(std::string::ToString::to_string)
-            .collect()
-    })
 }
 
 fn script_run_token(tokens: &[String]) -> Option<&str> {
@@ -234,6 +317,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 mod tests {
     use super::SkillLoadOutcome;
     use super::SkillMetadata;
+    use super::detect_implicit_skill_script_invocation_for_command;
     use super::detect_skill_doc_read;
     use super::detect_skill_script_run;
     use super::normalize_path;
@@ -352,5 +436,51 @@ mod tests {
             found.map(|value| value.name),
             Some("test-skill".to_string())
         );
+    }
+
+    #[test]
+    fn implicit_skill_script_invocation_matches_command() {
+        let skill_doc_path = PathBuf::from("/tmp/skill-test/SKILL.md");
+        let scripts_dir = normalize_path(Path::new("/tmp/skill-test/scripts"));
+        let skill = test_skill_metadata(skill_doc_path);
+        let outcome = SkillLoadOutcome {
+            implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(scripts_dir, skill)])),
+            implicit_skills_by_doc_path: Arc::new(HashMap::new()),
+            ..Default::default()
+        };
+
+        let found = detect_implicit_skill_script_invocation_for_command(
+            &outcome,
+            "python scripts/fetch_comments.py",
+            Path::new("/tmp/skill-test"),
+        );
+
+        assert_eq!(
+            found.map(|value| value.name),
+            Some("test-skill".to_string())
+        );
+    }
+
+    #[test]
+    fn implicit_skill_script_invocation_ignores_doc_reads() {
+        let skill_doc_path = PathBuf::from("/tmp/skill-test/SKILL.md");
+        let normalized_skill_doc_path = normalize_path(skill_doc_path.as_path());
+        let skill = test_skill_metadata(skill_doc_path);
+        let outcome = SkillLoadOutcome {
+            implicit_skills_by_scripts_dir: Arc::new(HashMap::new()),
+            implicit_skills_by_doc_path: Arc::new(HashMap::from([(
+                normalized_skill_doc_path,
+                skill,
+            )])),
+            ..Default::default()
+        };
+
+        let found = detect_implicit_skill_script_invocation_for_command(
+            &outcome,
+            "cat SKILL.md",
+            Path::new("/tmp/skill-test"),
+        );
+
+        assert_eq!(found, None);
     }
 }

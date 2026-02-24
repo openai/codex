@@ -65,6 +65,7 @@ mod bottom_pane;
 mod chatwidget;
 mod cli;
 mod clipboard_paste;
+mod clipboard_text;
 mod collaboration_modes;
 mod color;
 pub mod custom_terminal;
@@ -120,6 +121,7 @@ mod voice;
 mod voice {
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
+    use codex_protocol::protocol::RealtimeAudioFrame;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
@@ -135,8 +137,14 @@ mod voice {
 
     pub(crate) struct RecordingMeterState;
 
+    pub(crate) struct RealtimeAudioPlayer;
+
     impl VoiceCapture {
         pub fn start() -> Result<Self, String> {
+            Err("voice input is unavailable in this build".to_string())
+        }
+
+        pub fn start_realtime(_tx: AppEventSender) -> Result<Self, String> {
             Err("voice input is unavailable in this build".to_string())
         }
 
@@ -173,6 +181,18 @@ mod voice {
         pub(crate) fn next_text(&mut self, _peak: u16) -> String {
             "⠤⠤⠤⠤".to_string()
         }
+    }
+
+    impl RealtimeAudioPlayer {
+        pub(crate) fn start() -> Result<Self, String> {
+            Err("voice output is unavailable in this build".to_string())
+        }
+
+        pub(crate) fn enqueue_frame(&self, _frame: &RealtimeAudioFrame) -> Result<(), String> {
+            Err("voice output is unavailable in this build".to_string())
+        }
+
+        pub(crate) fn clear(&self) {}
     }
 
     pub fn transcribe_async(

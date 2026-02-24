@@ -62,6 +62,7 @@ pub(crate) const MAX_EXEC_OUTPUT_DELTAS_PER_CALL: usize = 10_000;
 #[derive(Debug)]
 pub struct ExecParams {
     pub command: Vec<String>,
+    pub original_command: String,
     pub cwd: PathBuf,
     pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
@@ -180,6 +181,7 @@ pub async fn process_exec_tool_call(
 
     let ExecParams {
         command,
+        original_command: _,
         cwd,
         mut env,
         expiration,
@@ -249,6 +251,8 @@ pub(crate) async fn execute_exec_env(
     } = env;
 
     let params = ExecParams {
+        original_command: shlex::try_join(command.iter().map(String::as_str))
+            .unwrap_or_else(|_| command.join(" ")),
         command,
         cwd,
         expiration,
@@ -1121,6 +1125,8 @@ mod tests {
         ];
         let env: HashMap<String, String> = std::env::vars().collect();
         let params = ExecParams {
+            original_command: shlex::try_join(command.iter().map(String::as_str))
+                .unwrap_or_else(|_| command.join(" ")),
             command,
             cwd: std::env::current_dir()?,
             expiration: 500.into(),
@@ -1174,6 +1180,8 @@ mod tests {
         let cancel_token = CancellationToken::new();
         let cancel_tx = cancel_token.clone();
         let params = ExecParams {
+            original_command: shlex::try_join(command.iter().map(String::as_str))
+                .unwrap_or_else(|_| command.join(" ")),
             command,
             cwd: cwd.clone(),
             expiration: ExecExpiration::Cancellation(cancel_token),

@@ -215,6 +215,14 @@ impl TestCodexBuilder {
         }
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
             config.codex_linux_sandbox_exe = Some(path);
+        } else if let Ok(exe) = std::env::current_exe()
+            && let Some(path) = exe
+                .parent()
+                .and_then(|parent| parent.parent())
+                .map(|parent| parent.join("codex"))
+            && path.is_file()
+        {
+            config.codex_linux_sandbox_exe = Some(path);
         }
 
         let mut mutators = vec![];
