@@ -2127,6 +2127,7 @@ async fn denying_network_policy_amendment_persists_policy_and_skips_future_promp
         home.path().join("config.toml"),
         r#"[permissions.network]
 enabled = true
+mode = "limited"
 allow_local_binding = true
 "#,
     )?;
