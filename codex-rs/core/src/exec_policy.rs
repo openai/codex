@@ -13,10 +13,12 @@ use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
 use codex_execpolicy::Evaluation;
+use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
+use codex_execpolicy::blocking_append_network_rule;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -293,6 +295,43 @@ impl ExecPolicyManager {
         self.policy.store(Arc::new(updated_policy));
         Ok(())
     }
+
+    pub(crate) async fn append_network_rule_and_update(
+        &self,
+        codex_home: &Path,
+        host: &str,
+        protocol: NetworkRuleProtocol,
+        decision: Decision,
+        justification: Option<String>,
+    ) -> Result<(), ExecPolicyUpdateError> {
+        let policy_path = default_policy_path(codex_home);
+        let host = host.to_string();
+        spawn_blocking({
+            let policy_path = policy_path.clone();
+            let host = host.clone();
+            let justification = justification.clone();
+            move || {
+                blocking_append_network_rule(
+                    &policy_path,
+                    &host,
+                    protocol,
+                    decision,
+                    justification.as_deref(),
+                )
+            }
+        })
+        .await
+        .map_err(|source| ExecPolicyUpdateError::JoinBlockingTask { source })?
+        .map_err(|source| ExecPolicyUpdateError::AppendRule {
+            path: policy_path,
+            source,
+        })?;
+
+        let mut updated_policy = self.current().as_ref().clone();
+        updated_policy.add_network_rule(&host, protocol, decision, justification)?;
+        self.policy.store(Arc::new(updated_policy));
+        Ok(())
+    }
 }
 
 impl Default for ExecPolicyManager {
@@ -440,7 +479,10 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         }
     }
 
-    Ok(Policy::new(combined_rules))
+    let mut combined_network_rules = policy.network_rules().to_vec();
+    combined_network_rules.extend(requirements_policy.as_ref().network_rules().iter().cloned());
+
+    Ok(Policy::from_parts(combined_rules, combined_network_rules))
 }
 
 /// If a command is not matched by any execpolicy rule, derive a [`Decision`].
@@ -912,6 +954,41 @@ mod tests {
             },
             policy.check_multiple(command.iter(), &|_| Decision::Allow)
         );
+    }
+
+    #[tokio::test]
+    async fn merges_requirements_exec_policy_network_rules() -> anyhow::Result<()> {
+        let temp_dir = tempdir()?;
+
+        let mut requirements_exec_policy = Policy::empty();
+        requirements_exec_policy.add_network_rule(
+            "blocked.example.com",
+            codex_execpolicy::NetworkRuleProtocol::Https,
+            Decision::Forbidden,
+            None,
+        )?;
+
+        let requirements = ConfigRequirements {
+            exec_policy: Some(codex_config::Sourced::new(
+                codex_config::RequirementsExecPolicy::new(requirements_exec_policy),
+                codex_config::RequirementSource::Unknown,
+            )),
+            ..ConfigRequirements::default()
+        };
+        let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+        let layer = ConfigLayerEntry::new(
+            ConfigLayerSource::Project { dot_codex_folder },
+            TomlValue::Table(Default::default()),
+        );
+        let config_stack =
+            ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())?;
+
+        let policy = load_exec_policy(&config_stack).await?;
+        let (allowed, denied) = policy.compiled_network_domains();
+
+        assert!(allowed.is_empty());
+        assert_eq!(denied, vec!["blocked.example.com".to_string()]);
+        Ok(())
     }
 
     #[tokio::test]

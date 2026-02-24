@@ -828,6 +828,31 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        NetworkPolicyAmendment {
+            network_policy_amendment,
+        } => {
+            let host = Span::from(network_policy_amendment.host).dim();
+            match network_policy_amendment.action {
+                codex_protocol::protocol::NetworkPolicyRuleAction::Allow => (
+                    "✔ ".green(),
+                    vec![
+                        "You ".into(),
+                        "approved".bold(),
+                        " future network access to ".into(),
+                        host,
+                    ],
+                ),
+                codex_protocol::protocol::NetworkPolicyRuleAction::Deny => (
+                    "✗ ".red(),
+                    vec![
+                        "You ".into(),
+                        "blocked".bold(),
+                        " future network access to ".into(),
+                        host,
+                    ],
+                ),
+            }
+        }
         Denied => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             (

@@ -4,6 +4,7 @@ use std::time::Instant;
 use tracing::error;
 
 use crate::analytics_client::AppInvocation;
+use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -276,15 +277,15 @@ async fn maybe_track_codex_app_used(
     let (connector_id, app_name) = metadata
         .map(|metadata| (metadata.connector_id, metadata.app_name))
         .unwrap_or((None, None));
-    let invoke_type = if let Some(connector_id) = connector_id.as_deref() {
+    let invocation_type = if let Some(connector_id) = connector_id.as_deref() {
         let mentioned_connector_ids = sess.get_connector_selection().await;
         if mentioned_connector_ids.contains(connector_id) {
-            "explicit"
+            InvocationType::Explicit
         } else {
-            "implicit"
+            InvocationType::Implicit
         }
     } else {
-        "implicit"
+        InvocationType::Implicit
     };
 
     let tracking = build_track_events_context(
@@ -297,7 +298,7 @@ async fn maybe_track_codex_app_used(
         AppInvocation {
             connector_id,
             app_name,
-            invoke_type: Some(invoke_type.to_string()),
+            invocation_type: Some(invocation_type),
         },
     );
 }
