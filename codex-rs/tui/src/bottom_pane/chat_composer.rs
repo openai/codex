@@ -1912,6 +1912,10 @@ impl ChatComposer {
     /// - The cursor may be anywhere *inside* the token (including on the
     ///   leading prefix). It does **not** need to be at the end of the line.
     /// - A token is delimited by ASCII whitespace (space, tab, newline).
+    /// - If the cursor is on `prefix` inside an existing token (for example the
+    ///   second `@` in `@scope/pkg@latest`), keep treating the surrounding
+    ///   whitespace-delimited token as the active token rather than starting a
+    ///   new token at that nested prefix.
     /// - If the token under the cursor starts with `prefix`, that token is
     ///   returned without the leading prefix. When `allow_empty` is true, a
     ///   lone prefix character yields `Some(String::new())` to surface hints.
@@ -2018,6 +2022,10 @@ impl ChatComposer {
         left_prefixed.or(right_prefixed)
     }
 
+    /// Heuristic used by `current_at_token` to avoid opening file search when a
+    /// pasted command contains a scoped npm package spec like `@scope/pkg@latest`.
+    /// This intentionally remains narrow so file queries containing `@` (for
+    /// example `@icons/icon@2x.png`) continue to work.
     fn looks_like_scoped_npm_package_spec(token: &str) -> bool {
         let Some((package_name, version)) = token.rsplit_once('@') else {
             return false;
@@ -2078,6 +2086,9 @@ impl ChatComposer {
     /// Extract the `@token` that the cursor is currently positioned on, if any.
     ///
     /// The returned string **does not** include the leading `@`.
+    ///
+    /// Scoped npm package specs (`@scope/pkg@version`) are intentionally
+    /// filtered out so they do not trigger file-search popup behavior.
     fn current_at_token(textarea: &TextArea) -> Option<String> {
         let token = Self::current_prefixed_token(textarea, '@', false)?;
         if Self::looks_like_scoped_npm_package_spec(&token) {
