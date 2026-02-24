@@ -25,11 +25,21 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
+use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
+use crate::tools::spec::ShellCommandBackendConfig;
 
 pub struct ShellHandler;
 
-pub struct ShellCommandHandler;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellCommandBackend {
+    Classic,
+    ZshFork,
+}
+
+pub struct ShellCommandHandler {
+    backend: ShellCommandBackend,
+}
 
 struct RunExecLikeArgs {
     tool_name: String,
@@ -40,6 +50,7 @@ struct RunExecLikeArgs {
     tracker: crate::tools::context::SharedTurnDiffTracker,
     call_id: String,
     freeform: bool,
+    shell_runtime_backend: ShellRuntimeBackend,
 }
 
 impl ShellHandler {
@@ -63,6 +74,13 @@ impl ShellHandler {
 }
 
 impl ShellCommandHandler {
+    fn shell_runtime_backend(&self) -> ShellRuntimeBackend {
+        match self.backend {
+            ShellCommandBackend::Classic => ShellRuntimeBackend::ShellCommandClassic,
+            ShellCommandBackend::ZshFork => ShellRuntimeBackend::ShellCommandZshFork,
+        }
+    }
+
     fn resolve_use_login_shell(
         login: Option<bool>,
         allow_login_shell: bool,
@@ -102,6 +120,16 @@ impl ShellCommandHandler {
             justification: params.justification.clone(),
             arg0: None,
         })
+    }
+}
+
+impl From<ShellCommandBackendConfig> for ShellCommandHandler {
+    fn from(config: ShellCommandBackendConfig) -> Self {
+        let backend = match config {
+            ShellCommandBackendConfig::Classic => ShellCommandBackend::Classic,
+            ShellCommandBackendConfig::ZshFork => ShellCommandBackend::ZshFork,
+        };
+        Self { backend }
     }
 }
 
@@ -155,6 +183,7 @@ impl ToolHandler for ShellHandler {
                     tracker,
                     call_id,
                     freeform: false,
+                    shell_runtime_backend: ShellRuntimeBackend::Generic,
                 })
                 .await
             }
@@ -170,6 +199,7 @@ impl ToolHandler for ShellHandler {
                     tracker,
                     call_id,
                     freeform: false,
+                    shell_runtime_backend: ShellRuntimeBackend::Generic,
                 })
                 .await
             }
@@ -245,6 +275,7 @@ impl ToolHandler for ShellCommandHandler {
             tracker,
             call_id,
             freeform: true,
+            shell_runtime_backend: self.shell_runtime_backend(),
         })
         .await
     }
@@ -261,6 +292,7 @@ impl ShellHandler {
             tracker,
             call_id,
             freeform,
+            shell_runtime_backend,
         } = args;
 
         let mut exec_params = exec_params;
@@ -341,7 +373,15 @@ impl ShellHandler {
             exec_approval_requirement,
         };
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = ShellRuntime::new();
+        let mut runtime = {
+            use ShellRuntimeBackend::*;
+            match shell_runtime_backend {
+                Generic => ShellRuntime::new(),
+                backend @ (ShellCommandClassic | ShellCommandZshFork) => {
+                    ShellRuntime::for_shell_command(backend)
+                }
+            }
+        };
         let tool_ctx = ToolCtx {
             session: session.clone(),
             turn: turn.clone(),
