@@ -9275,6 +9275,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                source: ToolCallSource::Direct,
             })
             .await;
 
@@ -9314,6 +9315,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                source: ToolCallSource::Direct,
             })
             .await;
 
@@ -9373,6 +9375,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                source: ToolCallSource::Direct,
             })
             .await;
 

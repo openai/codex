@@ -1004,6 +1004,7 @@ mod tests {
             call_id: "call-1".to_string(),
             tool_name: tool_name.to_string(),
             payload,
+            source: crate::tools::router::ToolCallSource::Direct,
         }
     }
 

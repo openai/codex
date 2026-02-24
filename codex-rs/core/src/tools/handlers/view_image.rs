@@ -8,6 +8,7 @@ use tokio::fs;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
 use crate::protocol::ViewImageToolCallEvent;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -51,6 +52,7 @@ impl ToolHandler for ViewImageHandler {
             turn,
             payload,
             call_id,
+            source,
             ..
         } = invocation;
 
@@ -83,9 +85,10 @@ impl ToolHandler for ViewImageHandler {
         let event_path = abs_path.clone();
 
         let content = local_image_content_items_with_label_number(&abs_path, None);
-        if content
-            .iter()
-            .any(|item| matches!(item, ContentItem::InputImage { .. }))
+        if source == ToolCallSource::JsRepl
+            && content
+                .iter()
+                .any(|item| matches!(item, ContentItem::InputImage { .. }))
         {
             let input_item = ResponseInputItem::Message {
                 role: "user".to_string(),
