@@ -101,6 +101,7 @@ impl SkillPopup {
                 let description = mention.description.clone().unwrap_or_default();
                 GenericDisplayRow {
                     name,
+                    name_prefix_spans: Vec::new(),
                     match_indices: indices,
                     display_shortcut: None,
                     description: Some(description).filter(|desc| !desc.is_empty()),

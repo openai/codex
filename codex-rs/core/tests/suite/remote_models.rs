@@ -9,11 +9,6 @@ use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::manager::RefreshStrategy;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -24,6 +19,11 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
@@ -548,7 +548,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_models_preserve_builtin_presets() -> Result<()> {
+async fn remote_models_do_not_append_removed_builtin_presets() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -592,12 +592,6 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
         available.iter().filter(|model| model.is_default).count(),
         1,
         "expected a single default model"
-    );
-    assert!(
-        available
-            .iter()
-            .any(|model| model.model == "gpt-5.1-codex-max"),
-        "builtin presets should remain available after refresh"
     );
     assert_eq!(
         models_mock.requests().len(),

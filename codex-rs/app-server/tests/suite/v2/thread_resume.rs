@@ -15,8 +15,6 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
-use codex_app_server_protocol::TurnInterruptParams;
-use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -317,9 +315,14 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let second_body = responses::sse(vec![responses::ev_response_created("resp-2")]);
+    let second_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]))
+    .set_delay(std::time::Duration::from_millis(500));
     let _first_response_mock = responses::mount_sse_once(&server, first_body).await;
-    let _second_response_mock = responses::mount_sse_once(&server, second_body).await;
+    let _second_response_mock = responses::mount_response_once(&server, second_response).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -413,28 +416,9 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
         resume_err.error.message
     );
 
-    // This test intentionally keeps a turn running to exercise the resume error path.
-    // Keep this explicit interrupt + turn_aborted wait so teardown does not leave
-    // in-flight work behind (which can show up as LEAK in nextest).
-    let interrupt_id = primary
-        .send_turn_interrupt_request(TurnInterruptParams {
-            thread_id,
-            turn_id: running_turn.id,
-        })
+    primary
+        .interrupt_turn_and_wait_for_aborted(thread_id, running_turn.id, DEFAULT_READ_TIMEOUT)
         .await?;
-    let interrupt_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(interrupt_id)),
-    )
-    .await??;
-    let _turn_interrupt_response: TurnInterruptResponse =
-        to_response::<TurnInterruptResponse>(interrupt_resp)?;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("codex/event/turn_aborted"),
-    )
-    .await??;
 
     Ok(())
 }
@@ -447,9 +431,14 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let second_body = responses::sse(vec![responses::ev_response_created("resp-2")]);
+    let second_response = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]))
+    .set_delay(std::time::Duration::from_millis(500));
     let _first_response_mock = responses::mount_sse_once(&server, first_body).await;
-    let _second_response_mock = responses::mount_sse_once(&server, second_body).await;
+    let _second_response_mock = responses::mount_response_once(&server, second_response).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -533,28 +522,9 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
         resume_err.error.message
     );
 
-    // This test intentionally keeps a turn running to exercise the resume error path.
-    // Keep this explicit interrupt + turn_aborted wait so teardown does not leave
-    // in-flight work behind (which can show up as LEAK in nextest).
-    let interrupt_id = primary
-        .send_turn_interrupt_request(TurnInterruptParams {
-            thread_id,
-            turn_id: running_turn.id,
-        })
+    primary
+        .interrupt_turn_and_wait_for_aborted(thread_id, running_turn.id, DEFAULT_READ_TIMEOUT)
         .await?;
-    let interrupt_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(interrupt_id)),
-    )
-    .await??;
-    let _turn_interrupt_response: TurnInterruptResponse =
-        to_response::<TurnInterruptResponse>(interrupt_resp)?;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("codex/event/turn_aborted"),
-    )
-    .await??;
 
     Ok(())
 }

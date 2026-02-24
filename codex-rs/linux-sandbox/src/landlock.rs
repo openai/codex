@@ -8,7 +8,7 @@ use std::path::Path;
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
 use codex_core::error::SandboxErr;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use landlock::ABI;
@@ -43,22 +43,26 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     cwd: &Path,
     apply_landlock_fs: bool,
     allow_network_for_proxy: bool,
+    proxy_routed_network: bool,
 ) -> Result<()> {
-    let install_network_seccomp =
-        should_install_network_seccomp(sandbox_policy, allow_network_for_proxy);
+    let network_seccomp_mode = network_seccomp_mode(
+        sandbox_policy,
+        allow_network_for_proxy,
+        proxy_routed_network,
+    );
 
     // `PR_SET_NO_NEW_PRIVS` is required for seccomp, but it also prevents
     // setuid privilege elevation. Many `bwrap` deployments rely on setuid, so
     // we avoid this unless we need seccomp or we are explicitly using the
     // legacy Landlock filesystem pipeline.
-    if install_network_seccomp
+    if network_seccomp_mode.is_some()
         || (apply_landlock_fs && !sandbox_policy.has_full_disk_write_access())
     {
         set_no_new_privs()?;
     }
 
-    if install_network_seccomp {
-        install_network_seccomp_filter_on_current_thread()?;
+    if let Some(mode) = network_seccomp_mode {
+        install_network_seccomp_filter_on_current_thread(mode)?;
     }
 
     if apply_landlock_fs && !sandbox_policy.has_full_disk_write_access() {
@@ -80,6 +84,12 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NetworkSeccompMode {
+    Restricted,
+    ProxyRouted,
+}
+
 fn should_install_network_seccomp(
     sandbox_policy: &SandboxPolicy,
     allow_network_for_proxy: bool,
@@ -87,6 +97,20 @@ fn should_install_network_seccomp(
     // Managed-network sessions should remain fail-closed even for policies that
     // would normally grant full network access (for example, DangerFullAccess).
     !sandbox_policy.has_full_network_access() || allow_network_for_proxy
+}
+
+fn network_seccomp_mode(
+    sandbox_policy: &SandboxPolicy,
+    allow_network_for_proxy: bool,
+    proxy_routed_network: bool,
+) -> Option<NetworkSeccompMode> {
+    if !should_install_network_seccomp(sandbox_policy, allow_network_for_proxy) {
+        None
+    } else if proxy_routed_network {
+        Some(NetworkSeccompMode::ProxyRouted)
+    } else {
+        Some(NetworkSeccompMode::Restricted)
+    }
 }
 
 /// Enable `PR_SET_NO_NEW_PRIVS` so seccomp can be applied safely.
@@ -135,51 +159,87 @@ fn install_filesystem_landlock_rules_on_current_thread(
     Ok(())
 }
 
-/// Installs a seccomp filter that blocks outbound network access except for
-/// AF_UNIX domain sockets.
+/// Installs a seccomp filter for Linux network sandboxing.
 ///
 /// The filter is applied to the current thread so only the sandboxed child
 /// inherits it.
-fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(), SandboxErr> {
+fn install_network_seccomp_filter_on_current_thread(
+    mode: NetworkSeccompMode,
+) -> std::result::Result<(), SandboxErr> {
+    fn deny_syscall(rules: &mut BTreeMap<i64, Vec<SeccompRule>>, nr: i64) {
+        rules.insert(nr, vec![]); // empty rule vec = unconditional match
+    }
+
     // Build rule map.
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
-    // Helper – insert unconditional deny rule for syscall number.
-    let mut deny_syscall = |nr: i64| {
-        rules.insert(nr, vec![]); // empty rule vec = unconditional match
-    };
+    deny_syscall(&mut rules, libc::SYS_ptrace);
+    deny_syscall(&mut rules, libc::SYS_io_uring_setup);
+    deny_syscall(&mut rules, libc::SYS_io_uring_enter);
+    deny_syscall(&mut rules, libc::SYS_io_uring_register);
 
-    deny_syscall(libc::SYS_connect);
-    deny_syscall(libc::SYS_accept);
-    deny_syscall(libc::SYS_accept4);
-    deny_syscall(libc::SYS_bind);
-    deny_syscall(libc::SYS_listen);
-    deny_syscall(libc::SYS_getpeername);
-    deny_syscall(libc::SYS_getsockname);
-    deny_syscall(libc::SYS_shutdown);
-    deny_syscall(libc::SYS_sendto);
-    deny_syscall(libc::SYS_sendmmsg);
-    // NOTE: allowing recvfrom allows some tools like: `cargo clippy` to run
-    // with their socketpair + child processes for sub-proc management
-    // deny_syscall(libc::SYS_recvfrom);
-    deny_syscall(libc::SYS_recvmmsg);
-    deny_syscall(libc::SYS_getsockopt);
-    deny_syscall(libc::SYS_setsockopt);
-    deny_syscall(libc::SYS_ptrace);
-    deny_syscall(libc::SYS_io_uring_setup);
-    deny_syscall(libc::SYS_io_uring_enter);
-    deny_syscall(libc::SYS_io_uring_register);
+    match mode {
+        NetworkSeccompMode::Restricted => {
+            deny_syscall(&mut rules, libc::SYS_connect);
+            deny_syscall(&mut rules, libc::SYS_accept);
+            deny_syscall(&mut rules, libc::SYS_accept4);
+            deny_syscall(&mut rules, libc::SYS_bind);
+            deny_syscall(&mut rules, libc::SYS_listen);
+            deny_syscall(&mut rules, libc::SYS_getpeername);
+            deny_syscall(&mut rules, libc::SYS_getsockname);
+            deny_syscall(&mut rules, libc::SYS_shutdown);
+            deny_syscall(&mut rules, libc::SYS_sendto);
+            deny_syscall(&mut rules, libc::SYS_sendmmsg);
+            // NOTE: allowing recvfrom allows some tools like: `cargo clippy`
+            // to run with their socketpair + child processes for sub-proc
+            // management.
+            // deny_syscall(&mut rules, libc::SYS_recvfrom);
+            deny_syscall(&mut rules, libc::SYS_recvmmsg);
+            deny_syscall(&mut rules, libc::SYS_getsockopt);
+            deny_syscall(&mut rules, libc::SYS_setsockopt);
 
-    // For `socket` we allow AF_UNIX (arg0 == AF_UNIX) and deny everything else.
-    let unix_only_rule = SeccompRule::new(vec![SeccompCondition::new(
-        0, // first argument (domain)
-        SeccompCmpArgLen::Dword,
-        SeccompCmpOp::Ne,
-        libc::AF_UNIX as u64,
-    )?])?;
+            // For `socket` we allow AF_UNIX (arg0 == AF_UNIX) and deny
+            // everything else.
+            let unix_only_rule = SeccompRule::new(vec![SeccompCondition::new(
+                0, // first argument (domain)
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Ne,
+                libc::AF_UNIX as u64,
+            )?])?;
 
-    rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
-    rules.insert(libc::SYS_socketpair, vec![unix_only_rule]); // always deny (Unix can use socketpair but fine, keep open?)
+            rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
+            rules.insert(libc::SYS_socketpair, vec![unix_only_rule]);
+        }
+        NetworkSeccompMode::ProxyRouted => {
+            // In proxy-routed mode we allow IP sockets in the isolated
+            // namespace (used to reach the local TCP bridge) but deny all
+            // other socket families, including AF_UNIX. This prevents
+            // bypassing the routed bridge via new Unix sockets and narrows the
+            // socket surface in proxy-only mode.
+            let deny_non_ip_socket = SeccompRule::new(vec![
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_INET as u64,
+                )?,
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_INET6 as u64,
+                )?,
+            ])?;
+            let deny_unix_socketpair = SeccompRule::new(vec![SeccompCondition::new(
+                0,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Eq,
+                libc::AF_UNIX as u64,
+            )?])?;
+            rules.insert(libc::SYS_socket, vec![deny_non_ip_socket]);
+            rules.insert(libc::SYS_socketpair, vec![deny_unix_socketpair]);
+        }
+    }
 
     let filter = SeccompFilter::new(
         rules,
@@ -203,8 +263,10 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
 
 #[cfg(test)]
 mod tests {
+    use super::NetworkSeccompMode;
+    use super::network_seccomp_mode;
     use super::should_install_network_seccomp;
-    use codex_core::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -233,5 +295,29 @@ mod tests {
             &SandboxPolicy::new_read_only_policy(),
             true
         ));
+    }
+
+    #[test]
+    fn managed_proxy_routes_use_proxy_routed_seccomp_mode() {
+        assert_eq!(
+            network_seccomp_mode(&SandboxPolicy::DangerFullAccess, true, true),
+            Some(NetworkSeccompMode::ProxyRouted)
+        );
+    }
+
+    #[test]
+    fn restricted_network_without_proxy_routing_uses_restricted_mode() {
+        assert_eq!(
+            network_seccomp_mode(&SandboxPolicy::new_read_only_policy(), false, false),
+            Some(NetworkSeccompMode::Restricted)
+        );
+    }
+
+    #[test]
+    fn full_network_without_managed_proxy_skips_network_seccomp_mode() {
+        assert_eq!(
+            network_seccomp_mode(&SandboxPolicy::DangerFullAccess, false, false),
+            None
+        );
     }
 }

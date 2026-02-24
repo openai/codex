@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "SkillApprovalDecision": {
+      "enum": [
+        "approve",
+        "decline"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "decision": {
+      "$ref": "#/definitions/SkillApprovalDecision"
+    }
+  },
+  "required": [
+    "decision"
+  ],
+  "title": "SkillRequestApprovalResponse",
+  "type": "object"
+}

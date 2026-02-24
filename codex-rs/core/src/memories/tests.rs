@@ -127,6 +127,7 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
     }
     files.sort_unstable();
     assert_eq!(files.len(), 1);
+    let canonical_rollout_summary_file = &files[0];
 
     let raw_memories = tokio::fs::read_to_string(raw_memories_file(&root))
         .await
@@ -134,6 +135,30 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
     assert!(raw_memories.contains("raw memory"));
     assert!(raw_memories.contains(&keep_id));
     assert!(raw_memories.contains("cwd: /tmp/workspace"));
+    assert!(raw_memories.contains(&format!(
+        "rollout_summary_file: {canonical_rollout_summary_file}"
+    )));
+    let thread_header = format!("## Thread `{keep_id}`");
+    let thread_pos = raw_memories
+        .find(&thread_header)
+        .expect("thread header should exist");
+    let updated_pos = raw_memories[thread_pos..]
+        .find("updated_at: ")
+        .map(|offset| thread_pos + offset)
+        .expect("updated_at should exist after thread header");
+    let cwd_pos = raw_memories[thread_pos..]
+        .find("cwd: /tmp/workspace")
+        .map(|offset| thread_pos + offset)
+        .expect("cwd should exist after thread header");
+    let file_pos = raw_memories[thread_pos..]
+        .find(&format!(
+            "rollout_summary_file: {canonical_rollout_summary_file}"
+        ))
+        .map(|offset| thread_pos + offset)
+        .expect("rollout_summary_file should exist after thread header");
+    assert!(thread_pos < updated_pos);
+    assert!(updated_pos < cwd_pos);
+    assert!(cwd_pos < file_pos);
 }
 
 #[tokio::test]
@@ -229,7 +254,7 @@ async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename(
 }
 
 #[tokio::test]
-async fn rebuild_raw_memories_file_rewrites_rollout_summary_file_to_canonical_filename() {
+async fn rebuild_raw_memories_file_adds_canonical_rollout_summary_file_header() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path().join("memory");
     ensure_layout(&root).await.expect("ensure layout");
@@ -241,11 +266,20 @@ async fn rebuild_raw_memories_file_rewrites_rollout_summary_file_to_canonical_fi
         source_updated_at: Utc.timestamp_opt(200, 0).single().expect("timestamp"),
         raw_memory: "\
 ---
-rollout_summary_file: state_migration_uniqueness_test.md
 description: Added a migration test
 keywords: codex-state, migrations
 ---
-- Kept details."
+### Task 1: migration-test
+task: add-migration-test
+task_group: codex-state
+task_outcome: success
+- Added regression coverage for migration uniqueness.
+
+### Task 2: validate-migration
+task: validate-migration-ordering
+task_group: codex-state
+task_outcome: success
+- Confirmed no ordering regressions."
             .to_string(),
         rollout_summary: "short summary".to_string(),
         rollout_slug: Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345".to_string()),
@@ -285,8 +319,11 @@ keywords: codex-state, migrations
     assert!(raw_memories.contains(&format!(
         "rollout_summary_file: {canonical_rollout_summary_file}"
     )));
-    assert!(!raw_memories.contains("rollout_summary_file: state_migration_uniqueness_test.md"));
     assert!(raw_memories.contains("description: Added a migration test"));
+    assert!(raw_memories.contains("### Task 1: migration-test"));
+    assert!(raw_memories.contains("task: add-migration-test"));
+    assert!(raw_memories.contains("task_group: codex-state"));
+    assert!(raw_memories.contains("task_outcome: success"));
 }
 
 mod phase2 {
