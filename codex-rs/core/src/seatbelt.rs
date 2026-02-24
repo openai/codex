@@ -269,13 +269,12 @@ fn dynamic_network_policy(
         let mut policy =
             String::from("; allow outbound access only to configured loopback proxy endpoints\n");
         if proxy.allow_local_binding {
-            policy.push_str("; allow dual-stack local binding and loopback traffic\n");
-            // Intentionally allows wildcard binds so dual-stack local listeners keep
-            // working under Seatbelt. Inbound and outbound traffic remain constrained
-            // by the narrower loopback rules below.
+            policy.push_str("; allow dual-stack local binding and local-endpoint traffic\n");
+            // Use wildcard local-endpoint rules so dual-stack listeners keep
+            // working under Seatbelt, including IPv4-mapped IPv6 loopback binds.
             policy.push_str("(allow network-bind (local ip \"*:*\"))\n");
-            policy.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
-            policy.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
+            policy.push_str("(allow network-inbound (local ip \"*:*\"))\n");
+            policy.push_str("(allow network-outbound (local ip \"*:*\"))\n");
         }
         for port in &proxy.ports {
             policy.push_str(&format!(
@@ -731,15 +730,15 @@ mod tests {
 
         assert!(
             policy.contains("(allow network-bind (local ip \"*:*\"))"),
-            "policy should allow dual-stack loopback binding when explicitly enabled:\n{policy}"
+            "policy should allow dual-stack local binding when explicitly enabled:\n{policy}"
         );
         assert!(
-            policy.contains("(allow network-inbound (local ip \"localhost:*\"))"),
-            "policy should allow loopback inbound when explicitly enabled:\n{policy}"
+            policy.contains("(allow network-inbound (local ip \"*:*\"))"),
+            "policy should allow local-endpoint inbound when explicitly enabled:\n{policy}"
         );
         assert!(
-            policy.contains("(allow network-outbound (remote ip \"localhost:*\"))"),
-            "policy should allow loopback outbound when explicitly enabled:\n{policy}"
+            policy.contains("(allow network-outbound (local ip \"*:*\"))"),
+            "policy should allow local-endpoint outbound when explicitly enabled:\n{policy}"
         );
         assert!(
             !policy.contains("\n(allow network-outbound)\n"),
