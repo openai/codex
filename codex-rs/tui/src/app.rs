@@ -1123,6 +1123,52 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    async fn start_clean_context_implement(&mut self, tui: &mut tui::Tui, plan_text: String) {
+        let model = self.chat_widget.current_model().to_string();
+        let summary = session_summary(
+            self.chat_widget.token_usage(),
+            self.chat_widget.thread_id(),
+            self.chat_widget.thread_name(),
+        );
+        self.shutdown_current_thread().await;
+        if let Err(err) = self.server.remove_and_close_all_threads().await {
+            tracing::warn!(error = %err, "failed to close all threads");
+        }
+
+        let implement_message = format!("Implement the following plan:\n\n{plan_text}");
+
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: self.config.clone(),
+            frame_requester: tui.frame_requester(),
+            app_event_tx: self.app_event_tx.clone(),
+            initial_user_message: crate::chatwidget::create_initial_user_message(
+                Some(implement_message),
+                Vec::new(),
+                Vec::new(),
+            ),
+            enhanced_keys_supported: self.enhanced_keys_supported,
+            auth_manager: self.auth_manager.clone(),
+            models_manager: self.server.get_models_manager(),
+            feedback: self.feedback.clone(),
+            is_first_run: false,
+            feedback_audience: self.feedback_audience,
+            model: Some(model),
+            status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
+            otel_manager: self.otel_manager.clone(),
+        };
+        self.chat_widget = ChatWidget::new(init, self.server.clone());
+        self.reset_thread_event_state();
+        if let Some(summary) = summary {
+            let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+            if let Some(command) = summary.resume_command {
+                let spans = vec!["To continue this session, run ".into(), command.cyan()];
+                lines.push(spans.into());
+            }
+            self.chat_widget.add_plain_history_lines(lines);
+        }
+        tui.frame_requester().schedule_frame();
+    }
+
     async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
         let Some(mut rx) = self.active_thread_rx.take() else {
             return Ok(());
@@ -2710,6 +2756,9 @@ impl App {
             } => {
                 self.chat_widget
                     .submit_user_message_with_mode(text, collaboration_mode);
+            }
+            AppEvent::CleanContextAndImplementPlan { plan_text } => {
+                self.start_clean_context_implement(tui, plan_text).await;
             }
             AppEvent::ManageSkillsClosed => {
                 self.chat_widget.handle_manage_skills_closed();

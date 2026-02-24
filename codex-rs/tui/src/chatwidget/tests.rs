@@ -1720,6 +1720,7 @@ async fn make_chatwidget_manual(
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
         external_editor_state: ExternalEditorState::Closed,
+        last_plan_text: None,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -2178,6 +2179,8 @@ async fn plan_implementation_popup_snapshot() {
 async fn plan_implementation_popup_no_selected_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.open_plan_implementation_prompt();
+    // Down twice: skip disabled clean-context (item 0) → Yes (item 1) → No (item 2)
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
     let popup = render_bottom_popup(&chat, 80);
@@ -2189,6 +2192,8 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.open_plan_implementation_prompt();
 
+    // Down to skip disabled clean-context (item 0) → Yes, implement (item 1), then Enter.
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let event = rx.try_recv().expect("expected AppEvent");
@@ -2201,6 +2206,66 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
     };
     assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
     assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_clean_context_emits_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    // Set plan text so clean-context option is enabled.
+    chat.last_plan_text = Some("- Step 1\n- Step 2".to_string());
+    chat.open_plan_implementation_prompt();
+
+    // First item (clean context) is selected by default and enabled; press Enter.
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::CleanContextAndImplementPlan { plan_text } = event else {
+        panic!("expected CleanContextAndImplementPlan, got {event:?}");
+    };
+    assert_eq!(plan_text, "- Step 1\n- Step 2");
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_clean_context_selected_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    // Set plan text so clean-context option is enabled and selected.
+    chat.last_plan_text = Some("- Step 1\n- Step 2".to_string());
+    chat.open_plan_implementation_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("plan_implementation_popup_clean_context_selected", popup);
+}
+
+#[tokio::test]
+async fn plan_implementation_stores_last_plan_text() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    assert!(chat.last_plan_text.is_none());
+
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+
+    assert_eq!(
+        chat.last_plan_text.as_deref(),
+        Some("- Step 1\n- Step 2\n")
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_clean_context_disabled_without_plan() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    // No plan text set → clean-context option should be disabled.
+    assert!(chat.last_plan_text.is_none());
+    chat.open_plan_implementation_prompt();
+
+    // First item is disabled (clean context); Enter should NOT emit an event.
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    // No event should be emitted since the item is disabled.
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no event for disabled clean-context option"
+    );
 }
 
 #[tokio::test]

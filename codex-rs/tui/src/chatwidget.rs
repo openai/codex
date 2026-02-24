@@ -158,6 +158,7 @@ const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
+const PLAN_IMPLEMENTATION_CLEAN_CONTEXT: &str = "Yes, clean context and implement";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
@@ -665,6 +666,9 @@ pub(crate) struct ChatWidget {
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
+    /// The text of the most recently completed proposed plan.
+    /// Used by "clean context and implement" to carry the plan into a fresh session.
+    last_plan_text: Option<String>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -1301,6 +1305,9 @@ impl ChatWidget {
         } else {
             text
         };
+        if !plan_text.is_empty() {
+            self.last_plan_text = Some(plan_text.clone());
+        }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.
         let should_restore_after_stream = self.plan_stream_controller.is_some();
@@ -1497,7 +1504,31 @@ impl ChatWidget {
             }
             None => (Vec::new(), Some("Default mode unavailable".to_string())),
         };
+
+        let plan_text_for_clean = self.last_plan_text.clone().unwrap_or_default();
+        let (clean_context_actions, clean_context_disabled_reason) =
+            if plan_text_for_clean.is_empty() {
+                (Vec::new(), Some("No plan text available".to_string()))
+            } else {
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::CleanContextAndImplementPlan {
+                        plan_text: plan_text_for_clean.clone(),
+                    });
+                })];
+                (actions, None)
+            };
+
         let items = vec![
+            SelectionItem {
+                name: PLAN_IMPLEMENTATION_CLEAN_CONTEXT.to_string(),
+                description: Some("Start fresh session with only the plan.".to_string()),
+                selected_description: None,
+                is_current: false,
+                actions: clean_context_actions,
+                disabled_reason: clean_context_disabled_reason,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
                 description: Some("Switch to Default and start coding.".to_string()),
@@ -2846,6 +2877,7 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            last_plan_text: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3017,6 +3049,7 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            last_plan_text: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3177,6 +3210,7 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            last_plan_text: None,
         };
 
         widget.prefetch_rate_limits();

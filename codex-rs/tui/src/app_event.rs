@@ -359,6 +359,11 @@ pub(crate) enum AppEvent {
         collaboration_mode: CollaborationModeMask,
     },
 
+    /// Start a fresh session with only the plan text and implement it.
+    CleanContextAndImplementPlan {
+        plan_text: String,
+    },
+
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
 
