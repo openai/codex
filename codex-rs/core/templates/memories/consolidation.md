@@ -99,9 +99,11 @@ Phase 2 has two operating styles:
 Primary inputs (always read these, if exists):
 Under `{{ memory_root }}/`:
 - `raw_memories.md`
-  - mechanical merge of `raw_memories` from Phase 1;
-  - ordered latest-first; use this recency ordering as a major heuristic when choosing
-    what to promote, expand, or deprecate;
+  - mechanical merge of `raw_memories` from Phase 1; ordered latest-first.
+  - Use this recency ordering as a major heuristic when choosing what to promote, expand, or deprecate.
+  - Default scan order: top-to-bottom. In INCREMENTAL UPDATE mode, bias attention toward the newest
+    portion first, then expand to older entries with enough coverage to avoid missing important older
+    context.
   - source of rollout-level metadata needed for MEMORY.md `### rollout_summary_files`
     annotations;
     you should be able to find `cwd` and `updated_at` there.
@@ -133,6 +135,8 @@ Rules:
   signal determine the granularity and depth.
 - Quality objective: for high-signal task families, `MEMORY.md` should be materially more
   useful than `raw_memories.md` while remaining easy to navigate.
+- Ordering objective: surface the most useful and most recently-updated validated memories
+  near the top of `MEMORY.md` and `memory_summary.md`.
 
 ============================================================
 1) `MEMORY.md` FORMAT (STRICT)
@@ -166,15 +170,13 @@ Required task-oriented body shape (strict):
 
 ## Task 1: <task description, outcome>
 
-task: <specific, searchable task signature; avoid fluff>
-
 ### rollout_summary_files
 
 - <rollout_summaries/file1.md> (cwd=<path>, updated_at=<timestamp>, <optional status/usefulness note>)
 
 ### keywords
 
-- <task-local retrieval handles: tool names, error strings, repo concepts, APIs/contracts>
+- <keyword1>, <keyword2>, <keyword3>, ... (single comma-separated line; task-local retrieval handles like tool names, error strings, repo concepts, APIs/contracts)
 
 ### learnings
 
@@ -246,8 +248,15 @@ Schema rules (strict):
     `- Related skill: skills/<skill-name>/SKILL.md`).
   - Use lowercase, hyphenated skill folder names.
 - E) Ordering and conflict handling
+  - Order top-level `# Task Group` blocks by expected future utility, with recency as a
+    strong default proxy (usually the freshest meaningful `updated_at` represented in that
+    block). The top of `MEMORY.md` should contain the highest-utility / freshest task families.
   - For grouped blocks, order `## Task <n>` sections by practical usefulness, then recency.
   - Treat `updated_at` as a first-class signal: fresher validated evidence usually wins.
+  - If a newer rollout materially changes a task family's guidance, update that task/block
+    and consider moving it upward so file order reflects current utility.
+  - In incremental updates, preserve stable ordering for unchanged older blocks; only
+    reorder when newer evidence materially changes usefulness or confidence.
   - If evidence conflicts and validation is unclear, preserve the uncertainty explicitly.
   - In `## General Tips`, cite task references (`[Task 1]`, `[Task 2]`, etc.) when
     merging, deduplicating, or resolving evidence.
@@ -261,9 +270,7 @@ What to write:
   `memory_summary.md`.
 - `MEMORY.md` should support related-but-not-identical tasks: slightly more general than a
   rollout summary, but still operational and concrete.
-- Use `raw_memories.md` as the routing layer and task inventory. In INIT mode, do a broad
-  coverage pass across nearly the whole file (chunked reads or equivalent) before choosing
-  deep dives.
+- Use `raw_memories.md` as the routing layer and task inventory.
 - Before writing `MEMORY.md`, build a scratch mapping of `rollout_summary_file -> target
   task group/task` from the full raw inventory so you can have a better overview. 
   Note that each rollout summary file can belong to multiple tasks.
@@ -325,12 +332,53 @@ For example, include (when known):
 ## What's in Memory
 This is a compact index to help future agents quickly find details in `MEMORY.md`,
 `skills/`, and `rollout_summaries/`.
-Organize by topic. Each bullet must include: topic, keywords, and a clear description.
-Ordered by utility - which is the most likely to be useful for a future agent.
+Organize by topic and split the index into a recent high-utility window and older topics.
+Each topic bullet must include: topic, keywords, and a clear description. Keywords must be
+representative and directly searchable in `MEMORY.md` (prefer exact strings: repo/project names, user query, tool names, error
+strings, commands, file paths, APIs/contracts; avoid vague synonyms).
+Order topics by utility, using `updated_at` recency as a strong default proxy unless there is
+strong contrary evidence.
 Do not target a fixed topic count. Cover the real high-signal areas and omit low-signal noise.
 Prefer grouping by task family / workflow intent, not by incidental tools alone.
 
-Recommended format:
+Required subsection structure (in this order):
+
+### <most recent memory day: YYYY-MM-DD>
+
+Recent Active Memory Window behavior (day-ordered):
+- Define a "memory day" as a calendar date (derived from `updated_at`) that has at least one
+  represented memory/rollout in the current memory set.
+- Recent Active Memory Window = the most recent 3 distinct memory days present in the current
+  memory inventory (`updated_at` dates), skipping empty date gaps (do not require consecutive dates).
+- If fewer than 3 memory days exist, include all available memory days.
+- For each of the 3 recent day subsections, include only the informative, likely-to-recur
+  topics touched on that day.
+- If a topic spans multiple recent days, list it under the most recent day it appears and do not
+  duplicate it under multiple days.
+- These entries should be more comprehensive than older-topic entries: richer keywords,
+  stronger / more detail descriptions, and concise recent learnings/change notes.
+- Group similar tasks / topics together.
+
+Recent-topic format:
+- <topic>: <keyword1>, <keyword2>, <keyword3>, ...
+  - desc: <clear and specific description of what tasks are inside this topic>
+  - learnings: <concise recent takeaways / decision triggers worth checking first>
+
+
+### <2nd most recent memory day: YYYY-MM-DD>
+
+Use the same format and keep it informative.
+
+### <3rd most recent memory day: YYYY-MM-DD>
+
+Use the same format and keep it informative.
+
+### Older Memory Topics
+
+All remaining high-signal topics not placed in the recent day subsections.
+Avoid duplicating recent topics.
+
+Older-topic format (compact):
 - <topic>: <keyword1>, <keyword2>, <keyword3>, ...
   - desc: <clear and specific description of what is inside this topic and when to use it>
 
@@ -338,10 +386,11 @@ Notes:
 - Do not include large snippets; push details into MEMORY.md and rollout summaries.
 - Prefer topics/keywords that help a future agent search MEMORY.md efficiently.
 - Prefer clear topic taxonomy over verbose drill-down pointers.
-- Keep descriptions explicit enough that a future model can decide which keyword cluster
-  to search first for a new user query.
-- Topic descriptions should mention what is inside, when to use it, and what kind of
-  outcome/procedure depth is available (for example: runbook, diagnostics, reporting, recovery).
+- Coverage guardrail: ensure every top-level `# Task Group` in `MEMORY.md` is represented by
+  at least one topic bullet in this index (either directly or via a clearly subsuming topic).
+- Keep descriptions explicit: what is inside, when to use it, and what kind of
+  outcome/procedure depth is available (for example: runbook, diagnostics, reporting, recovery),
+  so a future agent can quickly choose which topic/keyword cluster to search first.
 
 ============================================================
 3) `skills/` FORMAT (optional)
@@ -419,10 +468,10 @@ WORKFLOW
 
 2) INIT phase behavior:
    - Read `raw_memories.md` first, then rollout summaries carefully.
-   - In INIT mode, do a chunked coverage pass over `raw_memories.md` from top to near end
-     (or an equivalent full-file scan/indexing pass). Do not stop after only the first chunk.
-   - Use `wc -l` (or equivalent) to gauge file size, then scan in chunks so thread/task
-     metadata and high-signal entries across the whole file can influence clustering.
+   - In INIT mode, do a chunked coverage pass over `raw_memories.md` (top-to-bottom; do not stop
+     after only the first chunk).
+   - Use `wc -l` (or equivalent) to gauge file size, then scan in chunks so the full inventory can
+     influence clustering decisions (not just the newest chunk).
    - Build Phase 2 artifacts from scratch:
      - produce/refresh `MEMORY.md`
      - create initial `skills/*` (optional but highly recommended)
@@ -444,7 +493,8 @@ WORKFLOW
      - updating stale or contradicting guidance
      - expanding terse old blocks when new summaries/raw memories make the task family clearer
      - doing light clustering and merging if needed
-     - preserving stable block taxonomy/order unless there is real new evidence that warrants restructuring
+     - refreshing `MEMORY.md` top-of-file ordering so recent high-utility task families stay easy to find
+     - rebuilding the `memory_summary.md` recent active window (last 3 memory days) from current `updated_at` coverage
      - updating existing skills or adding new skills only when there is clear new reusable procedure
      - update `memory_summary.md` last to reflect the final state of the memory folder
    - Minimize churn in incremental mode: unchanged blocks should stay mostly unchanged in
@@ -476,6 +526,8 @@ WORKFLOW
    - ensure any referenced skills/summaries actually exist
    - ensure MEMORY blocks and "What's in Memory" use a consistent task-oriented taxonomy
    - ensure recent important task families are easy to find (description + keywords + topic wording)
+   - verify `MEMORY.md` block order and `What's in Memory` section order reflect current
+     utility/recency priorities (especially the recent active memory window)
    - if there is no net-new or higher-quality signal to add, keep changes minimal (no
      churn for its own sake).
 
