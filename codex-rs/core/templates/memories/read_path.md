@@ -55,11 +55,11 @@ When to update memory:
 Memory citation requirements:
 
 - If ANY relevant memory files were used: append exactly one
-  `<memory_citation>` block as the VERY LAST content of the final reply.
+  `<oai-mem-citation>` block as the VERY LAST content of the final reply.
   Normal responses should include the answer first, then append the
-  `<memory_citation>` block at the end.
+  `<oai-mem-citation>` block at the end.
 - Use this exact structure for programmatic parsing:
-<memory_citation>
+<oai-mem-citation>
 <citation_entries>
 MEMORY.md:234-236|note=[responsesapi citation extraction code pointer]
 rollout_summaries/2026-02-17T21-23-02-LN3m-weekly_memory_report_pivot_from_git_history.md:10-12|note=[weekly report format]
@@ -68,7 +68,7 @@ rollout_summaries/2026-02-17T21-23-02-LN3m-weekly_memory_report_pivot_from_git_h
 019c6e27-e55b-73d1-87d8-4e01f1f75043
 019c7714-3b77-74d1-9866-e1f484aae2ab
 </thread_ids>
-</memory_citation>
+</oai-mem-citation>
 - `citation_entries` is for rendering:
   - one citation entry per line
   - format: `<file>:<line_start>-<line_end>|note=[<how memory was used>]`
