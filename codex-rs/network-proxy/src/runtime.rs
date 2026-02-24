@@ -43,6 +43,12 @@ pub struct NetworkProxyAuditMetadata {
     pub conversation_id: Option<String>,
     pub app_version: Option<String>,
     pub user_account_id: Option<String>,
+    pub auth_mode: Option<String>,
+    pub originator: Option<String>,
+    pub user_email: Option<String>,
+    pub terminal_type: Option<String>,
+    pub model: Option<String>,
+    pub slug: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

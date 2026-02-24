@@ -234,6 +234,7 @@ mod tests {
             conversation_id: Some("conversation-1".to_string()),
             app_version: Some("1.2.3".to_string()),
             user_account_id: Some("acct-1".to_string()),
+            ..NetworkProxyAuditMetadata::default()
         };
 
         let state = spec
