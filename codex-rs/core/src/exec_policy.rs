@@ -535,7 +535,9 @@ pub fn render_decision_for_unmatched_command(
                     // command has not been flagged as dangerous.
                     Decision::Allow
                 }
-                SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => {
+                SandboxPolicy::ReadOnly { .. }
+                | SandboxPolicy::WorkspaceWrite { .. }
+                | SandboxPolicy::Custom { .. } => {
                     // In restricted sandboxes (ReadOnly/WorkspaceWrite), do not prompt for
                     // non‑escalated, non‑dangerous commands — let the sandbox enforce
                     // restrictions (e.g., block network/write) without a user prompt.
@@ -553,7 +555,9 @@ pub fn render_decision_for_unmatched_command(
                 // by `prompt_is_rejected_by_policy`.
                 Decision::Allow
             }
-            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => {
+            SandboxPolicy::ReadOnly { .. }
+            | SandboxPolicy::WorkspaceWrite { .. }
+            | SandboxPolicy::Custom { .. } => {
                 if sandbox_permissions.requires_escalated_permissions() {
                     Decision::Prompt
                 } else {

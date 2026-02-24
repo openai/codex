@@ -16,7 +16,9 @@ pub fn add_dir_warning_message(
         SandboxPolicy::WorkspaceWrite { .. }
         | SandboxPolicy::DangerFullAccess
         | SandboxPolicy::ExternalSandbox { .. } => None,
-        SandboxPolicy::ReadOnly { .. } => Some(format_warning(additional_dirs)),
+        SandboxPolicy::ReadOnly { .. } | SandboxPolicy::Custom { .. } => {
+            Some(format_warning(additional_dirs))
+        }
     }
 }
 

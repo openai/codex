@@ -251,15 +251,32 @@ pub fn apply_capability_denies_for_world_writable(
     let caps = load_or_create_cap_sids(codex_home)?;
     std::fs::write(&cap_path, serde_json::to_string(&caps)?)?;
     let (active_sid, workspace_roots): (*mut c_void, Vec<PathBuf>) = match sandbox_policy {
-        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+        SandboxPolicy::WorkspaceWrite { .. } => {
             let sid = unsafe { convert_string_sid_to_sid(&caps.workspace) }
                 .ok_or_else(|| anyhow!("ConvertStringSidToSidW failed for workspace capability"))?;
-            let mut roots: Vec<PathBuf> =
-                vec![dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf())];
-            for root in writable_roots {
-                let candidate = root.as_path();
-                roots.push(dunce::canonicalize(candidate).unwrap_or_else(|_| root.to_path_buf()));
-            }
+            let mut roots: Vec<PathBuf> = sandbox_policy
+                .get_writable_roots_with_cwd(cwd)
+                .into_iter()
+                .map(|root| dunce::canonicalize(root.root.as_path()).unwrap_or_else(|_| root.root.to_path_buf()))
+                .collect();
+            roots.push(dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()));
+            (sid, roots)
+        }
+        SandboxPolicy::Custom { writable_roots, .. } => {
+            let sid = if writable_roots.is_empty() {
+                unsafe { convert_string_sid_to_sid(&caps.readonly) }.ok_or_else(|| {
+                    anyhow!("ConvertStringSidToSidW failed for readonly capability")
+                })?
+            } else {
+                unsafe { convert_string_sid_to_sid(&caps.workspace) }.ok_or_else(|| {
+                    anyhow!("ConvertStringSidToSidW failed for workspace capability")
+                })?
+            };
+            let roots = sandbox_policy
+                .get_writable_roots_with_cwd(cwd)
+                .into_iter()
+                .map(|root| dunce::canonicalize(root.root.as_path()).unwrap_or_else(|_| root.root.to_path_buf()))
+                .collect();
             (sid, roots)
         }
         SandboxPolicy::ReadOnly { .. } => (

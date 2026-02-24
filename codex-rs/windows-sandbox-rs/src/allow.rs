@@ -38,9 +38,13 @@ pub fn compute_allow_paths(
         }
     );
 
-    if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
+    if matches!(
+        policy,
+        SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::Custom { .. }
+    ) {
         let add_writable_root =
             |root: PathBuf,
+             read_only_subpaths: &[PathBuf],
              policy_cwd: &Path,
              add_allow: &mut dyn FnMut(PathBuf),
              add_deny: &mut dyn FnMut(PathBuf)| {
@@ -52,30 +56,34 @@ pub fn compute_allow_paths(
                 let canonical = canonicalize(&candidate).unwrap_or(candidate);
                 add_allow(canonical.clone());
 
-                for protected_subdir in [".git", ".codex", ".agents"] {
-                    let protected_entry = canonical.join(protected_subdir);
-                    if protected_entry.exists() {
-                        add_deny(protected_entry);
-                    }
+                for read_only_subpath in read_only_subpaths {
+                    add_deny(canonicalize(read_only_subpath).unwrap_or_else(|_| read_only_subpath.clone()));
                 }
             };
 
-        add_writable_root(
-            command_cwd.to_path_buf(),
-            policy_cwd,
-            &mut add_allow_path,
-            &mut add_deny_path,
-        );
+        if matches!(policy, SandboxPolicy::WorkspaceWrite { .. }) {
+            add_writable_root(
+                command_cwd.to_path_buf(),
+                &[],
+                policy_cwd,
+                &mut add_allow_path,
+                &mut add_deny_path,
+            );
+        }
 
-        if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
-            for root in writable_roots {
-                add_writable_root(
-                    root.clone().into(),
-                    policy_cwd,
-                    &mut add_allow_path,
-                    &mut add_deny_path,
-                );
-            }
+        for writable_root in policy.get_writable_roots_with_cwd(policy_cwd) {
+            let read_only_subpaths: Vec<PathBuf> = writable_root
+                .read_only_subpaths
+                .iter()
+                .map(|path| path.to_path_buf())
+                .collect();
+            add_writable_root(
+                writable_root.root.to_path_buf(),
+                &read_only_subpaths,
+                policy_cwd,
+                &mut add_allow_path,
+                &mut add_deny_path,
+            );
         }
     }
     if include_tmp_env_vars {

@@ -41,12 +41,31 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             }
             summary
         }
+        SandboxPolicy::Custom {
+            writable_roots,
+            network_access,
+            read_only_access: _,
+        } => {
+            let mut summary = "custom".to_string();
+            if !writable_roots.is_empty() {
+                let writable_entries = writable_roots
+                    .iter()
+                    .map(|root| root.root.to_string_lossy().to_string())
+                    .collect::<Vec<_>>();
+                summary.push_str(&format!(" [{}]", writable_entries.join(", ")));
+            }
+            if matches!(network_access, NetworkAccess::Enabled) {
+                summary.push_str(" (network access enabled)");
+            }
+            summary
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::CustomWritableRoot;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
@@ -81,6 +100,27 @@ mod tests {
             summary,
             format!(
                 "workspace-write [workdir, {}] (network access enabled)",
+                writable_root.to_string_lossy()
+            )
+        );
+    }
+
+    #[test]
+    fn custom_summary_lists_explicit_roots_without_workspace_defaults() {
+        let root = if cfg!(windows) { "C:\\repo" } else { "/repo" };
+        let writable_root = AbsolutePathBuf::try_from(root).unwrap();
+        let summary = summarize_sandbox_policy(&SandboxPolicy::Custom {
+            read_only_access: Default::default(),
+            writable_roots: vec![CustomWritableRoot {
+                root: writable_root.clone(),
+                read_only_paths: vec![],
+            }],
+            network_access: NetworkAccess::Enabled,
+        });
+        assert_eq!(
+            summary,
+            format!(
+                "custom [{}] (network access enabled)",
                 writable_root.to_string_lossy()
             )
         );

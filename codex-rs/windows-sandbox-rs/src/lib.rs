@@ -259,7 +259,11 @@ mod windows_impl {
         std::fs::create_dir_all(&sandbox_base)?;
         let logs_base_dir = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
-        let is_workspace_write = matches!(&policy, SandboxPolicy::WorkspaceWrite { .. });
+        let is_write_capable = matches!(&policy, SandboxPolicy::WorkspaceWrite { .. })
+            || matches!(
+                &policy,
+                SandboxPolicy::Custom { writable_roots, .. } if !writable_roots.is_empty()
+            );
 
         if matches!(
             &policy,
@@ -293,6 +297,25 @@ mod windows_impl {
                     let h = h_res?;
                     (h, psid_generic, Some(psid_workspace))
                 }
+                SandboxPolicy::Custom { writable_roots, .. } => {
+                    if writable_roots.is_empty() {
+                        let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
+                        let (h, _) = super::token::create_readonly_token_with_cap(psid)?;
+                        (h, psid, None)
+                    } else {
+                        let psid_generic = convert_string_sid_to_sid(&caps.workspace).unwrap();
+                        let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+                        let psid_workspace = convert_string_sid_to_sid(&ws_sid).unwrap();
+                        let base = super::token::get_current_token_for_restriction()?;
+                        let h_res = create_workspace_write_token_with_caps_from(
+                            base,
+                            &[psid_generic, psid_workspace],
+                        );
+                        windows_sys::Win32::Foundation::CloseHandle(base);
+                        let h = h_res?;
+                        (h, psid_generic, Some(psid_workspace))
+                    }
+                }
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                     unreachable!("DangerFullAccess handled above")
                 }
@@ -300,7 +323,7 @@ mod windows_impl {
         };
 
         unsafe {
-            if is_workspace_write {
+            if is_write_capable {
                 if let Ok(base) = super::token::get_current_token_for_restriction() {
                     if let Ok(bytes) = super::token::get_logon_sid_bytes(base) {
                         let mut tmp = bytes.clone();
@@ -312,7 +335,7 @@ mod windows_impl {
             }
         }
 
-        let persist_aces = is_workspace_write;
+        let persist_aces = is_write_capable;
         let AllowDenyPaths { allow, deny } =
             compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
         let canonical_cwd = canonicalize_path(&current_dir);
@@ -524,8 +547,12 @@ mod windows_impl {
         cwd: &Path,
         env_map: &HashMap<String, String>,
     ) -> Result<()> {
-        let is_workspace_write = matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. });
-        if !is_workspace_write {
+        let is_write_capable = matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. })
+            || matches!(
+                sandbox_policy,
+                SandboxPolicy::Custom { writable_roots, .. } if !writable_roots.is_empty()
+            );
+        if !is_write_capable {
             return Ok(());
         }
 

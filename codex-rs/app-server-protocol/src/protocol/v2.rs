@@ -885,6 +885,9 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             },
+            codex_protocol::protocol::SandboxPolicy::Custom { .. } => {
+                panic!("SandboxPolicy::Custom is internal-only and not supported in app-server v2")
+            }
         }
     }
 }

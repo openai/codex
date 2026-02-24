@@ -264,10 +264,20 @@ pub(crate) fn gather_read_roots(command_cwd: &Path, policy: &SandboxPolicy) -> V
         roots.push(PathBuf::from(up));
     }
     roots.push(command_cwd.to_path_buf());
-    if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
-        for root in writable_roots {
-            roots.push(root.to_path_buf());
+    match policy {
+        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+            for root in writable_roots {
+                roots.push(root.to_path_buf());
+            }
         }
+        SandboxPolicy::Custom { writable_roots, .. } => {
+            for root in writable_roots {
+                roots.push(root.root.to_path_buf());
+            }
+        }
+        SandboxPolicy::ReadOnly { .. }
+        | SandboxPolicy::DangerFullAccess
+        | SandboxPolicy::ExternalSandbox { .. } => {}
     }
     canonical_existing(&roots)
 }

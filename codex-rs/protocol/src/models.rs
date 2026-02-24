@@ -321,6 +321,14 @@ impl DeveloperInstructions {
                 let roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
                 (SandboxMode::WorkspaceWrite, Some(roots))
             }
+            SandboxPolicy::Custom { .. } => {
+                let roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
+                if roots.is_empty() {
+                    (SandboxMode::ReadOnly, None)
+                } else {
+                    (SandboxMode::WorkspaceWrite, Some(roots))
+                }
+            }
         };
 
         DeveloperInstructions::from_permissions_with_network(

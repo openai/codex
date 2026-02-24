@@ -451,6 +451,13 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                         SandboxPolicy::ExternalSandbox { .. } => {
                             SandboxModeRequirement::ExternalSandbox
                         }
+                        SandboxPolicy::Custom { writable_roots, .. } => {
+                            if writable_roots.is_empty() {
+                                SandboxModeRequirement::ReadOnly
+                            } else {
+                                SandboxModeRequirement::WorkspaceWrite
+                            }
+                        }
                     };
                     if modes.contains(&mode) {
                         Ok(())
