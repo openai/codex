@@ -3,23 +3,31 @@
 //! Project-level documentation is primarily stored in files named `AGENTS.md`.
 //! Additional fallback filenames can be configured via `project_doc_fallback_filenames`.
 //! We include the concatenation of all files found along the path from the
-//! repository root to the current working directory as follows:
+//! project root to the current working directory as follows:
 //!
-//! 1.  Determine the Git repository root by walking upwards from the current
-//!     working directory until a `.git` directory or file is found. If no Git
-//!     root is found, only the current working directory is considered.
-//! 2.  Collect every `AGENTS.md` found from the repository root down to the
+//! 1.  Determine the project root by walking upwards from the current working
+//!     directory until a configured `project_root_markers` entry is found.
+//!     When `project_root_markers` is unset, the default marker list is used
+//!     (`.git`). If no marker is found, only the current working directory is
+//!     considered. An empty marker list disables parent traversal.
+//! 2.  Collect every `AGENTS.md` found from the project root down to the
 //!     current working directory (inclusive) and concatenate their contents in
 //!     that order.
-//! 3.  We do **not** walk past the Git root.
+//! 3.  We do **not** walk past the project root.
 
 use crate::config::Config;
+use crate::config_loader::ConfigLayerStackOrdering;
+use crate::config_loader::default_project_root_markers;
+use crate::config_loader::merge_toml_values;
+use crate::config_loader::project_root_markers_from_config;
 use crate::features::Feature;
 use crate::skills::SkillMetadata;
 use crate::skills::render_skills_section;
+use codex_app_server_protocol::ConfigLayerSource;
 use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
+use toml::Value as TomlValue;
 use tracing::error;
 
 pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str =
@@ -178,7 +186,7 @@ pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String
 
 /// Discover the list of AGENTS.md files using the same search rules as
 /// `read_project_docs`, but return the file paths instead of concatenated
-/// contents. The list is ordered from repository root to the current working
+/// contents. The list is ordered from project root to the current working
 /// directory (inclusive). Symlinks are allowed. When `project_doc_max_bytes`
 /// is zero, returns an empty list.
 pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBuf>> {
@@ -187,43 +195,62 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
         dir = canon;
     }
 
-    // Build chain from cwd upwards and detect git root.
-    let mut chain: Vec<PathBuf> = vec![dir.clone()];
-    let mut git_root: Option<PathBuf> = None;
-    let mut cursor = dir;
-    while let Some(parent) = cursor.parent() {
-        let git_marker = cursor.join(".git");
-        let git_exists = match std::fs::metadata(&git_marker) {
-            Ok(_) => true,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(e),
-        };
-
-        if git_exists {
-            git_root = Some(cursor.clone());
-            break;
+    let mut merged = TomlValue::Table(toml::map::Map::new());
+    for layer in config
+        .config_layer_stack
+        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)
+    {
+        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
+            continue;
         }
-
-        chain.push(parent.to_path_buf());
-        cursor = parent.to_path_buf();
+        merge_toml_values(&mut merged, &layer.config);
     }
-
-    let search_dirs: Vec<PathBuf> = if let Some(root) = git_root {
-        let mut dirs: Vec<PathBuf> = Vec::new();
-        let mut saw_root = false;
-        for p in chain.iter().rev() {
-            if !saw_root {
-                if p == &root {
-                    saw_root = true;
-                } else {
-                    continue;
+    let project_root_markers = match project_root_markers_from_config(&merged) {
+        Ok(Some(markers)) => markers,
+        Ok(None) => default_project_root_markers(),
+        Err(err) => {
+            tracing::warn!("invalid project_root_markers: {err}");
+            default_project_root_markers()
+        }
+    };
+    let mut project_root = None;
+    if !project_root_markers.is_empty() {
+        for ancestor in dir.ancestors() {
+            for marker in &project_root_markers {
+                let marker_path = ancestor.join(marker);
+                let marker_exists = match std::fs::metadata(&marker_path) {
+                    Ok(_) => true,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(e) => return Err(e),
+                };
+                if marker_exists {
+                    project_root = Some(ancestor.to_path_buf());
+                    break;
                 }
             }
-            dirs.push(p.clone());
+            if project_root.is_some() {
+                break;
+            }
         }
+    }
+
+    let search_dirs: Vec<PathBuf> = if let Some(root) = project_root {
+        let mut dirs = Vec::new();
+        let mut cursor = dir.as_path();
+        loop {
+            dirs.push(cursor.to_path_buf());
+            if cursor == root {
+                break;
+            }
+            let Some(parent) = cursor.parent() else {
+                break;
+            };
+            cursor = parent;
+        }
+        dirs.reverse();
         dirs
     } else {
-        vec![config.cwd.clone()]
+        vec![dir]
     };
 
     let mut found: Vec<PathBuf> = Vec::new();
@@ -309,6 +336,35 @@ mod tests {
             .iter()
             .map(std::string::ToString::to_string)
             .collect();
+        config
+    }
+
+    async fn make_config_with_project_root_markers(
+        root: &TempDir,
+        limit: usize,
+        instructions: Option<&str>,
+        markers: &[&str],
+    ) -> Config {
+        let codex_home = TempDir::new().unwrap();
+        let cli_overrides = vec![(
+            "project_root_markers".to_string(),
+            TomlValue::Array(
+                markers
+                    .iter()
+                    .map(|marker| TomlValue::String((*marker).to_string()))
+                    .collect(),
+            ),
+        )];
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cli_overrides(cli_overrides)
+            .build()
+            .await
+            .expect("defaults for test should always succeed");
+
+        config.cwd = root.path().to_path_buf();
+        config.project_doc_max_bytes = limit;
+        config.user_instructions = instructions.map(ToOwned::to_owned);
         config
     }
 
@@ -496,6 +552,35 @@ mod tests {
             .await
             .expect("doc expected");
         assert_eq!(res, "root doc\n\ncrate doc");
+    }
+
+    #[tokio::test]
+    async fn project_root_markers_are_honored_for_agents_discovery() {
+        let root = tempfile::tempdir().expect("tempdir");
+        fs::write(root.path().join(".codex-root"), "").unwrap();
+        fs::write(root.path().join("AGENTS.md"), "parent doc").unwrap();
+
+        let nested = root.path().join("dir1");
+        fs::create_dir_all(nested.join(".git")).unwrap();
+        fs::write(nested.join("AGENTS.md"), "child doc").unwrap();
+
+        let mut cfg =
+            make_config_with_project_root_markers(&root, 4096, None, &[".codex-root"]).await;
+        cfg.cwd = nested;
+
+        let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
+        let expected_parent =
+            dunce::canonicalize(root.path().join("AGENTS.md")).expect("canonical parent doc path");
+        let expected_child =
+            dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical child doc path");
+        assert_eq!(discovery.len(), 2);
+        assert_eq!(discovery[0], expected_parent);
+        assert_eq!(discovery[1], expected_child);
+
+        let res = get_user_instructions(&cfg, None)
+            .await
+            .expect("doc expected");
+        assert_eq!(res, "parent doc\n\nchild doc");
     }
 
     /// AGENTS.override.md is preferred over AGENTS.md when both are present.

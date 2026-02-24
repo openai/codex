@@ -107,6 +107,16 @@ pub(super) async fn try_run_zsh_fork(
         justification,
         arg0,
     };
+    let main_execve_wrapper_exe = ctx
+        .session
+        .services
+        .main_execve_wrapper_exe
+        .clone()
+        .ok_or_else(|| {
+            ToolError::Rejected(
+                "zsh fork feature enabled, but execve wrapper is not configured".to_string(),
+            )
+        })?;
     let exec_result = run_escalate_server(
         ExecParams {
             command: script,
@@ -115,7 +125,7 @@ pub(super) async fn try_run_zsh_fork(
             login: Some(login),
         },
         shell_zsh_path.clone(),
-        shell_execve_wrapper().map_err(|err| ToolError::Rejected(format!("{err}")))?,
+        main_execve_wrapper_exe,
         exec_policy.clone(),
         ShellPolicyFactory::new(CoreShellActionProvider {
             policy: Arc::clone(&exec_policy),
@@ -332,34 +342,6 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
             timed_out: result.timed_out,
         })
     }
-}
-
-// TODO(mbolin): This should be passed down from codex-arg0 like codex_linux_sandbox_exe.
-fn shell_execve_wrapper() -> anyhow::Result<PathBuf> {
-    const EXECVE_WRAPPER: &str = "codex-execve-wrapper";
-
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join(EXECVE_WRAPPER);
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-    }
-
-    let exe = std::env::current_exe()?;
-    let sibling = exe
-        .parent()
-        .map(|parent| parent.join(EXECVE_WRAPPER))
-        .ok_or_else(|| anyhow::anyhow!("failed to determine codex-execve-wrapper path"))?;
-    if sibling.is_file() {
-        return Ok(sibling);
-    }
-
-    Err(anyhow::anyhow!(
-        "failed to locate {EXECVE_WRAPPER} in PATH or next to current executable ({})",
-        exe.display()
-    ))
 }
 
 #[derive(Debug, Eq, PartialEq)]

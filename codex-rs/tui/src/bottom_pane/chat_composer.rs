@@ -389,6 +389,7 @@ pub(crate) struct ChatComposer {
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     connectors_enabled: bool,
     personality_command_enabled: bool,
+    realtime_conversation_enabled: bool,
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
@@ -494,6 +495,7 @@ impl ChatComposer {
             collaboration_mode_indicator: None,
             connectors_enabled: false,
             personality_command_enabled: false,
+            realtime_conversation_enabled: false,
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
@@ -576,6 +578,10 @@ impl ChatComposer {
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.personality_command_enabled = enabled;
+    }
+
+    pub fn set_realtime_conversation_enabled(&mut self, enabled: bool) {
+        self.realtime_conversation_enabled = enabled;
     }
 
     pub fn set_voice_transcription_enabled(&mut self, enabled: bool) {
@@ -1641,7 +1647,11 @@ impl ChatComposer {
             } => {
                 let Some(sel) = popup.selected_match() else {
                     self.active_popup = ActivePopup::None;
-                    return (InputResult::None, true);
+                    return if key_event.code == KeyCode::Enter {
+                        self.handle_key_event_without_popup(key_event)
+                    } else {
+                        (InputResult::None, true)
+                    };
                 };
 
                 let sel_path = sel.to_string_lossy().to_string();
@@ -1692,7 +1702,6 @@ impl ChatComposer {
                     // Non-image: inserting file path.
                     self.insert_selected_path(&sel_path);
                 }
-                // No selection: treat Enter as closing the popup/session.
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
             }
@@ -1912,6 +1921,10 @@ impl ChatComposer {
     /// - The cursor may be anywhere *inside* the token (including on the
     ///   leading prefix). It does **not** need to be at the end of the line.
     /// - A token is delimited by ASCII whitespace (space, tab, newline).
+    /// - If the cursor is on `prefix` inside an existing token (for example the
+    ///   second `@` in `@scope/pkg@latest`), keep treating the surrounding
+    ///   whitespace-delimited token as the active token rather than starting a
+    ///   new token at that nested prefix.
     /// - If the token under the cursor starts with `prefix`, that token is
     ///   returned without the leading prefix. When `allow_empty` is true, a
     ///   lone prefix character yields `Some(String::new())` to surface hints.
@@ -2005,7 +2018,15 @@ impl ChatComposer {
             return left_prefixed;
         }
         if after_cursor.starts_with(prefix) {
-            return right_prefixed.or(left_prefixed);
+            let prefix_starts_token = before_cursor
+                .chars()
+                .next_back()
+                .is_none_or(char::is_whitespace);
+            return if prefix_starts_token {
+                right_prefixed.or(left_prefixed)
+            } else {
+                left_prefixed
+            };
         }
         left_prefixed.or(right_prefixed)
     }
@@ -2245,6 +2266,7 @@ impl ChatComposer {
                     self.collaboration_modes_enabled,
                     self.connectors_enabled,
                     self.personality_command_enabled,
+                    self.realtime_conversation_enabled,
                     self.windows_degraded_sandbox_active,
                 )
                 .is_some();
@@ -2444,6 +2466,7 @@ impl ChatComposer {
                 self.collaboration_modes_enabled,
                 self.connectors_enabled,
                 self.personality_command_enabled,
+                self.realtime_conversation_enabled,
                 self.windows_degraded_sandbox_active,
             )
         {
@@ -2478,6 +2501,7 @@ impl ChatComposer {
             self.collaboration_modes_enabled,
             self.connectors_enabled,
             self.personality_command_enabled,
+            self.realtime_conversation_enabled,
             self.windows_degraded_sandbox_active,
         )?;
 
@@ -3310,6 +3334,7 @@ impl ChatComposer {
             self.collaboration_modes_enabled,
             self.connectors_enabled,
             self.personality_command_enabled,
+            self.realtime_conversation_enabled,
             self.windows_degraded_sandbox_active,
         )
         .is_some();
@@ -3371,6 +3396,7 @@ impl ChatComposer {
             self.collaboration_modes_enabled,
             self.connectors_enabled,
             self.personality_command_enabled,
+            self.realtime_conversation_enabled,
             self.windows_degraded_sandbox_active,
         ) {
             return true;
@@ -3424,12 +3450,14 @@ impl ChatComposer {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
                     let connectors_enabled = self.connectors_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
+                    let realtime_conversation_enabled = self.realtime_conversation_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
                             collaboration_modes_enabled,
                             connectors_enabled,
                             personality_command_enabled,
+                            realtime_conversation_enabled,
                             windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         },
                     );
@@ -3938,6 +3966,13 @@ impl ChatComposer {
 
     pub fn update_transcription_in_place(&mut self, id: &str, text: &str) -> bool {
         self.textarea.update_named_element_by_id(id, text)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn insert_transcription_placeholder(&mut self, text: &str) -> String {
+        let id = self.next_id();
+        self.textarea.insert_named_element(text, id.clone());
+        id
     }
 
     pub fn remove_transcription_placeholder(&mut self, id: &str) {
@@ -5417,6 +5452,115 @@ mod tests {
                 result, expected,
                 "Failed for whitespace boundary case: {description} - input: '{input}', cursor: {cursor_pos}",
             );
+        }
+    }
+
+    #[test]
+    fn test_current_at_token_tracks_tokens_with_second_at() {
+        let input = "npx -y @kaeawc/auto-mobile@latest";
+        let token_start = input.find("@kaeawc").expect("scoped npm package present");
+        let version_at = input
+            .rfind("@latest")
+            .expect("version suffix present in scoped npm package");
+        let test_cases = vec![
+            (token_start, "Cursor at leading @"),
+            (token_start + 8, "Cursor inside scoped package name"),
+            (version_at, "Cursor at version @"),
+            (input.len(), "Cursor at end of token"),
+        ];
+
+        for (cursor_pos, description) in test_cases {
+            let mut textarea = TextArea::new();
+            textarea.insert_str(input);
+            textarea.set_cursor(cursor_pos);
+
+            let result = ChatComposer::current_at_token(&textarea);
+            assert_eq!(
+                result,
+                Some("kaeawc/auto-mobile@latest".to_string()),
+                "Failed for case: {description} - input: '{input}', cursor: {cursor_pos}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_current_at_token_allows_file_queries_with_second_at() {
+        let input = "@icons/icon@2x.png";
+        let version_at = input
+            .rfind("@2x")
+            .expect("second @ in file token should be present");
+        let test_cases = vec![
+            (0, "Cursor at leading @"),
+            (8, "Cursor before second @"),
+            (version_at, "Cursor at second @"),
+            (input.len(), "Cursor at end of token"),
+        ];
+
+        for (cursor_pos, description) in test_cases {
+            let mut textarea = TextArea::new();
+            textarea.insert_str(input);
+            textarea.set_cursor(cursor_pos);
+
+            let result = ChatComposer::current_at_token(&textarea);
+            assert!(
+                result.is_some(),
+                "Failed for case: {description} - input: '{input}', cursor: {cursor_pos}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_current_at_token_ignores_mid_word_at() {
+        let input = "foo@bar";
+        let at_pos = input.find('@').expect("@ present");
+        let test_cases = vec![
+            (at_pos, "Cursor at mid-word @"),
+            (input.len(), "Cursor at end of word containing @"),
+        ];
+
+        for (cursor_pos, description) in test_cases {
+            let mut textarea = TextArea::new();
+            textarea.insert_str(input);
+            textarea.set_cursor(cursor_pos);
+
+            let result = ChatComposer::current_at_token(&textarea);
+            assert_eq!(
+                result, None,
+                "Failed for case: {description} - input: '{input}', cursor: {cursor_pos}"
+            );
+        }
+    }
+
+    #[test]
+    fn enter_submits_when_file_popup_has_no_selection() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        let input = "npx -y @kaeawc/auto-mobile@latest";
+        composer.textarea.insert_str(input);
+        composer.textarea.set_cursor(input.len());
+        composer.sync_popups();
+
+        assert!(matches!(composer.active_popup, ActivePopup::File(_)));
+
+        let (result, consumed) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(consumed);
+        match result {
+            InputResult::Submitted { text, .. } => assert_eq!(text, input),
+            _ => panic!("expected Submitted"),
         }
     }
 
