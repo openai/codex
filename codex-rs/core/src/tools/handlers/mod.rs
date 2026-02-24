@@ -64,8 +64,13 @@ pub(super) fn normalize_and_validate_additional_permissions(
     additional_permissions: Option<AdditionalPermissions>,
     cwd: &Path,
 ) -> Result<Option<AdditionalPermissions>, String> {
+    let uses_additional_permissions = matches!(
+        sandbox_permissions,
+        SandboxPermissions::WithAdditionalPermissions
+    );
+
     if !request_permission_enabled
-        && (sandbox_permissions.uses_additional_permissions() || additional_permissions.is_some())
+        && (uses_additional_permissions || additional_permissions.is_some())
     {
         return Err(
             "additional permissions are disabled; enable `features.request_permission` before using `with_additional_permissions`"
@@ -73,7 +78,7 @@ pub(super) fn normalize_and_validate_additional_permissions(
         );
     }
 
-    if sandbox_permissions.uses_additional_permissions() {
+    if uses_additional_permissions {
         if !matches!(approval_policy, AskForApproval::OnRequest) {
             return Err(format!(
                 "approval policy is {approval_policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest"

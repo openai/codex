@@ -303,7 +303,9 @@ impl ShellHandler {
         .map_err(FunctionCallError::RespondToModel)?;
 
         // Approval policy guard for explicit escalation in non-OnRequest modes.
-        if exec_params.sandbox_permissions.needs_elevated_permissions()
+        if exec_params
+            .sandbox_permissions
+            .requires_additional_permissions()
             && !matches!(
                 turn.approval_policy.value(),
                 codex_protocol::protocol::AskForApproval::OnRequest
