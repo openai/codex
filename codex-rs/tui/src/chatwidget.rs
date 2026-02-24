@@ -516,7 +516,7 @@ pub(crate) enum ExternalEditorState {
 type ClipboardTextWriter = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync + 'static>;
 
 fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
-    clipboard_text::copy_text_to_clipboard(text).map_err(|e| e.to_string())
+    clipboard_text::copy_text_to_clipboard(text)
 }
 
 pub(crate) struct ChatWidget {
