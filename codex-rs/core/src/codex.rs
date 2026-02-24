@@ -2752,7 +2752,8 @@ impl Session {
         //   rollback-adjust and reverse-scan to find the last surviving regular turn
         //   context. `CompactionOutsideTurn` is a marker for compaction that happened
         //   outside any matched turn span; this matters because surviving compaction
-        //   after the last surviving `TurnContextItem` must null
+        //   after the last surviving turn span (not merely later than that turn's
+        //   persisted `TurnContextItem` within the same turn) must null
         //   `reference_context_item` while still preserving `previous_model`.
         //
         // `ThreadRolledBack` updates both:
