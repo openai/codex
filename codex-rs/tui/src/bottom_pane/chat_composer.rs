@@ -1641,7 +1641,11 @@ impl ChatComposer {
             } => {
                 let Some(sel) = popup.selected_match() else {
                     self.active_popup = ActivePopup::None;
-                    return (InputResult::None, true);
+                    return if key_event.code == KeyCode::Enter {
+                        self.handle_key_event_without_popup(key_event)
+                    } else {
+                        (InputResult::None, true)
+                    };
                 };
 
                 let sel_path = sel.to_string_lossy().to_string();
@@ -1692,7 +1696,6 @@ impl ChatComposer {
                     // Non-image: inserting file path.
                     self.insert_selected_path(&sel_path);
                 }
-                // No selection: treat Enter as closing the popup/session.
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
             }
@@ -2022,79 +2025,11 @@ impl ChatComposer {
         left_prefixed.or(right_prefixed)
     }
 
-    /// Heuristic used by `current_at_token` to avoid opening file search when a
-    /// pasted command contains a scoped npm package spec like `@scope/pkg@latest`.
-    /// This intentionally remains narrow so file queries containing `@` (for
-    /// example `@icons/icon@2x.png`) continue to work.
-    fn looks_like_scoped_npm_package_spec(token: &str) -> bool {
-        let Some((package_name, version)) = token.rsplit_once('@') else {
-            return false;
-        };
-        if package_name.is_empty()
-            || version.is_empty()
-            || !package_name.contains('/')
-            || version.contains('/')
-        {
-            return false;
-        }
-
-        let version_is_dist_tag = version
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic())
-            && version
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-');
-        if version_is_dist_tag {
-            return true;
-        }
-
-        let trimmed = version.trim_start_matches(|c| matches!(c, '^' | '~' | '<' | '>' | '='));
-        let normalized = trimmed
-            .strip_prefix('v')
-            .filter(|tail| tail.chars().next().is_some_and(|c| c.is_ascii_digit()))
-            .unwrap_or(trimmed);
-
-        let (core, suffix) = normalized
-            .find(['-', '+'])
-            .map(|idx| (&normalized[..idx], Some(&normalized[idx + 1..])))
-            .unwrap_or((normalized, None));
-
-        let core_segments: Vec<&str> = core.split('.').collect();
-        if core_segments.is_empty() || core_segments.len() > 3 {
-            return false;
-        }
-        if !core_segments.iter().all(|segment| {
-            !segment.is_empty()
-                && (segment.chars().all(|c| c.is_ascii_digit())
-                    || matches!(*segment, "x" | "X" | "*"))
-        }) {
-            return false;
-        }
-
-        suffix.is_none_or(|suffix| {
-            !suffix.is_empty()
-                && suffix.split('.').all(|segment| {
-                    !segment.is_empty()
-                        && segment
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-                })
-        })
-    }
-
     /// Extract the `@token` that the cursor is currently positioned on, if any.
     ///
     /// The returned string **does not** include the leading `@`.
-    ///
-    /// Scoped npm package specs (`@scope/pkg@version`) are intentionally
-    /// filtered out so they do not trigger file-search popup behavior.
     fn current_at_token(textarea: &TextArea) -> Option<String> {
-        let token = Self::current_prefixed_token(textarea, '@', false)?;
-        if Self::looks_like_scoped_npm_package_spec(&token) {
-            return None;
-        }
-        Some(token)
+        Self::current_prefixed_token(textarea, '@', false)
     }
 
     fn current_mention_token(&self) -> Option<String> {
@@ -5501,7 +5436,7 @@ mod tests {
     }
 
     #[test]
-    fn test_current_at_token_rejects_scoped_npm_packages_with_versions() {
+    fn test_current_at_token_tracks_tokens_with_second_at() {
         let input = "npx -y @kaeawc/auto-mobile@latest";
         let token_start = input.find("@kaeawc").expect("scoped npm package present");
         let version_at = input
@@ -5521,7 +5456,8 @@ mod tests {
 
             let result = ChatComposer::current_at_token(&textarea);
             assert_eq!(
-                result, None,
+                result,
+                Some("kaeawc/auto-mobile@latest".to_string()),
                 "Failed for case: {description} - input: '{input}', cursor: {cursor_pos}"
             );
         }
@@ -5550,6 +5486,39 @@ mod tests {
                 result.is_some(),
                 "Failed for case: {description} - input: '{input}', cursor: {cursor_pos}"
             );
+        }
+    }
+
+    #[test]
+    fn enter_submits_when_file_popup_has_no_selection() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        let input = "npx -y @kaeawc/auto-mobile@latest";
+        composer.textarea.insert_str(input);
+        composer.textarea.set_cursor(input.len());
+        composer.sync_popups();
+
+        assert!(matches!(composer.active_popup, ActivePopup::File(_)));
+
+        let (result, consumed) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(consumed);
+        match result {
+            InputResult::Submitted { text, .. } => assert_eq!(text, input),
+            _ => panic!("expected Submitted"),
         }
     }
 
