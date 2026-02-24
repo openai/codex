@@ -1307,10 +1307,22 @@ pub struct AgentsToml {
     pub roles: BTreeMap<String, AgentRoleToml>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRoleSpawnMode {
+    Spawn,
+    #[default]
+    Fork,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentRoleConfig {
     /// Human-facing role documentation used in spawn tool guidance.
     pub description: Option<String>,
+    /// Optional model override applied by this role.
+    pub model: Option<String>,
+    /// Optional default spawn mode when `spawn_agent` omits `spawn_mode`.
+    pub spawn_mode: Option<AgentRoleSpawnMode>,
     /// Path to a role-specific config layer.
     pub config_file: Option<PathBuf>,
 }
@@ -1320,6 +1332,12 @@ pub struct AgentRoleConfig {
 pub struct AgentRoleToml {
     /// Human-facing role documentation used in spawn tool guidance.
     pub description: Option<String>,
+
+    /// Optional model override applied by this role.
+    pub model: Option<String>,
+
+    /// Optional default spawn mode when `spawn_agent` omits `spawn_mode`.
+    pub spawn_mode: Option<AgentRoleSpawnMode>,
 
     /// Path to a role-specific config layer.
     /// Relative paths are resolved relative to the `config.toml` that defines them.
@@ -1800,6 +1818,8 @@ impl Config {
                             name.clone(),
                             AgentRoleConfig {
                                 description: role.description.clone(),
+                                model: role.model.clone(),
+                                spawn_mode: role.spawn_mode,
                                 config_file,
                             },
                         ))
@@ -4373,6 +4393,7 @@ model = "gpt-5.1-codex"
                     AgentRoleToml {
                         description: Some("Research role".to_string()),
                         config_file: Some(AbsolutePathBuf::from_absolute_path(missing_path)?),
+                        ..Default::default()
                     },
                 )]),
             }),
@@ -4408,6 +4429,8 @@ model = "gpt-5.1-codex"
             codex_home.path().join(CONFIG_TOML_FILE),
             r#"[agents.researcher]
 description = "Research role"
+model = "gpt-5.3-codex-spark"
+spawn_mode = "spawn"
 config_file = "./agents/researcher.toml"
 "#,
         )
@@ -4424,6 +4447,20 @@ config_file = "./agents/researcher.toml"
                 .get("researcher")
                 .and_then(|role| role.config_file.as_ref()),
             Some(&role_config_path)
+        );
+        assert_eq!(
+            config
+                .agent_roles
+                .get("researcher")
+                .and_then(|role| role.model.as_deref()),
+            Some("gpt-5.3-codex-spark")
+        );
+        assert_eq!(
+            config
+                .agent_roles
+                .get("researcher")
+                .and_then(|role| role.spawn_mode),
+            Some(AgentRoleSpawnMode::Spawn)
         );
 
         Ok(())

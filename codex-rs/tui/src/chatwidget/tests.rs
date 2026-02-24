@@ -1807,6 +1807,12 @@ async fn subagent_panel_is_not_flushed_into_transcript_history() {
     let rendered = lines_to_single_string(&inserted[0]);
     assert!(rendered.contains("follow-up cell"));
     assert!(!rendered.contains("Subagents"));
+    assert!(
+        chat.active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<SubagentStatusCell>()),
+        "subagent panel should stay mounted after other history cells are inserted"
+    );
 }
 
 fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {

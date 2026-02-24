@@ -556,7 +556,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
         "spawn_mode".to_string(),
         JsonSchema::String {
             description: Some(
-                "Spawn behavior: spawn (default), fork (preserve history), or watchdog (idle-time check-ins). Watchdog mode returns a virtual handle, not a conversational worker. Watchdog check-ins are asynchronous and cannot occur until after the current turn ends and the owner thread is idle."
+                "Spawn behavior: fork (default), spawn (fresh context), or watchdog (idle-time check-ins). Roles may override the omitted-mode default. Watchdog mode returns a virtual handle, not a conversational worker. Watchdog check-ins are asynchronous and cannot occur until after the current turn ends and the owner thread is idle."
                     .to_string(),
             ),
         },

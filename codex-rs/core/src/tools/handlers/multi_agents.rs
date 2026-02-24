@@ -104,15 +104,15 @@ mod spawn {
     use crate::agent::exceeds_thread_spawn_depth_limit;
     use crate::agent::next_thread_spawn_depth;
     use crate::agent::role::apply_role_to_config;
+    use crate::config::AgentRoleSpawnMode;
     use crate::config::Config;
     use codex_protocol::protocol::SessionSource;
     use std::collections::HashSet;
     use std::sync::Arc;
 
-    #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+    #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "snake_case")]
     enum SpawnMode {
-        #[default]
         Spawn,
         Fork,
         Watchdog,
@@ -124,7 +124,7 @@ mod spawn {
         items: Option<Vec<UserInput>>,
         agent_type: Option<String>,
         #[serde(default, alias = "mode")]
-        spawn_mode: SpawnMode,
+        spawn_mode: Option<SpawnMode>,
         interval_s: Option<i64>,
     }
 
@@ -143,6 +143,15 @@ mod spawn {
         }
     }
 
+    impl From<AgentRoleSpawnMode> for SpawnMode {
+        fn from(value: AgentRoleSpawnMode) -> Self {
+            match value {
+                AgentRoleSpawnMode::Spawn => SpawnMode::Spawn,
+                AgentRoleSpawnMode::Fork => SpawnMode::Fork,
+            }
+        }
+    }
+
     pub async fn handle(
         session: Arc<Session>,
         turn: Arc<TurnContext>,
@@ -155,7 +164,10 @@ mod spawn {
             .as_deref()
             .map(str::trim)
             .filter(|role| !role.is_empty());
-        let spawn_mode = args.spawn_mode;
+        let spawn_mode = args.spawn_mode.unwrap_or_else(|| {
+            crate::agent::role::default_spawn_mode_for_role(&turn.config.agent_roles, role_name)
+                .into()
+        });
         let interval_s = match spawn_mode {
             SpawnMode::Watchdog => Some(watchdog_interval(args.interval_s)?),
             _ => None,
@@ -1557,7 +1569,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "No role requiring it for now"]
     async fn spawn_agent_uses_explorer_role_and_sets_never_approval_policy() {
         #[derive(Debug, Deserialize)]
         struct SpawnAgentResult {
@@ -1604,8 +1615,107 @@ mod tests {
             .expect("spawned agent thread should exist")
             .config_snapshot()
             .await;
-        assert_eq!(snapshot.model, "gpt-5.1-codex-mini");
+        assert_eq!(snapshot.model, "gpt-5.3-codex-spark");
         assert_eq!(snapshot.approval_policy, AskForApproval::Never);
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_uses_fast_worker_role_and_sets_never_approval_policy() {
+        #[derive(Debug, Deserialize)]
+        struct SpawnAgentResult {
+            agent_id: String,
+        }
+
+        let (mut session, mut turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let mut config = (*turn.config).clone();
+        config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::OnRequest)
+            .expect("approval policy should be set");
+        turn.config = Arc::new(config);
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "fix this one-line issue",
+                "agent_type": "fast-worker"
+            })),
+        );
+        let output = MultiAgentHandler
+            .handle(invocation)
+            .await
+            .expect("spawn_agent should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: SpawnAgentResult =
+            serde_json::from_str(&content).expect("spawn_agent result should be json");
+        let agent_id = agent_id(&result.agent_id).expect("agent_id should be valid");
+        let snapshot = manager
+            .get_thread(agent_id)
+            .await
+            .expect("spawned agent thread should exist")
+            .config_snapshot()
+            .await;
+        assert_eq!(snapshot.model, "gpt-5.3-codex-spark");
+        assert_eq!(snapshot.approval_policy, AskForApproval::Never);
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_uses_fast_worker_role_default_spawn_mode() {
+        #[derive(Debug, Deserialize)]
+        struct SpawnAgentResult {
+            agent_id: String,
+        }
+
+        let (mut session, mut turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: session.conversation_id,
+            depth: 0,
+            agent_nickname: None,
+            agent_role: None,
+        });
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "fix this one-line issue",
+                "agent_type": "fast-worker"
+            })),
+        );
+        let output = MultiAgentHandler
+            .handle(invocation)
+            .await
+            .expect("fast-worker should default to context-free spawn");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            success,
+            ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: SpawnAgentResult =
+            serde_json::from_str(&content).expect("spawn_agent result should be json");
+        let agent_id = agent_id(&result.agent_id).expect("agent_id should be valid");
+        manager
+            .get_thread(agent_id)
+            .await
+            .expect("spawned agent thread should exist");
+        assert_eq!(success, Some(true));
     }
 
     #[tokio::test]
@@ -1679,7 +1789,7 @@ mod tests {
             Arc::new(session),
             Arc::new(turn),
             "spawn_agent",
-            function_payload(json!({"message": "hello"})),
+            function_payload(json!({"message": "hello", "spawn_mode": "spawn"})),
         );
         let output = MultiAgentHandler
             .handle(invocation)
@@ -1697,6 +1807,38 @@ mod tests {
             serde_json::from_str(&content).expect("spawn_agent result should be json");
         assert!(!result.agent_id.is_empty());
         assert_eq!(success, Some(true));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_watchdog_from_subagent() {
+        let (mut session, mut turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: session.conversation_id,
+            depth: 0,
+            agent_nickname: None,
+            agent_role: None,
+        });
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "watchdog check-in",
+                "spawn_mode": "watchdog"
+            })),
+        );
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
+            panic!("watchdog spawn should be rejected for subagents");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(
+                "watchdogs can only be spawned by root agents".to_string()
+            )
+        );
     }
 
     #[tokio::test]

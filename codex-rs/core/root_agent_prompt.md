@@ -77,11 +77,15 @@ Create a subagent and give it an initial task.
 
 Parameters:
 - `message` (required): the task description.
-- `agent_type` (optional): the role to assign (`default`, `orchestrator`, or `worker`).
+- `agent_type` (optional): the role to assign (`default`, `explorer`, `fast-worker`, or `worker`).
 - `spawn_mode` (optional): one of `spawn`, `fork`, or `watchdog`.
 - `interval_s` (optional): watchdog interval in seconds when `spawn_mode = "watchdog"`.
 
 Guidance:
+- When `spawn_mode` is omitted, the default is `fork` unless the selected role overrides it.
+- Use `agent_type = "explorer"` for specific codebase questions; it defaults to context-free `spawn`.
+- Use `agent_type = "fast-worker"` for tightly constrained execution work that can run from a self-contained prompt; it also defaults to context-free `spawn`.
+- Use `agent_type = "worker"` for broader implementation work that should inherit current-thread context; it defaults to `fork`.
 - Choose `fork` vs `spawn` by context requirements first (not by task shape).
 - Use `spawn_mode = "fork"` when the child should preserve your current conversation history and rely on current-thread context, including:
   - current debugging-thread relevance (for example, "summarize only failures relevant to this investigation")
