@@ -51,6 +51,12 @@ use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAct
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
+use codex_app_server_protocol::RealtimeConversationClosedNotification;
+use codex_app_server_protocol::RealtimeConversationErrorNotification;
+use codex_app_server_protocol::RealtimeConversationItemAddedNotification;
+use codex_app_server_protocol::RealtimeConversationOutputAudioDeltaNotification;
+use codex_app_server_protocol::RealtimeConversationSessionUpdatedNotification;
+use codex_app_server_protocol::RealtimeConversationStartedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
@@ -97,6 +103,7 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
@@ -170,6 +177,87 @@ pub(crate) async fn apply_bespoke_event_handling(
                 };
                 outgoing
                     .send_server_notification(ServerNotification::ModelRerouted(notification))
+                    .await;
+            }
+        }
+        EventMsg::RealtimeConversationStarted(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = RealtimeConversationStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    session_id: event.session_id,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::RealtimeConversationStarted(
+                        notification,
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::RealtimeConversationRealtime(event) => {
+            if let ApiVersion::V2 = api_version {
+                match event.payload {
+                    RealtimeEvent::SessionCreated { .. } => {}
+                    RealtimeEvent::SessionUpdated { backend_prompt } => {
+                        let notification = RealtimeConversationSessionUpdatedNotification {
+                            thread_id: conversation_id.to_string(),
+                            backend_prompt,
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::RealtimeConversationSessionUpdated(
+                                    notification,
+                                ),
+                            )
+                            .await;
+                    }
+                    RealtimeEvent::AudioOut(audio) => {
+                        let notification = RealtimeConversationOutputAudioDeltaNotification {
+                            thread_id: conversation_id.to_string(),
+                            audio: audio.into(),
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::RealtimeConversationOutputAudioDelta(
+                                    notification,
+                                ),
+                            )
+                            .await;
+                    }
+                    RealtimeEvent::ConversationItemAdded(item) => {
+                        let notification = RealtimeConversationItemAddedNotification {
+                            thread_id: conversation_id.to_string(),
+                            item,
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::RealtimeConversationItemAdded(notification),
+                            )
+                            .await;
+                    }
+                    RealtimeEvent::Error(message) => {
+                        let notification = RealtimeConversationErrorNotification {
+                            thread_id: conversation_id.to_string(),
+                            message,
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::RealtimeConversationError(notification),
+                            )
+                            .await;
+                    }
+                }
+            }
+        }
+        EventMsg::RealtimeConversationClosed(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = RealtimeConversationClosedNotification {
+                    thread_id: conversation_id.to_string(),
+                    reason: event.reason,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::RealtimeConversationClosed(
+                        notification,
+                    ))
                     .await;
             }
         }

@@ -46,6 +46,7 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
+use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RejectConfig as CoreRejectConfig;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
@@ -2549,6 +2550,151 @@ pub struct ErrorNotification {
     pub will_retry: bool,
     pub thread_id: String,
     pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationAudioChunk {
+    pub data: String,
+    pub sample_rate: u32,
+    pub num_channels: u16,
+    pub samples_per_channel: Option<u32>,
+}
+
+impl From<CoreRealtimeAudioFrame> for RealtimeConversationAudioChunk {
+    fn from(value: CoreRealtimeAudioFrame) -> Self {
+        let CoreRealtimeAudioFrame {
+            data,
+            sample_rate,
+            num_channels,
+            samples_per_channel,
+        } = value;
+        Self {
+            data,
+            sample_rate,
+            num_channels,
+            samples_per_channel,
+        }
+    }
+}
+
+impl From<RealtimeConversationAudioChunk> for CoreRealtimeAudioFrame {
+    fn from(value: RealtimeConversationAudioChunk) -> Self {
+        let RealtimeConversationAudioChunk {
+            data,
+            sample_rate,
+            num_channels,
+            samples_per_channel,
+        } = value;
+        Self {
+            data,
+            sample_rate,
+            num_channels,
+            samples_per_channel,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationStartParams {
+    pub thread_id: String,
+    pub prompt: String,
+    #[ts(optional = nullable)]
+    pub session_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationStartResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationAudioAppendParams {
+    pub thread_id: String,
+    pub audio: RealtimeConversationAudioChunk,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationAudioAppendResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationTextAppendParams {
+    pub thread_id: String,
+    pub text: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationTextAppendResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationStopParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationStopResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationStartedNotification {
+    pub thread_id: String,
+    pub session_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationSessionUpdatedNotification {
+    pub thread_id: String,
+    pub backend_prompt: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationItemAddedNotification {
+    pub thread_id: String,
+    pub item: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationOutputAudioDeltaNotification {
+    pub thread_id: String,
+    pub audio: RealtimeConversationAudioChunk,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationErrorNotification {
+    pub thread_id: String,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RealtimeConversationClosedNotification {
+    pub thread_id: String,
+    pub reason: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

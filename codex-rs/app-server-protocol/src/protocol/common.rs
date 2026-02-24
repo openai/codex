@@ -268,6 +268,26 @@ client_request_definitions! {
         params: v2::TurnInterruptParams,
         response: v2::TurnInterruptResponse,
     },
+    #[experimental("realtimeConversation/start")]
+    RealtimeConversationStart => "realtimeConversation/start" {
+        params: v2::RealtimeConversationStartParams,
+        response: v2::RealtimeConversationStartResponse,
+    },
+    #[experimental("realtimeConversation/audioAppend")]
+    RealtimeConversationAudioAppend => "realtimeConversation/audioAppend" {
+        params: v2::RealtimeConversationAudioAppendParams,
+        response: v2::RealtimeConversationAudioAppendResponse,
+    },
+    #[experimental("realtimeConversation/textAppend")]
+    RealtimeConversationTextAppend => "realtimeConversation/textAppend" {
+        params: v2::RealtimeConversationTextAppendParams,
+        response: v2::RealtimeConversationTextAppendResponse,
+    },
+    #[experimental("realtimeConversation/stop")]
+    RealtimeConversationStop => "realtimeConversation/stop" {
+        params: v2::RealtimeConversationStopParams,
+        response: v2::RealtimeConversationStopResponse,
+    },
     ReviewStart => "review/start" {
         params: v2::ReviewStartParams,
         response: v2::ReviewStartResponse,
@@ -823,6 +843,12 @@ server_notification_definitions! {
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
     FuzzyFileSearchSessionCompleted => "fuzzyFileSearch/sessionCompleted" (FuzzyFileSearchSessionCompletedNotification),
+    RealtimeConversationStarted => "realtimeConversation/started" (v2::RealtimeConversationStartedNotification),
+    RealtimeConversationSessionUpdated => "realtimeConversation/sessionUpdated" (v2::RealtimeConversationSessionUpdatedNotification),
+    RealtimeConversationItemAdded => "realtimeConversation/itemAdded" (v2::RealtimeConversationItemAddedNotification),
+    RealtimeConversationOutputAudioDelta => "realtimeConversation/outputAudio/delta" (v2::RealtimeConversationOutputAudioDeltaNotification),
+    RealtimeConversationError => "realtimeConversation/error" (v2::RealtimeConversationErrorNotification),
+    RealtimeConversationClosed => "realtimeConversation/closed" (v2::RealtimeConversationClosedNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
@@ -1351,6 +1377,31 @@ mod tests {
     }
 
     #[test]
+    fn serialize_realtime_conversation_start() -> Result<()> {
+        let request = ClientRequest::RealtimeConversationStart {
+            request_id: RequestId::Integer(9),
+            params: v2::RealtimeConversationStartParams {
+                thread_id: "thr_123".to_string(),
+                prompt: "You are on a call".to_string(),
+                session_id: Some("sess_456".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "realtimeConversation/start",
+                "id": 9,
+                "params": {
+                    "threadId": "thr_123",
+                    "prompt": "You are on a call",
+                    "sessionId": "sess_456"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_thread_status_changed_notification() -> Result<()> {
         let notification =
             ServerNotification::ThreadStatusChanged(v2::ThreadStatusChangedNotification {
@@ -1373,6 +1424,37 @@ mod tests {
     }
 
     #[test]
+    fn serialize_realtime_conversation_output_audio_delta_notification() -> Result<()> {
+        let notification = ServerNotification::RealtimeConversationOutputAudioDelta(
+            v2::RealtimeConversationOutputAudioDeltaNotification {
+                thread_id: "thr_123".to_string(),
+                audio: v2::RealtimeConversationAudioChunk {
+                    data: "AQID".to_string(),
+                    sample_rate: 24_000,
+                    num_channels: 1,
+                    samples_per_channel: Some(512),
+                },
+            },
+        );
+        assert_eq!(
+            json!({
+                "method": "realtimeConversation/outputAudio/delta",
+                "params": {
+                    "threadId": "thr_123",
+                    "audio": {
+                        "data": "AQID",
+                        "sampleRate": 24000,
+                        "numChannels": 1,
+                        "samplesPerChannel": 512
+                    }
+                }
+            }),
+            serde_json::to_value(&notification)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn mock_experimental_method_is_marked_experimental() {
         let request = ClientRequest::MockExperimentalMethod {
             request_id: RequestId::Integer(1),
@@ -1380,6 +1462,19 @@ mod tests {
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("mock/experimentalMethod"));
+    }
+    #[test]
+    fn realtime_conversation_start_is_marked_experimental() {
+        let request = ClientRequest::RealtimeConversationStart {
+            request_id: RequestId::Integer(1),
+            params: v2::RealtimeConversationStartParams {
+                thread_id: "thr_123".to_string(),
+                prompt: "You are on a call".to_string(),
+                session_id: None,
+            },
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
+        assert_eq!(reason, Some("realtimeConversation/start"));
     }
 
     #[test]

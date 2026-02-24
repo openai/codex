@@ -42,6 +42,10 @@ use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::NewConversationParams;
+use codex_app_server_protocol::RealtimeConversationAudioAppendParams;
+use codex_app_server_protocol::RealtimeConversationStartParams;
+use codex_app_server_protocol::RealtimeConversationStopParams;
+use codex_app_server_protocol::RealtimeConversationTextAppendParams;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
@@ -582,6 +586,45 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("turn/interrupt", params).await
+    }
+
+    /// Send a `realtimeConversation/start` JSON-RPC request (v2).
+    pub async fn send_realtime_conversation_start_request(
+        &mut self,
+        params: RealtimeConversationStartParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("realtimeConversation/start", params)
+            .await
+    }
+
+    /// Send a `realtimeConversation/audioAppend` JSON-RPC request (v2).
+    pub async fn send_realtime_conversation_audio_append_request(
+        &mut self,
+        params: RealtimeConversationAudioAppendParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("realtimeConversation/audioAppend", params)
+            .await
+    }
+
+    /// Send a `realtimeConversation/textAppend` JSON-RPC request (v2).
+    pub async fn send_realtime_conversation_text_append_request(
+        &mut self,
+        params: RealtimeConversationTextAppendParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("realtimeConversation/textAppend", params)
+            .await
+    }
+
+    /// Send a `realtimeConversation/stop` JSON-RPC request (v2).
+    pub async fn send_realtime_conversation_stop_request(
+        &mut self,
+        params: RealtimeConversationStopParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("realtimeConversation/stop", params).await
     }
 
     /// Deterministically clean up an intentionally in-flight turn.

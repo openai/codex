@@ -1290,6 +1290,131 @@
       ],
       "type": "object"
     },
+    "RealtimeConversationAudioChunk": {
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "numChannels": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "sampleRate": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "samplesPerChannel": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data",
+        "numChannels",
+        "sampleRate"
+      ],
+      "type": "object"
+    },
+    "RealtimeConversationClosedNotification": {
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "RealtimeConversationErrorNotification": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "RealtimeConversationItemAddedNotification": {
+      "properties": {
+        "item": true,
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "RealtimeConversationOutputAudioDeltaNotification": {
+      "properties": {
+        "audio": {
+          "$ref": "#/definitions/RealtimeConversationAudioChunk"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "audio",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "RealtimeConversationSessionUpdatedNotification": {
+      "properties": {
+        "backendPrompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "RealtimeConversationStartedNotification": {
+      "properties": {
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ReasoningSummaryPartAddedNotification": {
       "properties": {
         "itemId": {
@@ -3451,6 +3576,126 @@
         "params"
       ],
       "title": "FuzzyFileSearch/sessionCompletedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "realtimeConversation/started"
+          ],
+          "title": "RealtimeConversation/startedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RealtimeConversationStartedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "RealtimeConversation/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "realtimeConversation/sessionUpdated"
+          ],
+          "title": "RealtimeConversation/sessionUpdatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RealtimeConversationSessionUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "RealtimeConversation/sessionUpdatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "realtimeConversation/itemAdded"
+          ],
+          "title": "RealtimeConversation/itemAddedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RealtimeConversationItemAddedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "RealtimeConversation/itemAddedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "realtimeConversation/outputAudio/delta"
+          ],
+          "title": "RealtimeConversation/outputAudio/deltaNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RealtimeConversationOutputAudioDeltaNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "RealtimeConversation/outputAudio/deltaNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "realtimeConversation/error"
+          ],
+          "title": "RealtimeConversation/errorNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RealtimeConversationErrorNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "RealtimeConversation/errorNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "realtimeConversation/closed"
+          ],
+          "title": "RealtimeConversation/closedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RealtimeConversationClosedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "RealtimeConversation/closedNotification",
       "type": "object"
     },
     {

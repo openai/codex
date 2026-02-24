@@ -96,6 +96,14 @@ use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::ProductSurface as ApiProductSurface;
+use codex_app_server_protocol::RealtimeConversationAudioAppendParams;
+use codex_app_server_protocol::RealtimeConversationAudioAppendResponse;
+use codex_app_server_protocol::RealtimeConversationStartParams;
+use codex_app_server_protocol::RealtimeConversationStartResponse;
+use codex_app_server_protocol::RealtimeConversationStopParams;
+use codex_app_server_protocol::RealtimeConversationStopResponse;
+use codex_app_server_protocol::RealtimeConversationTextAppendParams;
+use codex_app_server_protocol::RealtimeConversationTextAppendResponse;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::ResumeConversationParams;
@@ -235,6 +243,9 @@ use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::ConversationStartParams;
+use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -623,6 +634,28 @@ impl CodexMessageProcessor {
             }
             ClientRequest::TurnInterrupt { request_id, params } => {
                 self.turn_interrupt(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::RealtimeConversationStart { request_id, params } => {
+                self.realtime_conversation_start(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::RealtimeConversationAudioAppend { request_id, params } => {
+                self.realtime_conversation_audio_append(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::RealtimeConversationTextAppend { request_id, params } => {
+                self.realtime_conversation_text_append(
+                    to_connection_request_id(request_id),
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::RealtimeConversationStop { request_id, params } => {
+                self.realtime_conversation_stop(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ReviewStart { request_id, params } => {
@@ -5514,6 +5547,183 @@ impl CodexMessageProcessor {
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn prepare_realtime_conversation_thread(
+        &mut self,
+        request_id: ConnectionRequestId,
+        thread_id: &str,
+    ) -> Option<(ThreadId, Arc<CodexThread>)> {
+        let (thread_id, thread) = match self.load_thread(thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return None;
+            }
+        };
+
+        if let Err(error) = self
+            .ensure_conversation_listener(
+                thread_id,
+                request_id.connection_id,
+                false,
+                ApiVersion::V2,
+            )
+            .await
+        {
+            self.outgoing.send_error(request_id, error).await;
+            return None;
+        }
+
+        if !thread.enabled(Feature::RealtimeConversation) {
+            self.send_invalid_request_error(
+                request_id,
+                format!("thread {thread_id} does not support realtime conversation"),
+            )
+            .await;
+            return None;
+        }
+
+        Some((thread_id, thread))
+    }
+
+    async fn realtime_conversation_start(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: RealtimeConversationStartParams,
+    ) {
+        let Some((_, thread)) = self
+            .prepare_realtime_conversation_thread(request_id.clone(), &params.thread_id)
+            .await
+        else {
+            return;
+        };
+
+        let submit = thread
+            .submit(Op::RealtimeConversationStart(ConversationStartParams {
+                prompt: params.prompt,
+                session_id: params.session_id,
+            }))
+            .await;
+
+        match submit {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, RealtimeConversationStartResponse::default())
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to start realtime conversation: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn realtime_conversation_audio_append(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: RealtimeConversationAudioAppendParams,
+    ) {
+        let Some((_, thread)) = self
+            .prepare_realtime_conversation_thread(request_id.clone(), &params.thread_id)
+            .await
+        else {
+            return;
+        };
+
+        let submit = thread
+            .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
+                frame: params.audio.into(),
+            }))
+            .await;
+
+        match submit {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        RealtimeConversationAudioAppendResponse::default(),
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to append realtime conversation audio: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn realtime_conversation_text_append(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: RealtimeConversationTextAppendParams,
+    ) {
+        let Some((_, thread)) = self
+            .prepare_realtime_conversation_thread(request_id.clone(), &params.thread_id)
+            .await
+        else {
+            return;
+        };
+
+        let submit = thread
+            .submit(Op::RealtimeConversationText(ConversationTextParams {
+                text: params.text,
+            }))
+            .await;
+
+        match submit {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        RealtimeConversationTextAppendResponse::default(),
+                    )
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to append realtime conversation text: {err}"),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn realtime_conversation_stop(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: RealtimeConversationStopParams,
+    ) {
+        let Some((_, thread)) = self
+            .prepare_realtime_conversation_thread(request_id.clone(), &params.thread_id)
+            .await
+        else {
+            return;
+        };
+
+        let submit = thread.submit(Op::RealtimeConversationClose).await;
+
+        match submit {
+            Ok(_) => {
+                self.outgoing
+                    .send_response(request_id, RealtimeConversationStopResponse::default())
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to stop realtime conversation: {err}"),
+                )
+                .await;
             }
         }
     }

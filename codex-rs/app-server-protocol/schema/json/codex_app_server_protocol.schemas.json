@@ -6426,6 +6426,126 @@
           "type": "object"
         },
         {
+          "properties": {
+            "method": {
+              "enum": [
+                "realtimeConversation/started"
+              ],
+              "title": "RealtimeConversation/startedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/RealtimeConversationStartedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "RealtimeConversation/startedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "realtimeConversation/sessionUpdated"
+              ],
+              "title": "RealtimeConversation/sessionUpdatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/RealtimeConversationSessionUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "RealtimeConversation/sessionUpdatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "realtimeConversation/itemAdded"
+              ],
+              "title": "RealtimeConversation/itemAddedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/RealtimeConversationItemAddedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "RealtimeConversation/itemAddedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "realtimeConversation/outputAudio/delta"
+              ],
+              "title": "RealtimeConversation/outputAudio/deltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/RealtimeConversationOutputAudioDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "RealtimeConversation/outputAudio/deltaNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "realtimeConversation/error"
+              ],
+              "title": "RealtimeConversation/errorNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/RealtimeConversationErrorNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "RealtimeConversation/errorNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "realtimeConversation/closed"
+              ],
+              "title": "RealtimeConversation/closedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/RealtimeConversationClosedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "RealtimeConversation/closedNotification",
+          "type": "object"
+        },
+        {
           "description": "Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.",
           "properties": {
             "method": {
@@ -10694,6 +10814,143 @@
             "type": "object"
           }
         ]
+      },
+      "RealtimeConversationAudioChunk": {
+        "properties": {
+          "data": {
+            "type": "string"
+          },
+          "numChannels": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "sampleRate": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "samplesPerChannel": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "numChannels",
+          "sampleRate"
+        ],
+        "type": "object"
+      },
+      "RealtimeConversationClosedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "RealtimeConversationClosedNotification",
+        "type": "object"
+      },
+      "RealtimeConversationErrorNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "threadId"
+        ],
+        "title": "RealtimeConversationErrorNotification",
+        "type": "object"
+      },
+      "RealtimeConversationItemAddedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "item": true,
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "threadId"
+        ],
+        "title": "RealtimeConversationItemAddedNotification",
+        "type": "object"
+      },
+      "RealtimeConversationOutputAudioDeltaNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "audio": {
+            "$ref": "#/definitions/v2/RealtimeConversationAudioChunk"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "audio",
+          "threadId"
+        ],
+        "title": "RealtimeConversationOutputAudioDeltaNotification",
+        "type": "object"
+      },
+      "RealtimeConversationSessionUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "backendPrompt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "RealtimeConversationSessionUpdatedNotification",
+        "type": "object"
+      },
+      "RealtimeConversationStartedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "RealtimeConversationStartedNotification",
+        "type": "object"
       },
       "ReasoningEffort": {
         "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",

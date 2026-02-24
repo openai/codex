@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RealtimeConversationAudioChunk": {
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "numChannels": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "sampleRate": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "samplesPerChannel": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data",
+        "numChannels",
+        "sampleRate"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "audio": {
+      "$ref": "#/definitions/RealtimeConversationAudioChunk"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "audio",
+    "threadId"
+  ],
+  "title": "RealtimeConversationOutputAudioDeltaNotification",
+  "type": "object"
+}

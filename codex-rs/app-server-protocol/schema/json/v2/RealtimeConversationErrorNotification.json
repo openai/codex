@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "message": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "message",
+    "threadId"
+  ],
+  "title": "RealtimeConversationErrorNotification",
+  "type": "object"
+}
