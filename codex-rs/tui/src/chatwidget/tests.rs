@@ -8143,7 +8143,7 @@ async fn status_line_invalid_items_warn_once() {
     ]);
     chat.thread_id = Some(ThreadId::new());
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one warning history cell");
     let rendered = lines_to_single_string(&cells[0]);
@@ -8152,7 +8152,7 @@ async fn status_line_invalid_items_warn_once() {
         "warning cell missing invalid item content: {rendered}"
     );
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
     let cells = drain_insert_history(&mut rx);
     assert!(
         cells.is_empty(),
@@ -8241,7 +8241,7 @@ async fn status_line_branch_state_resets_when_git_branch_disabled() {
     chat.status_line_branch_lookup_complete = true;
     chat.config.tui_status_line = Some(vec!["model_name".to_string()]);
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
 
     assert_eq!(chat.status_line_branch, None);
     assert!(!chat.status_line_branch_pending);
