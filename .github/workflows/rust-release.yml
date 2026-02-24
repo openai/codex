@@ -10,6 +10,13 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run build/test workflow only and skip release/publish side effects.
+        required: false
+        default: true
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}
@@ -26,6 +33,12 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Tag validation"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
+            echo "INFO: workflow_dispatch dry_run enabled; skipping tag validation."
+            echo "::endgroup::"
+            exit 0
+          fi
 
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
@@ -114,15 +127,6 @@ jobs:
           set -euo pipefail
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
-      - name: Install UBSan runtime (musl)
-        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if command -v apt-get >/dev/null 2>&1; then
-            sudo apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
-          fi
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
           targets: ${{ matrix.target }}
@@ -149,29 +153,6 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
-
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
-        name: Configure rustc UBSan wrapper (musl host)
-        shell: bash
-        run: |
-          set -euo pipefail
-          ubsan=""
-          if command -v ldconfig >/dev/null 2>&1; then
-            ubsan="$(ldconfig -p | grep -m1 'libubsan\.so\.1' | sed -E 's/.*=> (.*)$/\1/')"
-          fi
-          wrapper_root="${RUNNER_TEMP:-/tmp}"
-          wrapper="${wrapper_root}/rustc-ubsan-wrapper"
-          cat > "${wrapper}" <<EOF
-          #!/usr/bin/env bash
-          set -euo pipefail
-          if [[ -n "${ubsan}" ]]; then
-            export LD_PRELOAD="${ubsan}\${LD_PRELOAD:+:\${LD_PRELOAD}}"
-          fi
-          exec "\$1" "\${@:2}"
-          EOF
-          chmod +x "${wrapper}"
-          echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
-          echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Clear sanitizer flags (musl)
@@ -364,6 +345,7 @@ jobs:
 
   shell-tool-mcp:
     name: shell-tool-mcp
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') }}
     needs: tag-check
     uses: ./.github/workflows/shell-tool-mcp.yml
     with:
@@ -372,6 +354,7 @@ jobs:
     secrets: inherit
 
   release:
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') }}
     needs:
       - build
       - build-windows
@@ -524,7 +507,7 @@ jobs:
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
-    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') && needs.release.outputs.should_publish_npm == 'true' }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
@@ -631,6 +614,7 @@ jobs:
 
   update-branch:
     name: Update latest-alpha-cli branch
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') }}
     permissions:
       contents: write
     needs: release
