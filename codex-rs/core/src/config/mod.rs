@@ -169,8 +169,11 @@ pub struct Config {
 
     /// Optional override of model selection.
     pub model: Option<String>,
-    /// Persisted two-entry model toggle ring (global scope only).
-    pub model_toggle_pair: Option<Vec<ModelTogglePairEntry>>,
+    /// Effective TUI model-toggle pair loaded from `[tui].model_toggle_pair`.
+    ///
+    /// This field is kept on runtime [`Config`] so TUI code can access
+    /// sanitized toggle history without reading raw TOML structures.
+    pub tui_model_toggle_pair: Option<Vec<ModelTogglePairEntry>>,
 
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
@@ -1999,7 +2002,7 @@ impl Config {
         } else {
             network.enabled().then_some(network)
         };
-        let model_toggle_pair = cfg
+        let tui_model_toggle_pair = cfg
             .tui
             .as_ref()
             .and_then(|tui| tui.model_toggle_pair.clone())
@@ -2025,7 +2028,7 @@ impl Config {
 
         let config = Self {
             model,
-            model_toggle_pair,
+            tui_model_toggle_pair,
             review_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
@@ -4657,7 +4660,7 @@ model_verbosity = "high"
         assert_eq!(
             Config {
                 model: Some("o3".to_string()),
-                model_toggle_pair: None,
+                tui_model_toggle_pair: None,
                 review_model: None,
                 model_context_window: None,
                 model_auto_compact_token_limit: None,
@@ -4781,7 +4784,7 @@ model_verbosity = "high"
         )?;
         let expected_gpt3_profile_config = Config {
             model: Some("gpt-3.5-turbo".to_string()),
-            model_toggle_pair: None,
+            tui_model_toggle_pair: None,
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
@@ -4903,7 +4906,7 @@ model_verbosity = "high"
         )?;
         let expected_zdr_profile_config = Config {
             model: Some("o3".to_string()),
-            model_toggle_pair: None,
+            tui_model_toggle_pair: None,
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
@@ -5011,7 +5014,7 @@ model_verbosity = "high"
         )?;
         let expected_gpt5_profile_config = Config {
             model: Some("gpt-5.1".to_string()),
-            model_toggle_pair: None,
+            tui_model_toggle_pair: None,
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,

@@ -727,11 +727,18 @@
     },
     "ModelTogglePairEntry": {
       "additionalProperties": false,
+      "description": "A persisted model + reasoning-effort pairing used by the TUI quick toggle.\n\nThe TUI stores at most two of these entries in recency order under `[tui].model_toggle_pair`. The loader sanitizes this data on read by trimming model names, dropping empty values, and deduplicating by model slug.",
       "properties": {
         "effort": {
-          "$ref": "#/definitions/ReasoningEffort"
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Global or Plan-mode reasoning effort associated with this model."
         },
         "model": {
+          "description": "Model slug used for selection.",
           "type": "string"
         }
       },
@@ -1399,7 +1406,7 @@
         },
         "model_toggle_pair": {
           "default": null,
-          "description": "Persisted two-entry model toggle ring for TUI model switching.",
+          "description": "Persisted ring for Ctrl+O model switching in the TUI.\n\nThis data is intentionally scoped under `[tui]` because it captures UI recency state, not a cross-client model preference. Runtime loading enforces a maximum of two valid unique entries.",
           "items": {
             "$ref": "#/definitions/ModelTogglePairEntry"
           },

@@ -6145,7 +6145,7 @@ async fn model_history_other_entry_none_with_single_entry() {
 async fn session_configured_uses_persisted_pair_other_when_default_present() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     let default_model = chat.current_model().to_string();
-    chat.config.model_toggle_pair = Some(vec![
+    chat.config.tui_model_toggle_pair = Some(vec![
         ModelTogglePairEntry {
             model: "o3".to_string(),
             effort: Some(ReasoningEffortConfig::High),
@@ -6193,7 +6193,7 @@ async fn session_configured_uses_persisted_pair_other_when_default_present() {
 async fn session_configured_replaces_current_when_default_not_in_persisted_pair() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     let default_model = chat.current_model().to_string();
-    chat.config.model_toggle_pair = Some(vec![
+    chat.config.tui_model_toggle_pair = Some(vec![
         ModelTogglePairEntry {
             model: "o3".to_string(),
             effort: Some(ReasoningEffortConfig::High),

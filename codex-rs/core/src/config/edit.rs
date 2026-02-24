@@ -772,6 +772,11 @@ impl ConfigEditsBuilder {
         self
     }
 
+    /// Persist TUI quick-toggle history under `[tui].model_toggle_pair`.
+    ///
+    /// Passing `None` or an empty slice clears the persisted value. Callers
+    /// should only provide the most-recent two entries; longer lists are not
+    /// expected and may obscure recency semantics for Ctrl+O toggling.
     pub fn set_model_toggle_pair(mut self, pair: Option<&[ModelTogglePairEntry]>) -> Self {
         self.edits.push(ConfigEdit::SetModelTogglePair {
             pair: pair.map(<[ModelTogglePairEntry]>::to_vec),
