@@ -609,11 +609,11 @@ pub(crate) struct ChatWidget {
     ///
     /// The front entry is always the current (or most-recently-switched-to) model.
     /// Ctrl+O swaps to the back entry and moves it to the front, giving a
-    /// two-item toggle.  The ring is populated lazily: it stays empty until the
-    /// user first switches models via the picker or until Ctrl+O seeds it from
-    /// the session's initial model.  Effort updates from the effort picker are
-    /// propagated into the matching entry so the toggle restores the latest
-    /// effort the user chose for that model.
+    /// two-item toggle. On session startup we reconcile any persisted pair with
+    /// the runtime default model, and after startup the ring is still populated
+    /// lazily when the user switches models or when Ctrl+O seeds from the
+    /// current model. Global effort updates propagate into the matching entry so
+    /// the toggle restores the latest global effort chosen for that model.
     recent_model_history: VecDeque<ModelHistoryEntry>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,

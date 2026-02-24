@@ -2001,10 +2001,27 @@ impl Config {
         } else {
             network.enabled().then_some(network)
         };
+        let model_toggle_pair = cfg.model_toggle_pair.map(|entries| {
+            let mut sanitized: Vec<ModelTogglePairEntry> = Vec::with_capacity(2);
+            for entry in entries {
+                let model = entry.model.trim();
+                if model.is_empty() || sanitized.iter().any(|candidate| candidate.model == model) {
+                    continue;
+                }
+                sanitized.push(ModelTogglePairEntry {
+                    model: model.to_string(),
+                    effort: entry.effort,
+                });
+                if sanitized.len() == 2 {
+                    break;
+                }
+            }
+            sanitized
+        });
 
         let config = Self {
             model,
-            model_toggle_pair: cfg.model_toggle_pair,
+            model_toggle_pair,
             review_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,

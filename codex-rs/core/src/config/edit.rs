@@ -286,20 +286,6 @@ enum TraversalMode {
     Existing,
 }
 
-fn model_toggle_pair_item(entries: &[ModelTogglePairEntry]) -> TomlItem {
-    let mut tables = ArrayOfTables::new();
-    for entry in entries {
-        let mut table = TomlTable::new();
-        table.set_implicit(false);
-        table.insert("model", value(entry.model.clone()));
-        if let Some(effort) = entry.effort {
-            table.insert("effort", value(effort.to_string()));
-        }
-        tables.push(table);
-    }
-    TomlItem::ArrayOfTables(tables)
-}
-
 impl ConfigDocument {
     fn new(doc: DocumentMut, profile: Option<String>) -> Self {
         Self { doc, profile }
@@ -320,11 +306,23 @@ impl ConfigDocument {
                 mutated
             }),
             ConfigEdit::SetModelTogglePair { pair } => Ok(match pair {
-                Some(entries) if !entries.is_empty() => self.write_value(
-                    Scope::Global,
-                    &["model_toggle_pair"],
-                    model_toggle_pair_item(entries),
-                ),
+                Some(entries) if !entries.is_empty() => {
+                    let mut tables = ArrayOfTables::new();
+                    for entry in entries {
+                        let mut table = TomlTable::new();
+                        table.set_implicit(false);
+                        table.insert("model", value(entry.model.clone()));
+                        if let Some(effort) = entry.effort {
+                            table.insert("effort", value(effort.to_string()));
+                        }
+                        tables.push(table);
+                    }
+                    self.write_value(
+                        Scope::Global,
+                        &["model_toggle_pair"],
+                        TomlItem::ArrayOfTables(tables),
+                    )
+                }
                 _ => self.clear(Scope::Global, &["model_toggle_pair"]),
             }),
             ConfigEdit::SetModelPersonality { personality } => Ok(self.write_profile_value(
