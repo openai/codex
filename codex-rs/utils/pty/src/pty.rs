@@ -45,7 +45,15 @@ impl ChildTerminator for PtyChildTerminator {
         if let Some(process_group_id) = self.process_group_id {
             // Match the pipe backend's hard-kill behavior so descendant
             // processes from interactive shells/REPLs do not survive shutdown.
-            return crate::process_group::kill_process_group(process_group_id);
+            // Also try the direct child killer in case the cached PGID is stale.
+            let process_group_kill_result =
+                crate::process_group::kill_process_group(process_group_id);
+            let child_kill_result = self.killer.kill();
+            return match child_kill_result {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == ErrorKind::NotFound => process_group_kill_result,
+                Err(err) => process_group_kill_result.or(Err(err)),
+            };
         }
 
         self.killer.kill()
