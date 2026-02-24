@@ -552,7 +552,7 @@ impl RealtimeConversationUiState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct RenderedUserMessageEvent {
     message: String,
     remote_image_urls: Vec<String>,
