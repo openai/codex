@@ -6,17 +6,17 @@
         "description": {
           "type": "string"
         },
-        "migrationType": {
-          "$ref": "#/definitions/ExternalAgentConfigMigrationType"
+        "itemType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
         }
       },
       "required": [
         "description",
-        "migrationType"
+        "itemType"
       ],
       "type": "object"
     },
-    "ExternalAgentConfigMigrationType": {
+    "ExternalAgentConfigMigrationItemType": {
       "enum": [
         "AGENTS_MD",
         "CONFIG",

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "ExternalAgentConfigMigrationType": {
+    "ExternalAgentConfigMigrationItemType": {
       "enum": [
         "AGENTS_MD",
         "CONFIG",
@@ -11,15 +11,15 @@
     }
   },
   "properties": {
-    "migrationTypes": {
+    "migrationItemTypes": {
       "items": {
-        "$ref": "#/definitions/ExternalAgentConfigMigrationType"
+        "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
       },
       "type": "array"
     }
   },
   "required": [
-    "migrationTypes"
+    "migrationItemTypes"
   ],
   "title": "ExternalAgentConfigImportParams",
   "type": "object"

@@ -69,7 +69,7 @@ export type { ExternalAgentConfigDetectResponse } from "./ExternalAgentConfigDet
 export type { ExternalAgentConfigImportParams } from "./ExternalAgentConfigImportParams";
 export type { ExternalAgentConfigImportResponse } from "./ExternalAgentConfigImportResponse";
 export type { ExternalAgentConfigMigrationItem } from "./ExternalAgentConfigMigrationItem";
-export type { ExternalAgentConfigMigrationType } from "./ExternalAgentConfigMigrationType";
+export type { ExternalAgentConfigMigrationItemType } from "./ExternalAgentConfigMigrationItemType";
 export type { FeedbackUploadParams } from "./FeedbackUploadParams";
 export type { FeedbackUploadResponse } from "./FeedbackUploadResponse";
 export type { FileChangeApprovalDecision } from "./FileChangeApprovalDecision";

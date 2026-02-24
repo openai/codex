@@ -3,7 +3,7 @@ use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
-use codex_app_server_protocol::ExternalAgentConfigMigrationType;
+use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::JSONRPCErrorError;
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
@@ -39,23 +39,12 @@ impl ExternalAgentConfigApi {
     pub(crate) async fn detect(
         &self,
     ) -> Result<ExternalAgentConfigDetectResponse, JSONRPCErrorError> {
-        self.detect_sync().map_err(map_io_error)
-    }
-
-    pub(crate) async fn import(
-        &self,
-        params: ExternalAgentConfigImportParams,
-    ) -> Result<ExternalAgentConfigImportResponse, JSONRPCErrorError> {
-        self.import_sync(params).map_err(map_io_error)
-    }
-
-    fn detect_sync(&self) -> io::Result<ExternalAgentConfigDetectResponse> {
         let mut items = Vec::new();
         let claude_md = self.claude_home.join("CLAUDE.md");
         let agents_md = self.codex_home.join("AGENTS.md");
         if claude_md.is_file() && !agents_md.exists() {
             items.push(ExternalAgentConfigMigrationItem {
-                migration_type: ExternalAgentConfigMigrationType::AgentsMd,
+                item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: format!("Import {} to {}.", claude_md.display(), agents_md.display()),
             });
         }
@@ -63,7 +52,7 @@ impl ExternalAgentConfigApi {
         let settings_json = self.claude_home.join("settings.json");
         if settings_json.is_file() {
             items.push(ExternalAgentConfigMigrationItem {
-                migration_type: ExternalAgentConfigMigrationType::Config,
+                item_type: ExternalAgentConfigMigrationItemType::Config,
                 description: format!(
                     "Migrate {} into {}.",
                     settings_json.display(),
@@ -75,7 +64,7 @@ impl ExternalAgentConfigApi {
         let claude_skills = self.claude_home.join("skills");
         if has_subdirectories(&claude_skills)? {
             items.push(ExternalAgentConfigMigrationItem {
-                migration_type: ExternalAgentConfigMigrationType::Skills,
+                item_type: ExternalAgentConfigMigrationItemType::Skills,
                 description: format!(
                     "Copy skill folders from {} to {}.",
                     claude_skills.display(),
@@ -87,22 +76,23 @@ impl ExternalAgentConfigApi {
         Ok(ExternalAgentConfigDetectResponse { items })
     }
 
-    fn import_sync(
+    pub(crate) async fn import(
         &self,
         params: ExternalAgentConfigImportParams,
-    ) -> io::Result<ExternalAgentConfigImportResponse> {
+    ) -> Result<ExternalAgentConfigImportResponse, JSONRPCErrorError> {
         let mut seen = HashSet::new();
 
-        for migration in params.migration_types {
-            if !seen.insert(migration) {
+        for migration_item_type in params.migration_item_types {
+            if !seen.insert(migration_item_type) {
                 continue;
             }
 
-            match migration {
-                ExternalAgentConfigMigrationType::AgentsMd => self.import_agents_md()?,
-                ExternalAgentConfigMigrationType::Config => self.import_config()?,
-                ExternalAgentConfigMigrationType::Skills => self.import_skills()?,
+            match migration_item_type {
+                ExternalAgentConfigMigrationItemType::AgentsMd => self.import_agents_md(),
+                ExternalAgentConfigMigrationItemType::Config => self.import_config(),
+                ExternalAgentConfigMigrationItemType::Skills => self.import_skills(),
             }
+            .map_err(map_io_error)?;
         }
 
         Ok(ExternalAgentConfigImportResponse {})
@@ -231,13 +221,10 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn build_config_from_external(
-    settings: &JsonValue,
-    settings_path: &Path,
-) -> io::Result<TomlValue> {
+fn build_config_from_external(settings: &JsonValue, settings_path: &Path) -> io::Result<TomlValue> {
     let Some(settings_obj) = settings.as_object() else {
         return Err(invalid_data_error(
-            "Claude settings.json root must be an object",
+            "external agent settings root must be an object",
         ));
     };
 
@@ -570,7 +557,7 @@ mod tests {
         let expected = ExternalAgentConfigDetectResponse {
             items: vec![
                 ExternalAgentConfigMigrationItem {
-                    migration_type: ExternalAgentConfigMigrationType::AgentsMd,
+                    item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                     description: format!(
                         "Import {} to {} (skips if destination already exists).",
                         claude_home.join("CLAUDE.md").display(),
@@ -578,7 +565,7 @@ mod tests {
                     ),
                 },
                 ExternalAgentConfigMigrationItem {
-                    migration_type: ExternalAgentConfigMigrationType::Config,
+                    item_type: ExternalAgentConfigMigrationItemType::Config,
                     description: format!(
                         "Migrate {} into {} (creates file if missing; only appends missing Codex fields).",
                         claude_home.join("settings.json").display(),
@@ -586,7 +573,7 @@ mod tests {
                     ),
                 },
                 ExternalAgentConfigMigrationItem {
-                    migration_type: ExternalAgentConfigMigrationType::Skills,
+                    item_type: ExternalAgentConfigMigrationItemType::Skills,
                     description: format!(
                         "Copy skill folders from {} to {} (existing skill names are skipped).",
                         claude_home.join("skills").display(),
@@ -617,19 +604,16 @@ mod tests {
 
         let response = api_for_paths(claude_home.clone(), codex_home.clone())
             .import(ExternalAgentConfigImportParams {
-                migration_types: vec![
-                    ExternalAgentConfigMigrationType::AgentsMd,
-                    ExternalAgentConfigMigrationType::Config,
-                    ExternalAgentConfigMigrationType::Skills,
+                migration_item_types: vec![
+                    ExternalAgentConfigMigrationItemType::AgentsMd,
+                    ExternalAgentConfigMigrationItemType::Config,
+                    ExternalAgentConfigMigrationItemType::Skills,
                 ],
             })
             .await
             .expect("import");
 
-        assert_eq!(
-            response,
-            ExternalAgentConfigImportResponse {}
-        );
+        assert_eq!(response, ExternalAgentConfigImportResponse {});
         assert_eq!(
             fs::read_to_string(codex_home.join("AGENTS.md")).expect("read agents"),
             "claude rules"
@@ -681,19 +665,16 @@ mod tests {
 
         let response = api_for_paths(claude_home, codex_home.clone())
             .import(ExternalAgentConfigImportParams {
-                migration_types: vec![
-                    ExternalAgentConfigMigrationType::AgentsMd,
-                    ExternalAgentConfigMigrationType::Config,
-                    ExternalAgentConfigMigrationType::Skills,
+                migration_item_types: vec![
+                    ExternalAgentConfigMigrationItemType::AgentsMd,
+                    ExternalAgentConfigMigrationItemType::Config,
+                    ExternalAgentConfigMigrationItemType::Skills,
                 ],
             })
             .await
             .expect("import");
 
-        assert_eq!(
-            response,
-            ExternalAgentConfigImportResponse {}
-        );
+        assert_eq!(response, ExternalAgentConfigImportResponse {});
         assert_eq!(
             fs::read_to_string(codex_home.join("AGENTS.md")).expect("read agents"),
             "existing"

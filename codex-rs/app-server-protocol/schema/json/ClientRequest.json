@@ -378,19 +378,19 @@
     },
     "ExternalAgentConfigImportParams": {
       "properties": {
-        "migrationTypes": {
+        "migrationItemTypes": {
           "items": {
-            "$ref": "#/definitions/ExternalAgentConfigMigrationType"
+            "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
           },
           "type": "array"
         }
       },
       "required": [
-        "migrationTypes"
+        "migrationItemTypes"
       ],
       "type": "object"
     },
-    "ExternalAgentConfigMigrationType": {
+    "ExternalAgentConfigMigrationItemType": {
       "enum": [
         "AGENTS_MD",
         "CONFIG",

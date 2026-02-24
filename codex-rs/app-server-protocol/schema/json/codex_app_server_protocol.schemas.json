@@ -8943,15 +8943,15 @@
       "ExternalAgentConfigImportParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "migrationTypes": {
+          "migrationItemTypes": {
             "items": {
-              "$ref": "#/definitions/v2/ExternalAgentConfigMigrationType"
+              "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
             },
             "type": "array"
           }
         },
         "required": [
-          "migrationTypes"
+          "migrationItemTypes"
         ],
         "title": "ExternalAgentConfigImportParams",
         "type": "object"
@@ -8966,17 +8966,17 @@
           "description": {
             "type": "string"
           },
-          "migrationType": {
-            "$ref": "#/definitions/v2/ExternalAgentConfigMigrationType"
+          "itemType": {
+            "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
           }
         },
         "required": [
           "description",
-          "migrationType"
+          "itemType"
         ],
         "type": "object"
       },
-      "ExternalAgentConfigMigrationType": {
+      "ExternalAgentConfigMigrationItemType": {
         "enum": [
           "AGENTS_MD",
           "CONFIG",
