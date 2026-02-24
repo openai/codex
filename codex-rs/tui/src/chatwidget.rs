@@ -158,7 +158,6 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
-use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
@@ -553,6 +552,14 @@ impl RealtimeConversationUiState {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RenderedUserMessageEvent {
+    message: String,
+    remote_image_urls: Vec<String>,
+    local_images: Vec<PathBuf>,
+    text_elements: Vec<TextElement>,
+}
+
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -716,6 +723,7 @@ pub(crate) struct ChatWidget {
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
+    last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -2898,6 +2906,7 @@ impl ChatWidget {
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
+            last_rendered_user_message_event: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3076,6 +3085,7 @@ impl ChatWidget {
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
+            last_rendered_user_message_event: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3243,6 +3253,7 @@ impl ChatWidget {
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
+            last_rendered_user_message_event: None,
         };
 
         widget.prefetch_rate_limits();
@@ -4182,7 +4193,17 @@ impl ChatWidget {
 
         // Show replayable user content in conversation history.
         if !text.is_empty() {
-            let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
+            let local_image_paths = local_images
+                .into_iter()
+                .map(|img| img.path)
+                .collect::<Vec<_>>();
+            self.last_rendered_user_message_event =
+                Some(Self::rendered_user_message_event_from_parts(
+                    text.clone(),
+                    text_elements.clone(),
+                    local_image_paths.clone(),
+                    remote_image_urls.clone(),
+                ));
             self.add_to_history(history_cell::new_user_prompt(
                 text,
                 text_elements,
@@ -4190,6 +4211,13 @@ impl ChatWidget {
                 remote_image_urls,
             ));
         } else if !remote_image_urls.is_empty() {
+            self.last_rendered_user_message_event =
+                Some(Self::rendered_user_message_event_from_parts(
+                    String::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    remote_image_urls.clone(),
+                ));
             self.add_to_history(history_cell::new_user_prompt(
                 String::new(),
                 Vec::new(),
@@ -4412,7 +4440,7 @@ impl ChatWidget {
                 }
             }
             EventMsg::UserMessage(ev) => {
-                if from_replay {
+                if from_replay || self.should_render_realtime_user_message_event(&ev) {
                     self.on_user_message_event(ev);
                 }
             }
@@ -4534,6 +4562,8 @@ impl ChatWidget {
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
+        self.last_rendered_user_message_event =
+            Some(Self::rendered_user_message_event_from_event(&event));
         let remote_image_urls = event.images.unwrap_or_default();
         if !event.message.trim().is_empty()
             || !event.text_elements.is_empty()
@@ -7672,6 +7702,39 @@ impl ChatWidget {
 }
 
 impl ChatWidget {
+    fn rendered_user_message_event_from_parts(
+        message: String,
+        text_elements: Vec<TextElement>,
+        local_images: Vec<PathBuf>,
+        remote_image_urls: Vec<String>,
+    ) -> RenderedUserMessageEvent {
+        RenderedUserMessageEvent {
+            message,
+            remote_image_urls,
+            local_images,
+            text_elements,
+        }
+    }
+
+    fn rendered_user_message_event_from_event(
+        event: &UserMessageEvent,
+    ) -> RenderedUserMessageEvent {
+        Self::rendered_user_message_event_from_parts(
+            event.message.clone(),
+            event.text_elements.clone(),
+            event.local_images.clone(),
+            event.images.clone().unwrap_or_default(),
+        )
+    }
+
+    fn should_render_realtime_user_message_event(&self, event: &UserMessageEvent) -> bool {
+        if !self.realtime_conversation.is_live() {
+            return false;
+        }
+        let key = Self::rendered_user_message_event_from_event(event);
+        self.last_rendered_user_message_event.as_ref() != Some(&key)
+    }
+
     fn realtime_footer_hint_items() -> Vec<(String, String)> {
         vec![("/realtime".to_string(), "stop live voice".to_string())]
     }
@@ -7740,17 +7803,7 @@ impl ChatWidget {
             }
             RealtimeEvent::SessionUpdated { .. } => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
-            RealtimeEvent::ConversationItemAdded(item) => {
-                if let Some(text) = realtime_user_text_from_conversation_item(&item) {
-                    self.add_to_history(history_cell::new_user_prompt(
-                        text,
-                        Vec::new(),
-                        Vec::new(),
-                        Vec::new(),
-                    ));
-                    self.request_redraw();
-                }
-            }
+            RealtimeEvent::ConversationItemAdded(_item) => {}
             RealtimeEvent::Error(message) => {
                 self.add_error_message(format!("Realtime voice error: {message}"));
                 self.reset_realtime_conversation_state();
@@ -7932,48 +7985,6 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
         || summary.responses_api_engine_service_ttft_ms > 0
         || summary.responses_api_engine_iapi_tbt_ms > 0
         || summary.responses_api_engine_service_tbt_ms > 0
-}
-
-fn realtime_user_text_from_conversation_item(item: &Value) -> Option<String> {
-    let item = item.get("item").unwrap_or(item);
-    if item.get("type").and_then(Value::as_str) != Some("message") {
-        return None;
-    }
-    if item.get("role").and_then(Value::as_str) != Some("user") {
-        return None;
-    }
-
-    let mut texts = Vec::new();
-    for content in item
-        .get("content")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let Some(kind) = content.get("type").and_then(Value::as_str) else {
-            continue;
-        };
-        let maybe_text = match kind {
-            "text" | "input_text" => content
-                .get("text")
-                .and_then(Value::as_str)
-                .or_else(|| content.get("transcript").and_then(Value::as_str)),
-            "input_audio" => content.get("transcript").and_then(Value::as_str),
-            _ => None,
-        };
-        if let Some(text) = maybe_text {
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                texts.push(trimmed.to_string());
-            }
-        }
-    }
-
-    if texts.is_empty() {
-        None
-    } else {
-        Some(texts.join("\n"))
-    }
 }
 
 impl Drop for ChatWidget {
