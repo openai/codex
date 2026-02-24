@@ -974,12 +974,14 @@ impl EventProcessorWithHumanOutput {
         let line = format_agent_job_progress_line(
             columns,
             job_label.as_str(),
-            processed,
-            total,
-            percent,
-            update.failed_items,
-            update.running_items,
-            update.pending_items,
+            AgentJobProgressStats {
+                processed,
+                total,
+                percent,
+                failed: update.failed_items,
+                running: update.running_items,
+                pending: update.pending_items,
+            },
             eta.as_str(),
         );
         let done = processed >= update.total_items;
@@ -995,7 +997,7 @@ impl EventProcessorWithHumanOutput {
             return;
         }
         if !self.progress_active {
-            eprint!("\n");
+            eprintln!();
             self.progress_anchor = true;
             self.progress_done = false;
         }
@@ -1022,18 +1024,30 @@ impl EventProcessorWithHumanOutput {
     }
 }
 
-fn format_agent_job_progress_line(
-    columns: Option<usize>,
-    job_label: &str,
+struct AgentJobProgressStats {
     processed: usize,
     total: usize,
     percent: i64,
     failed: usize,
     running: usize,
     pending: usize,
+}
+
+fn format_agent_job_progress_line(
+    columns: Option<usize>,
+    job_label: &str,
+    stats: AgentJobProgressStats,
     eta: &str,
 ) -> String {
-    let rest = format!("{processed}/{total} {percent}% f{failed} r{running} p{pending} eta {eta}");
+    let rest = format!(
+        "{processed}/{total} {percent}% f{failed} r{running} p{pending} eta {eta}",
+        processed = stats.processed,
+        total = stats.total,
+        percent = stats.percent,
+        failed = stats.failed,
+        running = stats.running,
+        pending = stats.pending
+    );
     let prefix = format!("job {job_label}");
     let base_len = prefix.len() + rest.len() + 4;
     let mut bar_width = columns
@@ -1041,7 +1055,7 @@ fn format_agent_job_progress_line(
         .filter(|available| *available > 0)
         .unwrap_or(20usize);
     let with_bar = |width: usize| {
-        let filled = ((processed as f64 / total as f64) * width as f64)
+        let filled = ((stats.processed as f64 / stats.total as f64) * width as f64)
             .round()
             .clamp(0.0, width as f64) as usize;
         let mut bar = "#".repeat(filled);
