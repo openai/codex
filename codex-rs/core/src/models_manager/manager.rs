@@ -100,7 +100,16 @@ impl ModelsManager {
     ///
     /// Returns a static set of presets seeded with the configured model.
     pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        builtin_collaboration_mode_presets(self.default_mode_request_user_input)
+        self.list_collaboration_modes_for_default_mode_request_user_input(
+            self.default_mode_request_user_input,
+        )
+    }
+
+    pub fn list_collaboration_modes_for_default_mode_request_user_input(
+        &self,
+        default_mode_request_user_input: bool,
+    ) -> Vec<CollaborationModeMask> {
+        builtin_collaboration_mode_presets(default_mode_request_user_input)
     }
 
     /// Attempt to list models without blocking, using the current cached state.
