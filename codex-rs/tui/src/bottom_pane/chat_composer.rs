@@ -1009,18 +1009,6 @@ impl ChatComposer {
         self.sync_popups();
     }
 
-    pub(crate) fn insert_named_placeholder(&mut self, id: &str, text: &str) {
-        self.textarea.insert_named_element(text, id.to_string());
-    }
-
-    pub(crate) fn update_named_placeholder_in_place(&mut self, id: &str, text: &str) -> bool {
-        self.textarea.update_named_element_by_id(id, text)
-    }
-
-    pub(crate) fn remove_named_placeholder(&mut self, id: &str) {
-        let _ = self.textarea.replace_element_by_id(id, "");
-    }
-
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
         if self.is_empty() {
             return None;
@@ -3954,6 +3942,10 @@ impl ChatComposer {
     pub fn replace_transcription(&mut self, id: &str, text: &str) {
         self.stop_transcription_spinner(id);
         let _ = self.textarea.replace_element_by_id(id, text);
+    }
+
+    pub fn update_transcription_in_place(&mut self, id: &str, text: &str) -> bool {
+        self.textarea.update_named_element_by_id(id, text)
     }
 
     pub fn remove_transcription_placeholder(&mut self, id: &str) {

@@ -2719,9 +2719,7 @@ impl App {
             }
             AppEvent::UpdateRecordingMeter { id, text } => {
                 // Update in place to preserve the element id for subsequent frames.
-                let updated = self
-                    .chat_widget
-                    .update_named_placeholder_in_place(&id, &text);
+                let updated = self.chat_widget.update_transcription_in_place(&id, &text);
                 if updated {
                     tui.frame_requester().schedule_frame();
                 }

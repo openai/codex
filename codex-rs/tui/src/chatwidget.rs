@@ -3436,23 +3436,6 @@ impl ChatWidget {
         self.bottom_pane.set_footer_hint_override(items);
     }
 
-    pub(crate) fn insert_named_placeholder(&mut self, id: &str, text: &str) {
-        self.bottom_pane.insert_named_placeholder(id, text);
-    }
-
-    pub(crate) fn update_named_placeholder_in_place(&mut self, id: &str, text: &str) -> bool {
-        let updated = self.bottom_pane.update_named_placeholder_in_place(id, text);
-        if updated {
-            self.request_redraw();
-        }
-        updated
-    }
-
-    pub(crate) fn remove_named_placeholder(&mut self, id: &str) {
-        self.bottom_pane.remove_named_placeholder(id);
-        self.request_redraw();
-    }
-
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
@@ -3469,7 +3452,7 @@ impl ChatWidget {
             "Stop voice chat".to_string(),
         )]));
         let id = REALTIME_METER_PLACEHOLDER_ID.to_string();
-        self.insert_named_placeholder(&id, "Realtime listening ⠤⠤⠤⠤");
+        self.replace_transcription(&id, "Realtime listening ⠤⠤⠤⠤");
 
         if let Some(controller) = &self.realtime_audio_controller
             && let Some(RealtimeMicMeterHandles { last_peak, stop }) = controller.meter_handles()
@@ -3488,7 +3471,7 @@ impl ChatWidget {
     fn disable_realtime_ui(&mut self) {
         self.set_footer_hint_override(None);
         if let Some(id) = self.realtime_meter_placeholder_id.take() {
-            self.remove_named_placeholder(&id);
+            self.remove_transcription_placeholder(&id);
         }
     }
 
@@ -7771,12 +7754,19 @@ impl ChatWidget {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
 impl ChatWidget {
     pub(crate) fn replace_transcription(&mut self, id: &str, text: &str) {
         self.bottom_pane.replace_transcription(id, text);
         // Ensure the UI redraws to reflect the updated transcription.
         self.request_redraw();
+    }
+
+    pub(crate) fn update_transcription_in_place(&mut self, id: &str, text: &str) -> bool {
+        let updated = self.bottom_pane.update_transcription_in_place(id, text);
+        if updated {
+            self.request_redraw();
+        }
+        updated
     }
 
     pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {

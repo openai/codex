@@ -14,9 +14,6 @@
 //! Some UI is time-based rather than input-based, such as the transient "press again to quit"
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU16;
 
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
@@ -569,33 +566,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn insert_named_placeholder(&mut self, id: &str, text: &str) {
-        self.composer.insert_named_placeholder(id, text);
-        self.composer.sync_popups();
-        self.request_redraw();
-    }
-
-    pub(crate) fn update_named_placeholder_in_place(&mut self, id: &str, text: &str) -> bool {
-        let updated = self.composer.update_named_placeholder_in_place(id, text);
-        if updated {
-            self.composer.sync_popups();
-            self.request_redraw();
-        }
-        updated
-    }
-
-    pub(crate) fn remove_named_placeholder(&mut self, id: &str) {
-        self.composer.remove_named_placeholder(id);
-        self.composer.sync_popups();
-        self.request_redraw();
-    }
-
     pub(crate) fn spawn_live_meter_updates(
         &self,
         id: String,
         prefix: Option<String>,
-        last_peak: Arc<AtomicU16>,
-        stop: Arc<AtomicBool>,
+        last_peak: std::sync::Arc<std::sync::atomic::AtomicU16>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) {
         self.composer
             .spawn_live_meter_updates(id, prefix, last_peak, stop);
@@ -1043,12 +1019,20 @@ impl BottomPane {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
 impl BottomPane {
     pub(crate) fn replace_transcription(&mut self, id: &str, text: &str) {
         self.composer.replace_transcription(id, text);
         self.composer.sync_popups();
         self.request_redraw();
+    }
+
+    pub(crate) fn update_transcription_in_place(&mut self, id: &str, text: &str) -> bool {
+        let updated = self.composer.update_transcription_in_place(id, text);
+        if updated {
+            self.composer.sync_popups();
+            self.request_redraw();
+        }
+        updated
     }
 
     pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
