@@ -62,7 +62,7 @@ impl ExternalAgentConfigApi {
         }
 
         let claude_skills = self.claude_home.join("skills");
-        if has_subdirectories(&claude_skills)? {
+        if has_subdirectories(&claude_skills).map_err(map_io_error)? {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Skills,
                 description: format!(
@@ -379,7 +379,7 @@ fn build_config_from_external(settings: &JsonValue, settings_path: &Path) -> io:
     }
 
     root.insert(
-        "migrated_from_claude".to_string(),
+        "migrated_from_external_agent".to_string(),
         TomlValue::Table(migrated),
     );
     Ok(TomlValue::Table(root))
