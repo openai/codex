@@ -6178,7 +6178,7 @@ async fn session_configured_uses_persisted_pair_other_when_default_present() {
         entries,
         vec![
             ModelHistoryEntry {
-                model: default_model.clone(),
+                model: default_model,
                 effort: Some(ReasoningEffortConfig::Medium),
             },
             ModelHistoryEntry {
@@ -6226,7 +6226,7 @@ async fn session_configured_replaces_current_when_default_not_in_persisted_pair(
         entries,
         vec![
             ModelHistoryEntry {
-                model: default_model.clone(),
+                model: default_model,
                 effort: Some(ReasoningEffortConfig::Medium),
             },
             ModelHistoryEntry {
