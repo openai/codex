@@ -1,5 +1,6 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
 use codex_core::config::Config;
@@ -12,7 +13,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
@@ -225,13 +225,13 @@ fn log_format_from_env() -> LogFormat {
 }
 
 pub async fn run_main(
-    codex_linux_sandbox_exe: Option<PathBuf>,
+    arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     default_analytics_enabled: bool,
 ) -> IoResult<()> {
     run_main_with_transport(
-        codex_linux_sandbox_exe,
+        arg0_paths,
         cli_config_overrides,
         loader_overrides,
         default_analytics_enabled,
@@ -241,7 +241,7 @@ pub async fn run_main(
 }
 
 pub async fn run_main_with_transport(
-    codex_linux_sandbox_exe: Option<PathBuf>,
+    arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     default_analytics_enabled: bool,
@@ -454,7 +454,7 @@ pub async fn run_main_with_transport(
         let loader_overrides = loader_overrides_for_config_api;
         let mut processor = MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
-            codex_linux_sandbox_exe,
+            arg0_paths,
             config: Arc::new(config),
             single_client_mode,
             cli_overrides,
