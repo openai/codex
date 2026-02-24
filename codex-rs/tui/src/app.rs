@@ -4073,13 +4073,32 @@ mod tests {
         let codex_home = tempdir()?;
         let codex_home = codex_home.path().to_path_buf();
         app.config.codex_home = codex_home.clone();
-        app.chat_widget.config.codex_home = codex_home.clone();
-        app.chat_widget.thread_id = Some(ThreadId::new());
+        let session_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: app.chat_widget.current_model().to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: app.config.cwd.clone(),
+                reasoning_effort: Some(ReasoningEffortConfig::Medium),
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
 
-        app.on_update_reasoning_effort(Some(ReasoningEffortConfig::Medium));
         let selected_model = "gpt-5-codex".to_string();
         let mut tui = crate::tui::Tui::new(
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24))?,
+            crate::tui::Terminal::with_options(ratatui::backend::CrosstermBackend::new(
+                std::io::stdout(),
+            ))?,
         );
 
         app.handle_event(
