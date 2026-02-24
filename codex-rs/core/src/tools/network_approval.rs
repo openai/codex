@@ -10,8 +10,12 @@ use codex_network_proxy::NetworkProtocol;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
+use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::WarningEvent;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -19,6 +23,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
+use tracing::warn;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -158,6 +163,7 @@ pub(crate) struct NetworkApprovalService {
     call_outcomes: Mutex<HashMap<String, NetworkApprovalOutcome>>,
     pending_host_approvals: Mutex<HashMap<HostApprovalKey, Arc<PendingHostApproval>>>,
     session_approved_hosts: Mutex<HashSet<HostApprovalKey>>,
+    session_denied_hosts: Mutex<HashSet<HostApprovalKey>>,
 }
 
 impl Default for NetworkApprovalService {
@@ -167,6 +173,7 @@ impl Default for NetworkApprovalService {
             call_outcomes: Mutex::new(HashMap::new()),
             pending_host_approvals: Mutex::new(HashMap::new()),
             session_approved_hosts: Mutex::new(HashSet::new()),
+            session_denied_hosts: Mutex::new(HashSet::new()),
         }
     }
 }
@@ -273,6 +280,13 @@ impl NetworkApprovalService {
         let key = HostApprovalKey::from_request(&request, protocol);
 
         {
+            let denied_hosts = self.session_denied_hosts.lock().await;
+            if denied_hosts.contains(&key) {
+                return NetworkDecision::deny(REASON_NOT_ALLOWED);
+            }
+        }
+
+        {
             let approved_hosts = self.session_approved_hosts.lock().await;
             if approved_hosts.contains(&key) {
                 return NetworkDecision::Allow;
@@ -312,6 +326,10 @@ impl NetworkApprovalService {
 
         let approval_id = Self::approval_id_for_key(&key);
         let prompt_command = vec!["network-access".to_string(), target.clone()];
+        let network_approval_context = NetworkApprovalContext {
+            host: request.host.clone(),
+            protocol,
+        };
 
         let approval_decision = session
             .request_command_approval(
@@ -321,19 +339,86 @@ impl NetworkApprovalService {
                 prompt_command,
                 turn_context.cwd.clone(),
                 Some(prompt_reason),
-                Some(NetworkApprovalContext {
-                    host: request.host.clone(),
-                    protocol,
-                }),
+                Some(network_approval_context.clone()),
                 None,
             )
             .await;
 
+        let mut cache_session_deny = false;
         let resolved = match approval_decision {
             ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                 PendingApprovalDecision::AllowOnce
             }
             ReviewDecision::ApprovedForSession => PendingApprovalDecision::AllowForSession,
+            ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => match network_policy_amendment.action {
+                NetworkPolicyRuleAction::Allow => {
+                    match session
+                        .persist_network_policy_amendment(
+                            &network_policy_amendment,
+                            &network_approval_context,
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            session
+                                .record_network_policy_amendment_message(
+                                    &turn_context.sub_id,
+                                    &network_policy_amendment,
+                                )
+                                .await;
+                        }
+                        Err(err) => {
+                            let message =
+                                format!("Failed to apply network policy amendment: {err}");
+                            warn!("{message}");
+                            session
+                                .send_event_raw(Event {
+                                    id: turn_context.sub_id.clone(),
+                                    msg: EventMsg::Warning(WarningEvent { message }),
+                                })
+                                .await;
+                        }
+                    }
+                    PendingApprovalDecision::AllowForSession
+                }
+                NetworkPolicyRuleAction::Deny => {
+                    match session
+                        .persist_network_policy_amendment(
+                            &network_policy_amendment,
+                            &network_approval_context,
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            session
+                                .record_network_policy_amendment_message(
+                                    &turn_context.sub_id,
+                                    &network_policy_amendment,
+                                )
+                                .await;
+                        }
+                        Err(err) => {
+                            let message =
+                                format!("Failed to apply network policy amendment: {err}");
+                            warn!("{message}");
+                            session
+                                .send_event_raw(Event {
+                                    id: turn_context.sub_id.clone(),
+                                    msg: EventMsg::Warning(WarningEvent { message }),
+                                })
+                                .await;
+                        }
+                    }
+                    self.record_outcome_for_single_active_call(
+                        NetworkApprovalOutcome::DeniedByUser,
+                    )
+                    .await;
+                    cache_session_deny = true;
+                    PendingApprovalDecision::Deny
+                }
+            },
             ReviewDecision::Denied | ReviewDecision::Abort => {
                 self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByUser)
                     .await;
@@ -342,8 +427,21 @@ impl NetworkApprovalService {
         };
 
         if matches!(resolved, PendingApprovalDecision::AllowForSession) {
+            {
+                let mut denied_hosts = self.session_denied_hosts.lock().await;
+                denied_hosts.remove(&key);
+            }
             let mut approved_hosts = self.session_approved_hosts.lock().await;
             approved_hosts.insert(key.clone());
+        }
+
+        if cache_session_deny {
+            {
+                let mut approved_hosts = self.session_approved_hosts.lock().await;
+                approved_hosts.remove(&key);
+            }
+            let mut denied_hosts = self.session_denied_hosts.lock().await;
+            denied_hosts.insert(key.clone());
         }
 
         pending.set_decision(resolved).await;

@@ -27,6 +27,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 
 pub(crate) struct ToolOrchestrator {
@@ -145,6 +146,14 @@ impl ToolOrchestrator {
                     ReviewDecision::Approved
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                     | ReviewDecision::ApprovedForSession => {}
+                    ReviewDecision::NetworkPolicyAmendment {
+                        network_policy_amendment,
+                    } => match network_policy_amendment.action {
+                        NetworkPolicyRuleAction::Allow => {}
+                        NetworkPolicyRuleAction::Deny => {
+                            return Err(ToolError::Rejected("rejected by user".to_string()));
+                        }
+                    },
                 }
                 already_approved = true;
             }
@@ -273,6 +282,14 @@ impl ToolOrchestrator {
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                         | ReviewDecision::ApprovedForSession => {}
+                        ReviewDecision::NetworkPolicyAmendment {
+                            network_policy_amendment,
+                        } => match network_policy_amendment.action {
+                            NetworkPolicyRuleAction::Allow => {}
+                            NetworkPolicyRuleAction::Deny => {
+                                return Err(ToolError::Rejected("rejected by user".to_string()));
+                            }
+                        },
                     }
                 }
 

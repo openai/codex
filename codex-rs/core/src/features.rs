@@ -131,6 +131,8 @@ pub enum Feature {
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
     SkillEnvVarDependencyPrompt,
+    /// Emit skill approval test prompts/events.
+    SkillApproval,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Default).
@@ -608,6 +610,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SkillEnvVarDependencyPrompt,
         key: "skill_env_var_dependency_prompt",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SkillApproval,
+        key: "skill_approval",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

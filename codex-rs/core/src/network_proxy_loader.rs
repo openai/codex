@@ -6,6 +6,9 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
+use crate::exec_policy::ExecPolicyError;
+use crate::exec_policy::format_exec_policy_error_with_source;
+use crate::exec_policy::load_exec_policy;
 use anyhow::Context;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -18,6 +21,7 @@ use codex_network_proxy::NetworkProxyConstraintError;
 use codex_network_proxy::NetworkProxyConstraints;
 use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::build_config_state;
+use codex_network_proxy::normalize_host;
 use codex_network_proxy::validate_policy_against_constraints;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -49,7 +53,21 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
     .await
     .context("failed to load Codex config")?;
 
-    let config = config_from_layers(&config_layer_stack)?;
+    let (exec_policy, warning) = match load_exec_policy(&config_layer_stack).await {
+        Ok(policy) => (policy, None),
+        Err(err @ ExecPolicyError::ParsePolicy { .. }) => {
+            (codex_execpolicy::Policy::empty(), Some(err))
+        }
+        Err(err) => return Err(err.into()),
+    };
+    if let Some(err) = warning.as_ref() {
+        tracing::warn!(
+            "failed to parse execpolicy while building network proxy state: {}",
+            format_exec_policy_error_with_source(err)
+        );
+    }
+
+    let config = config_from_layers(&config_layer_stack, &exec_policy)?;
 
     let constraints = enforce_trusted_constraints(&config_layer_stack, &config)?;
     let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
@@ -175,13 +193,44 @@ fn apply_network_tables(config: &mut NetworkProxyConfig, parsed: NetworkTablesTo
     }
 }
 
-fn config_from_layers(layers: &ConfigLayerStack) -> Result<NetworkProxyConfig> {
+fn config_from_layers(
+    layers: &ConfigLayerStack,
+    exec_policy: &codex_execpolicy::Policy,
+) -> Result<NetworkProxyConfig> {
     let mut config = NetworkProxyConfig::default();
     for layer in layers.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false) {
         let parsed = network_tables_from_toml(&layer.config)?;
         apply_network_tables(&mut config, parsed);
     }
+    apply_exec_policy_network_rules(&mut config, exec_policy);
     Ok(config)
+}
+
+fn apply_exec_policy_network_rules(
+    config: &mut NetworkProxyConfig,
+    exec_policy: &codex_execpolicy::Policy,
+) {
+    let (allowed_domains, denied_domains) = exec_policy.compiled_network_domains();
+    for host in allowed_domains {
+        upsert_network_domain(
+            &mut config.network.allowed_domains,
+            &mut config.network.denied_domains,
+            host,
+        );
+    }
+    for host in denied_domains {
+        upsert_network_domain(
+            &mut config.network.denied_domains,
+            &mut config.network.allowed_domains,
+            host,
+        );
+    }
+}
+
+fn upsert_network_domain(target: &mut Vec<String>, opposite: &mut Vec<String>, host: String) {
+    opposite.retain(|entry| normalize_host(entry) != host);
+    target.retain(|entry| normalize_host(entry) != host);
+    target.push(host);
 }
 
 fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
@@ -260,6 +309,9 @@ impl ConfigReloader for MtimeConfigReloader {
 mod tests {
     use super::*;
 
+    use codex_execpolicy::Decision;
+    use codex_execpolicy::NetworkRuleProtocol;
+    use codex_execpolicy::Policy;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -290,6 +342,45 @@ allowed_domains = ["higher.example.com"]
         );
 
         assert_eq!(config.network.allowed_domains, vec!["higher.example.com"]);
+    }
+
+    #[test]
+    fn execpolicy_network_rules_overlay_network_lists() {
+        let mut config = NetworkProxyConfig::default();
+        config.network.allowed_domains = vec!["config.example.com".to_string()];
+        config.network.denied_domains = vec!["blocked.example.com".to_string()];
+
+        let mut exec_policy = Policy::empty();
+        exec_policy
+            .add_network_rule(
+                "blocked.example.com",
+                NetworkRuleProtocol::Https,
+                Decision::Allow,
+                None,
+            )
+            .expect("allow rule should be valid");
+        exec_policy
+            .add_network_rule(
+                "api.example.com",
+                NetworkRuleProtocol::Http,
+                Decision::Forbidden,
+                None,
+            )
+            .expect("deny rule should be valid");
+
+        apply_exec_policy_network_rules(&mut config, &exec_policy);
+
+        assert_eq!(
+            config.network.allowed_domains,
+            vec![
+                "config.example.com".to_string(),
+                "blocked.example.com".to_string()
+            ]
+        );
+        assert_eq!(
+            config.network.denied_domains,
+            vec!["api.example.com".to_string()]
+        );
     }
 
     #[test]

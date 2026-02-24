@@ -10,7 +10,6 @@ use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
 use crate::state::NetworkProxyConstraintError;
 use crate::state::NetworkProxyConstraints;
-#[cfg(test)]
 use crate::state::build_config_state;
 use crate::state::validate_policy_against_constraints;
 use anyhow::Context;
@@ -500,6 +499,70 @@ impl NetworkProxyState {
         }
     }
 
+    pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
+        self.update_domain_list(host, DomainListKind::Allow).await
+    }
+
+    pub async fn add_denied_domain(&self, host: &str) -> Result<()> {
+        self.update_domain_list(host, DomainListKind::Deny).await
+    }
+
+    async fn update_domain_list(&self, host: &str, target: DomainListKind) -> Result<()> {
+        let host = Host::parse(host).context("invalid network host")?;
+        let normalized_host = host.as_str().to_string();
+        let list_name = target.list_name();
+        let constraint_field = target.constraint_field();
+
+        loop {
+            self.reload_if_needed().await?;
+            let (previous_cfg, constraints, blocked, blocked_total) = {
+                let guard = self.state.read().await;
+                (
+                    guard.config.clone(),
+                    guard.constraints.clone(),
+                    guard.blocked.clone(),
+                    guard.blocked_total,
+                )
+            };
+
+            let mut candidate = previous_cfg.clone();
+            let (target_entries, opposite_entries) = candidate.split_domain_lists_mut(target);
+            let target_contains = target_entries
+                .iter()
+                .any(|entry| normalize_host(entry) == normalized_host);
+            let opposite_contains = opposite_entries
+                .iter()
+                .any(|entry| normalize_host(entry) == normalized_host);
+            if target_contains && !opposite_contains {
+                return Ok(());
+            }
+
+            target_entries.retain(|entry| normalize_host(entry) != normalized_host);
+            target_entries.push(normalized_host.clone());
+            opposite_entries.retain(|entry| normalize_host(entry) != normalized_host);
+
+            validate_policy_against_constraints(&candidate, &constraints)
+                .map_err(NetworkProxyConstraintError::into_anyhow)
+                .with_context(|| format!("{constraint_field} constrained by managed config"))?;
+
+            let mut new_state = build_config_state(candidate.clone(), constraints.clone())
+                .with_context(|| format!("failed to compile updated network {list_name}"))?;
+            new_state.blocked = blocked;
+            new_state.blocked_total = blocked_total;
+
+            let mut guard = self.state.write().await;
+            if guard.constraints != constraints || guard.config != previous_cfg {
+                drop(guard);
+                continue;
+            }
+
+            log_policy_changes(&guard.config, &candidate);
+            *guard = new_state;
+            info!("updated network {list_name} with {normalized_host}");
+            return Ok(());
+        }
+    }
+
     async fn reload_if_needed(&self) -> Result<()> {
         match self.reloader.maybe_reload().await? {
             None => Ok(()),
@@ -523,6 +586,46 @@ impl NetworkProxyState {
                 info!("reloaded config from {source}");
                 Ok(())
             }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DomainListKind {
+    Allow,
+    Deny,
+}
+
+impl DomainListKind {
+    fn list_name(self) -> &'static str {
+        match self {
+            Self::Allow => "allowlist",
+            Self::Deny => "denylist",
+        }
+    }
+
+    fn constraint_field(self) -> &'static str {
+        match self {
+            Self::Allow => "network.allowed_domains",
+            Self::Deny => "network.denied_domains",
+        }
+    }
+}
+
+impl NetworkProxyConfig {
+    fn split_domain_lists_mut(
+        &mut self,
+        target: DomainListKind,
+    ) -> (&mut Vec<String>, &mut Vec<String>) {
+        match target {
+            DomainListKind::Allow => (
+                &mut self.network.allowed_domains,
+                &mut self.network.denied_domains,
+            ),
+            DomainListKind::Deny => (
+                &mut self.network.denied_domains,
+                &mut self.network.allowed_domains,
+            ),
         }
     }
 }
@@ -692,6 +795,42 @@ mod tests {
             // resolve unknown hostnames to private IPs, which would trigger `not_allowed_local`).
             state.host_blocked("8.8.8.8", 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        );
+    }
+
+    #[tokio::test]
+    async fn add_allowed_domain_removes_matching_deny_entry() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            denied_domains: vec!["example.com".to_string()],
+            ..NetworkProxySettings::default()
+        });
+
+        state.add_allowed_domain("ExAmPlE.CoM").await.unwrap();
+
+        let (allowed, denied) = state.current_patterns().await.unwrap();
+        assert_eq!(allowed, vec!["example.com".to_string()]);
+        assert!(denied.is_empty());
+        assert_eq!(
+            state.host_blocked("example.com", 80).await.unwrap(),
+            HostBlockDecision::Allowed
+        );
+    }
+
+    #[tokio::test]
+    async fn add_denied_domain_removes_matching_allow_entry() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["example.com".to_string()],
+            ..NetworkProxySettings::default()
+        });
+
+        state.add_denied_domain("EXAMPLE.COM").await.unwrap();
+
+        let (allowed, denied) = state.current_patterns().await.unwrap();
+        assert!(allowed.is_empty());
+        assert_eq!(denied, vec!["example.com".to_string()]);
+        assert_eq!(
+            state.host_blocked("example.com", 80).await.unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::Denied)
         );
     }
 
