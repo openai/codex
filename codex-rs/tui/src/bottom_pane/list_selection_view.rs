@@ -112,6 +112,7 @@ pub(crate) type OnCancelCallback = Option<Box<dyn Fn(&AppEventSender) + Send + S
 #[derive(Default)]
 pub(crate) struct SelectionItem {
     pub name: String,
+    pub name_prefix_spans: Vec<Span<'static>>,
     pub display_shortcut: Option<KeyBinding>,
     pub description: Option<String>,
     pub selected_description: Option<String>,
@@ -372,7 +373,9 @@ impl ListSelectionView {
                         format!("{prefix} {n}. ")
                     };
                     let wrap_prefix_width = UnicodeWidthStr::width(wrap_prefix.as_str());
-                    let display_name = format!("{wrap_prefix}{name_with_marker}");
+                    let mut name_prefix_spans = Vec::new();
+                    name_prefix_spans.push(wrap_prefix.into());
+                    name_prefix_spans.extend(item.name_prefix_spans.clone());
                     let description = is_selected
                         .then(|| item.selected_description.clone())
                         .flatten()
@@ -380,7 +383,8 @@ impl ListSelectionView {
                     let wrap_indent = description.is_none().then_some(wrap_prefix_width);
                     let is_disabled = item.is_disabled || item.disabled_reason.is_some();
                     GenericDisplayRow {
-                        name: display_name,
+                        name: name_with_marker,
+                        name_prefix_spans,
                         display_shortcut: item.display_shortcut,
                         match_indices: None,
                         description,
