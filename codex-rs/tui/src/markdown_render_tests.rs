@@ -654,7 +654,7 @@ fn link() {
 #[test]
 fn file_link_hides_destination() {
     let text =
-        render_markdown_text("[markdown_render.rs:74](/Users/pash/code/codex/codex-rs/tui/src/markdown_render.rs:74)");
+        render_markdown_text("[markdown_render.rs:74](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)");
     let expected = Text::from(Line::from("markdown_render.rs:74".cyan().underlined()));
     assert_eq!(text, expected);
 }
@@ -662,7 +662,7 @@ fn file_link_hides_destination() {
 #[test]
 fn markdown_render_file_link_snapshot() {
     let text = render_markdown_text(
-        "See [markdown_render.rs:74](/Users/pash/code/codex/codex-rs/tui/src/markdown_render.rs:74).",
+        "See [markdown_render.rs:74](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74).",
     );
     let rendered = text
         .lines
