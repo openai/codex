@@ -3,5 +3,8 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "login",
     crate_name = "codex_login",
-    compile_data = ["src/assets/success.html"],
+    compile_data = [
+        "src/assets/error.html",
+        "src/assets/success.html",
+    ],
 )

@@ -1,5 +1,6 @@
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
+use crate::config::ValidatedUnixSocketPath;
 use crate::policy::Host;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
@@ -9,7 +10,6 @@ use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
 use crate::state::NetworkProxyConstraintError;
 use crate::state::NetworkProxyConstraints;
-#[cfg(test)]
 use crate::state::build_config_state;
 use crate::state::validate_policy_against_constraints;
 use anyhow::Context;
@@ -463,6 +463,10 @@ impl NetworkProxyState {
         }
 
         let guard = self.state.read().await;
+        if guard.config.network.dangerously_allow_all_unix_sockets {
+            return Ok(true);
+        }
+
         // Normalize the path while keeping the absolute-path requirement explicit.
         let requested_abs = match AbsolutePathBuf::from_absolute_path(requested_path) {
             Ok(path) => path,
@@ -470,7 +474,16 @@ impl NetworkProxyState {
         };
         let requested_canonical = std::fs::canonicalize(requested_abs.as_path()).ok();
         for allowed in &guard.config.network.allow_unix_sockets {
-            if allowed == path {
+            let allowed_path = match ValidatedUnixSocketPath::parse(allowed) {
+                Ok(ValidatedUnixSocketPath::Native(path)) => path,
+                Ok(ValidatedUnixSocketPath::UnixStyleAbsolute(_)) => continue,
+                Err(err) => {
+                    warn!("ignoring invalid network.allow_unix_sockets entry at runtime: {err:#}");
+                    continue;
+                }
+            };
+
+            if allowed_path.as_path() == requested_abs.as_path() {
                 return Ok(true);
             }
 
@@ -479,7 +492,7 @@ impl NetworkProxyState {
             let Some(requested_canonical) = &requested_canonical else {
                 continue;
             };
-            if let Ok(allowed_canonical) = std::fs::canonicalize(allowed)
+            if let Ok(allowed_canonical) = std::fs::canonicalize(allowed_path.as_path())
                 && &allowed_canonical == requested_canonical
             {
                 return Ok(true);
@@ -531,6 +544,70 @@ impl NetworkProxyState {
         }
     }
 
+    pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
+        self.update_domain_list(host, DomainListKind::Allow).await
+    }
+
+    pub async fn add_denied_domain(&self, host: &str) -> Result<()> {
+        self.update_domain_list(host, DomainListKind::Deny).await
+    }
+
+    async fn update_domain_list(&self, host: &str, target: DomainListKind) -> Result<()> {
+        let host = Host::parse(host).context("invalid network host")?;
+        let normalized_host = host.as_str().to_string();
+        let list_name = target.list_name();
+        let constraint_field = target.constraint_field();
+
+        loop {
+            self.reload_if_needed().await?;
+            let (previous_cfg, constraints, blocked, blocked_total) = {
+                let guard = self.state.read().await;
+                (
+                    guard.config.clone(),
+                    guard.constraints.clone(),
+                    guard.blocked.clone(),
+                    guard.blocked_total,
+                )
+            };
+
+            let mut candidate = previous_cfg.clone();
+            let (target_entries, opposite_entries) = candidate.split_domain_lists_mut(target);
+            let target_contains = target_entries
+                .iter()
+                .any(|entry| normalize_host(entry) == normalized_host);
+            let opposite_contains = opposite_entries
+                .iter()
+                .any(|entry| normalize_host(entry) == normalized_host);
+            if target_contains && !opposite_contains {
+                return Ok(());
+            }
+
+            target_entries.retain(|entry| normalize_host(entry) != normalized_host);
+            target_entries.push(normalized_host.clone());
+            opposite_entries.retain(|entry| normalize_host(entry) != normalized_host);
+
+            validate_policy_against_constraints(&candidate, &constraints)
+                .map_err(NetworkProxyConstraintError::into_anyhow)
+                .with_context(|| format!("{constraint_field} constrained by managed config"))?;
+
+            let mut new_state = build_config_state(candidate.clone(), constraints.clone())
+                .with_context(|| format!("failed to compile updated network {list_name}"))?;
+            new_state.blocked = blocked;
+            new_state.blocked_total = blocked_total;
+
+            let mut guard = self.state.write().await;
+            if guard.constraints != constraints || guard.config != previous_cfg {
+                drop(guard);
+                continue;
+            }
+
+            log_policy_changes(&guard.config, &candidate);
+            *guard = new_state;
+            info!("updated network {list_name} with {normalized_host}");
+            return Ok(());
+        }
+    }
+
     async fn reload_if_needed(&self) -> Result<()> {
         match self.reloader.maybe_reload().await? {
             None => Ok(()),
@@ -554,6 +631,46 @@ impl NetworkProxyState {
                 info!("reloaded config from {source}");
                 Ok(())
             }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DomainListKind {
+    Allow,
+    Deny,
+}
+
+impl DomainListKind {
+    fn list_name(self) -> &'static str {
+        match self {
+            Self::Allow => "allowlist",
+            Self::Deny => "denylist",
+        }
+    }
+
+    fn constraint_field(self) -> &'static str {
+        match self {
+            Self::Allow => "network.allowed_domains",
+            Self::Deny => "network.denied_domains",
+        }
+    }
+}
+
+impl NetworkProxyConfig {
+    fn split_domain_lists_mut(
+        &mut self,
+        target: DomainListKind,
+    ) -> (&mut Vec<String>, &mut Vec<String>) {
+        match target {
+            DomainListKind::Allow => (
+                &mut self.network.allowed_domains,
+                &mut self.network.denied_domains,
+            ),
+            DomainListKind::Deny => (
+                &mut self.network.denied_domains,
+                &mut self.network.allowed_domains,
+            ),
         }
     }
 }
@@ -723,6 +840,42 @@ mod tests {
             // resolve unknown hostnames to private IPs, which would trigger `not_allowed_local`).
             state.host_blocked("8.8.8.8", 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        );
+    }
+
+    #[tokio::test]
+    async fn add_allowed_domain_removes_matching_deny_entry() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            denied_domains: vec!["example.com".to_string()],
+            ..NetworkProxySettings::default()
+        });
+
+        state.add_allowed_domain("ExAmPlE.CoM").await.unwrap();
+
+        let (allowed, denied) = state.current_patterns().await.unwrap();
+        assert_eq!(allowed, vec!["example.com".to_string()]);
+        assert!(denied.is_empty());
+        assert_eq!(
+            state.host_blocked("example.com", 80).await.unwrap(),
+            HostBlockDecision::Allowed
+        );
+    }
+
+    #[tokio::test]
+    async fn add_denied_domain_removes_matching_allow_entry() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["example.com".to_string()],
+            ..NetworkProxySettings::default()
+        });
+
+        state.add_denied_domain("EXAMPLE.COM").await.unwrap();
+
+        let (allowed, denied) = state.current_patterns().await.unwrap();
+        assert!(allowed.is_empty());
+        assert_eq!(denied, vec!["example.com".to_string()]);
+        assert_eq!(
+            state.host_blocked("example.com", 80).await.unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::Denied)
         );
     }
 
@@ -1121,6 +1274,77 @@ mod tests {
     }
 
     #[test]
+    fn validate_policy_against_constraints_disallows_allow_all_unix_sockets_without_managed_opt_in()
+    {
+        let constraints = NetworkProxyConstraints {
+            dangerously_allow_all_unix_sockets: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                dangerously_allow_all_unix_sockets: true,
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_disallows_allow_all_unix_sockets_when_allowlist_is_managed()
+     {
+        let constraints = NetworkProxyConstraints {
+            allow_unix_sockets: Some(vec!["/tmp/allowed.sock".to_string()]),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                dangerously_allow_all_unix_sockets: true,
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_allows_allow_all_unix_sockets_with_managed_opt_in() {
+        let constraints = NetworkProxyConstraints {
+            dangerously_allow_all_unix_sockets: Some(true),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                dangerously_allow_all_unix_sockets: true,
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_ok());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_allows_allow_all_unix_sockets_when_unmanaged() {
+        let constraints = NetworkProxyConstraints::default();
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                dangerously_allow_all_unix_sockets: true,
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_ok());
+    }
+
+    #[test]
     fn compile_globset_is_case_insensitive() {
         let patterns = vec!["ExAmPle.CoM".to_string()];
         let set = compile_globset(&patterns).unwrap();
@@ -1217,6 +1441,19 @@ mod tests {
         assert!(state.is_unix_socket_allowed(&link_s).await.unwrap());
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn unix_socket_allow_all_flag_bypasses_allowlist() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["example.com".to_string()],
+            dangerously_allow_all_unix_sockets: true,
+            ..NetworkProxySettings::default()
+        });
+
+        assert!(state.is_unix_socket_allowed("/tmp/any.sock").await.unwrap());
+        assert!(!state.is_unix_socket_allowed("relative.sock").await.unwrap());
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn unix_socket_allowlist_is_rejected_on_non_macos() {
@@ -1224,6 +1461,7 @@ mod tests {
         let state = network_proxy_state_for_policy(NetworkProxySettings {
             allowed_domains: vec!["example.com".to_string()],
             allow_unix_sockets: vec![socket_path.clone()],
+            dangerously_allow_all_unix_sockets: true,
             ..NetworkProxySettings::default()
         });
 

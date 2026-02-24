@@ -10,7 +10,6 @@ use codex_core::config_loader::LoaderOverrides;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
@@ -42,6 +41,7 @@ use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_feedback::CodexFeedback;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use tracing::error;
 use tracing::info;
@@ -92,6 +92,7 @@ enum OutboundControlEvent {
     Opened {
         connection_id: ConnectionId,
         writer: mpsc::Sender<crate::outgoing_message::OutgoingMessage>,
+        disconnect_sender: Option<CancellationToken>,
         initialized: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     },
@@ -403,61 +404,43 @@ pub async fn run_main_with_transport(
         }
     }
 
-    let transport_event_tx_for_outbound = transport_event_tx.clone();
     let outbound_handle = tokio::spawn(async move {
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
-        let mut pending_closed_connections = VecDeque::<ConnectionId>::new();
         loop {
             tokio::select! {
-                biased;
-                event = outbound_control_rx.recv() => {
-                    let Some(event) = event else {
-                        break;
-                    };
-                    match event {
-                        OutboundControlEvent::Opened {
-                            connection_id,
-                            writer,
-                            initialized,
-                            opted_out_notification_methods,
-                        } => {
-                            outbound_connections.insert(
+                    biased;
+                    event = outbound_control_rx.recv() => {
+                        let Some(event) = event else {
+                            break;
+                        };
+                        match event {
+                            OutboundControlEvent::Opened {
                                 connection_id,
-                                OutboundConnectionState::new(
-                                    writer,
-                                    initialized,
-                                    opted_out_notification_methods,
-                                ),
-                            );
-                        }
-                        OutboundControlEvent::Closed { connection_id } => {
-                            outbound_connections.remove(&connection_id);
+                                writer,
+                                disconnect_sender,
+                                initialized,
+                                opted_out_notification_methods,
+                            } => {
+                                outbound_connections.insert(
+                                    connection_id,
+                                    OutboundConnectionState::new(
+                                        writer,
+                                        initialized,
+                                        opted_out_notification_methods,
+                                        disconnect_sender,
+                                    ),
+                                );
+                            }
+                            OutboundControlEvent::Closed { connection_id } => {
+                                outbound_connections.remove(&connection_id);
+                            }
                         }
                     }
-                }
-                envelope = outgoing_rx.recv() => {
+                    envelope = outgoing_rx.recv() => {
                     let Some(envelope) = envelope else {
                         break;
                     };
-                    let disconnected_connections =
-                        route_outgoing_envelope(&mut outbound_connections, envelope).await;
-                    pending_closed_connections.extend(disconnected_connections);
-                }
-            }
-
-            while let Some(connection_id) = pending_closed_connections.front().copied() {
-                match transport_event_tx_for_outbound
-                    .try_send(TransportEvent::ConnectionClosed { connection_id })
-                {
-                    Ok(()) => {
-                        pending_closed_connections.pop_front();
-                    }
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        break;
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        return;
-                    }
+                    route_outgoing_envelope(&mut outbound_connections, envelope).await;
                 }
             }
         }
@@ -491,7 +474,11 @@ pub async fn run_main_with_transport(
                             break;
                         };
                         match event {
-                            TransportEvent::ConnectionOpened { connection_id, writer } => {
+                            TransportEvent::ConnectionOpened {
+                                connection_id,
+                                writer,
+                                disconnect_sender,
+                            } => {
                                 let outbound_initialized = Arc::new(AtomicBool::new(false));
                                 let outbound_opted_out_notification_methods =
                                     Arc::new(RwLock::new(HashSet::new()));
@@ -499,6 +486,7 @@ pub async fn run_main_with_transport(
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
                                         writer,
+                                        disconnect_sender,
                                         initialized: Arc::clone(&outbound_initialized),
                                         opted_out_notification_methods: Arc::clone(
                                             &outbound_opted_out_notification_methods,
@@ -518,6 +506,9 @@ pub async fn run_main_with_transport(
                                 );
                             }
                             TransportEvent::ConnectionClosed { connection_id } => {
+                                if connections.remove(&connection_id).is_none() {
+                                    continue;
+                                }
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Closed { connection_id })
                                     .await
@@ -526,7 +517,6 @@ pub async fn run_main_with_transport(
                                     break;
                                 }
                                 processor.connection_closed(connection_id).await;
-                                connections.remove(&connection_id);
                                 if shutdown_when_no_connections && connections.is_empty() {
                                     break;
                                 }
@@ -535,7 +525,7 @@ pub async fn run_main_with_transport(
                                 match message {
                                     JSONRPCMessage::Request(request) => {
                                         let Some(connection_state) = connections.get_mut(&connection_id) else {
-                                            warn!("dropping request from unknown connection: {:?}", connection_id);
+                                            warn!("dropping request from unknown connection: {connection_id:?}");
                                             continue;
                                         };
                                         let was_initialized = connection_state.session.initialized;
@@ -565,12 +555,24 @@ pub async fn run_main_with_transport(
                                         }
                                     }
                                     JSONRPCMessage::Response(response) => {
+                                        if !connections.contains_key(&connection_id) {
+                                            warn!("dropping response from unknown connection: {connection_id:?}");
+                                            continue;
+                                        }
                                         processor.process_response(response).await;
                                     }
                                     JSONRPCMessage::Notification(notification) => {
+                                        if !connections.contains_key(&connection_id) {
+                                            warn!("dropping notification from unknown connection: {connection_id:?}");
+                                            continue;
+                                        }
                                         processor.process_notification(notification).await;
                                     }
                                     JSONRPCMessage::Error(err) => {
+                                        if !connections.contains_key(&connection_id) {
+                                            warn!("dropping error from unknown connection: {connection_id:?}");
+                                            continue;
+                                        }
                                         processor.process_error(err).await;
                                     }
                                 }

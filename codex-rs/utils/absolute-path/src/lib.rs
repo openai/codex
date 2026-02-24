@@ -69,8 +69,11 @@ impl AbsolutePathBuf {
 
     pub fn parent(&self) -> Option<Self> {
         self.0.parent().map(|p| {
-            #[expect(clippy::expect_used)]
-            Self::from_absolute_path(p).expect("parent of AbsolutePathBuf must be absolute")
+            debug_assert!(
+                p.is_absolute(),
+                "parent of AbsolutePathBuf must be absolute"
+            );
+            Self(p.to_path_buf())
         })
     }
 

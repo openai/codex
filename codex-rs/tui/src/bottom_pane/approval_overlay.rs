@@ -17,13 +17,13 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use codex_core::features::Features;
-use codex_core::protocol::ElicitationAction;
-use codex_core::protocol::ExecPolicyAmendment;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::NetworkApprovalContext;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
 use codex_protocol::mcp::RequestId;
+use codex_protocol::protocol::ElicitationAction;
+use codex_protocol::protocol::ExecPolicyAmendment;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::NetworkApprovalContext;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -576,7 +576,7 @@ fn elicitation_options() -> Vec<ApprovalOption> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use codex_core::protocol::NetworkApprovalProtocol;
+    use codex_protocol::protocol::NetworkApprovalProtocol;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 

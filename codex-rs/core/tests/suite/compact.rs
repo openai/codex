@@ -5,19 +5,19 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ItemCompletedEvent;
-use codex_core::protocol::ItemStartedEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::RolloutItem;
-use codex_core::protocol::RolloutLine;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::WarningEvent;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -363,7 +363,7 @@ async fn summarize_context_three_requests_and_instructions() {
     codex.submit(Op::Shutdown).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    // Verify rollout contains APITurn entries for each API call and a Compacted entry.
+    // Verify rollout contains regular sampling TurnContext entries and a Compacted entry.
     println!("rollout path: {}", rollout_path.display());
     let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
         panic!(
@@ -371,7 +371,7 @@ async fn summarize_context_three_requests_and_instructions() {
             rollout_path.display()
         )
     });
-    let mut api_turn_count = 0usize;
+    let mut regular_turn_context_count = 0usize;
     let mut saw_compacted_summary = false;
     for line in text.lines() {
         let trimmed = line.trim();
@@ -383,7 +383,7 @@ async fn summarize_context_three_requests_and_instructions() {
         };
         match entry.item {
             RolloutItem::TurnContext(_) => {
-                api_turn_count += 1;
+                regular_turn_context_count += 1;
             }
             RolloutItem::Compacted(ci) => {
                 if ci.message == expected_summary_message {
@@ -395,8 +395,8 @@ async fn summarize_context_three_requests_and_instructions() {
     }
 
     assert!(
-        api_turn_count == 3,
-        "expected three APITurn entries in rollout"
+        regular_turn_context_count == 2,
+        "expected two regular sampling TurnContext entries in rollout"
     );
     assert!(
         saw_compacted_summary,
@@ -2414,26 +2414,36 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         first_request_user_texts[first_turn_user_index], first_user_message,
         "first turn request should end with the submitted user message"
     );
-    let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
+    let initial_seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
 
     let final_request_user_texts = requests
         .last()
         .unwrap_or_else(|| panic!("final turn request missing for {final_user_message}"))
         .message_input_texts("user");
     assert!(
-        final_request_user_texts
-            .as_slice()
-            .starts_with(seeded_user_prefix),
-        "final request should start with seeded user prefix from first request: {seeded_user_prefix:?}"
+        !initial_seeded_user_prefix.is_empty(),
+        "first turn should include seeded user prefix before the submitted user message"
     );
-    let final_output = &final_request_user_texts[seeded_user_prefix.len()..];
-    let expected = vec![
+    let (final_request_last_user_text, final_request_before_last_user) = final_request_user_texts
+        .split_last()
+        .unwrap_or_else(|| panic!("final turn request missing user messages"));
+    assert_eq!(
+        final_request_last_user_text, final_user_message,
+        "final turn request should end with the submitted user message"
+    );
+    let history_before_seeded_prefix = final_request_before_last_user
+        .strip_suffix(initial_seeded_user_prefix)
+        .unwrap_or_else(|| {
+            panic!(
+                "final request should end with the seeded user prefix from the first request: {initial_seeded_user_prefix:?}"
+            )
+        });
+    let expected_history = vec![
         first_user_message.to_string(),
         second_user_message.to_string(),
         expected_second_summary,
-        final_user_message.to_string(),
     ];
-    assert_eq!(final_output, expected.as_slice());
+    assert_eq!(history_before_seeded_prefix, expected_history.as_slice());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

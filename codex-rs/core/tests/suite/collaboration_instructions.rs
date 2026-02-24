@@ -1,11 +1,11 @@
 use anyhow::Result;
-use codex_core::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use codex_core::protocol::COLLABORATION_MODE_OPEN_TAG;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::protocol::COLLABORATION_MODE_CLOSE_TAG;
+use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;

@@ -206,6 +206,10 @@ impl NetworkProxyBuilder {
             socks_addr,
             socks_enabled: current_cfg.network.enable_socks5,
             allow_local_binding: current_cfg.network.allow_local_binding,
+            allow_unix_sockets: current_cfg.network.allow_unix_sockets.clone(),
+            dangerously_allow_all_unix_sockets: current_cfg
+                .network
+                .dangerously_allow_all_unix_sockets,
             admin_addr,
             reserved_listeners,
             policy_decider: self.policy_decider,
@@ -240,6 +244,8 @@ pub struct NetworkProxy {
     socks_addr: SocketAddr,
     socks_enabled: bool,
     allow_local_binding: bool,
+    allow_unix_sockets: Vec<String>,
+    dangerously_allow_all_unix_sockets: bool,
     admin_addr: SocketAddr,
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
@@ -419,6 +425,26 @@ impl NetworkProxy {
         self.admin_addr
     }
 
+    pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
+        self.state.add_allowed_domain(host).await
+    }
+
+    pub async fn add_denied_domain(&self, host: &str) -> Result<()> {
+        self.state.add_denied_domain(host).await
+    }
+
+    pub fn allow_local_binding(&self) -> bool {
+        self.allow_local_binding
+    }
+
+    pub fn allow_unix_sockets(&self) -> &[String] {
+        &self.allow_unix_sockets
+    }
+
+    pub fn dangerously_allow_all_unix_sockets(&self) -> bool {
+        self.dangerously_allow_all_unix_sockets
+    }
+
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
@@ -441,7 +467,9 @@ impl NetworkProxy {
         ensure_rustls_crypto_provider();
 
         if !unix_socket_permissions_supported() {
-            warn!("allowUnixSockets is macOS-only; requests will be rejected on this platform");
+            warn!(
+                "allowUnixSockets and dangerouslyAllowAllUnixSockets are macOS-only; requests will be rejected on this platform"
+            );
         }
 
         let reserved_listeners = self.reserved_listeners.as_ref();
