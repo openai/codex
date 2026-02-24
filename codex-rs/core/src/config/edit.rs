@@ -774,7 +774,7 @@ impl ConfigEditsBuilder {
 
     pub fn set_model_toggle_pair(mut self, pair: Option<&[ModelTogglePairEntry]>) -> Self {
         self.edits.push(ConfigEdit::SetModelTogglePair {
-            pair: pair.map(|entries| entries.to_vec()),
+            pair: pair.map(<[ModelTogglePairEntry]>::to_vec),
         });
         self
     }
