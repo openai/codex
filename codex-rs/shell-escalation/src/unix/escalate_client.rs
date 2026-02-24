@@ -27,7 +27,10 @@ fn get_escalate_client() -> anyhow::Result<AsyncDatagramSocket> {
     Ok(unsafe { AsyncDatagramSocket::from_raw_fd(client_fd) }?)
 }
 
-pub async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> {
+pub async fn run_shell_escalation_execve_wrapper(
+    file: String,
+    argv: Vec<String>,
+) -> anyhow::Result<i32> {
     let handshake_client = get_escalate_client()?;
     let (server, client) = AsyncSocket::pair()?;
     const HANDSHAKE_MESSAGE: [u8; 1] = [0];
