@@ -4,9 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "codex-execve-wrapper"
+path = "src/bin/main_execve_wrapper.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
 codex-core = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-protocol = { workspace = true }
@@ -24,6 +29,7 @@ tokio = { workspace = true, features = [
 ] }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

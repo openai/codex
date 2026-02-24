@@ -3,11 +3,11 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::escalate_protocol::EscalateAction;
-use crate::escalation_policy::EscalationPolicy;
-use crate::stopwatch::Stopwatch;
-use crate::unix::escalate_server::EscalationPolicyFactory;
 use codex_execpolicy::Policy;
+use super::escalate_protocol::EscalateAction;
+use super::escalate_server::EscalationPolicyFactory;
+use super::escalation_policy::EscalationPolicy;
+use super::stopwatch::Stopwatch;
 
 #[async_trait]
 pub trait ShellActionProvider: Send + Sync {
