@@ -180,7 +180,7 @@ where
 fn longest_suffix_prefix_len(s: &str, needle: &str) -> usize {
     let max = s.len().min(needle.len().saturating_sub(1));
     for k in (1..=max).rev() {
-        if s.ends_with(&needle[..k]) {
+        if needle.is_char_boundary(k) && s.ends_with(&needle[..k]) {
             return k;
         }
     }
@@ -240,5 +240,21 @@ mod tests {
         assert_eq!(out.extracted[0].content, "x");
         assert_eq!(out.extracted[1].tag, Tag::B);
         assert_eq!(out.extracted[1].content, "y");
+    }
+
+    #[test]
+    fn generic_inline_parser_supports_non_ascii_tag_delimiters() {
+        let mut parser = InlineHiddenTagParser::new(vec![InlineTagSpec {
+            tag: Tag::A,
+            open: "<é>",
+            close: "</é>",
+        }]);
+
+        let out = collect_chunks(&mut parser, &["a<", "é>中</", "é>b"]);
+
+        assert_eq!(out.visible_text, "ab");
+        assert_eq!(out.extracted.len(), 1);
+        assert_eq!(out.extracted[0].tag, Tag::A);
+        assert_eq!(out.extracted[0].content, "中");
     }
 }

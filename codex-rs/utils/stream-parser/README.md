@@ -8,6 +8,7 @@ Small, dependency-free utilities for parsing streamed text incrementally.
 - `InlineHiddenTagParser<T>`: generic parser that hides inline tags and extracts their contents
 - `CitationStreamParser`: convenience wrapper for `<citation>...</citation>`
 - `strip_citations(...)`: one-shot helper for non-streamed strings
+- `Utf8StreamParser<P>`: adapter for raw `&[u8]` streams that may split UTF-8 code points
 
 ## Why this exists
 
@@ -37,6 +38,25 @@ assert_eq!(second.extracted, vec!["doc A".to_string()]);
 let tail = parser.finish();
 assert!(tail.visible_text.is_empty());
 assert!(tail.extracted.is_empty());
+```
+
+## Example: raw byte streaming with split UTF-8 code points
+
+```rust
+use codex_utils_stream_parser::CitationStreamParser;
+use codex_utils_stream_parser::Utf8StreamParser;
+
+let mut parser = Utf8StreamParser::new(CitationStreamParser::new());
+
+// "é" split across chunks: 0xC3 + 0xA9
+let first = parser.push_bytes(&[b'H', 0xC3]).unwrap();
+assert_eq!(first.visible_text, "H");
+
+let second = parser.push_bytes(&[0xA9, b'!']).unwrap();
+assert_eq!(second.visible_text, "é!");
+
+let tail = parser.finish().unwrap();
+assert!(tail.visible_text.is_empty());
 ```
 
 ## Example: custom hidden tags
@@ -69,3 +89,5 @@ assert_eq!(out.extracted[0].content, "x");
 - No tag attributes
 - No nested tag support
 - Unterminated open tags are auto-closed on `finish()` (buffered content is returned as extracted)
+- `StreamTextParser::push_str(...)` accepts only valid UTF-8 (`&str`); use `Utf8StreamParser` if your
+  upstream source yields raw bytes
