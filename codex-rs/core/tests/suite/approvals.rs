@@ -35,6 +35,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
@@ -2215,7 +2216,18 @@ allow_local_binding = true
     )
     .await?;
 
-    let approval = expect_exec_approval(&test, expected_network_target).await;
+    let approval: ExecApprovalRequestEvent = wait_for_event_match(&test.codex, |event| {
+        let EventMsg::ExecApprovalRequest(approval) = event else {
+            return None;
+        };
+        let last_arg = approval
+            .command
+            .last()
+            .map(std::string::String::as_str)
+            .unwrap_or_default();
+        (last_arg == expected_network_target).then(|| approval.clone())
+    })
+    .await;
     let network_context = approval
         .network_approval_context
         .clone()
