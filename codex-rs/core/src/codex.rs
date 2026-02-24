@@ -5856,6 +5856,9 @@ async fn emit_streamed_assistant_text_delta(
         }
         return;
     }
+    if parsed.visible_text.is_empty() {
+        return;
+    }
     let event = AgentMessageContentDeltaEvent {
         thread_id: sess.conversation_id.to_string(),
         turn_id: turn_context.sub_id.clone(),
