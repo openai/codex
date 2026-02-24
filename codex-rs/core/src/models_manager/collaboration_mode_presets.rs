@@ -8,6 +8,7 @@ const COLLABORATION_MODE_DEFAULT: &str =
     include_str!("../../templates/collaboration_mode/default.md");
 const KNOWN_MODE_NAMES_PLACEHOLDER: &str = "{{KNOWN_MODE_NAMES}}";
 const REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER: &str = "{{REQUEST_USER_INPUT_AVAILABILITY}}";
+const QUESTION_STRATEGY_PLACEHOLDER: &str = "{{QUESTION_STRATEGY}}";
 
 pub(crate) fn builtin_collaboration_mode_presets(
     default_mode_request_user_input: bool,
@@ -44,12 +45,14 @@ fn default_mode_instructions(default_mode_request_user_input: bool) -> String {
     let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
     let request_user_input_availability =
         request_user_input_availability_message(ModeKind::Default, default_mode_request_user_input);
+    let question_strategy = question_strategy_message(default_mode_request_user_input);
     COLLABORATION_MODE_DEFAULT
         .replace(KNOWN_MODE_NAMES_PLACEHOLDER, &known_mode_names)
         .replace(
             REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER,
             &request_user_input_availability,
         )
+        .replace(QUESTION_STRATEGY_PLACEHOLDER, &question_strategy)
 }
 
 fn format_mode_names(modes: &[ModeKind]) -> String {
@@ -78,6 +81,14 @@ fn request_user_input_availability_message(
     }
 }
 
+fn question_strategy_message(default_mode_request_user_input: bool) -> String {
+    if default_mode_request_user_input {
+        "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, prefer using the `request_user_input` tool rather than writing a multiple choice question as a textual assistant message. Never write a multiple choice question as a textual assistant message.".to_string()
+    } else {
+        "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.".to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,6 +113,7 @@ mod tests {
 
         assert!(!default_instructions.contains(KNOWN_MODE_NAMES_PLACEHOLDER));
         assert!(!default_instructions.contains(REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER));
+        assert!(!default_instructions.contains(QUESTION_STRATEGY_PLACEHOLDER));
 
         let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
         let expected_snippet = format!("Known mode names are {known_mode_names}.");
@@ -110,5 +122,20 @@ mod tests {
         let expected_availability_message =
             request_user_input_availability_message(ModeKind::Default, true);
         assert!(default_instructions.contains(&expected_availability_message));
+        assert!(default_instructions.contains("prefer using the `request_user_input` tool"));
+    }
+
+    #[test]
+    fn default_mode_instructions_use_plain_text_questions_when_feature_disabled() {
+        let default_instructions = default_preset(false)
+            .developer_instructions
+            .expect("default preset should include instructions")
+            .expect("default instructions should be set");
+
+        assert!(!default_instructions.contains("prefer using the `request_user_input` tool"));
+        assert!(
+            default_instructions
+                .contains("ask the user directly with a concise plain-text question")
+        );
     }
 }
