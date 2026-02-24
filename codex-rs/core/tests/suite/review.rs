@@ -4,6 +4,7 @@ use codex_core::config::Config;
 use codex_core::review_format::render_review_output_text;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
@@ -479,6 +480,146 @@ async fn review_uses_session_model_when_review_model_unset() {
     assert_eq!(request.path(), "/v1/responses");
     let body = request.body_json();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-4.1");
+
+    let _codex_home_guard = codex_home;
+    server.verify().await;
+}
+
+/// Ensure `/review` uses the current runtime reasoning effort after a model
+/// switch, not stale startup effort.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_uses_current_reasoning_effort_after_model_switch() {
+    skip_if_no_network!();
+
+    let sse_raw = r#"[
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"#;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
+        cfg.model = Some("gpt-5.2-codex".to_string());
+        cfg.model_reasoning_effort = Some(ReasoningEffort::XHigh);
+        cfg.review_model = None;
+    })
+    .await;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: Some("gpt-5.1-codex-mini".to_string()),
+            effort: Some(Some(ReasoningEffort::High)),
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .unwrap();
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "use current runtime effort".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _closed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: None
+            })
+        )
+    })
+    .await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = request_log.single_request();
+    let body = request.body_json();
+    let reasoning_effort = body
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(|value| value.as_str());
+    assert_eq!(body["model"].as_str(), Some("gpt-5.1-codex-mini"));
+    assert_eq!(reasoning_effort, Some("high"));
+
+    let _codex_home_guard = codex_home;
+    server.verify().await;
+}
+
+/// Ensure `/review` falls back to a supported reasoning effort when the
+/// current runtime effort is unsupported by the active model.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_falls_back_reasoning_effort_when_current_effort_is_unsupported() {
+    skip_if_no_network!();
+
+    let sse_raw = r#"[
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"#;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
+        cfg.model = Some("gpt-5.2-codex".to_string());
+        cfg.model_reasoning_effort = Some(ReasoningEffort::XHigh);
+        cfg.review_model = None;
+    })
+    .await;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: Some("gpt-5.1".to_string()),
+            effort: Some(Some(ReasoningEffort::Minimal)),
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .unwrap();
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "fallback when effort unsupported".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _closed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: None
+            })
+        )
+    })
+    .await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = request_log.single_request();
+    let body = request.body_json();
+    let reasoning_effort = body
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(|value| value.as_str());
+    assert_eq!(body["model"].as_str(), Some("gpt-5.1"));
+    assert_eq!(reasoning_effort, Some("medium"));
 
     let _codex_home_guard = codex_home;
     server.verify().await;

@@ -575,6 +575,30 @@ pub(crate) struct TurnContext {
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
 }
+
+fn select_reasoning_effort_for_model(
+    current_reasoning_effort: Option<ReasoningEffortConfig>,
+    model_info: &ModelInfo,
+) -> Option<ReasoningEffortConfig> {
+    let supported_reasoning_levels = model_info
+        .supported_reasoning_levels
+        .iter()
+        .map(|preset| preset.effort)
+        .collect::<Vec<_>>();
+    let fallback_reasoning_effort = supported_reasoning_levels
+        .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+        .copied()
+        .or(model_info.default_reasoning_level);
+
+    if let Some(current_reasoning_effort) = current_reasoning_effort
+        && supported_reasoning_levels.contains(&current_reasoning_effort)
+    {
+        return Some(current_reasoning_effort);
+    }
+
+    fallback_reasoning_effort
+}
+
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
         let effective_context_window_percent = self.model_info.effective_context_window_percent;
@@ -588,26 +612,8 @@ impl TurnContext {
         config.model = Some(model.clone());
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
         let truncation_policy = model_info.truncation_policy.into();
-        let supported_reasoning_levels = model_info
-            .supported_reasoning_levels
-            .iter()
-            .map(|preset| preset.effort)
-            .collect::<Vec<_>>();
-        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort {
-            if supported_reasoning_levels.contains(&current_reasoning_effort) {
-                Some(current_reasoning_effort)
-            } else {
-                supported_reasoning_levels
-                    .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                    .copied()
-                    .or(model_info.default_reasoning_level)
-            }
-        } else {
-            supported_reasoning_levels
-                .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                .copied()
-                .or(model_info.default_reasoning_level)
-        };
+        let reasoning_effort =
+            select_reasoning_effort_for_model(self.reasoning_effort, &model_info);
         config.model_reasoning_effort = reasoning_effort;
 
         let collaboration_mode =
@@ -3519,7 +3525,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 }
             }
             Op::Review { review_request } => {
-                handlers::review(&sess, &config, sub.id.clone(), review_request).await;
+                handlers::review(&sess, sub.id.clone(), review_request).await;
             }
             _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }
@@ -4269,26 +4275,14 @@ mod handlers {
         true
     }
 
-    pub async fn review(
-        sess: &Arc<Session>,
-        config: &Arc<Config>,
-        sub_id: String,
-        review_request: ReviewRequest,
-    ) {
+    pub async fn review(sess: &Arc<Session>, sub_id: String, review_request: ReviewRequest) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
         sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
         sess.refresh_mcp_servers_if_requested(&turn_context).await;
         match resolve_review_request(review_request, turn_context.cwd.as_path()) {
             Ok(resolved) => {
-                spawn_review_thread(
-                    Arc::clone(sess),
-                    Arc::clone(config),
-                    turn_context.clone(),
-                    sub_id,
-                    resolved,
-                )
-                .await;
+                spawn_review_thread(Arc::clone(sess), turn_context.clone(), sub_id, resolved).await;
             }
             Err(err) => {
                 let event = Event {
@@ -4307,19 +4301,19 @@ mod handlers {
 /// Spawn a review thread using the given prompt.
 async fn spawn_review_thread(
     sess: Arc<Session>,
-    config: Arc<Config>,
     parent_turn_context: Arc<TurnContext>,
     sub_id: String,
     resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
-    let model = config
+    let model = parent_turn_context
+        .config
         .review_model
         .clone()
         .unwrap_or_else(|| parent_turn_context.model_info.slug.clone());
     let review_model_info = sess
         .services
         .models_manager
-        .get_model_info(&model, &config)
+        .get_model_info(&model, parent_turn_context.config.as_ref())
         .await;
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
@@ -4332,8 +4326,8 @@ async fn spawn_review_thread(
         features: &review_features,
         web_search_mode: Some(review_web_search_mode),
     })
-    .with_allow_login_shell(config.permissions.allow_login_shell)
-    .with_agent_roles(config.agent_roles.clone());
+    .with_allow_login_shell(parent_turn_context.config.permissions.allow_login_shell)
+    .with_agent_roles(parent_turn_context.config.agent_roles.clone());
 
     let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.provider.clone();
@@ -4341,8 +4335,10 @@ async fn spawn_review_thread(
     let model_info = review_model_info.clone();
 
     // Build per‑turn client with the requested model/family.
-    let mut per_turn_config = (*config).clone();
+    let mut per_turn_config = (*parent_turn_context.config).clone();
     per_turn_config.model = Some(model.clone());
+    per_turn_config.model_reasoning_effort =
+        select_reasoning_effort_for_model(parent_turn_context.reasoning_effort, &review_model_info);
     per_turn_config.features = review_features.clone();
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
