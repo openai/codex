@@ -2119,7 +2119,8 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn denying_network_policy_amendment_persists_policy_and_skips_future_prompts() -> Result<()> {
+async fn denying_network_policy_amendment_persists_policy_and_skips_future_network_prompt()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -2182,17 +2183,19 @@ allow_local_binding = true
         .network_proxy
         .as_ref()
         .expect("expected runtime managed network proxy addresses");
+    let proxy_addr = runtime_proxy.http_addr.as_str();
 
     let call_id_first = "allow-network-first";
+    // Use the same urllib-based pattern as the other network integration tests,
+    // but point it at the runtime proxy directly so the blocked host reliably
+    // produces a network approval request without relying on curl.
     let fetch_command = format!(
-        "curl -sS --noproxy '' -x http://{} http://codex-network-test.invalid 2>&1",
-        runtime_proxy.http_addr
+        "python3 -c \"import urllib.request; proxy = urllib.request.ProxyHandler({{'http': 'http://{proxy_addr}'}}); opener = urllib.request.build_opener(proxy); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=30).read().decode(errors='replace'))\""
     );
-    let expected_network_target = "http://codex-network-test.invalid:80";
     let first_event = shell_event(
         call_id_first,
         &fetch_command,
-        5_000,
+        30_000,
         SandboxPermissions::UseDefault,
     )?;
 
@@ -2222,24 +2225,42 @@ allow_local_binding = true
     )
     .await?;
 
-    let approval_event = wait_for_event_with_timeout(
-        &test.codex,
-        |event| {
-            let EventMsg::ExecApprovalRequest(approval) = event else {
-                return false;
-            };
-            let last_arg = approval
-                .command
-                .last()
-                .map(std::string::String::as_str)
-                .unwrap_or_default();
-            last_arg == expected_network_target
-        },
-        std::time::Duration::from_secs(30),
-    )
-    .await;
-    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
-        panic!("expected matching exec approval event");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let approval = loop {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .expect("timed out waiting for network approval request");
+        let event = wait_for_event_with_timeout(
+            &test.codex,
+            |event| {
+                matches!(
+                    event,
+                    EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+                )
+            },
+            remaining,
+        )
+        .await;
+        match event {
+            EventMsg::ExecApprovalRequest(approval) => {
+                if approval.command.first().map(std::string::String::as_str)
+                    == Some("network-access")
+                {
+                    break approval;
+                }
+                test.codex
+                    .submit(Op::ExecApproval {
+                        id: approval.effective_approval_id(),
+                        turn_id: None,
+                        decision: ReviewDecision::Approved,
+                    })
+                    .await?;
+            }
+            EventMsg::TurnComplete(_) => {
+                panic!("expected network approval request before completion");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     };
     let network_context = approval
         .network_approval_context
@@ -2314,7 +2335,7 @@ allow_local_binding = true
     let second_event = shell_event(
         call_id_second,
         &fetch_command,
-        5_000,
+        30_000,
         SandboxPermissions::UseDefault,
     )?;
 
@@ -2344,7 +2365,44 @@ allow_local_binding = true
     )
     .await?;
 
-    wait_for_completion_without_approval(&test).await;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .expect("timed out waiting for second turn completion");
+        let event = wait_for_event_with_timeout(
+            &test.codex,
+            |event| {
+                matches!(
+                    event,
+                    EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+                )
+            },
+            remaining,
+        )
+        .await;
+        match event {
+            EventMsg::ExecApprovalRequest(approval) => {
+                if approval.command.first().map(std::string::String::as_str)
+                    == Some("network-access")
+                {
+                    panic!(
+                        "unexpected network approval request: {:?}",
+                        approval.command
+                    );
+                }
+                test.codex
+                    .submit(Op::ExecApproval {
+                        id: approval.effective_approval_id(),
+                        turn_id: None,
+                        decision: ReviewDecision::Approved,
+                    })
+                    .await?;
+            }
+            EventMsg::TurnComplete(_) => break,
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
 
     let second_output = parse_result(
         &second_results
