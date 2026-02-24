@@ -210,17 +210,13 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
         })
         .await?;
 
-    let permissions = read_raw_response_item(&mut mcp, conversation_id).await;
-    assert_permissions_message(&permissions);
-
     let developer = read_raw_response_item(&mut mcp, conversation_id).await;
+    assert_permissions_message(&developer);
     assert_developer_message(&developer, "Use the test harness tools.");
 
-    let instructions = read_raw_response_item(&mut mcp, conversation_id).await;
-    assert_instructions_message(&instructions);
-
-    let environment = read_raw_response_item(&mut mcp, conversation_id).await;
-    assert_environment_message(&environment);
+    let contextual_user = read_raw_response_item(&mut mcp, conversation_id).await;
+    assert_instructions_message(&contextual_user);
+    assert_environment_message(&contextual_user);
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -481,9 +477,8 @@ fn assert_permissions_message(item: &ResponseItem) {
                 false,
             )
             .into_text();
-            assert_eq!(
-                texts,
-                vec![expected.as_str()],
+            assert!(
+                texts.iter().any(|text| *text == expected),
                 "expected permissions developer message, got {texts:?}"
             );
         }
@@ -496,9 +491,8 @@ fn assert_developer_message(item: &ResponseItem, expected_text: &str) {
         ResponseItem::Message { role, content, .. } => {
             assert_eq!(role, "developer");
             let texts = content_texts(content);
-            assert_eq!(
-                texts,
-                vec![expected_text],
+            assert!(
+                texts.iter().any(|text| *text == expected_text),
                 "expected developer instructions message, got {texts:?}"
             );
         }
