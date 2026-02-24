@@ -74,6 +74,8 @@ impl ExternalAgentConfigApi {
             });
         }
 
+        //TODO: add MCP server config detection
+
         Ok(ExternalAgentConfigDetectResponse { items })
     }
 
@@ -92,6 +94,7 @@ impl ExternalAgentConfigApi {
                 ExternalAgentConfigMigrationItemType::AgentsMd => self.import_agents_md(),
                 ExternalAgentConfigMigrationItemType::Config => self.import_config(),
                 ExternalAgentConfigMigrationItemType::Skills => self.import_skills(),
+                ExternalAgentConfigMigrationItemType::McpServerConfig => Ok(()),
             }
             .map_err(map_io_error)?;
         }

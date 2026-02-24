@@ -5,7 +5,8 @@
       "enum": [
         "AGENTS_MD",
         "CONFIG",
-        "SKILLS"
+        "SKILLS",
+        "MCP_SERVER_CONFIG"
       ],
       "type": "string"
     }
