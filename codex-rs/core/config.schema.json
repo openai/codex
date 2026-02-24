@@ -367,6 +367,9 @@
             "prevent_idle_sleep": {
               "type": "boolean"
             },
+            "realtime_conversation": {
+              "type": "boolean"
+            },
             "remote_models": {
               "type": "boolean"
             },
@@ -1652,6 +1655,9 @@
           "type": "boolean"
         },
         "prevent_idle_sleep": {
+          "type": "boolean"
+        },
+        "realtime_conversation": {
           "type": "boolean"
         },
         "remote_models": {
