@@ -46,17 +46,20 @@ assert!(tail.extracted.is_empty());
 use codex_utils_stream_parser::CitationStreamParser;
 use codex_utils_stream_parser::Utf8StreamParser;
 
+# fn demo() -> Result<(), codex_utils_stream_parser::Utf8StreamParserError> {
 let mut parser = Utf8StreamParser::new(CitationStreamParser::new());
 
 // "é" split across chunks: 0xC3 + 0xA9
-let first = parser.push_bytes(&[b'H', 0xC3]).unwrap();
+let first = parser.push_bytes(&[b'H', 0xC3])?;
 assert_eq!(first.visible_text, "H");
 
-let second = parser.push_bytes(&[0xA9, b'!']).unwrap();
+let second = parser.push_bytes(&[0xA9, b'!'])?;
 assert_eq!(second.visible_text, "é!");
 
-let tail = parser.finish().unwrap();
+let tail = parser.finish()?;
 assert!(tail.visible_text.is_empty());
+# Ok(())
+# }
 ```
 
 ## Example: custom hidden tags

@@ -66,12 +66,8 @@ where
         self.pending_utf8.extend_from_slice(chunk);
 
         match std::str::from_utf8(&self.pending_utf8) {
-            Ok(_) => {
-                let out = {
-                    let text = std::str::from_utf8(&self.pending_utf8)
-                        .expect("pending_utf8 was validated by from_utf8");
-                    self.inner.push_str(text)
-                };
+            Ok(text) => {
+                let out = self.inner.push_str(text);
                 self.pending_utf8.clear();
                 Ok(out)
             }
@@ -89,11 +85,18 @@ where
                     return Ok(StreamTextChunk::default());
                 }
 
-                let out = {
-                    let text = std::str::from_utf8(&self.pending_utf8[..valid_up_to])
-                        .expect("valid_up_to from Utf8Error is always on a char boundary");
-                    self.inner.push_str(text)
+                let text = match std::str::from_utf8(&self.pending_utf8[..valid_up_to]) {
+                    Ok(text) => text,
+                    Err(prefix_err) => {
+                        self.pending_utf8.truncate(old_len);
+                        let error_len = prefix_err.error_len().unwrap_or_else(|| 0);
+                        return Err(Utf8StreamParserError::InvalidUtf8 {
+                            valid_up_to: prefix_err.valid_up_to(),
+                            error_len,
+                        });
+                    }
                 };
+                let out = self.inner.push_str(text);
                 self.pending_utf8.drain(..valid_up_to);
                 Ok(out)
             }
@@ -119,11 +122,17 @@ where
         let mut out = if self.pending_utf8.is_empty() {
             StreamTextChunk::default()
         } else {
-            let out = {
-                let text = std::str::from_utf8(&self.pending_utf8)
-                    .expect("pending_utf8 was validated by from_utf8");
-                self.inner.push_str(text)
+            let text = match std::str::from_utf8(&self.pending_utf8) {
+                Ok(text) => text,
+                Err(err) => {
+                    let error_len = err.error_len().unwrap_or_else(|| 0);
+                    return Err(Utf8StreamParserError::InvalidUtf8 {
+                        valid_up_to: err.valid_up_to(),
+                        error_len,
+                    });
+                }
             };
+            let out = self.inner.push_str(text);
             self.pending_utf8.clear();
             out
         };
@@ -166,19 +175,13 @@ mod tests {
 
     #[test]
     fn utf8_stream_parser_handles_split_code_points_across_chunks() {
-        let text = "Aé<citation>中</citation>Z";
-        let bytes = text.as_bytes();
-        let e_idx = text.find('é').expect("test string contains é");
-        let cjk_idx = text.find('中').expect("test string contains 中");
-
-        let chunks = [
-            &bytes[..e_idx + 1],
-            &bytes[e_idx + 1..cjk_idx + 1],
-            &bytes[cjk_idx + 1..],
-        ];
+        let chunks: [&[u8]; 3] = [b"A\xC3", b"\xA9<citation>\xE4", b"\xB8\xAD</citation>Z"];
 
         let mut parser = Utf8StreamParser::new(CitationStreamParser::new());
-        let out = collect_bytes(&mut parser, &chunks).expect("valid UTF-8 stream should parse");
+        let out = match collect_bytes(&mut parser, &chunks) {
+            Ok(out) => out,
+            Err(err) => panic!("valid UTF-8 stream should parse: {err}"),
+        };
 
         assert_eq!(out.visible_text, "AéZ");
         assert_eq!(out.extracted, vec!["中".to_string()]);
@@ -188,14 +191,16 @@ mod tests {
     fn utf8_stream_parser_rolls_back_on_invalid_utf8_chunk() {
         let mut parser = Utf8StreamParser::new(CitationStreamParser::new());
 
-        let first = parser
-            .push_bytes(&[0xC3])
-            .expect("leading byte may be buffered until next chunk");
+        let first = match parser.push_bytes(&[0xC3]) {
+            Ok(out) => out,
+            Err(err) => panic!("leading byte may be buffered until next chunk: {err}"),
+        };
         assert!(first.is_empty());
 
-        let err = parser
-            .push_bytes(&[0x28])
-            .expect_err("invalid continuation byte should error");
+        let err = match parser.push_bytes(&[0x28]) {
+            Ok(out) => panic!("invalid continuation byte should error, got output: {out:?}"),
+            Err(err) => err,
+        };
         assert_eq!(
             err,
             Utf8StreamParserError::InvalidUtf8 {
@@ -204,10 +209,14 @@ mod tests {
             }
         );
 
-        let second = parser
-            .push_bytes(&[0xA9, b'x'])
-            .expect("state should still allow a valid continuation");
-        let tail = parser.finish().expect("stream should finish");
+        let second = match parser.push_bytes(&[0xA9, b'x']) {
+            Ok(out) => out,
+            Err(err) => panic!("state should still allow a valid continuation: {err}"),
+        };
+        let tail = match parser.finish() {
+            Ok(out) => out,
+            Err(err) => panic!("stream should finish: {err}"),
+        };
 
         assert_eq!(second.visible_text, "éx");
         assert!(second.extracted.is_empty());
@@ -218,14 +227,16 @@ mod tests {
     fn utf8_stream_parser_errors_on_incomplete_code_point_at_eof() {
         let mut parser = Utf8StreamParser::new(CitationStreamParser::new());
 
-        let out = parser
-            .push_bytes(&[0xE2, 0x82])
-            .expect("partial code point should be buffered");
+        let out = match parser.push_bytes(&[0xE2, 0x82]) {
+            Ok(out) => out,
+            Err(err) => panic!("partial code point should be buffered: {err}"),
+        };
         assert!(out.is_empty());
 
-        let err = parser
-            .finish()
-            .expect_err("unfinished code point should error");
+        let err = match parser.finish() {
+            Ok(out) => panic!("unfinished code point should error, got output: {out:?}"),
+            Err(err) => err,
+        };
         assert_eq!(err, Utf8StreamParserError::IncompleteUtf8AtEof);
     }
 }
