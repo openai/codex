@@ -45,6 +45,8 @@ pub struct NetworkProxySettings {
     #[serde(default)]
     pub allow_unix_sockets: Vec<String>,
     pub allow_local_binding: bool,
+    #[serde(default)]
+    pub mitm: bool,
 }
 
 impl Default for NetworkProxySettings {
@@ -65,6 +67,7 @@ impl Default for NetworkProxySettings {
             denied_domains: Vec::new(),
             allow_unix_sockets: Vec::new(),
             allow_local_binding: true,
+            mitm: false,
         }
     }
 }
@@ -74,6 +77,7 @@ impl Default for NetworkProxySettings {
 pub enum NetworkMode {
     /// Limited (read-only) access: only GET/HEAD/OPTIONS are allowed for HTTP. HTTPS CONNECT is
     /// blocked unless MITM is enabled so the proxy can enforce method policy on inner requests.
+    /// SOCKS5 remains blocked in limited mode.
     Limited,
     /// Full network access: all HTTP methods are allowed, and HTTPS CONNECTs are tunneled without
     /// MITM interception.
@@ -393,6 +397,7 @@ mod tests {
                 denied_domains: Vec::new(),
                 allow_unix_sockets: Vec::new(),
                 allow_local_binding: true,
+                mitm: false,
             }
         );
     }

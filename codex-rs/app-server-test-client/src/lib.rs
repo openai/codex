@@ -57,6 +57,9 @@ use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SkillApprovalDecision;
+use codex_app_server_protocol::SkillRequestApprovalParams;
+use codex_app_server_protocol::SkillRequestApprovalResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -1472,6 +1475,9 @@ impl CodexClient {
             ServerRequest::FileChangeRequestApproval { request_id, params } => {
                 self.approve_file_change_request(request_id, params)?;
             }
+            ServerRequest::SkillRequestApproval { request_id, params } => {
+                self.approve_skill_request(request_id, params)?;
+            }
             other => {
                 bail!("received unsupported server request: {other:?}");
             }
@@ -1540,6 +1546,22 @@ impl CodexClient {
             "< commandExecution decision for approval #{} on item {item_id}: {:?}",
             self.command_approval_count, decision
         );
+        Ok(())
+    }
+
+    fn approve_skill_request(
+        &mut self,
+        request_id: RequestId,
+        params: SkillRequestApprovalParams,
+    ) -> Result<()> {
+        println!(
+            "\n< skill approval requested for item {}, skill {}",
+            params.item_id, params.skill_name
+        );
+        let response = SkillRequestApprovalResponse {
+            decision: SkillApprovalDecision::Approve,
+        };
+        self.send_server_request_response(request_id, &response)?;
         Ok(())
     }
 

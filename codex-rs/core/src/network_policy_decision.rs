@@ -1,8 +1,12 @@
+use codex_execpolicy::Decision as ExecPolicyDecision;
+use codex_execpolicy::NetworkRuleProtocol as ExecPolicyNetworkRuleProtocol;
 use codex_network_proxy::BlockedRequest;
 use codex_network_proxy::NetworkDecisionSource;
 use codex_network_proxy::NetworkPolicyDecision;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
+use codex_protocol::approvals::NetworkPolicyAmendment;
+use codex_protocol::approvals::NetworkPolicyRuleAction;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -15,6 +19,13 @@ pub struct NetworkPolicyDecisionPayload {
     pub host: Option<String>,
     pub reason: Option<String>,
     pub port: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExecPolicyNetworkRuleAmendment {
+    pub protocol: ExecPolicyNetworkRuleProtocol,
+    pub decision: ExecPolicyDecision,
+    pub justification: String,
 }
 
 impl NetworkPolicyDecisionPayload {
@@ -79,10 +90,42 @@ pub(crate) fn denied_network_policy_message(blocked: &BlockedRequest) -> Option<
     ))
 }
 
+pub(crate) fn execpolicy_network_rule_amendment(
+    amendment: &NetworkPolicyAmendment,
+    network_approval_context: &NetworkApprovalContext,
+    host: &str,
+) -> ExecPolicyNetworkRuleAmendment {
+    let protocol = match network_approval_context.protocol {
+        NetworkApprovalProtocol::Http => ExecPolicyNetworkRuleProtocol::Http,
+        NetworkApprovalProtocol::Https => ExecPolicyNetworkRuleProtocol::Https,
+        NetworkApprovalProtocol::Socks5Tcp => ExecPolicyNetworkRuleProtocol::Socks5Tcp,
+        NetworkApprovalProtocol::Socks5Udp => ExecPolicyNetworkRuleProtocol::Socks5Udp,
+    };
+    let (decision, action_verb) = match amendment.action {
+        NetworkPolicyRuleAction::Allow => (ExecPolicyDecision::Allow, "Allow"),
+        NetworkPolicyRuleAction::Deny => (ExecPolicyDecision::Forbidden, "Deny"),
+    };
+    let protocol_label = match network_approval_context.protocol {
+        NetworkApprovalProtocol::Http => "http",
+        NetworkApprovalProtocol::Https => "https_connect",
+        NetworkApprovalProtocol::Socks5Tcp => "socks5_tcp",
+        NetworkApprovalProtocol::Socks5Udp => "socks5_udp",
+    };
+    let justification = format!("{action_verb} {protocol_label} access to {host}");
+
+    ExecPolicyNetworkRuleAmendment {
+        protocol,
+        decision,
+        justification,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use codex_network_proxy::BlockedRequest;
+    use codex_protocol::approvals::NetworkPolicyAmendment;
+    use codex_protocol::approvals::NetworkPolicyRuleAction;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -209,6 +252,27 @@ mod tests {
         )
         .expect("payload should deserialize");
         assert_eq!(payload.protocol, Some(NetworkApprovalProtocol::Https));
+    }
+
+    #[test]
+    fn execpolicy_network_rule_amendment_maps_protocol_action_and_justification() {
+        let amendment = NetworkPolicyAmendment {
+            action: NetworkPolicyRuleAction::Deny,
+            host: "example.com".to_string(),
+        };
+        let context = NetworkApprovalContext {
+            host: "example.com".to_string(),
+            protocol: NetworkApprovalProtocol::Socks5Udp,
+        };
+
+        assert_eq!(
+            execpolicy_network_rule_amendment(&amendment, &context, "example.com"),
+            ExecPolicyNetworkRuleAmendment {
+                protocol: ExecPolicyNetworkRuleProtocol::Socks5Udp,
+                decision: ExecPolicyDecision::Forbidden,
+                justification: "Deny socks5_udp access to example.com".to_string(),
+            }
+        );
     }
 
     #[test]

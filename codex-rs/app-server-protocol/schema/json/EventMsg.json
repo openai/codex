@@ -5,6 +5,23 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AdditionalPermissions": {
+      "properties": {
+        "fs_read": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fs_write": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "AgentMessageContent": {
       "oneOf": [
         {
@@ -1613,6 +1630,17 @@
         },
         {
           "properties": {
+            "additional_permissions": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/AdditionalPermissions"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional additional filesystem permissions requested for this command."
+            },
             "approval_id": {
               "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
               "type": [
@@ -1656,6 +1684,16 @@
               "description": "Proposed execpolicy amendment that can be applied to allow future runs.",
               "items": {
                 "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "proposed_network_policy_amendments": {
+              "description": "Proposed network policy amendments (for example allow/deny this host in future).",
+              "items": {
+                "$ref": "#/definitions/NetworkPolicyAmendment"
               },
               "type": [
                 "array",
@@ -1753,6 +1791,30 @@
             "type"
           ],
           "title": "DynamicToolCallRequestEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "item_id": {
+              "type": "string"
+            },
+            "skill_name": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "skill_request_approval"
+              ],
+              "title": "SkillRequestApprovalEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "skill_name",
+            "type"
+          ],
+          "title": "SkillRequestApprovalEventMsg",
           "type": "object"
         },
         {
@@ -3634,6 +3696,28 @@
         "https",
         "socks5_tcp",
         "socks5_udp"
+      ],
+      "type": "string"
+    },
+    "NetworkPolicyAmendment": {
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/NetworkPolicyRuleAction"
+        },
+        "host": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "host"
+      ],
+      "type": "object"
+    },
+    "NetworkPolicyRuleAction": {
+      "enum": [
+        "allow",
+        "deny"
       ],
       "type": "string"
     },
@@ -6858,6 +6942,17 @@
     },
     {
       "properties": {
+        "additional_permissions": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional additional filesystem permissions requested for this command."
+        },
         "approval_id": {
           "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
           "type": [
@@ -6901,6 +6996,16 @@
           "description": "Proposed execpolicy amendment that can be applied to allow future runs.",
           "items": {
             "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "proposed_network_policy_amendments": {
+          "description": "Proposed network policy amendments (for example allow/deny this host in future).",
+          "items": {
+            "$ref": "#/definitions/NetworkPolicyAmendment"
           },
           "type": [
             "array",
@@ -6998,6 +7103,30 @@
         "type"
       ],
       "title": "DynamicToolCallRequestEventMsg",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "item_id": {
+          "type": "string"
+        },
+        "skill_name": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "skill_request_approval"
+          ],
+          "title": "SkillRequestApprovalEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "item_id",
+        "skill_name",
+        "type"
+      ],
+      "title": "SkillRequestApprovalEventMsg",
       "type": "object"
     },
     {

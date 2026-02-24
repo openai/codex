@@ -425,6 +425,14 @@ impl NetworkProxy {
         self.admin_addr
     }
 
+    pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
+        self.state.add_allowed_domain(host).await
+    }
+
+    pub async fn add_denied_domain(&self, host: &str) -> Result<()> {
+        self.state.add_denied_domain(host).await
+    }
+
     pub fn allow_local_binding(&self) -> bool {
         self.allow_local_binding
     }
