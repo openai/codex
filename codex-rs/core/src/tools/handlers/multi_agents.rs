@@ -153,6 +153,7 @@ mod spawn {
         apply_role_to_config(&mut config, role_name)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
+        apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
 
         let result = session
@@ -922,6 +923,16 @@ fn build_agent_shared_config(
     config.model_reasoning_summary = turn.reasoning_summary;
     config.developer_instructions = turn.developer_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
+    apply_spawn_agent_runtime_overrides(&mut config, turn)?;
+    apply_spawn_agent_overrides(&mut config, child_depth);
+
+    Ok(config)
+}
+
+fn apply_spawn_agent_runtime_overrides(
+    config: &mut Config,
+    turn: &TurnContext,
+) -> Result<(), FunctionCallError> {
     config.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     config.cwd = turn.cwd.clone();
@@ -932,9 +943,7 @@ fn build_agent_shared_config(
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("sandbox_policy is invalid: {err}"))
         })?;
-    apply_spawn_agent_overrides(&mut config, child_depth);
-
-    Ok(config)
+    Ok(())
 }
 
 fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
@@ -1163,6 +1172,85 @@ mod tests {
             err,
             FunctionCallError::RespondToModel("collab manager unavailable".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
+        fn pick_allowed_sandbox_policy(
+            constraint: &crate::config::Constrained<SandboxPolicy>,
+            base: SandboxPolicy,
+        ) -> SandboxPolicy {
+            let candidates = [
+                SandboxPolicy::DangerFullAccess,
+                SandboxPolicy::new_workspace_write_policy(),
+                SandboxPolicy::new_read_only_policy(),
+            ];
+            candidates
+                .into_iter()
+                .find(|candidate| *candidate != base && constraint.can_set(candidate).is_ok())
+                .unwrap_or(base)
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct SpawnAgentResult {
+            agent_id: String,
+            nickname: Option<String>,
+        }
+
+        let (mut session, mut turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let expected_sandbox = pick_allowed_sandbox_policy(
+            &turn.config.permissions.sandbox_policy,
+            turn.config.permissions.sandbox_policy.get().clone(),
+        );
+        turn.sandbox_policy
+            .set(expected_sandbox.clone())
+            .expect("sandbox policy should be set");
+        assert_ne!(
+            expected_sandbox,
+            turn.config.permissions.sandbox_policy.get().clone(),
+            "test requires a runtime sandbox override that differs from base config"
+        );
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "await this command",
+                "agent_type": "awaiter"
+            })),
+        );
+        let output = MultiAgentHandler
+            .handle(invocation)
+            .await
+            .expect("spawn_agent should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: SpawnAgentResult =
+            serde_json::from_str(&content).expect("spawn_agent result should be json");
+        let agent_id = agent_id(&result.agent_id).expect("agent_id should be valid");
+        assert!(
+            result
+                .nickname
+                .as_deref()
+                .is_some_and(|nickname| !nickname.is_empty())
+        );
+
+        let snapshot = manager
+            .get_thread(agent_id)
+            .await
+            .expect("spawned agent thread should exist")
+            .config_snapshot()
+            .await;
+        assert_eq!(snapshot.sandbox_policy, expected_sandbox);
+        assert_eq!(snapshot.approval_policy, AskForApproval::Never);
     }
 
     #[tokio::test]
