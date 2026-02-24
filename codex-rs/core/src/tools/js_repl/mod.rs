@@ -1291,8 +1291,6 @@ mod tests {
     use crate::protocol::AskForApproval;
     use crate::protocol::SandboxPolicy;
     use crate::turn_diff_tracker::TurnDiffTracker;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ResponseInputItem;
     use codex_protocol::openai_models::InputModality;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -1977,7 +1975,10 @@ const png = Buffer.from(
 await fs.writeFile(imagePath, png);
 const out = await codex.tool("view_image", { path: imagePath });
 console.log(out.type);
-console.log(out.output?.body?.text ?? "");
+const imageItem = Array.isArray(out.output)
+  ? out.output.find(item => item?.type === "input_image")
+  : undefined;
+console.log(imageItem?.image_url ?? "");
 "#;
 
         let result = manager
@@ -1992,21 +1993,7 @@ console.log(out.output?.body?.text ?? "");
             )
             .await?;
         assert!(result.output.contains("function_call_output"));
-
-        let pending_input = session.get_pending_input().await;
-        let image_url = pending_input
-            .iter()
-            .find_map(|item| match item {
-                ResponseInputItem::Message { content, .. } => {
-                    content.iter().find_map(|content_item| match content_item {
-                        ContentItem::InputImage { image_url } => Some(image_url.as_str()),
-                        _ => None,
-                    })
-                }
-                _ => None,
-            })
-            .expect("view_image should inject an input_image message for the active turn");
-        assert!(image_url.starts_with("data:image/png;base64,"));
+        assert!(result.output.contains("data:image/png;base64,"));
 
         Ok(())
     }
