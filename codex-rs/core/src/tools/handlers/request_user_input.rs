@@ -117,9 +117,9 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn request_user_input_mode_availability_is_plan_only() {
+    fn request_user_input_mode_availability_includes_default_mode() {
         assert!(ModeKind::Plan.allows_request_user_input());
-        assert!(!ModeKind::Default.allows_request_user_input());
+        assert!(ModeKind::Default.allows_request_user_input());
         assert!(!ModeKind::Execute.allows_request_user_input());
         assert!(!ModeKind::PairProgramming.allows_request_user_input());
     }
@@ -129,7 +129,7 @@ mod tests {
         assert_eq!(request_user_input_unavailable_message(ModeKind::Plan), None);
         assert_eq!(
             request_user_input_unavailable_message(ModeKind::Default),
-            Some("request_user_input is unavailable in Default mode".to_string())
+            None
         );
         assert_eq!(
             request_user_input_unavailable_message(ModeKind::Execute),
@@ -142,10 +142,10 @@ mod tests {
     }
 
     #[test]
-    fn request_user_input_tool_description_mentions_plan_only() {
+    fn request_user_input_tool_description_mentions_default_and_plan() {
         assert_eq!(
             request_user_input_tool_description(),
-            "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.".to_string()
+            "Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode.".to_string()
         );
     }
 }
