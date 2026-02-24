@@ -1,41 +1,26 @@
+use anyhow::Context;
 use anyhow::Result;
-#[cfg(not(test))]
+use base64::Engine;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
-use tokio::sync::mpsc::Sender;
-#[cfg(not(test))]
-use tokio::sync::mpsc::error::TrySendError;
-
-#[cfg(not(test))]
-use anyhow::Context;
-#[cfg(not(test))]
-use base64::Engine;
-#[cfg(not(test))]
-use cpal::traits::DeviceTrait;
-#[cfg(not(test))]
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
 use std::sync::Arc;
-#[cfg(not(test))]
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU16;
-#[cfg(not(test))]
 use std::sync::atomic::Ordering;
-#[cfg(not(test))]
+use std::thread;
+use std::time::Duration;
+use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::error::TrySendError;
 use tracing::warn;
-
-#[cfg(not(test))]
 const TARGET_SAMPLE_RATE: u32 = 24_000;
-#[cfg(not(test))]
 const TARGET_NUM_CHANNELS: u16 = 1;
-#[cfg(not(test))]
 const TARGET_SAMPLES_PER_CHANNEL: u32 = 480;
-#[cfg(not(test))]
 const PLAYBACK_BUFFER_SECONDS: usize = 5;
-#[cfg(not(test))]
 const MAX_AUDIO_FRAME_DECODED_BYTES: usize = 128 * 1024;
-#[cfg(not(test))]
 const MAX_AUDIO_FRAME_ENCODED_BYTES: usize = 192 * 1024;
 const MIN_REALTIME_PLAYBACK_SAMPLE_RATE: u32 = 8_000;
 const MAX_REALTIME_PLAYBACK_SAMPLE_RATE: u32 = 192_000;
@@ -51,15 +36,12 @@ pub(crate) struct RealtimeMicMeterHandles {
 }
 
 enum RealtimeAudioBackend {
-    #[cfg(not(test))]
     Live(LiveRealtimeAudioController),
-    #[cfg(test)]
     Stub,
 }
-
-#[cfg(not(test))]
 struct LiveRealtimeAudioController {
-    _input_stream: cpal::Stream,
+    _input_capture: crate::voice::VoiceCapture,
+    _input_capture_thread: Option<thread::JoinHandle<()>>,
     _output_stream: cpal::Stream,
     playback_state: Arc<Mutex<PlaybackState>>,
     last_input_peak: Arc<AtomicU16>,
@@ -68,89 +50,100 @@ struct LiveRealtimeAudioController {
 
 impl RealtimeAudioController {
     pub(crate) fn start(realtime_audio_op_tx: Sender<Op>) -> Result<Self> {
-        #[cfg(test)]
-        {
+        if cfg!(test) {
             let _ = realtime_audio_op_tx;
-            Ok(Self {
+            return Ok(Self {
                 backend: RealtimeAudioBackend::Stub,
-            })
+            });
         }
+        let host = cpal::default_host();
+        let output_device = host
+            .default_output_device()
+            .context("no default output device available")?;
+        let output_supported = output_device
+            .default_output_config()
+            .context("failed to query default output config")?;
 
-        #[cfg(not(test))]
-        {
-            use cpal::traits::HostTrait;
-            use cpal::traits::StreamTrait;
-
-            let host = cpal::default_host();
-            let input_device = host
-                .default_input_device()
-                .context("no default input device available")?;
-            let output_device = host
-                .default_output_device()
-                .context("no default output device available")?;
-
-            let input_supported = input_device
-                .default_input_config()
-                .context("failed to query default input config")?;
-            let output_supported = output_device
-                .default_output_config()
-                .context("failed to query default output config")?;
-
-            let input_config = input_supported.config();
-            let output_config = output_supported.config();
-            // TODO(aibrahim): Add persisted audio device + sample-rate selection/config for TUI
-            // realtime conversations instead of always using defaults.
-
-            let playback_state = Arc::new(Mutex::new(PlaybackState::new(
-                output_config.sample_rate.0,
-                output_config.channels,
-            )));
-            let last_input_peak = Arc::new(AtomicU16::new(0));
-            let meter_stop = Arc::new(AtomicBool::new(false));
-            let mic_state = Arc::new(Mutex::new(MicCaptureState::new(
-                realtime_audio_op_tx,
-                input_config.sample_rate.0,
-                input_config.channels,
-                Arc::clone(&last_input_peak),
-            )));
-
-            let input_stream = build_input_stream(
-                &input_device,
-                input_supported.sample_format(),
-                &input_config,
-                Arc::clone(&mic_state),
-            )
-            .context("failed to open microphone input stream")?;
-            let output_stream = build_output_stream(
-                &output_device,
-                output_supported.sample_format(),
-                &output_config,
-                Arc::clone(&playback_state),
-            )
-            .context("failed to open speaker output stream")?;
-
-            input_stream
-                .play()
-                .context("failed to start microphone stream")?;
-            output_stream
-                .play()
-                .context("failed to start speaker output stream")?;
-
-            Ok(Self {
-                backend: RealtimeAudioBackend::Live(LiveRealtimeAudioController {
-                    _input_stream: input_stream,
-                    _output_stream: output_stream,
-                    playback_state,
-                    last_input_peak,
-                    meter_stop,
-                }),
-            })
+        let output_config = output_supported.config();
+        // TODO(aibrahim): Add persisted audio device + sample-rate selection/config for TUI
+        // realtime conversations instead of always using defaults.
+        let input_capture = crate::voice::VoiceCapture::start().map_err(anyhow::Error::msg)?;
+        let source_sample_rate = input_capture.sample_rate();
+        let source_channels = input_capture.channels();
+        if source_sample_rate == 0 || source_channels == 0 {
+            return Err(anyhow::anyhow!(
+                "unsupported realtime microphone format from VoiceCapture"
+            ));
         }
+        let source_data = input_capture.data_arc();
+        let last_input_peak = input_capture.last_peak_arc();
+        let meter_stop = input_capture.stopped_flag();
+        let mic_state = Arc::new(Mutex::new(MicCaptureState::new(
+            realtime_audio_op_tx,
+            source_sample_rate,
+            source_channels,
+        )));
+        let source_data_thread = source_data;
+        let input_state = Arc::clone(&mic_state);
+        let input_capture_thread = thread::spawn({
+            let stop = Arc::clone(&meter_stop);
+            move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let samples = match source_data_thread.lock() {
+                        Ok(mut data) => {
+                            if data.is_empty() {
+                                None
+                            } else {
+                                Some(std::mem::take(&mut *data))
+                            }
+                        }
+                        Err(_) => {
+                            warn!("failed to lock realtime microphone buffer");
+                            None
+                        }
+                    };
+                    if let Some(samples) = samples {
+                        if let Ok(mut state) = input_state.lock() {
+                            state.push_input_samples_i16(&samples);
+                        } else {
+                            warn!("failed to lock realtime microphone processing state");
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        });
+
+        let playback_state = Arc::new(Mutex::new(PlaybackState::new(
+            output_config.sample_rate.0,
+            output_config.channels,
+        )));
+        let output_stream = build_output_stream(
+            &output_device,
+            output_supported.sample_format(),
+            &output_config,
+            Arc::clone(&playback_state),
+        )
+        .context("failed to open speaker output stream")?;
+
+        output_stream
+            .play()
+            .context("failed to start speaker output stream")?;
+
+        Ok(Self {
+            backend: RealtimeAudioBackend::Live(LiveRealtimeAudioController {
+                _input_capture: input_capture,
+                _input_capture_thread: Some(input_capture_thread),
+                _output_stream: output_stream,
+                playback_state,
+                last_input_peak,
+                meter_stop,
+            }),
+        })
     }
 
     pub(crate) fn enqueue_audio_out(&self, frame: RealtimeAudioFrame) -> Result<()> {
         match &self.backend {
-            #[cfg(not(test))]
             RealtimeAudioBackend::Live(controller) => {
                 let mut state = controller
                     .playback_state
@@ -158,7 +151,6 @@ impl RealtimeAudioController {
                     .map_err(|_| anyhow::anyhow!("playback state lock poisoned"))?;
                 state.enqueue(frame)?;
             }
-            #[cfg(test)]
             RealtimeAudioBackend::Stub => {
                 let _ = frame;
             }
@@ -167,48 +159,45 @@ impl RealtimeAudioController {
     }
 
     pub(crate) fn shutdown(self) {
-        #[cfg(not(test))]
-        let RealtimeAudioBackend::Live(controller) = &self.backend;
-        #[cfg(not(test))]
-        controller.meter_stop.store(true, Ordering::Relaxed);
+        if let RealtimeAudioBackend::Live(controller) = self.backend {
+            if let Err(err) = controller._input_capture.stop().map(|_| ()) {
+                warn!("failed to stop realtime microphone capture: {err}");
+            }
+            if let Some(handle) = controller._input_capture_thread {
+                if let Err(err) = handle.join() {
+                    warn!("failed to join realtime microphone input thread: {err:?}");
+                }
+            }
+        }
     }
 
     pub(crate) fn meter_handles(&self) -> Option<RealtimeMicMeterHandles> {
         match &self.backend {
-            #[cfg(not(test))]
             RealtimeAudioBackend::Live(controller) => Some(RealtimeMicMeterHandles {
                 last_peak: Arc::clone(&controller.last_input_peak),
                 stop: Arc::clone(&controller.meter_stop),
             }),
-            #[cfg(test)]
             RealtimeAudioBackend::Stub => None,
         }
     }
 }
-
-#[cfg(not(test))]
 #[derive(Debug)]
 struct MicCaptureState {
     realtime_audio_op_tx: Sender<Op>,
-    last_input_peak: Arc<AtomicU16>,
     source_sample_rate: u32,
     source_channels: u16,
     source_mono: Vec<f32>,
     source_position: f64,
     resampled: Vec<f32>,
 }
-
-#[cfg(not(test))]
 impl MicCaptureState {
     fn new(
         realtime_audio_op_tx: Sender<Op>,
         source_sample_rate: u32,
         source_channels: u16,
-        last_input_peak: Arc<AtomicU16>,
     ) -> Self {
         Self {
             realtime_audio_op_tx,
-            last_input_peak,
             source_sample_rate,
             source_channels,
             source_mono: Vec::new(),
@@ -217,41 +206,9 @@ impl MicCaptureState {
         }
     }
 
-    fn push_input_samples_f32(&mut self, data: &[f32]) {
-        let peak = data
-            .iter()
-            .map(|sample| ((sample.abs().min(1.0)) * i16::MAX as f32) as u16)
-            .max()
-            .unwrap_or(0);
-        self.last_input_peak.store(peak, Ordering::Relaxed);
-        self.push_mono_samples_from_frames(data.iter().copied());
-    }
-
     fn push_input_samples_i16(&mut self, data: &[i16]) {
-        let peak = data
-            .iter()
-            .map(|sample| sample.unsigned_abs())
-            .max()
-            .unwrap_or(0);
-        self.last_input_peak.store(peak, Ordering::Relaxed);
         self.push_mono_samples_from_frames(
             data.iter().map(|sample| *sample as f32 / i16::MAX as f32),
-        );
-    }
-
-    fn push_input_samples_u16(&mut self, data: &[u16]) {
-        let peak = data
-            .iter()
-            .map(|sample| {
-                let centered = *sample as i32 - (u16::MAX as i32 / 2);
-                centered.unsigned_abs().min(i16::MAX as u32) as u16
-            })
-            .max()
-            .unwrap_or(0);
-        self.last_input_peak.store(peak, Ordering::Relaxed);
-        self.push_mono_samples_from_frames(
-            data.iter()
-                .map(|sample| (*sample as f32 / u16::MAX as f32) * 2.0 - 1.0),
         );
     }
 
@@ -321,8 +278,6 @@ impl MicCaptureState {
         }
     }
 }
-
-#[cfg(not(test))]
 #[derive(Debug)]
 struct PlaybackState {
     output_sample_rate: u32,
@@ -330,8 +285,6 @@ struct PlaybackState {
     queue: VecDeque<f32>,
     max_queue_samples: usize,
 }
-
-#[cfg(not(test))]
 impl PlaybackState {
     fn new(output_sample_rate: u32, output_channels: u16) -> Self {
         let max_queue_samples =
@@ -423,8 +376,6 @@ impl PlaybackState {
         self.queue.pop_front().unwrap_or(0.0)
     }
 }
-
-#[cfg(not(test))]
 fn interleaved_i16_to_mono_f32(samples: &[i16], num_channels: u16) -> Vec<f32> {
     let channels = usize::from(num_channels.max(1));
     let mut mono = Vec::with_capacity(samples.len() / channels.max(1));
@@ -472,8 +423,6 @@ fn resample_linear_mono(input: &[f32], src_rate: u32, dst_rate: u32) -> Option<V
     }
     Some(out)
 }
-
-#[cfg(not(test))]
 fn encode_pcm16_le_base64(samples: &[f32]) -> String {
     let mut bytes = Vec::with_capacity(samples.len() * 2);
     for sample in samples {
@@ -483,56 +432,6 @@ fn encode_pcm16_le_base64(samples: &[f32]) -> String {
     }
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
-
-#[cfg(not(test))]
-fn build_input_stream(
-    device: &cpal::Device,
-    sample_format: cpal::SampleFormat,
-    config: &cpal::StreamConfig,
-    mic_state: Arc<Mutex<MicCaptureState>>,
-) -> Result<cpal::Stream> {
-    let err_fn = |err| warn!("realtime microphone stream error: {err}");
-    let stream = match sample_format {
-        cpal::SampleFormat::F32 => device.build_input_stream(
-            config,
-            move |data: &[f32], _| {
-                if let Ok(mut state) = mic_state.lock() {
-                    state.push_input_samples_f32(data);
-                }
-            },
-            err_fn,
-            None,
-        )?,
-        cpal::SampleFormat::I16 => device.build_input_stream(
-            config,
-            move |data: &[i16], _| {
-                if let Ok(mut state) = mic_state.lock() {
-                    state.push_input_samples_i16(data);
-                }
-            },
-            err_fn,
-            None,
-        )?,
-        cpal::SampleFormat::U16 => device.build_input_stream(
-            config,
-            move |data: &[u16], _| {
-                if let Ok(mut state) = mic_state.lock() {
-                    state.push_input_samples_u16(data);
-                }
-            },
-            err_fn,
-            None,
-        )?,
-        other => {
-            return Err(anyhow::anyhow!(
-                "unsupported microphone sample format: {other:?}"
-            ));
-        }
-    };
-    Ok(stream)
-}
-
-#[cfg(not(test))]
 fn build_output_stream(
     device: &cpal::Device,
     sample_format: cpal::SampleFormat,
@@ -567,28 +466,20 @@ fn build_output_stream(
     };
     Ok(stream)
 }
-
-#[cfg(not(test))]
 fn write_output_f32(data: &mut [f32], playback_state: &Arc<Mutex<PlaybackState>>) {
     fill_output_buffer(data, playback_state, |sample| sample);
 }
-
-#[cfg(not(test))]
 fn write_output_i16(data: &mut [i16], playback_state: &Arc<Mutex<PlaybackState>>) {
     fill_output_buffer(data, playback_state, |sample| {
         (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
     });
 }
-
-#[cfg(not(test))]
 fn write_output_u16(data: &mut [u16], playback_state: &Arc<Mutex<PlaybackState>>) {
     fill_output_buffer(data, playback_state, |sample| {
         let normalized = (sample.clamp(-1.0, 1.0) + 1.0) * 0.5;
         (normalized * u16::MAX as f32).round() as u16
     });
 }
-
-#[cfg(not(test))]
 fn fill_output_buffer<T>(
     data: &mut [T],
     playback_state: &Arc<Mutex<PlaybackState>>,
