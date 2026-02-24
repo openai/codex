@@ -517,6 +517,7 @@ impl RealtimeAudioPlayer {
             .queue
             .lock()
             .map_err(|_| "failed to lock output audio queue".to_string())?;
+        // TODO(aibrahim): Cap or trim this queue if we observe producer bursts outrunning playback.
         guard.extend(converted);
         Ok(())
     }
