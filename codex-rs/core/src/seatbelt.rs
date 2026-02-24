@@ -239,8 +239,10 @@ fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
         proxy.unix_domain_socket_policy,
         UnixDomainSocketPolicy::AllowAll
     ) {
-        policy.push_str("(allow network-bind (local unix-socket))\n");
-        policy.push_str("(allow network-outbound (remote unix-socket))\n");
+        // Keep "allow all" scoped to absolute filesystem-backed socket paths instead
+        // of a completely unqualified unix-socket allowance.
+        policy.push_str("(allow network-bind (local unix-socket (path-regex #\"^/\")))\n");
+        policy.push_str("(allow network-outbound (remote unix-socket (path-regex #\"^/\")))\n");
         return policy;
     }
 
@@ -906,12 +908,12 @@ mod tests {
             "policy should allow AF_UNIX socket creation when unix sockets are enabled:\n{policy}"
         );
         assert!(
-            policy.contains("(allow network-bind (local unix-socket))"),
-            "policy should allow binding unix sockets when enabled:\n{policy}"
+            policy.contains("(allow network-bind (local unix-socket (path-regex #\"^/\")))"),
+            "policy should allow binding absolute-path unix sockets when enabled:\n{policy}"
         );
         assert!(
-            policy.contains("(allow network-outbound (remote unix-socket))"),
-            "policy should allow connecting to unix sockets when enabled:\n{policy}"
+            policy.contains("(allow network-outbound (remote unix-socket (path-regex #\"^/\")))"),
+            "policy should allow connecting to absolute-path unix sockets when enabled:\n{policy}"
         );
         assert!(
             !policy.contains("(allow network* (subpath"),
