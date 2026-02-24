@@ -205,7 +205,11 @@ mod tests {
 
     #[test]
     fn utf8_stream_parser_handles_split_code_points_across_chunks() {
-        let chunks: [&[u8]; 3] = [b"A\xC3", b"\xA9<citation>\xE4", b"\xB8\xAD</citation>Z"];
+        let chunks: [&[u8]; 3] = [
+            b"A\xC3",
+            b"\xA9<oai-mem-citation>\xE4",
+            b"\xB8\xAD</oai-mem-citation>Z",
+        ];
 
         let mut parser = Utf8StreamParser::new(CitationStreamParser::new());
         let out = match collect_bytes(&mut parser, &chunks) {

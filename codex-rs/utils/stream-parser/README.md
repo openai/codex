@@ -2,19 +2,23 @@
 
 Small, dependency-free utilities for parsing streamed text incrementally.
 
+**Disclaimer**: This code is pretty complex and Codex did not manage to write it so before updating the code, make
+sure to deeply understand it and don't blindly trust Codex on it. Feel free to update the documentation as you
+modify the code
+
 ## What it provides
 
 - `StreamTextParser`: trait for incremental parsers that consume string chunks
 - `InlineHiddenTagParser<T>`: generic parser that hides inline tags and extracts their contents
-- `CitationStreamParser`: convenience wrapper for `<citation>...</citation>`
+- `CitationStreamParser`: convenience wrapper for `<oai-mem-citation>...</oai-mem-citation>`
 - `strip_citations(...)`: one-shot helper for non-streamed strings
 - `Utf8StreamParser<P>`: adapter for raw `&[u8]` streams that may split UTF-8 code points
 
 ## Why this exists
 
 Some model outputs arrive as a stream and may contain hidden markup (for example
-`<citation>...</citation>`) split across chunk boundaries. Parsing each chunk
-independently is incorrect because tags can be split (`<cita` + `tion>`).
+`<oai-mem-citation>...</oai-mem-citation>`) split across chunk boundaries. Parsing each chunk
+independently is incorrect because tags can be split (`<oai-mem-` + `citation>`).
 
 This crate keeps parser state across chunks, returns visible text safe to render
 immediately, and extracts hidden payloads separately.
@@ -27,11 +31,11 @@ use codex_utils_stream_parser::StreamTextParser;
 
 let mut parser = CitationStreamParser::new();
 
-let first = parser.push_str("Hello <cita");
+let first = parser.push_str("Hello <oai-mem-");
 assert_eq!(first.visible_text, "Hello ");
 assert!(first.extracted.is_empty());
 
-let second = parser.push_str("tion>doc A</citation> world");
+let second = parser.push_str("citation>doc A</oai-mem-citation> world");
 assert_eq!(second.visible_text, " world");
 assert_eq!(second.extracted, vec!["doc A".to_string()]);
 

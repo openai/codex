@@ -8,16 +8,17 @@ enum CitationTag {
     Citation,
 }
 
-const CITATION_OPEN: &str = "<citation>";
-const CITATION_CLOSE: &str = "</citation>";
+const CITATION_OPEN: &str = "<oai-mem-citation>";
+const CITATION_CLOSE: &str = "</oai-mem-citation>";
 
-/// Stream parser for `<citation>...</citation>` tags.
+/// Stream parser for `<oai-mem-citation>...</oai-mem-citation>` tags.
 ///
 /// This is a thin convenience wrapper around [`InlineHiddenTagParser`]. It returns citation bodies
 /// as plain strings and omits the citation tags from visible text.
 ///
-/// Matching is literal and non-nested. If EOF is reached before a closing `</citation>`, the
-/// parser auto-closes the tag and returns the buffered body as an extracted citation.
+/// Matching is literal and non-nested. If EOF is reached before a closing
+/// `</oai-mem-citation>`, the parser auto-closes the tag and returns the buffered body as an
+/// extracted citation.
 #[derive(Debug)]
 pub struct CitationStreamParser {
     inner: InlineHiddenTagParser<CitationTag>,
@@ -103,7 +104,11 @@ mod tests {
         let mut parser = CitationStreamParser::new();
         let out = collect_chunks(
             &mut parser,
-            &["Hello <cita", "tion>source A</cita", "tion> world"],
+            &[
+                "Hello <oai-mem-",
+                "citation>source A</oai-mem-",
+                "citation> world",
+            ],
         );
 
         assert_eq!(out.visible_text, "Hello  world");
@@ -114,11 +119,11 @@ mod tests {
     fn citation_parser_buffers_partial_open_tag_prefix() {
         let mut parser = CitationStreamParser::new();
 
-        let first = parser.push_str("abc <cita");
+        let first = parser.push_str("abc <oai-mem-");
         assert_eq!(first.visible_text, "abc ");
         assert_eq!(first.extracted, Vec::<String>::new());
 
-        let second = parser.push_str("tion>x</citation>z");
+        let second = parser.push_str("citation>x</oai-mem-citation>z");
         let tail = parser.finish();
 
         assert_eq!(second.visible_text, "z");
@@ -129,7 +134,7 @@ mod tests {
     #[test]
     fn citation_parser_auto_closes_unterminated_tag_on_finish() {
         let mut parser = CitationStreamParser::new();
-        let out = collect_chunks(&mut parser, &["x<citation>source"]);
+        let out = collect_chunks(&mut parser, &["x<oai-mem-citation>source"]);
 
         assert_eq!(out.visible_text, "x");
         assert_eq!(out.extracted, vec!["source".to_string()]);
@@ -138,16 +143,17 @@ mod tests {
     #[test]
     fn citation_parser_preserves_partial_open_tag_at_eof_if_not_a_full_tag() {
         let mut parser = CitationStreamParser::new();
-        let out = collect_chunks(&mut parser, &["hello <cita"]);
+        let out = collect_chunks(&mut parser, &["hello <oai-mem-"]);
 
-        assert_eq!(out.visible_text, "hello <cita");
+        assert_eq!(out.visible_text, "hello <oai-mem-");
         assert_eq!(out.extracted, Vec::<String>::new());
     }
 
     #[test]
     fn strip_citations_collects_all_citations() {
-        let (visible, citations) =
-            strip_citations("a<citation>one</citation>b<citation>two</citation>c");
+        let (visible, citations) = strip_citations(
+            "a<oai-mem-citation>one</oai-mem-citation>b<oai-mem-citation>two</oai-mem-citation>c",
+        );
 
         assert_eq!(visible, "abc");
         assert_eq!(citations, vec!["one".to_string(), "two".to_string()]);
@@ -155,7 +161,7 @@ mod tests {
 
     #[test]
     fn strip_citations_auto_closes_unterminated_citation_at_eof() {
-        let (visible, citations) = strip_citations("x<citation>y");
+        let (visible, citations) = strip_citations("x<oai-mem-citation>y");
 
         assert_eq!(visible, "x");
         assert_eq!(citations, vec!["y".to_string()]);
@@ -163,10 +169,11 @@ mod tests {
 
     #[test]
     fn citation_parser_does_not_support_nested_tags() {
-        let (visible, citations) =
-            strip_citations("a<citation>x<citation>y</citation>z</citation>b");
+        let (visible, citations) = strip_citations(
+            "a<oai-mem-citation>x<oai-mem-citation>y</oai-mem-citation>z</oai-mem-citation>b",
+        );
 
-        assert_eq!(visible, "az</citation>b");
-        assert_eq!(citations, vec!["x<citation>y".to_string()]);
+        assert_eq!(visible, "az</oai-mem-citation>b");
+        assert_eq!(citations, vec!["x<oai-mem-citation>y".to_string()]);
     }
 }

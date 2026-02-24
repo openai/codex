@@ -288,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_non_tool_response_item_strips_citations_from_assistant_message() {
-        let item = assistant_output_text("hello<citation>doc1</citation> world");
+        let item = assistant_output_text("hello<oai-mem-citation>doc1</oai-mem-citation> world");
 
         let turn_item = handle_non_tool_response_item(&item, false)
             .await
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn last_assistant_message_from_item_strips_citations_and_plan_blocks() {
         let item = assistant_output_text(
-            "before<citation>doc1</citation>\n<proposed_plan>\n- x\n</proposed_plan>\nafter",
+            "before<oai-mem-citation>doc1</oai-mem-citation>\n<proposed_plan>\n- x\n</proposed_plan>\nafter",
         );
 
         let message = last_assistant_message_from_item(&item, true)
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn last_assistant_message_from_item_returns_none_for_citation_only_message() {
-        let item = assistant_output_text("<citation>doc1</citation>");
+        let item = assistant_output_text("<oai-mem-citation>doc1</oai-mem-citation>");
 
         assert_eq!(last_assistant_message_from_item(&item, false), None);
     }

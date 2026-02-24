@@ -26,7 +26,7 @@ struct ActiveTag<T> {
 /// Generic streaming parser that hides configured inline tags and extracts their contents.
 ///
 /// Example:
-/// - input: `hello <citation>doc A</citation> world`
+/// - input: `hello <oai-mem-citation>doc A</oai-mem-citation> world`
 /// - visible output: `hello  world`
 /// - extracted: `["doc A"]`
 ///

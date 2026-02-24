@@ -6624,8 +6624,8 @@ mod tests {
         let mut parsers = AssistantMessageStreamParsers::default();
         let item_id = "msg-1";
 
-        let seeded = parsers.seed_item_text(item_id, "hello <citation>doc");
-        let parsed = parsers.parse_delta(item_id, "1</citation> world");
+        let seeded = parsers.seed_item_text(item_id, "hello <oai-mem-citation>doc");
+        let parsed = parsers.parse_delta(item_id, "1</oai-mem-citation> world");
         let tail = parsers.finish_item(item_id);
 
         assert_eq!(seeded.visible_text, "hello ");
@@ -6641,8 +6641,8 @@ mod tests {
         let mut parsers = AssistantMessageStreamParsers::default();
         let item_id = "msg-1";
 
-        let seeded = parsers.seed_item_text(item_id, "hello <cita");
-        let parsed = parsers.parse_delta(item_id, "tion>doc</citation> world");
+        let seeded = parsers.seed_item_text(item_id, "hello <oai-mem-");
+        let parsed = parsers.parse_delta(item_id, "citation>doc</oai-mem-citation> world");
         let tail = parsers.finish_item(item_id);
 
         assert_eq!(seeded.visible_text, "hello ");
