@@ -2016,18 +2016,68 @@ impl ChatComposer {
     fn current_at_token(textarea: &TextArea) -> Option<String> {
         let text = textarea.text();
         let safe_cursor = Self::clamp_to_char_boundary(text, textarea.cursor());
-        let token = Self::current_prefixed_token(textarea, '@', false)?;
-        if token.contains('@') {
-            return None;
-        }
-        if text[safe_cursor..].starts_with('@')
-            && text[..safe_cursor]
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
+        let token_start = before_cursor
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map(|(idx, c)| idx + c.len_utf8())
+            .unwrap_or(0);
+        let token_end_rel = after_cursor
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(after_cursor.len());
+        let token_end = safe_cursor + token_end_rel;
+        let raw_token = (token_start < token_end).then(|| &text[token_start..token_end]);
+
+        if raw_token.is_some_and(|raw_token| {
+            let Some(rest) = raw_token.strip_prefix('@') else {
+                return false;
+            };
+            let Some(version_sep) = rest.find('@') else {
+                return false;
+            };
+            let package_name = &rest[..version_sep];
+            let version = &rest[version_sep + 1..];
+            if package_name.is_empty()
+                || version.is_empty()
+                || !package_name.contains('/')
+                || version.contains('/')
+            {
+                return false;
+            }
+
+            if !version.contains('.') {
+                return true;
+            }
+
+            let normalized_version = version
+                .strip_prefix('v')
+                .filter(|tail| tail.chars().next().is_some_and(|c| c.is_ascii_digit()))
+                .unwrap_or(version);
+
+            if !normalized_version
                 .chars()
-                .next_back()
-                .is_some_and(|c| !c.is_whitespace())
-        {
+                .next()
+                .is_some_and(|c| c.is_ascii_digit())
+            {
+                return false;
+            }
+
+            normalized_version.split('.').all(|segment| {
+                !segment.is_empty()
+                    && segment.chars().all(|c| {
+                        c.is_ascii_alphanumeric()
+                            || matches!(c, '-' | '+' | '^' | '~' | '<' | '>' | '=')
+                    })
+                    && segment.chars().any(|c| c.is_ascii_digit())
+            })
+        }) {
             return None;
         }
+
+        let token = Self::current_prefixed_token(textarea, '@', false)?;
         Some(token)
     }
 
@@ -5435,7 +5485,7 @@ mod tests {
     }
 
     #[test]
-    fn test_current_at_token_rejects_tokens_with_second_at() {
+    fn test_current_at_token_rejects_scoped_npm_packages_with_versions() {
         let input = "npx -y @kaeawc/auto-mobile@latest";
         let token_start = input.find("@kaeawc").expect("scoped npm package present");
         let version_at = input
@@ -5456,6 +5506,32 @@ mod tests {
             let result = ChatComposer::current_at_token(&textarea);
             assert_eq!(
                 result, None,
+                "Failed for case: {description} - input: '{input}', cursor: {cursor_pos}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_current_at_token_allows_file_queries_with_second_at() {
+        let input = "@icons/icon@2x.png";
+        let version_at = input
+            .rfind("@2x")
+            .expect("second @ in file token should be present");
+        let test_cases = vec![
+            (0, "Cursor at leading @"),
+            (8, "Cursor before second @"),
+            (version_at, "Cursor at second @"),
+            (input.len(), "Cursor at end of token"),
+        ];
+
+        for (cursor_pos, description) in test_cases {
+            let mut textarea = TextArea::new();
+            textarea.insert_str(input);
+            textarea.set_cursor(cursor_pos);
+
+            let result = ChatComposer::current_at_token(&textarea);
+            assert!(
+                result.is_some(),
                 "Failed for case: {description} - input: '{input}', cursor: {cursor_pos}"
             );
         }
