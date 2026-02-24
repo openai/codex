@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
+use codex_arg0::Arg0DispatchPaths;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -38,7 +38,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     initialized: bool,
-    codex_linux_sandbox_exe: Option<PathBuf>,
+    arg0_paths: Arg0DispatchPaths,
     thread_manager: Arc<ThreadManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
 }
@@ -48,7 +48,7 @@ impl MessageProcessor {
     /// `Sender` so handlers can enqueue messages to be written to stdout.
     pub(crate) fn new(
         outgoing: OutgoingMessageSender,
-        codex_linux_sandbox_exe: Option<PathBuf>,
+        arg0_paths: Arg0DispatchPaths,
         config: Arc<Config>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
@@ -66,7 +66,7 @@ impl MessageProcessor {
         Self {
             outgoing,
             initialized: false,
-            codex_linux_sandbox_exe,
+            arg0_paths,
             thread_manager,
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -352,10 +352,7 @@ impl MessageProcessor {
         let arguments = arguments.map(serde_json::Value::Object);
         let (initial_prompt, config): (String, Config) = match arguments {
             Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
-                Ok(tool_cfg) => match tool_cfg
-                    .into_config(self.codex_linux_sandbox_exe.clone())
-                    .await
-                {
+                Ok(tool_cfg) => match tool_cfg.into_config(self.arg0_paths.clone()).await {
                     Ok(cfg) => cfg,
                     Err(e) => {
                         let result = CallToolResult {

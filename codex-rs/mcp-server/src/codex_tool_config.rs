@@ -1,5 +1,6 @@
 //! Configuration object accepted by the `codex` MCP tool-call.
 
+use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_protocol::ThreadId;
@@ -153,7 +154,7 @@ impl CodexToolCallParam {
     /// effective Config object generated from the supplied parameters.
     pub async fn into_config(
         self,
-        codex_linux_sandbox_exe: Option<PathBuf>,
+        arg0_paths: Arg0DispatchPaths,
     ) -> std::io::Result<(String, Config)> {
         let Self {
             prompt,
@@ -175,7 +176,8 @@ impl CodexToolCallParam {
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy.map(Into::into),
             sandbox_mode: sandbox.map(Into::into),
-            codex_linux_sandbox_exe,
+            codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
+            main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
             base_instructions,
             developer_instructions,
             compact_prompt,
