@@ -4,7 +4,6 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
@@ -34,7 +33,6 @@ use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::rollout::session_index;
-use crate::skills::ImplicitInvocationContext;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -566,8 +564,8 @@ pub(crate) struct TurnContext {
     pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
+    pub(crate) skills_outcome: Arc<SkillLoadOutcome>,
     pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<String>>>,
-    pub(crate) implicit_invocation_context: Arc<OnceLock<Option<Arc<ImplicitInvocationContext>>>>,
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -649,8 +647,8 @@ impl TurnContext {
             js_repl: Arc::clone(&self.js_repl),
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
+            skills_outcome: self.skills_outcome.clone(),
             implicit_invocation_seen_skills: self.implicit_invocation_seen_skills.clone(),
-            implicit_invocation_context: self.implicit_invocation_context.clone(),
         }
     }
 
@@ -922,10 +920,11 @@ impl Session {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn make_turn_context(
+    async fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
         otel_manager: &OtelManager,
         provider: ModelProviderInfo,
+        skills_manager: &SkillsManager,
         session_configuration: &SessionConfiguration,
         per_turn_config: Config,
         model_info: ModelInfo,
@@ -933,6 +932,11 @@ impl Session {
         sub_id: String,
         js_repl: Arc<JsReplHandle>,
     ) -> TurnContext {
+        let skills_outcome = Arc::new(
+            skills_manager
+                .skills_for_cwd(&session_configuration.cwd, false)
+                .await,
+        );
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration.model_reasoning_summary;
         let otel_manager = otel_manager.clone().with_model(
@@ -993,8 +997,8 @@ impl Session {
             js_repl,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
+            skills_outcome,
             implicit_invocation_seen_skills: Arc::new(Mutex::new(HashSet::new())),
-            implicit_invocation_context: Arc::new(OnceLock::new()),
         }
     }
 
@@ -1871,6 +1875,7 @@ impl Session {
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_manager,
             session_configuration.provider.clone(),
+            self.services.skills_manager.as_ref(),
             &session_configuration,
             per_turn_config,
             model_info,
@@ -1880,7 +1885,8 @@ impl Session {
                 .map(StartedNetworkProxy::proxy),
             sub_id,
             Arc::clone(&self.js_repl),
-        );
+        )
+        .await;
 
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -4151,8 +4157,8 @@ async fn spawn_review_thread(
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,
+        skills_outcome: parent_turn_context.skills_outcome.clone(),
         implicit_invocation_seen_skills: Arc::new(Mutex::new(HashSet::new())),
-        implicit_invocation_context: Arc::new(OnceLock::new()),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -4270,17 +4276,7 @@ pub(crate) async fn run_turn(
         return None;
     }
 
-    let skills_outcome = Some(
-        sess.services
-            .skills_manager
-            .skills_for_cwd(&turn_context.cwd, false)
-            .await,
-    );
-    let _ = turn_context.implicit_invocation_context.set(
-        skills_outcome
-            .as_ref()
-            .and_then(|outcome| outcome.implicit_invocation_context.clone()),
-    );
+    let skills_outcome = Some(turn_context.skills_outcome.as_ref());
 
     let available_connectors = if turn_context.config.features.enabled(Feature::Apps) {
         let mcp_tools = match sess
@@ -4460,7 +4456,6 @@ pub(crate) async fn run_turn(
             turn_metadata_header.as_deref(),
             sampling_request_input,
             &explicitly_enabled_connectors,
-            skills_outcome.as_ref(),
             &mut server_model_warning_emitted_for_turn,
             cancellation_token.child_token(),
         )
@@ -4834,10 +4829,10 @@ async fn run_sampling_request(
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
     explicitly_enabled_connectors: &HashSet<String>,
-    skills_outcome: Option<&SkillLoadOutcome>,
     server_model_warning_emitted_for_turn: &mut bool,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
+    let skills_outcome = Some(turn_context.skills_outcome.as_ref());
     let router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -7329,13 +7324,15 @@ mod tests {
             Some(Arc::clone(&auth_manager)),
             &otel_manager,
             session_configuration.provider.clone(),
+            services.skills_manager.as_ref(),
             &session_configuration,
             per_turn_config,
             model_info,
             None,
             "turn_id".to_string(),
             Arc::clone(&js_repl),
-        );
+        )
+        .await;
 
         let session = Session {
             conversation_id,
@@ -7473,17 +7470,21 @@ mod tests {
             config.codex_home.clone(),
         ));
 
-        let turn_context = Arc::new(Session::make_turn_context(
-            Some(Arc::clone(&auth_manager)),
-            &otel_manager,
-            session_configuration.provider.clone(),
-            &session_configuration,
-            per_turn_config,
-            model_info,
-            None,
-            "turn_id".to_string(),
-            Arc::clone(&js_repl),
-        ));
+        let turn_context = Arc::new(
+            Session::make_turn_context(
+                Some(Arc::clone(&auth_manager)),
+                &otel_manager,
+                session_configuration.provider.clone(),
+                services.skills_manager.as_ref(),
+                &session_configuration,
+                per_turn_config,
+                model_info,
+                None,
+                "turn_id".to_string(),
+                Arc::clone(&js_repl),
+            )
+            .await,
+        );
 
         let session = Arc::new(Session {
             conversation_id,

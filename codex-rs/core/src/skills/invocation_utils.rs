@@ -85,9 +85,9 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     workdir: Option<&str>,
 ) {
     let Some(implicit) = turn_context
+        .skills_outcome
         .implicit_invocation_context
-        .get()
-        .and_then(|value| value.as_deref())
+        .as_deref()
     else {
         return;
     };
