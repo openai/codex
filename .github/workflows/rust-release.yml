@@ -205,6 +205,16 @@ jobs:
       - name: Cargo build
         shell: bash
         run: |
+          set -euo pipefail
+          if [[ "${{ matrix.target }}" == *"-unknown-linux-musl" ]]; then
+            echo "Pre-build CFLAGS=${CFLAGS-}"
+            echo "Pre-build CXXFLAGS=${CXXFLAGS-}"
+            echo "Pre-build RUSTFLAGS=${RUSTFLAGS-}"
+            export CFLAGS="-pthread"
+            export CXXFLAGS="-pthread"
+            echo "Post-build CFLAGS=${CFLAGS-}"
+            echo "Post-build CXXFLAGS=${CXXFLAGS-}"
+          fi
           cargo build --target ${{ matrix.target }} --release --timings --bin codex --bin codex-responses-api-proxy
 
       - name: Upload Cargo timings
