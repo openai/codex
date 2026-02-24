@@ -106,7 +106,7 @@ Under `{{ memory_root }}/`:
     context.
   - source of rollout-level metadata needed for MEMORY.md `### rollout_summary_files`
     annotations;
-    you should be able to find `cwd` and `updated_at` there.
+    you should be able to find `cwd`, `rollout_path`, and `updated_at` there.
 - `MEMORY.md`
   - merged memories; produce a lightly clustered version if applicable
 - `rollout_summaries/*.md`
@@ -171,7 +171,7 @@ Required task-oriented body shape (strict):
 ## Task 1: <task description, outcome>
 
 ### rollout_summary_files
-- <rollout_summaries/file1.md> (cwd=<path>, updated_at=<timestamp>, thread_id=<thread_id>, <optional status/usefulness note>)
+- <rollout_summaries/file1.md> (cwd=<path>, rollout_path=<path>, updated_at=<timestamp>, thread_id=<thread_id>, <optional status/usefulness note>)
 
 ### keywords
 
@@ -236,7 +236,8 @@ Schema rules (strict):
   - Every `## Task <n>` section must include `### rollout_summary_files`, `### keywords`,
     and `### learnings`.
   - `### rollout_summary_files` must be task-local (not a block-wide catch-all list).
-  - Each rollout annotation must include `cwd=<path>` and `updated_at=<timestamp>`.
+  - Each rollout annotation must include `cwd=<path>`, `rollout_path=<path>`, and
+    `updated_at=<timestamp>`.
     If missing from a rollout summary, recover them from `raw_memories.md`.
   - Major learnings should be traceable to rollout summaries listed in the same task section.
   - Order rollout references by freshness and practical usefulness.

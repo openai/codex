@@ -26,6 +26,7 @@ Memory layout (general -> specific):
   - examples/ (optional example outputs)
   - templates/ (optional templates)
 - {{ base_path }}/rollout_summaries/ (per-rollout recaps + evidence snippets)
+- `rollout` entries (raw rollout logs, `rollout_path` can be found in {{ base_path }}/MEMORY.md or {{ base_path }}/rollout_summaries/)
 
 Quick memory pass (when applicable):
 
@@ -34,7 +35,8 @@ Quick memory pass (when applicable):
 3. Only if MEMORY.md directly points to rollout summaries/skills, open the 1-2
    most relevant files under {{ base_path }}/rollout_summaries/ or
    {{ base_path }}/skills/.
-4. If there are no relevant hits, stop memory lookup and continue normally.
+4. If above are not clear and you need exact commands, error text, or precise evidence., open `rollout_path` for more evidence.
+5. If there are no relevant hits, stop memory lookup and continue normally.
 
 Quick-pass budget:
 

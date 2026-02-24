@@ -12,6 +12,7 @@ use super::ThreadMetadata;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stage1Output {
     pub thread_id: ThreadId,
+    pub rollout_path: PathBuf,
     pub source_updated_at: DateTime<Utc>,
     pub raw_memory: String,
     pub rollout_summary: String,
@@ -23,6 +24,7 @@ pub struct Stage1Output {
 #[derive(Debug)]
 pub(crate) struct Stage1OutputRow {
     thread_id: String,
+    rollout_path: String,
     source_updated_at: i64,
     raw_memory: String,
     rollout_summary: String,
@@ -35,6 +37,7 @@ impl Stage1OutputRow {
     pub(crate) fn try_from_row(row: &SqliteRow) -> Result<Self> {
         Ok(Self {
             thread_id: row.try_get("thread_id")?,
+            rollout_path: row.try_get("rollout_path")?,
             source_updated_at: row.try_get("source_updated_at")?,
             raw_memory: row.try_get("raw_memory")?,
             rollout_summary: row.try_get("rollout_summary")?,
@@ -51,6 +54,7 @@ impl TryFrom<Stage1OutputRow> for Stage1Output {
     fn try_from(row: Stage1OutputRow) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
             thread_id: ThreadId::try_from(row.thread_id)?,
+            rollout_path: PathBuf::from(row.rollout_path),
             source_updated_at: epoch_seconds_to_datetime(row.source_updated_at)?,
             raw_memory: row.raw_memory,
             rollout_summary: row.rollout_summary,

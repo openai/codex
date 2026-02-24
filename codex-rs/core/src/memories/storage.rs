@@ -82,6 +82,8 @@ async fn rebuild_raw_memories_file(
         )
         .map_err(raw_memories_format_error)?;
         writeln!(body, "cwd: {}", memory.cwd.display()).map_err(raw_memories_format_error)?;
+        writeln!(body, "rollout_path: {}", memory.rollout_path.display())
+            .map_err(raw_memories_format_error)?;
         let rollout_summary_file = format!("{}.md", rollout_summary_file_stem(memory));
         writeln!(body, "rollout_summary_file: {rollout_summary_file}")
             .map_err(raw_memories_format_error)?;
@@ -138,6 +140,8 @@ async fn write_rollout_summary_for_thread(
         memory.source_updated_at.to_rfc3339()
     )
     .map_err(rollout_summary_format_error)?;
+    writeln!(body, "rollout_path: {}", memory.rollout_path.display())
+        .map_err(rollout_summary_format_error)?;
     writeln!(body, "cwd: {}", memory.cwd.display()).map_err(rollout_summary_format_error)?;
     writeln!(body).map_err(rollout_summary_format_error)?;
     body.push_str(&memory.rollout_summary);
@@ -267,6 +271,7 @@ mod tests {
             raw_memory: "raw memory".to_string(),
             rollout_summary: "summary".to_string(),
             rollout_slug: rollout_slug.map(ToString::to_string),
+            rollout_path: PathBuf::from("/tmp/rollout.jsonl"),
             cwd: PathBuf::from("/tmp/workspace"),
             generated_at: Utc.timestamp_opt(124, 0).single().expect("timestamp"),
         }

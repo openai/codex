@@ -180,7 +180,7 @@ LEFT JOIN jobs
     ///
     /// Query behavior:
     /// - filters out rows where both `raw_memory` and `rollout_summary` are blank
-    /// - joins `threads` to include thread `cwd`
+    /// - joins `threads` to include thread `cwd` and `rollout_path`
     /// - orders by `source_updated_at DESC, thread_id DESC`
     /// - applies `LIMIT n`
     pub async fn list_stage1_outputs_for_global(
@@ -195,6 +195,7 @@ LEFT JOIN jobs
             r#"
 SELECT
     so.thread_id,
+    COALESCE(t.rollout_path, '') AS rollout_path,
     so.source_updated_at,
     so.raw_memory,
     so.rollout_summary,
