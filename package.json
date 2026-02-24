@@ -15,7 +15,8 @@
     "semver": "^7.7.1"
   },
   "overrides": {
-    "punycode": "^2.3.1"
+    "punycode": "^2.3.1",
+    "esbuild": ">=0.25.0"
   },
   "engines": {
     "node": ">=22",
