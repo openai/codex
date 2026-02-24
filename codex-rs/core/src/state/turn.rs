@@ -57,8 +57,11 @@ impl ActiveTurn {
         self.tasks.insert(sub_id, task);
     }
 
-    pub(crate) fn remove_task(&mut self, sub_id: &str) -> bool {
-        self.tasks.swap_remove(sub_id);
+    pub(crate) fn remove_task(&mut self, sub_id: &str) -> Option<RunningTask> {
+        self.tasks.swap_remove(sub_id)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
 

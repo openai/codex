@@ -155,6 +155,7 @@ impl ToolHandler for JsReplHandler {
         };
 
         let content = result.output;
+        let interrupt_turn = result.interrupt_turn;
         let items = vec![FunctionCallOutputContentItem::InputText {
             text: content.clone(),
         }];
@@ -169,10 +170,18 @@ impl ToolHandler for JsReplHandler {
         )
         .await;
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::ContentItems(items),
-            success: Some(true),
-        })
+        if interrupt_turn {
+            Ok(ToolOutput::FunctionWithControl {
+                body: FunctionCallOutputBody::ContentItems(items),
+                success: Some(true),
+                interrupt_turn: true,
+            })
+        } else {
+            Ok(ToolOutput::Function {
+                body: FunctionCallOutputBody::ContentItems(items),
+                success: Some(true),
+            })
+        }
     }
 }
 

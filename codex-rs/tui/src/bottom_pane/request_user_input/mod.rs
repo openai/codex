@@ -33,6 +33,7 @@ use crate::render::renderable::Renderable;
 use codex_protocol::protocol::Op;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::TextElement;
 use unicode_width::UnicodeWidthStr;
@@ -88,6 +89,9 @@ impl ComposerDraft {
 struct AnswerState {
     // Scrollable cursor state for option navigation/highlight.
     options_state: ScrollState,
+    // Last explicitly committed option selection. We preserve this across later
+    // edits so partial interrupt submission can keep the committed selection.
+    committed_option_idx: Option<usize>,
     // Per-question notes draft.
     draft: ComposerDraft,
     // Whether the answer for this question has been explicitly submitted.
@@ -558,6 +562,7 @@ impl RequestUserInputOverlay {
                 }
                 AnswerState {
                     options_state,
+                    committed_option_idx: None,
                     draft: ComposerDraft::default(),
                     answer_committed: false,
                     notes_visible: !has_options,
@@ -644,6 +649,9 @@ impl RequestUserInputOverlay {
         let updated = if let Some(answer) = self.current_answer_mut() {
             answer.options_state.clamp_selection(options_len);
             answer.answer_committed = committed;
+            if committed {
+                answer.committed_option_idx = answer.options_state.selected_idx;
+            }
             true
         } else {
             false
@@ -660,6 +668,7 @@ impl RequestUserInputOverlay {
         }
         if let Some(answer) = self.current_answer_mut() {
             answer.options_state.reset();
+            answer.committed_option_idx = None;
             answer.draft = ComposerDraft::default();
             answer.answer_committed = false;
             answer.notes_visible = false;
@@ -710,46 +719,123 @@ impl RequestUserInputOverlay {
         }
     }
 
+    fn answer_for_question(
+        &self,
+        idx: usize,
+        question: &RequestUserInputQuestion,
+        committed_only: bool,
+    ) -> Option<RequestUserInputAnswer> {
+        let answer_state = &self.answers[idx];
+        if committed_only
+            && !answer_state.answer_committed
+            && answer_state.committed_option_idx.is_none()
+        {
+            return None;
+        }
+
+        let options = question.options.as_ref();
+        // For option questions we may still produce no selection.
+        let selected_idx = if options.is_some_and(|opts| !opts.is_empty()) {
+            if answer_state.answer_committed {
+                answer_state.options_state.selected_idx
+            } else if committed_only {
+                answer_state.committed_option_idx
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        // Notes are appended as extra answers. For freeform questions, only submit when
+        // the user explicitly committed the draft.
+        let notes = if answer_state.answer_committed {
+            answer_state.draft.text_with_pending().trim().to_string()
+        } else {
+            String::new()
+        };
+        let selected_label = selected_idx
+            .and_then(|selected_idx| Self::option_label_for_index(question, selected_idx));
+        let mut answer_list = selected_label.into_iter().collect::<Vec<_>>();
+        if !notes.is_empty() {
+            answer_list.push(format!("user_note: {notes}"));
+        }
+
+        Some(RequestUserInputAnswer {
+            answers: answer_list,
+        })
+    }
+
+    fn submit_committed_answers_for_interrupt(&mut self) {
+        self.confirm_unanswered = None;
+
+        let mut answers = HashMap::new();
+        for (idx, question) in self.request.questions.iter().enumerate() {
+            if let Some(answer) = self.answer_for_question(idx, question, true) {
+                answers.insert(question.id.clone(), answer);
+            }
+        }
+
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::UserInputAnswer {
+                id: self.request.turn_id.clone(),
+                response: RequestUserInputResponse {
+                    answers: answers.clone(),
+                    interrupted: true,
+                },
+            }));
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::RequestUserInputResultCell {
+                questions: self.request.questions.clone(),
+                answers,
+                interrupted: true,
+            },
+        )));
+    }
+
+    fn supports_partial_interrupt_submission(&self) -> bool {
+        !self.request.questions.is_empty()
+            && self
+                .request
+                .questions
+                .iter()
+                .all(Self::is_tool_style_partial_interrupt_question)
+    }
+
+    fn is_tool_style_partial_interrupt_question(question: &RequestUserInputQuestion) -> bool {
+        // Tool `request_user_input` currently emits option questions with `is_other = true`.
+        // Non-tool prompts rely on a true `Op::Interrupt` to abort the turn.
+        question.is_other
+            && question
+                .options
+                .as_ref()
+                .is_some_and(|options| !options.is_empty())
+    }
+
+    fn interrupt_current_request(&mut self) {
+        if self.supports_partial_interrupt_submission() {
+            self.submit_committed_answers_for_interrupt();
+        } else {
+            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+        }
+        self.done = true;
+    }
+
     /// Build the response payload and dispatch it to the app.
     fn submit_answers(&mut self) {
         self.confirm_unanswered = None;
         self.save_current_draft();
         let mut answers = HashMap::new();
         for (idx, question) in self.request.questions.iter().enumerate() {
-            let answer_state = &self.answers[idx];
-            let options = question.options.as_ref();
-            // For option questions we may still produce no selection.
-            let selected_idx =
-                if options.is_some_and(|opts| !opts.is_empty()) && answer_state.answer_committed {
-                    answer_state.options_state.selected_idx
-                } else {
-                    None
-                };
-            // Notes are appended as extra answers. For freeform questions, only submit when
-            // the user explicitly committed the draft.
-            let notes = if answer_state.answer_committed {
-                answer_state.draft.text_with_pending().trim().to_string()
-            } else {
-                String::new()
-            };
-            let selected_label = selected_idx
-                .and_then(|selected_idx| Self::option_label_for_index(question, selected_idx));
-            let mut answer_list = selected_label.into_iter().collect::<Vec<_>>();
-            if !notes.is_empty() {
-                answer_list.push(format!("user_note: {notes}"));
+            if let Some(answer) = self.answer_for_question(idx, question, false) {
+                answers.insert(question.id.clone(), answer);
             }
-            answers.insert(
-                question.id.clone(),
-                RequestUserInputAnswer {
-                    answers: answer_list,
-                },
-            );
         }
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::UserInputAnswer {
                 id: self.request.turn_id.clone(),
                 response: RequestUserInputResponse {
                     answers: answers.clone(),
+                    interrupted: false,
                 },
             }));
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
@@ -925,6 +1011,7 @@ impl RequestUserInputOverlay {
                 if self.has_options() {
                     if let Some(answer) = self.current_answer_mut() {
                         answer.answer_committed = true;
+                        answer.committed_option_idx = answer.options_state.selected_idx;
                     }
                 } else if let Some(answer) = self.current_answer_mut() {
                     answer.answer_committed = !text.trim().is_empty();
@@ -1005,10 +1092,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 self.clear_notes_and_focus_options();
                 return;
             }
-            // TODO: Emit interrupted request_user_input results (including committed answers)
-            // once core supports persisting them reliably without follow-up turn issues.
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
-            self.done = true;
+            self.interrupt_current_request();
             return;
         }
 
@@ -1221,10 +1305,7 @@ impl BottomPaneView for RequestUserInputOverlay {
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if self.confirm_unanswered_active() {
             self.close_unanswered_confirmation();
-            // TODO: Emit interrupted request_user_input results (including committed answers)
-            // once core supports persisting them reliably without follow-up turn issues.
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
-            self.done = true;
+            self.interrupt_current_request();
             return CancellationEvent::Handled;
         }
         if self.focus_is_notes() && !self.composer.current_text_with_pending().is_empty() {
@@ -1232,10 +1313,7 @@ impl BottomPaneView for RequestUserInputOverlay {
             return CancellationEvent::Handled;
         }
 
-        // TODO: Emit interrupted request_user_input results (including committed answers)
-        // once core supports persisting them reliably without follow-up turn issues.
-        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
-        self.done = true;
+        self.interrupt_current_request();
         CancellationEvent::Handled
     }
 
@@ -1298,15 +1376,36 @@ mod tests {
         (AppEventSender::new(tx_raw), rx)
     }
 
-    fn expect_interrupt_only(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) {
-        let event = rx.try_recv().expect("expected interrupt AppEvent");
+    fn expect_partial_interrupt_submission(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+        expected_turn_id: &str,
+    ) -> RequestUserInputResponse {
+        let event = rx.try_recv().expect("expected partial answer AppEvent");
         let AppEvent::CodexOp(op) = event else {
             panic!("expected CodexOp");
         };
-        assert_eq!(op, Op::Interrupt);
+        let Op::UserInputAnswer { id, response } = op else {
+            panic!("expected UserInputAnswer");
+        };
+        assert_eq!(id, expected_turn_id);
+        assert!(response.interrupted, "expected interrupted response");
+
+        let event = rx.try_recv().expect("expected history cell");
+        assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
         assert!(
             rx.try_recv().is_err(),
-            "unexpected AppEvents before interrupt completion"
+            "unexpected AppEvents after interrupted submission"
+        );
+
+        response
+    }
+
+    fn expect_interrupt_op(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) {
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
+        assert!(matches!(event, AppEvent::CodexOp(Op::Interrupt)));
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvents after interrupt"
         );
     }
 
@@ -1529,7 +1628,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
         assert!(overlay.done, "expected overlay to be done");
-        expect_interrupt_only(&mut rx);
+        expect_interrupt_op(&mut rx);
     }
 
     #[test]
@@ -1910,14 +2009,17 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
         assert_eq!(overlay.done, true);
-        expect_interrupt_only(&mut rx);
+        expect_interrupt_op(&mut rx);
     }
 
     #[test]
-    fn esc_in_options_mode_interrupts() {
+    fn esc_in_tool_options_mode_interrupts_with_partial_submission() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
-            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            request_event(
+                "turn-1",
+                vec![question_with_options_and_other("q1", "Pick one")],
+            ),
             tx,
             true,
             false,
@@ -1927,7 +2029,8 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
         assert_eq!(overlay.done, true);
-        expect_interrupt_only(&mut rx);
+        let response = expect_partial_interrupt_submission(&mut rx, "turn-1");
+        assert!(response.answers.is_empty(), "expected no committed answers");
     }
 
     #[test]
@@ -1988,14 +2091,14 @@ mod tests {
     }
 
     #[test]
-    fn esc_drops_committed_answers() {
+    fn esc_submits_only_committed_answers_before_interrupt() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
             request_event(
                 "turn-1",
                 vec![
-                    question_with_options("q1", "First"),
-                    question_without_options("q2", "Second"),
+                    question_with_options_and_other("q1", "First"),
+                    question_with_options_and_other("q2", "Second"),
                 ],
             ),
             tx,
@@ -2012,7 +2115,77 @@ mod tests {
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
-        expect_interrupt_only(&mut rx);
+        let response = expect_partial_interrupt_submission(&mut rx, "turn-1");
+        let answer = response
+            .answers
+            .get("q1")
+            .expect("missing committed answer");
+        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
+        assert!(
+            !response.answers.contains_key("q2"),
+            "uncommitted question should not be submitted"
+        );
+    }
+
+    #[test]
+    fn esc_interrupt_preserves_committed_selection_after_notes_clear() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options_and_other("q1", "First"),
+                    question_with_options_and_other("q2", "Second"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+        assert_eq!(overlay.current_index(), 1);
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected AppEvent before interruption"
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('h')));
+        assert_eq!(overlay.current_index(), 0);
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        let answer = overlay.current_answer().expect("answer missing");
+        assert_eq!(answer.answer_committed, false);
+        assert_eq!(answer.options_state.selected_idx, Some(1));
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        let response = expect_partial_interrupt_submission(&mut rx, "turn-1");
+        let answer = response
+            .answers
+            .get("q1")
+            .expect("missing committed answer");
+        assert_eq!(answer.answers, vec!["Option 2".to_string()]);
+    }
+
+    #[test]
+    fn esc_on_non_tool_freeform_request_emits_interrupt() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_without_options("q1", "Notes")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('x')));
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        assert!(overlay.done, "expected overlay to be done");
+        expect_interrupt_op(&mut rx);
     }
 
     #[test]

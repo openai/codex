@@ -63,15 +63,28 @@ pub enum ToolOutput {
         body: FunctionCallOutputBody,
         success: Option<bool>,
     },
+    FunctionWithControl {
+        // Canonical output body for function-style tools plus internal control
+        // metadata consumed by core dispatch (not exposed on the wire).
+        body: FunctionCallOutputBody,
+        success: Option<bool>,
+        interrupt_turn: bool,
+    },
     Mcp {
         result: Result<CallToolResult, String>,
     },
 }
 
+#[derive(Clone, Debug)]
+pub struct ToolDispatchOutput {
+    pub response_input: ResponseInputItem,
+    pub interrupt_turn: bool,
+}
+
 impl ToolOutput {
     pub fn log_preview(&self) -> String {
         match self {
-            ToolOutput::Function { body, .. } => {
+            ToolOutput::Function { body, .. } | ToolOutput::FunctionWithControl { body, .. } => {
                 telemetry_preview(&body.to_text().unwrap_or_default())
             }
             ToolOutput::Mcp { result } => format!("{result:?}"),
@@ -80,14 +93,23 @@ impl ToolOutput {
 
     pub fn success_for_logging(&self) -> bool {
         match self {
-            ToolOutput::Function { success, .. } => success.unwrap_or(true),
+            ToolOutput::Function { success, .. }
+            | ToolOutput::FunctionWithControl { success, .. } => success.unwrap_or(true),
             ToolOutput::Mcp { result } => result.is_ok(),
+        }
+    }
+
+    pub fn interrupt_turn_hint(&self) -> bool {
+        match self {
+            ToolOutput::FunctionWithControl { interrupt_turn, .. } => *interrupt_turn,
+            ToolOutput::Function { .. } | ToolOutput::Mcp { .. } => false,
         }
     }
 
     pub fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         match self {
-            ToolOutput::Function { body, success } => {
+            ToolOutput::Function { body, success }
+            | ToolOutput::FunctionWithControl { body, success, .. } => {
                 // `custom_tool_call` is the Responses API item type for freeform
                 // tools (`ToolSpec::Freeform`, e.g. freeform `apply_patch`).
                 // Those payloads must round-trip as `custom_tool_call_output`
@@ -199,6 +221,30 @@ mod tests {
                 assert_eq!(call_id, "fn-1");
                 assert_eq!(output.text_content(), Some("ok"));
                 assert!(output.content_items().is_none());
+                assert_eq!(output.success, Some(true));
+            }
+            other => panic!("expected FunctionCallOutput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn function_with_control_interrupt_hint_is_internal_only() {
+        let payload = ToolPayload::Function {
+            arguments: "{}".to_string(),
+        };
+        let output = ToolOutput::FunctionWithControl {
+            body: FunctionCallOutputBody::Text("ok".to_string()),
+            success: Some(true),
+            interrupt_turn: true,
+        };
+
+        assert!(output.interrupt_turn_hint());
+
+        let response = output.into_response("fn-ctrl", &payload);
+        match response {
+            ResponseInputItem::FunctionCallOutput { call_id, output } => {
+                assert_eq!(call_id, "fn-ctrl");
+                assert_eq!(output.text_content(), Some("ok"));
                 assert_eq!(output.success, Some(true));
             }
             other => panic!("expected FunctionCallOutput, got {other:?}"),

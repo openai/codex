@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -93,7 +94,7 @@ use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use futures::future::BoxFuture;
 use futures::prelude::*;
-use futures::stream::FuturesOrdered;
+use futures::stream::FuturesUnordered;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
@@ -240,8 +241,10 @@ use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::TaskRunOutput;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolDispatchOutput;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
 use crate::tools::js_repl::JsReplHandle;
 use crate::tools::network_approval::NetworkApprovalService;
@@ -4719,9 +4722,9 @@ pub(crate) async fn run_turn(
     input: Vec<UserInput>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
-) -> Option<String> {
+) -> TaskRunOutput {
     if input.is_empty() {
-        return None;
+        return TaskRunOutput::default();
     }
 
     let model_info = turn_context.model_info.clone();
@@ -4751,7 +4754,7 @@ pub(crate) async fn run_turn(
         .is_err()
     {
         error!("Failed to run pre-sampling compact");
-        return None;
+        return TaskRunOutput::default();
     }
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
@@ -4774,7 +4777,7 @@ pub(crate) async fn run_turn(
             .await
         {
             Ok(mcp_tools) => mcp_tools,
-            Err(_) => return None,
+            Err(_) => return TaskRunOutput::default(),
         };
         connectors::with_app_enabled_state(
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
@@ -4885,6 +4888,7 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let mut server_model_warning_emitted_for_turn = false;
+    let mut abort_reason = None;
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
@@ -4955,8 +4959,22 @@ pub(crate) async fn run_turn(
             Ok(sampling_request_output) => {
                 let SamplingRequestResult {
                     needs_follow_up,
+                    interrupted_tool_result,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
+                if interrupted_tool_result {
+                    cancellation_token.cancel();
+                    // Keep interrupt cleanup consistent with abort_all_tasks(): a parallel
+                    // unified-exec tool call may still be running when request_user_input
+                    // returns an interrupted result.
+                    sess.close_unified_exec_processes().await;
+                    sess.finish_turn_without_completion_event(turn_context.as_ref())
+                        .await;
+                    // Defer TurnAborted emission until run_turn unwinds so the caller can
+                    // flush the rollout marker without blocking the in-flight tool loop.
+                    abort_reason = Some(TurnAbortReason::Interrupted);
+                    break;
+                }
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
@@ -4983,7 +5001,7 @@ pub(crate) async fn run_turn(
                     .await
                     .is_err()
                     {
-                        return None;
+                        return TaskRunOutput::default();
                     }
                     continue;
                 }
@@ -5045,7 +5063,7 @@ pub(crate) async fn run_turn(
                             }),
                         )
                         .await;
-                        return None;
+                        return TaskRunOutput::default();
                     }
                     break;
                 }
@@ -5081,7 +5099,10 @@ pub(crate) async fn run_turn(
         }
     }
 
-    last_agent_message
+    TaskRunOutput {
+        last_agent_message,
+        abort_reason,
+    }
 }
 
 async fn run_pre_sampling_compact(
@@ -5542,7 +5563,14 @@ async fn built_tools(
 #[derive(Debug)]
 struct SamplingRequestResult {
     needs_follow_up: bool,
+    interrupted_tool_result: bool,
     last_agent_message: Option<String>,
+}
+
+#[derive(Debug)]
+struct IndexedToolDispatchOutput {
+    seq: usize,
+    output: ToolDispatchOutput,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -5972,22 +6000,68 @@ async fn handle_assistant_item_done_in_plan_mode(
 }
 
 async fn drain_in_flight(
-    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
+    in_flight: &mut FuturesUnordered<BoxFuture<'static, CodexResult<IndexedToolDispatchOutput>>>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
+    let mut next_seq = 0usize;
+    let mut ready = BTreeMap::<usize, ToolDispatchOutput>::new();
     while let Some(res) = in_flight.next().await {
         match res {
-            Ok(response_input) => {
-                sess.record_conversation_items(&turn_context, &[response_input.into()])
-                    .await;
+            Ok(indexed) => {
+                let IndexedToolDispatchOutput { seq, output } = indexed;
+                if output.interrupt_turn {
+                    // Drain any completions that are already ready but not yet yielded by
+                    // FuturesUnordered so earlier outputs are not lost when we return below.
+                    loop {
+                        match in_flight.next().now_or_never() {
+                            Some(Some(Ok(indexed))) => {
+                                let IndexedToolDispatchOutput { seq, output } = indexed;
+                                ready.insert(seq, output);
+                            }
+                            Some(Some(Err(err))) => {
+                                error_or_panic(format!(
+                                    "in-flight tool future failed during interrupt drain: {err}"
+                                ));
+                            }
+                            Some(None) | None => break,
+                        }
+                    }
+                    // Preserve any already-completed earlier tool outputs before short-circuiting.
+                    // FuturesUnordered may yield the interrupting result before lower-sequence
+                    // completions that were buffered waiting on an even earlier slow tool.
+                    let _dropped_later_ready = ready.split_off(&seq);
+                    for (_ready_seq, ready_output) in std::mem::take(&mut ready) {
+                        sess.record_conversation_items(
+                            &turn_context,
+                            &[ready_output.response_input.into()],
+                        )
+                        .await;
+                    }
+                    sess.record_conversation_items(&turn_context, &[output.response_input.into()])
+                        .await;
+                    return Ok(true);
+                }
+
+                ready.insert(seq, output);
+                while let Some(output) = ready.remove(&next_seq) {
+                    sess.record_conversation_items(&turn_context, &[output.response_input.into()])
+                        .await;
+                    next_seq += 1;
+                }
             }
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));
             }
         }
     }
-    Ok(())
+    if !ready.is_empty() {
+        for (_seq, output) in ready {
+            sess.record_conversation_items(&turn_context, &[output.response_input.into()])
+                .await;
+        }
+    }
+    Ok(false)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6043,8 +6117,10 @@ async fn try_run_sampling_request(
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
     );
-    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
-        FuturesOrdered::new();
+    let mut in_flight: FuturesUnordered<
+        BoxFuture<'static, CodexResult<IndexedToolDispatchOutput>>,
+    > = FuturesUnordered::new();
+    let mut next_in_flight_seq = 0usize;
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
@@ -6052,7 +6128,7 @@ async fn try_run_sampling_request(
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let receiving_span = trace_span!("receiving_stream");
-    let outcome: CodexResult<SamplingRequestResult> = loop {
+    let mut outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
             parent: &receiving_span,
             "handle_responses",
@@ -6127,7 +6203,12 @@ async fn try_run_sampling_request(
                     .instrument(handle_responses)
                     .await?;
                 if let Some(tool_future) = output_result.tool_future {
-                    in_flight.push_back(tool_future);
+                    let seq = next_in_flight_seq;
+                    next_in_flight_seq += 1;
+                    in_flight.push(Box::pin(async move {
+                        let output = tool_future.await?;
+                        Ok(IndexedToolDispatchOutput { seq, output })
+                    }));
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
@@ -6186,6 +6267,7 @@ async fn try_run_sampling_request(
 
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
+                    interrupted_tool_result: false,
                     last_agent_message,
                 });
             }
@@ -6267,7 +6349,14 @@ async fn try_run_sampling_request(
         }
     };
 
-    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    let interrupted_tool_result =
+        drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    if let Ok(result) = outcome.as_mut()
+        && interrupted_tool_result
+    {
+        result.needs_follow_up = false;
+        result.interrupted_tool_result = true;
+    }
 
     if should_emit_turn_diff {
         let unified_diff = {
@@ -6347,6 +6436,7 @@ mod tests {
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
     use crate::tools::ToolRouter;
+    use crate::tools::context::ToolDispatchOutput;
     use crate::tools::context::ToolInvocation;
     use crate::tools::context::ToolOutput;
     use crate::tools::context::ToolPayload;
@@ -8629,10 +8719,10 @@ mod tests {
             _ctx: Arc<TurnContext>,
             _input: Vec<UserInput>,
             cancellation_token: CancellationToken,
-        ) -> Option<String> {
+        ) -> TaskRunOutput {
             if self.listen_to_cancellation_token {
                 cancellation_token.cancelled().await;
-                return None;
+                return TaskRunOutput::default();
             }
             loop {
                 sleep(Duration::from_secs(60)).await;
@@ -8672,6 +8762,207 @@ mod tests {
         }
         // No extra events should be emitted after an abort.
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn drain_in_flight_flushes_buffered_earlier_results_before_interrupt() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+
+        let mut in_flight: FuturesUnordered<
+            BoxFuture<'static, CodexResult<IndexedToolDispatchOutput>>,
+        > = FuturesUnordered::new();
+
+        let (slow_tx, slow_rx) = tokio::sync::oneshot::channel::<()>();
+        let _slow_tx = slow_tx;
+        in_flight.push(Box::pin(async move {
+            let _ = slow_rx.await;
+            Ok(IndexedToolDispatchOutput {
+                seq: 0,
+                output: ToolDispatchOutput {
+                    response_input: ResponseInputItem::FunctionCallOutput {
+                        call_id: "slow-call".to_string(),
+                        output: FunctionCallOutputPayload {
+                            body: FunctionCallOutputBody::Text("slow".to_string()),
+                            ..Default::default()
+                        },
+                    },
+                    interrupt_turn: false,
+                },
+            })
+        }));
+
+        in_flight.push(Box::pin(async move {
+            Ok(IndexedToolDispatchOutput {
+                seq: 1,
+                output: ToolDispatchOutput {
+                    response_input: ResponseInputItem::FunctionCallOutput {
+                        call_id: "fast-call".to_string(),
+                        output: FunctionCallOutputPayload {
+                            body: FunctionCallOutputBody::Text("fast".to_string()),
+                            ..Default::default()
+                        },
+                    },
+                    interrupt_turn: false,
+                },
+            })
+        }));
+
+        let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(10)).await;
+            let _ = interrupt_tx.send(());
+        });
+        in_flight.push(Box::pin(async move {
+            let _ = interrupt_rx.await;
+            Ok(IndexedToolDispatchOutput {
+                seq: 2,
+                output: ToolDispatchOutput {
+                    response_input: ResponseInputItem::FunctionCallOutput {
+                        call_id: "interrupt-call".to_string(),
+                        output: FunctionCallOutputPayload {
+                            body: FunctionCallOutputBody::Text("interrupt".to_string()),
+                            ..Default::default()
+                        },
+                    },
+                    interrupt_turn: true,
+                },
+            })
+        }));
+
+        let interrupted = drain_in_flight(&mut in_flight, Arc::clone(&sess), Arc::clone(&tc))
+            .await
+            .expect("drain_in_flight should succeed");
+        assert!(interrupted);
+
+        let history = sess.clone_history().await;
+        let fast_item = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
+            call_id: "fast-call".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("fast".to_string()),
+                ..Default::default()
+            },
+        });
+        let interrupt_item = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
+            call_id: "interrupt-call".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("interrupt".to_string()),
+                ..Default::default()
+            },
+        });
+
+        let fast_idx = history
+            .raw_items()
+            .iter()
+            .position(|item| item == &fast_item)
+            .expect("buffered earlier tool result should be recorded");
+        let interrupt_idx = history
+            .raw_items()
+            .iter()
+            .position(|item| item == &interrupt_item)
+            .expect("interrupting tool result should be recorded");
+        assert!(
+            fast_idx < interrupt_idx,
+            "buffered earlier tool result should be recorded before interrupt result"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_in_flight_flushes_ready_unyielded_earlier_results_before_interrupt() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+
+        let mut in_flight: FuturesUnordered<
+            BoxFuture<'static, CodexResult<IndexedToolDispatchOutput>>,
+        > = FuturesUnordered::new();
+
+        let (slow_tx, slow_rx) = tokio::sync::oneshot::channel::<()>();
+        let _slow_tx = slow_tx;
+        in_flight.push(Box::pin(async move {
+            let _ = slow_rx.await;
+            Ok(IndexedToolDispatchOutput {
+                seq: 0,
+                output: ToolDispatchOutput {
+                    response_input: ResponseInputItem::FunctionCallOutput {
+                        call_id: "slow-call-2".to_string(),
+                        output: FunctionCallOutputPayload {
+                            body: FunctionCallOutputBody::Text("slow".to_string()),
+                            ..Default::default()
+                        },
+                    },
+                    interrupt_turn: false,
+                },
+            })
+        }));
+
+        let (fast_tx, fast_rx) = tokio::sync::oneshot::channel::<()>();
+        in_flight.push(Box::pin(async move {
+            let _ = fast_rx.await;
+            Ok(IndexedToolDispatchOutput {
+                seq: 1,
+                output: ToolDispatchOutput {
+                    response_input: ResponseInputItem::FunctionCallOutput {
+                        call_id: "fast-call-2".to_string(),
+                        output: FunctionCallOutputPayload {
+                            body: FunctionCallOutputBody::Text("fast".to_string()),
+                            ..Default::default()
+                        },
+                    },
+                    interrupt_turn: false,
+                },
+            })
+        }));
+
+        in_flight.push(Box::pin(async move {
+            let _ = fast_tx.send(());
+            Ok(IndexedToolDispatchOutput {
+                seq: 2,
+                output: ToolDispatchOutput {
+                    response_input: ResponseInputItem::FunctionCallOutput {
+                        call_id: "interrupt-call-2".to_string(),
+                        output: FunctionCallOutputPayload {
+                            body: FunctionCallOutputBody::Text("interrupt".to_string()),
+                            ..Default::default()
+                        },
+                    },
+                    interrupt_turn: true,
+                },
+            })
+        }));
+
+        let interrupted = drain_in_flight(&mut in_flight, Arc::clone(&sess), Arc::clone(&tc))
+            .await
+            .expect("drain_in_flight should succeed");
+        assert!(interrupted);
+
+        let history = sess.clone_history().await;
+        let fast_item = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
+            call_id: "fast-call-2".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("fast".to_string()),
+                ..Default::default()
+            },
+        });
+        let interrupt_item = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
+            call_id: "interrupt-call-2".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("interrupt".to_string()),
+                ..Default::default()
+            },
+        });
+
+        let fast_idx = history
+            .raw_items()
+            .iter()
+            .position(|item| item == &fast_item)
+            .expect("ready-but-unyielded earlier tool result should be recorded");
+        let interrupt_idx = history
+            .raw_items()
+            .iter()
+            .position(|item| item == &interrupt_item)
+            .expect("interrupting tool result should be recorded");
+        assert!(
+            fast_idx < interrupt_idx,
+            "ready-but-unyielded earlier tool result should be recorded before interrupt result"
+        );
     }
 
     #[tokio::test]
