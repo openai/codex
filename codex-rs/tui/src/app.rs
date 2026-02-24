@@ -1934,12 +1934,11 @@ impl App {
                 effort,
                 scope,
             } => {
-                let should_persist_toggle_pair =
-                    matches!(
-                        scope,
-                        crate::app_event::ModelEffortScope::Global
-                            | crate::app_event::ModelEffortScope::PlanMode
-                    );
+                let should_persist_toggle_pair = matches!(
+                    scope,
+                    crate::app_event::ModelEffortScope::Global
+                        | crate::app_event::ModelEffortScope::PlanMode
+                );
                 self.chat_widget.set_model(&model);
                 match scope {
                     crate::app_event::ModelEffortScope::Global => {
@@ -4095,11 +4094,9 @@ mod tests {
         });
 
         let selected_model = "gpt-5-codex".to_string();
-        let mut tui = crate::tui::Tui::new(
-            crate::tui::Terminal::with_options(ratatui::backend::CrosstermBackend::new(
-                std::io::stdout(),
-            ))?,
-        );
+        let mut tui = crate::tui::Tui::new(crate::tui::Terminal::with_options(
+            ratatui::backend::CrosstermBackend::new(std::io::stdout()),
+        )?);
 
         app.handle_event(
             &mut tui,
