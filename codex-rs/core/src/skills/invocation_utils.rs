@@ -85,7 +85,8 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     workdir: Option<&str>,
 ) {
     let Some(implicit) = turn_context
-        .skills_outcome
+        .turn_skills
+        .outcome
         .implicit_invocation_context
         .as_deref()
     else {
@@ -109,7 +110,11 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     let skill_name = candidate.invocation.skill_name.clone();
     let seen_key = format!("{skill_scope}:{skill_path}:{skill_name}");
     let inserted = {
-        let mut seen_skills = turn_context.implicit_invocation_seen_skills.lock().await;
+        let mut seen_skills = turn_context
+            .turn_skills
+            .implicit_invocation_seen_skills
+            .lock()
+            .await;
         seen_skills.insert(seen_key)
     };
     if !inserted {

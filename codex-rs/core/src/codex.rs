@@ -528,6 +528,12 @@ pub(crate) struct Session {
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
 }
+#[derive(Clone, Debug)]
+pub(crate) struct TurnSkillsContext {
+    pub(crate) outcome: Arc<SkillLoadOutcome>,
+    pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<String>>>,
+}
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -564,8 +570,7 @@ pub(crate) struct TurnContext {
     pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
-    pub(crate) skills_outcome: Arc<SkillLoadOutcome>,
-    pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<String>>>,
+    pub(crate) turn_skills: TurnSkillsContext,
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -647,8 +652,7 @@ impl TurnContext {
             js_repl: Arc::clone(&self.js_repl),
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
-            skills_outcome: self.skills_outcome.clone(),
-            implicit_invocation_seen_skills: self.implicit_invocation_seen_skills.clone(),
+            turn_skills: self.turn_skills.clone(),
         }
     }
 
@@ -992,8 +996,10 @@ impl Session {
             js_repl,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
-            skills_outcome,
-            implicit_invocation_seen_skills: Arc::new(Mutex::new(HashSet::new())),
+            turn_skills: TurnSkillsContext {
+                outcome: skills_outcome,
+                implicit_invocation_seen_skills: Arc::new(Mutex::new(HashSet::new())),
+            },
         }
     }
 
@@ -4157,8 +4163,10 @@ async fn spawn_review_thread(
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,
-        skills_outcome: parent_turn_context.skills_outcome.clone(),
-        implicit_invocation_seen_skills: Arc::new(Mutex::new(HashSet::new())),
+        turn_skills: TurnSkillsContext {
+            outcome: parent_turn_context.turn_skills.outcome.clone(),
+            implicit_invocation_seen_skills: Arc::new(Mutex::new(HashSet::new())),
+        },
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -4276,7 +4284,7 @@ pub(crate) async fn run_turn(
         return None;
     }
 
-    let skills_outcome = Some(turn_context.skills_outcome.as_ref());
+    let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
 
     let available_connectors = if turn_context.config.features.enabled(Feature::Apps) {
         let mcp_tools = match sess
