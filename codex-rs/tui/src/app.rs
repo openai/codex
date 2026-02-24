@@ -1935,7 +1935,11 @@ impl App {
                 scope,
             } => {
                 let should_persist_toggle_pair =
-                    matches!(scope, crate::app_event::ModelEffortScope::Global);
+                    matches!(
+                        scope,
+                        crate::app_event::ModelEffortScope::Global
+                            | crate::app_event::ModelEffortScope::PlanMode
+                    );
                 self.chat_widget.set_model(&model);
                 match scope {
                     crate::app_event::ModelEffortScope::Global => {
