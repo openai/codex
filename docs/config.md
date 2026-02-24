@@ -32,4 +32,13 @@ The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schem
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.
 
+## Plan mode defaults
+
+`plan_mode_reasoning_effort` lets you set a Plan-mode-specific default reasoning
+effort override. When unset, Plan mode uses the built-in Plan preset default
+(currently `medium`). When explicitly set (including `none`), it overrides the
+Plan preset. The string value `none` means "no reasoning" (an explicit Plan
+override), not "inherit the global default". There is currently no separate
+config value for "follow the global default in Plan mode".
+
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).

@@ -178,6 +178,13 @@ impl NetworkProxySpec {
             constraints.dangerously_allow_non_loopback_admin =
                 Some(dangerously_allow_non_loopback_admin);
         }
+        if let Some(dangerously_allow_all_unix_sockets) =
+            requirements.dangerously_allow_all_unix_sockets
+        {
+            config.network.dangerously_allow_all_unix_sockets = dangerously_allow_all_unix_sockets;
+            constraints.dangerously_allow_all_unix_sockets =
+                Some(dangerously_allow_all_unix_sockets);
+        }
         if let Some(allowed_domains) = requirements.allowed_domains.clone() {
             config.network.allowed_domains = allowed_domains.clone();
             constraints.allowed_domains = Some(allowed_domains);

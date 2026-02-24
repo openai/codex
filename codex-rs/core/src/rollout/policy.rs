@@ -122,6 +122,9 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeEnd(_) => Some(EventPersistenceMode::Extended),
         EventMsg::Warning(_)
+        | EventMsg::RealtimeConversationStarted(_)
+        | EventMsg::RealtimeConversationRealtime(_)
+        | EventMsg::RealtimeConversationClosed(_)
         | EventMsg::ModelReroute(_)
         | EventMsg::AgentMessageDelta(_)
         | EventMsg::AgentReasoningDelta(_)
@@ -136,6 +139,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::TerminalInteraction(_)
         | EventMsg::ExecCommandOutputDelta(_)
         | EventMsg::ExecApprovalRequest(_)
+        | EventMsg::SkillRequestApproval(_)
         | EventMsg::RequestUserInput(_)
         | EventMsg::DynamicToolCallRequest(_)
         | EventMsg::ElicitationRequest(_)

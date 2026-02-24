@@ -3,7 +3,9 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::compact::InitialContextInjection;
 use crate::compact::extract_trailing_model_switch_update_for_compaction_request;
+use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -25,8 +27,9 @@ use tracing::info;
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    run_remote_compact_task_inner(&sess, &turn_context).await?;
+    run_remote_compact_task_inner(&sess, &turn_context, initial_context_injection).await?;
     Ok(())
 }
 
@@ -41,14 +44,17 @@ pub(crate) async fn run_remote_compact_task(
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_compact_task_inner(&sess, &turn_context).await
+    run_remote_compact_task_inner(&sess, &turn_context, InitialContextInjection::DoNotInject).await
 }
 
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context).await {
+    if let Err(err) =
+        run_remote_compact_task_inner_impl(sess, turn_context, initial_context_injection).await
+    {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
         );
@@ -61,6 +67,7 @@ async fn run_remote_compact_task_inner(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
@@ -122,9 +129,13 @@ async fn run_remote_compact_task_inner_impl(
             Err(err)
         })
         .await?;
-    new_history = sess
-        .process_compacted_history(turn_context, new_history)
-        .await;
+    new_history = process_compacted_history(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        new_history,
+        initial_context_injection,
+    )
+    .await;
     // Reattach the stripped model-switch update only after successful compaction so the model
     // still sees the switch instructions on the next real sampling request.
     if let Some(model_switch_item) = stripped_model_switch_item {
@@ -134,7 +145,12 @@ async fn run_remote_compact_task_inner_impl(
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
     }
-    sess.replace_history(new_history.clone()).await;
+    let reference_context_item = match initial_context_injection {
+        InitialContextInjection::DoNotInject => None,
+        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+    };
+    sess.replace_history(new_history.clone(), reference_context_item)
+        .await;
     sess.recompute_token_usage(turn_context).await;
 
     let compacted_item = CompactedItem {
@@ -147,6 +163,65 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
     Ok(())
+}
+
+pub(crate) async fn process_compacted_history(
+    sess: &Session,
+    turn_context: &TurnContext,
+    mut compacted_history: Vec<ResponseItem>,
+    initial_context_injection: InitialContextInjection,
+) -> Vec<ResponseItem> {
+    // Mid-turn compaction is the only path that must inject initial context above the last user
+    // message in the replacement history. Pre-turn compaction instead injects context after the
+    // compaction item, but mid-turn compaction keeps the compaction item last for model training.
+    let initial_context = if matches!(
+        initial_context_injection,
+        InitialContextInjection::BeforeLastUserMessage
+    ) {
+        sess.build_initial_context(turn_context).await
+    } else {
+        Vec::new()
+    };
+
+    compacted_history.retain(should_keep_compacted_history_item);
+    insert_initial_context_before_last_real_user_or_summary(compacted_history, initial_context)
+}
+
+/// Returns whether an item from remote compaction output should be preserved.
+///
+/// Called while processing the model-provided compacted transcript, before we
+/// append fresh canonical context from the current session.
+///
+/// We drop:
+/// - `developer` messages because remote output can include stale/duplicated
+///   instruction content.
+/// - non-user-content `user` messages (session prefix/instruction wrappers),
+///   keeping only real user messages as parsed by `parse_turn_item`.
+///
+/// This intentionally keeps:
+/// - `assistant` messages (future remote compaction models may emit them)
+/// - `user`-role warnings and compaction-generated summary messages because
+///   they parse as `TurnItem::UserMessage`.
+fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { role, .. } if role == "developer" => false,
+        ResponseItem::Message { role, .. } if role == "user" => matches!(
+            crate::event_mapping::parse_turn_item(item),
+            Some(TurnItem::UserMessage(_))
+        ),
+        ResponseItem::Message { role, .. } if role == "assistant" => true,
+        ResponseItem::Message { .. } => false,
+        ResponseItem::Compaction { .. } => true,
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Other => false,
+    }
 }
 
 #[derive(Debug)]

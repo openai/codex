@@ -255,6 +255,152 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (issuer_addr, _issuer_handle) = start_mock_issuer("org-123");
+    let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
+
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().to_path_buf();
+    let state = "state-entitlement".to_string();
+
+    let opts = ServerOptions {
+        codex_home: codex_home.clone(),
+        cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        client_id: codex_login::CLIENT_ID.to_string(),
+        issuer,
+        port: 0,
+        open_browser: false,
+        force_state: Some(state.clone()),
+        forced_chatgpt_workspace_id: None,
+    };
+    let server = run_login_server(opts)?;
+    let login_port = server.actual_port;
+
+    let client = reqwest::Client::new();
+    let url = format!(
+        "http://127.0.0.1:{login_port}/auth/callback?state={state}&error=access_denied&error_description=missing_codex_entitlement"
+    );
+    let resp = client.get(&url).send().await?;
+    assert!(resp.status().is_success());
+    let body = resp.text().await?;
+    assert!(
+        body.contains("You do not have access to Codex"),
+        "error body should clearly explain the Codex access denial"
+    );
+    assert!(
+        body.contains("Contact your workspace administrator"),
+        "error body should tell the user how to get access"
+    );
+    assert!(
+        body.contains("access_denied"),
+        "error body should still include the oauth error code"
+    );
+    assert!(
+        !body.contains("missing_codex_entitlement"),
+        "known entitlement errors should be mapped to user-facing copy"
+    );
+
+    let result = server.block_until_done().await;
+    assert!(result.is_err(), "login should fail for access_denied");
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+    assert!(
+        err.to_string()
+            .contains("Contact your workspace administrator"),
+        "terminal error should also tell the user what to do next"
+    );
+
+    let auth_path = codex_home.join("auth.json");
+    assert!(
+        !auth_path.exists(),
+        "auth.json should not be written when oauth callback is denied"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (issuer_addr, _issuer_handle) = start_mock_issuer("org-123");
+    let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
+
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().to_path_buf();
+    let state = "state-generic-denial".to_string();
+
+    let opts = ServerOptions {
+        codex_home: codex_home.clone(),
+        cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        client_id: codex_login::CLIENT_ID.to_string(),
+        issuer,
+        port: 0,
+        open_browser: false,
+        force_state: Some(state.clone()),
+        forced_chatgpt_workspace_id: None,
+    };
+    let server = run_login_server(opts)?;
+    let login_port = server.actual_port;
+
+    let client = reqwest::Client::new();
+    let url = format!(
+        "http://127.0.0.1:{login_port}/auth/callback?state={state}&error=access_denied&error_description=some_other_reason"
+    );
+    let resp = client.get(&url).send().await?;
+    assert!(resp.status().is_success());
+    let body = resp.text().await?;
+    assert!(
+        body.contains("Sign-in could not be completed"),
+        "generic oauth denial should use the generic error page title"
+    );
+    assert!(
+        body.contains("Sign-in failed: some_other_reason"),
+        "generic oauth denial should preserve the oauth error details"
+    );
+    assert!(
+        body.contains("Return to Codex to retry"),
+        "generic oauth denial should keep the generic help text"
+    );
+    assert!(
+        body.contains("access_denied"),
+        "generic oauth denial should include the oauth error code"
+    );
+    assert!(
+        body.contains("some_other_reason"),
+        "generic oauth denial should include the oauth error description"
+    );
+    assert!(
+        !body.contains("You do not have access to Codex"),
+        "generic oauth denial should not show the entitlement-specific title"
+    );
+    assert!(
+        !body.contains("get access to Codex"),
+        "generic oauth denial should not show the entitlement-specific admin guidance"
+    );
+
+    let result = server.block_until_done().await;
+    assert!(result.is_err(), "login should fail for access_denied");
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+    assert!(
+        err.to_string()
+            .contains("Sign-in failed: some_other_reason"),
+        "terminal error should preserve generic oauth details"
+    );
+
+    let auth_path = codex_home.join("auth.json");
+    assert!(
+        !auth_path.exists(),
+        "auth.json should not be written when oauth callback is denied"
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
     skip_if_no_network!(Ok(()));

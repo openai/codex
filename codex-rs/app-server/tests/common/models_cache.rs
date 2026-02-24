@@ -24,7 +24,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         } else {
             ModelVisibility::Hide
         },
-        supported_in_api: true,
+        supported_in_api: preset.supported_in_api,
         priority,
         upgrade: preset.upgrade.as_ref().map(|u| u.into()),
         base_instructions: "base instructions".to_string(),
@@ -48,9 +48,9 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
 /// Write a models_cache.json file to the codex home directory.
 /// This prevents ModelsManager from making network requests to refresh models.
 /// The cache will be treated as fresh (within TTL) and used instead of fetching from the network.
-/// Uses the built-in model presets from ModelsManager, converted to ModelInfo format.
+/// Uses bundled-catalog-derived presets, converted to ModelInfo format.
 pub fn write_models_cache(codex_home: &Path) -> std::io::Result<()> {
-    // Get all presets and filter for show_in_picker (same as builtin_model_presets does)
+    // Get a stable bundled-catalog-derived preset list and filter for picker-visible entries.
     let presets: Vec<&ModelPreset> = all_model_presets()
         .iter()
         .filter(|preset| preset.show_in_picker)
