@@ -1,21 +1,21 @@
 #[cfg(unix)]
-mod unix {
-    mod escalate_client;
-    mod escalate_protocol;
-    mod escalate_server;
-    mod escalation_policy;
-    mod socket;
-    mod stopwatch;
-
-    pub use self::escalate_client::run;
-    pub use self::escalate_protocol::EscalateAction;
-    pub use self::escalate_server::EscalationPolicyFactory;
-    pub use self::escalate_server::ExecParams;
-    pub use self::escalate_server::ExecResult;
-    pub use self::escalate_server::run_escalate_server;
-    pub use self::escalation_policy::EscalationPolicy;
-    pub use self::stopwatch::Stopwatch;
-}
+mod unix;
 
 #[cfg(unix)]
-pub use unix::*;
+pub use unix::EscalateAction;
+#[cfg(unix)]
+pub use unix::EscalationPolicy;
+#[cfg(unix)]
+pub use unix::EscalationPolicyFactory;
+#[cfg(unix)]
+pub use unix::ExecParams;
+#[cfg(unix)]
+pub use unix::ExecResult;
+#[cfg(unix)]
+pub use unix::Stopwatch;
+#[cfg(unix)]
+pub use unix::main_execve_wrapper;
+#[cfg(unix)]
+pub use unix::run;
+#[cfg(unix)]
+pub use unix::run_escalate_server;
