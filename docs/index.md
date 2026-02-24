@@ -1,0 +1,32 @@
+# Consolidated Index
+
+## Files
+
+* `CLA.md`
+* `agents_md.md`
+* `authentication.md`
+* `config.md`
+* `contributing.md`
+* `example-config.md`
+* `exec.md`
+* `execpolicy.md`
+* `exit-confirmation-prompt-design.md`
+* `getting-started.md`
+* `install.md`
+* `js_repl.md`
+* `license.md`
+* `open-source-fund.md`
+* `prompts.md`
+* `sandbox.md`
+* `skills.md`
+* `slash_commands.md`
+* `tui-alternate-screen.md`
+* `tui-chat-composer.md`
+* `tui-request-user-input.md`
+* `tui-stream-chunking-review.md`
+* `tui-stream-chunking-tuning.md`
+* `tui-stream-chunking-validation.md`
+
+## Subdirectories
+
+* _No subdirectories_
