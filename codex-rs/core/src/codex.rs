@@ -920,23 +920,18 @@ impl Session {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn make_turn_context(
+    fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
         otel_manager: &OtelManager,
         provider: ModelProviderInfo,
-        skills_manager: &SkillsManager,
         session_configuration: &SessionConfiguration,
         per_turn_config: Config,
         model_info: ModelInfo,
         network: Option<NetworkProxy>,
         sub_id: String,
         js_repl: Arc<JsReplHandle>,
+        skills_outcome: Arc<SkillLoadOutcome>,
     ) -> TurnContext {
-        let skills_outcome = Arc::new(
-            skills_manager
-                .skills_for_cwd(&session_configuration.cwd, false)
-                .await,
-        );
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration.model_reasoning_summary;
         let otel_manager = otel_manager.clone().with_model(
@@ -1871,11 +1866,16 @@ impl Session {
                 &per_turn_config,
             )
             .await;
+        let skills_outcome = Arc::new(
+            self.services
+                .skills_manager
+                .skills_for_cwd(&session_configuration.cwd, false)
+                .await,
+        );
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_manager,
             session_configuration.provider.clone(),
-            self.services.skills_manager.as_ref(),
             &session_configuration,
             per_turn_config,
             model_info,
@@ -1885,8 +1885,8 @@ impl Session {
                 .map(StartedNetworkProxy::proxy),
             sub_id,
             Arc::clone(&self.js_repl),
-        )
-        .await;
+            skills_outcome,
+        );
 
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -4456,6 +4456,7 @@ pub(crate) async fn run_turn(
             turn_metadata_header.as_deref(),
             sampling_request_input,
             &explicitly_enabled_connectors,
+            skills_outcome,
             &mut server_model_warning_emitted_for_turn,
             cancellation_token.child_token(),
         )
@@ -4829,10 +4830,10 @@ async fn run_sampling_request(
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
     explicitly_enabled_connectors: &HashSet<String>,
+    skills_outcome: Option<&SkillLoadOutcome>,
     server_model_warning_emitted_for_turn: &mut bool,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    let skills_outcome = Some(turn_context.skills_outcome.as_ref());
     let router = built_tools(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -7320,19 +7321,19 @@ mod tests {
             config.codex_home.clone(),
         ));
 
+        let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
             &otel_manager,
             session_configuration.provider.clone(),
-            services.skills_manager.as_ref(),
             &session_configuration,
             per_turn_config,
             model_info,
             None,
             "turn_id".to_string(),
             Arc::clone(&js_repl),
-        )
-        .await;
+            skills_outcome,
+        );
 
         let session = Session {
             conversation_id,
@@ -7470,21 +7471,19 @@ mod tests {
             config.codex_home.clone(),
         ));
 
-        let turn_context = Arc::new(
-            Session::make_turn_context(
-                Some(Arc::clone(&auth_manager)),
-                &otel_manager,
-                session_configuration.provider.clone(),
-                services.skills_manager.as_ref(),
-                &session_configuration,
-                per_turn_config,
-                model_info,
-                None,
-                "turn_id".to_string(),
-                Arc::clone(&js_repl),
-            )
-            .await,
-        );
+        let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
+        let turn_context = Arc::new(Session::make_turn_context(
+            Some(Arc::clone(&auth_manager)),
+            &otel_manager,
+            session_configuration.provider.clone(),
+            &session_configuration,
+            per_turn_config,
+            model_info,
+            None,
+            "turn_id".to_string(),
+            Arc::clone(&js_repl),
+            skills_outcome,
+        ));
 
         let session = Arc::new(Session {
             conversation_id,
