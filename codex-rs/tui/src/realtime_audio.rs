@@ -4,8 +4,11 @@ use base64::Engine;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
+#[cfg(not(target_os = "linux"))]
 use cpal::traits::DeviceTrait;
+#[cfg(not(target_os = "linux"))]
 use cpal::traits::HostTrait;
+#[cfg(not(target_os = "linux"))]
 use cpal::traits::StreamTrait;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -38,12 +41,14 @@ pub(crate) struct RealtimeMicMeterHandles {
 }
 
 enum RealtimeAudioBackend {
+    #[cfg(not(target_os = "linux"))]
     Live(LiveRealtimeAudioController),
     Stub,
 }
 struct LiveRealtimeAudioController {
     input_capture: crate::voice::VoiceCapture,
     input_capture_thread: Option<thread::JoinHandle<()>>,
+    #[cfg(not(target_os = "linux"))]
     output_stream: cpal::Stream,
     playback_state: Arc<Mutex<PlaybackState>>,
     last_input_peak: Arc<AtomicU16>,
@@ -58,35 +63,58 @@ impl RealtimeAudioController {
                 backend: RealtimeAudioBackend::Stub,
             });
         }
+        #[cfg(target_os = "linux")]
+        {
+            drop(realtime_audio_op_tx);
+            return Ok(Self {
+                backend: RealtimeAudioBackend::Stub,
+            });
+        }
+
+        #[cfg(not(target_os = "linux"))]
         let host = cpal::default_host();
+        #[cfg(not(target_os = "linux"))]
         let output_device = host
             .default_output_device()
             .context("no default output device available")?;
+        #[cfg(not(target_os = "linux"))]
         let output_supported = output_device
             .default_output_config()
             .context("failed to query default output config")?;
 
+        #[cfg(not(target_os = "linux"))]
         let output_config = output_supported.config();
         // TODO(aibrahim): Add persisted audio device + sample-rate selection/config for TUI
         // realtime conversations instead of always using defaults.
+        #[cfg(not(target_os = "linux"))]
         let input_capture = crate::voice::VoiceCapture::start().map_err(anyhow::Error::msg)?;
+        #[cfg(not(target_os = "linux"))]
         let source_sample_rate = input_capture.sample_rate();
+        #[cfg(not(target_os = "linux"))]
         let source_channels = input_capture.channels();
+        #[cfg(not(target_os = "linux"))]
         if source_sample_rate == 0 || source_channels == 0 {
             return Err(anyhow::anyhow!(
                 "unsupported realtime microphone format from VoiceCapture"
             ));
         }
+        #[cfg(not(target_os = "linux"))]
         let source_data = input_capture.data_arc();
+        #[cfg(not(target_os = "linux"))]
         let last_input_peak = input_capture.last_peak_arc();
+        #[cfg(not(target_os = "linux"))]
         let meter_stop = input_capture.stopped_flag();
+        #[cfg(not(target_os = "linux"))]
         let mic_state = Arc::new(Mutex::new(MicCaptureState::new(
             realtime_audio_op_tx,
             source_sample_rate,
             source_channels,
         )));
+        #[cfg(not(target_os = "linux"))]
         let source_data_thread = source_data;
+        #[cfg(not(target_os = "linux"))]
         let input_state = Arc::clone(&mic_state);
+        #[cfg(not(target_os = "linux"))]
         let input_capture_thread = thread::spawn({
             let stop = Arc::clone(&meter_stop);
             move || {
@@ -116,10 +144,12 @@ impl RealtimeAudioController {
             }
         });
 
+        #[cfg(not(target_os = "linux"))]
         let playback_state = Arc::new(Mutex::new(PlaybackState::new(
             output_config.sample_rate.0,
             output_config.channels,
         )));
+        #[cfg(not(target_os = "linux"))]
         let output_stream = build_output_stream(
             &output_device,
             output_supported.sample_format(),
@@ -128,10 +158,12 @@ impl RealtimeAudioController {
         )
         .context("failed to open speaker output stream")?;
 
+        #[cfg(not(target_os = "linux"))]
         output_stream
             .play()
             .context("failed to start speaker output stream")?;
 
+        #[cfg(not(target_os = "linux"))]
         Ok(Self {
             backend: RealtimeAudioBackend::Live(LiveRealtimeAudioController {
                 input_capture,
@@ -146,6 +178,7 @@ impl RealtimeAudioController {
 
     pub(crate) fn enqueue_audio_out(&self, frame: RealtimeAudioFrame) -> Result<()> {
         match &self.backend {
+            #[cfg(not(target_os = "linux"))]
             RealtimeAudioBackend::Live(controller) => {
                 let mut state = controller
                     .playback_state
@@ -161,10 +194,13 @@ impl RealtimeAudioController {
     }
 
     pub(crate) fn shutdown(self) {
+        #[cfg(not(target_os = "linux"))]
         if let RealtimeAudioBackend::Live(controller) = self.backend {
+            #[cfg(not(target_os = "linux"))]
             if let Err(err) = controller.input_capture.stop().map(|_| ()) {
                 warn!("failed to stop realtime microphone capture: {err}");
             }
+            #[cfg(not(target_os = "linux"))]
             if let Some(handle) = controller.input_capture_thread {
                 if let Err(err) = handle.join() {
                     warn!("failed to join realtime microphone input thread: {err:?}");
@@ -175,6 +211,7 @@ impl RealtimeAudioController {
 
     pub(crate) fn meter_handles(&self) -> Option<RealtimeMicMeterHandles> {
         match &self.backend {
+            #[cfg(not(target_os = "linux"))]
             RealtimeAudioBackend::Live(controller) => Some(RealtimeMicMeterHandles {
                 last_peak: Arc::clone(&controller.last_input_peak),
                 stop: Arc::clone(&controller.meter_stop),
@@ -434,6 +471,7 @@ fn encode_pcm16_le_base64(samples: &[f32]) -> String {
     }
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
+#[cfg(not(target_os = "linux"))]
 fn build_output_stream(
     device: &cpal::Device,
     sample_format: cpal::SampleFormat,
@@ -468,20 +506,24 @@ fn build_output_stream(
     };
     Ok(stream)
 }
+#[cfg(not(target_os = "linux"))]
 fn write_output_f32(data: &mut [f32], playback_state: &Arc<Mutex<PlaybackState>>) {
     fill_output_buffer(data, playback_state, |sample| sample);
 }
+#[cfg(not(target_os = "linux"))]
 fn write_output_i16(data: &mut [i16], playback_state: &Arc<Mutex<PlaybackState>>) {
     fill_output_buffer(data, playback_state, |sample| {
         (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
     });
 }
+#[cfg(not(target_os = "linux"))]
 fn write_output_u16(data: &mut [u16], playback_state: &Arc<Mutex<PlaybackState>>) {
     fill_output_buffer(data, playback_state, |sample| {
         let normalized = (sample.clamp(-1.0, 1.0) + 1.0) * 0.5;
         (normalized * u16::MAX as f32).round() as u16
     });
 }
+#[cfg(not(target_os = "linux"))]
 fn fill_output_buffer<T>(
     data: &mut [T],
     playback_state: &Arc<Mutex<PlaybackState>>,
