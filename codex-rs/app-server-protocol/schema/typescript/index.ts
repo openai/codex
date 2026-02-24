@@ -3,6 +3,7 @@
 export type { AbsolutePathBuf } from "./AbsolutePathBuf";
 export type { AddConversationListenerParams } from "./AddConversationListenerParams";
 export type { AddConversationSubscriptionResponse } from "./AddConversationSubscriptionResponse";
+export type { AdditionalPermissions } from "./AdditionalPermissions";
 export type { AgentMessageContent } from "./AgentMessageContent";
 export type { AgentMessageContentDeltaEvent } from "./AgentMessageContentDeltaEvent";
 export type { AgentMessageDeltaEvent } from "./AgentMessageDeltaEvent";

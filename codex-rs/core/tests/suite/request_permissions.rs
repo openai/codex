@@ -161,14 +161,14 @@ fn unique_tmp_path(label: &str) -> PathBuf {
     env::temp_dir().join(format!("codex-request-permissions-{label}-{nanos}.txt"))
 }
 
-fn unique_outside_cwd_path(label: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be after epoch")
-        .as_nanos();
-    env::current_dir()
-        .expect("current dir should be available")
-        .join(format!("codex-request-permissions-{label}-{nanos}.txt"))
+fn workspace_write_excluding_tmp() -> SandboxPolicy {
+    SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        read_only_access: Default::default(),
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -417,7 +417,7 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write()
 async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
-    let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+    let sandbox_policy = workspace_write_excluding_tmp();
     let sandbox_policy_for_config = sandbox_policy.clone();
 
     let mut builder = test_codex().with_config(move |config| {
@@ -427,7 +427,8 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
     });
     let test = builder.build(&server).await?;
 
-    let outside_write = unique_outside_cwd_path("workspace-write-outside");
+    let outside_dir = tempfile::tempdir()?;
+    let outside_write = outside_dir.path().join("workspace-write-outside.txt");
     let placeholder = test.workspace_path("workspace-write-placeholder.txt");
     let _ = fs::remove_file(&outside_write);
     let _ = fs::remove_file(&placeholder);
@@ -439,7 +440,11 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
     );
     let requested_permissions = AdditionalPermissions {
         fs_read: vec![],
-        fs_write: vec![outside_write.clone()],
+        fs_write: vec![outside_dir.path().to_path_buf()],
+    };
+    let normalized_requested_permissions = AdditionalPermissions {
+        fs_read: vec![],
+        fs_write: vec![outside_dir.path().canonicalize()?],
     };
     let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
@@ -466,7 +471,7 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
     let approval = expect_exec_approval(&test, &command).await;
     assert_eq!(
         approval.additional_permissions,
-        Some(requested_permissions.clone())
+        Some(normalized_requested_permissions)
     );
     test.codex
         .submit(Op::ExecApproval {
@@ -501,7 +506,7 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
 async fn with_additional_permissions_denied_approval_blocks_execution() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::OnRequest;
-    let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+    let sandbox_policy = workspace_write_excluding_tmp();
     let sandbox_policy_for_config = sandbox_policy.clone();
 
     let mut builder = test_codex().with_config(move |config| {
@@ -511,7 +516,8 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
     });
     let test = builder.build(&server).await?;
 
-    let outside_write = unique_outside_cwd_path("workspace-write-denied");
+    let outside_dir = tempfile::tempdir()?;
+    let outside_write = outside_dir.path().join("workspace-write-denied.txt");
     let _ = fs::remove_file(&outside_write);
 
     let call_id = "request_permissions_denied";
@@ -521,7 +527,11 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
     );
     let requested_permissions = AdditionalPermissions {
         fs_read: vec![],
-        fs_write: vec![outside_write.clone()],
+        fs_write: vec![outside_dir.path().to_path_buf()],
+    };
+    let normalized_requested_permissions = AdditionalPermissions {
+        fs_read: vec![],
+        fs_write: vec![outside_dir.path().canonicalize()?],
     };
     let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
@@ -548,7 +558,7 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
     let approval = expect_exec_approval(&test, &command).await;
     assert_eq!(
         approval.additional_permissions,
-        Some(requested_permissions.clone())
+        Some(normalized_requested_permissions)
     );
     test.codex
         .submit(Op::ExecApproval {
