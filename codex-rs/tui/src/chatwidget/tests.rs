@@ -2776,6 +2776,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         network_approval_context: None,
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
+        additional_permissions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2823,6 +2824,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         network_approval_context: None,
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
+        additional_permissions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2876,6 +2878,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         network_approval_context: None,
         proposed_execpolicy_amendment: None,
         proposed_network_policy_amendments: None,
+        additional_permissions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -4592,10 +4595,10 @@ async fn collab_mode_applies_default_preset() {
 
 #[tokio::test]
 async fn user_turn_includes_personality_from_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
     chat.set_feature_enabled(Feature::Personality, true);
     chat.thread_id = Some(ThreadId::new());
-    chat.set_model("bengalfox");
+    chat.set_model("gpt-5.2-codex");
     chat.set_personality(Personality::Friendly);
 
     chat.bottom_pane
@@ -5715,7 +5718,7 @@ async fn model_selection_popup_snapshot() {
 
 #[tokio::test]
 async fn personality_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.open_personality_popup();
 
@@ -5763,8 +5766,8 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
 
 #[tokio::test]
 async fn server_overloaded_error_does_not_switch_models() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("boomslang")).await;
-    chat.set_model("boomslang");
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.set_model("gpt-5.2-codex");
     while rx.try_recv().is_ok() {}
     while op_rx.try_recv().is_ok() {}
 
@@ -5779,7 +5782,7 @@ async fn server_overloaded_error_does_not_switch_models() {
     while let Ok(event) = rx.try_recv() {
         if let AppEvent::UpdateModel(model) = event {
             assert_eq!(
-                model, "boomslang",
+                model, "gpt-5.2-codex",
                 "did not expect model switch on server-overloaded error"
             );
         }
@@ -6474,6 +6477,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
             "world".into(),
         ])),
         proposed_network_policy_amendments: None,
+        additional_permissions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -6533,6 +6537,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
             "world".into(),
         ])),
         proposed_network_policy_amendments: None,
+        additional_permissions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -6579,6 +6584,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         network_approval_context: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         proposed_network_policy_amendments: None,
+        additional_permissions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -6944,6 +6950,7 @@ async fn status_widget_and_approval_modal_snapshot() {
             "hello world".into(),
         ])),
         proposed_network_policy_amendments: None,
+        additional_permissions: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {

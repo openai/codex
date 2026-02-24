@@ -1734,7 +1734,6 @@ dependencies = [
  "http 1.4.0",
  "image",
  "indexmap 2.13.0",
- "indoc",
  "insta",
  "keyring",
  "landlock",

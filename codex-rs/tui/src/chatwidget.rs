@@ -2553,6 +2553,7 @@ impl ChatWidget {
             network_approval_context: ev.network_approval_context,
             proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
             proposed_network_policy_amendments: ev.proposed_network_policy_amendments,
+            additional_permissions: ev.additional_permissions,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
@@ -4341,7 +4342,8 @@ impl ChatWidget {
             | EventMsg::RealtimeConversationStarted(_)
             | EventMsg::RealtimeConversationRealtime(_)
             | EventMsg::RealtimeConversationClosed(_)
-            | EventMsg::DynamicToolCallRequest(_) => {}
+            | EventMsg::DynamicToolCallRequest(_)
+            | EventMsg::SkillRequestApproval(_) => {}
             EventMsg::ItemCompleted(event) => {
                 let item = event.item;
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
@@ -7186,7 +7188,7 @@ impl ChatWidget {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
     /// Forward an `Op` directly to codex.
-    pub(crate) fn submit_op(&mut self, op: Op) {
+    pub(crate) fn submit_op(&mut self, op: Op) -> bool {
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);
         if matches!(&op, Op::Review { .. }) && !self.bottom_pane.is_task_running() {
@@ -7194,7 +7196,9 @@ impl ChatWidget {
         }
         if let Err(e) = self.codex_op_tx.send(op) {
             tracing::error!("failed to submit op: {e}");
+            return false;
         }
+        true
     }
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {

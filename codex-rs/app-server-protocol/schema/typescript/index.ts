@@ -3,6 +3,7 @@
 export type { AbsolutePathBuf } from "./AbsolutePathBuf";
 export type { AddConversationListenerParams } from "./AddConversationListenerParams";
 export type { AddConversationSubscriptionResponse } from "./AddConversationSubscriptionResponse";
+export type { AdditionalPermissions } from "./AdditionalPermissions";
 export type { AgentMessageContent } from "./AgentMessageContent";
 export type { AgentMessageContentDeltaEvent } from "./AgentMessageContentDeltaEvent";
 export type { AgentMessageDeltaEvent } from "./AgentMessageDeltaEvent";
@@ -203,6 +204,7 @@ export type { SkillDependencies } from "./SkillDependencies";
 export type { SkillErrorInfo } from "./SkillErrorInfo";
 export type { SkillInterface } from "./SkillInterface";
 export type { SkillMetadata } from "./SkillMetadata";
+export type { SkillRequestApprovalEvent } from "./SkillRequestApprovalEvent";
 export type { SkillScope } from "./SkillScope";
 export type { SkillToolDependency } from "./SkillToolDependency";
 export type { SkillsListEntry } from "./SkillsListEntry";

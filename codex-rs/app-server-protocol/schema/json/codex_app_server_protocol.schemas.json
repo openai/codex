@@ -1,6 +1,23 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "AdditionalPermissions": {
+      "properties": {
+        "fs_read": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fs_write": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "AgentMessageContent": {
       "oneOf": [
         {
@@ -2706,6 +2723,17 @@
         },
         {
           "properties": {
+            "additional_permissions": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/AdditionalPermissions"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional additional filesystem permissions requested for this command."
+            },
             "approval_id": {
               "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
               "type": [
@@ -2856,6 +2884,30 @@
             "type"
           ],
           "title": "DynamicToolCallRequestEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "item_id": {
+              "type": "string"
+            },
+            "skill_name": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "skill_request_approval"
+              ],
+              "title": "SkillRequestApprovalEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item_id",
+            "skill_name",
+            "type"
+          ],
+          "title": "SkillRequestApprovalEventMsg",
           "type": "object"
         },
         {
@@ -6281,6 +6333,30 @@
           "type": "object"
         },
         {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "skill/requestApproval"
+              ],
+              "title": "Skill/requestApprovalRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SkillRequestApprovalParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Skill/requestApprovalRequest",
+          "type": "object"
+        },
+        {
           "description": "Execute a dynamic tool call on the client.",
           "properties": {
             "id": {
@@ -6399,6 +6475,43 @@
         "http_addr",
         "socks_addr"
       ],
+      "type": "object"
+    },
+    "SkillApprovalDecision": {
+      "enum": [
+        "approve",
+        "decline"
+      ],
+      "type": "string"
+    },
+    "SkillRequestApprovalParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "skillName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "skillName"
+      ],
+      "title": "SkillRequestApprovalParams",
+      "type": "object"
+    },
+    "SkillRequestApprovalResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/SkillApprovalDecision"
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "title": "SkillRequestApprovalResponse",
       "type": "object"
     },
     "StepStatus": {

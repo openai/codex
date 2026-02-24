@@ -88,6 +88,8 @@ pub enum Feature {
     ShellZshFork,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
+    /// Allow requesting additional filesystem permissions while staying sandboxed.
+    RequestPermissions,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
@@ -131,6 +133,8 @@ pub enum Feature {
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
     SkillEnvVarDependencyPrompt,
+    /// Emit skill approval test prompts/events.
+    SkillApproval,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Default).
@@ -519,6 +523,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::RequestPermissions,
+        key: "request_permissions",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
         key: "use_linux_sandbox_bwrap",
         #[cfg(target_os = "linux")]
@@ -608,6 +618,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SkillEnvVarDependencyPrompt,
         key: "skill_env_var_dependency_prompt",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SkillApproval,
+        key: "skill_approval",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
