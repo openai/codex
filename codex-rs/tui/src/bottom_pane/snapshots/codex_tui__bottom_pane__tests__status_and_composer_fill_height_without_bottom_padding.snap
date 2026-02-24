@@ -1,8 +1,10 @@
 ---
 source: tui/src/bottom_pane/mod.rs
+assertion_line: 1201
 expression: "render_snapshot(&pane, area)"
 ---
-• Working (0s • esc to interru
+• Working (0s • esc to        
+interrupt)                    
                               
                               
 › Ask Codex to do anything    

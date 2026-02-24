@@ -1,0 +1,9 @@
+---
+source: tui/src/status_indicator_widget.rs
+assertion_line: 386
+expression: terminal.backend()
+---
+"• Waiting for background terminal · "
+"cargo test -p codex-core (0s)       "
+"                                    "
+"                                    "

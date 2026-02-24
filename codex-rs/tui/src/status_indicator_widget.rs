@@ -23,11 +23,13 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::exec_cell::spinner;
 use crate::key_hint;
+use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
 use crate::text_formatting::capitalize_first;
 use crate::tui::FrameRequester;
 use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 
 const DETAILS_MAX_LINES: usize = 3;
@@ -175,6 +177,53 @@ impl StatusIndicatorWidget {
         self.elapsed_seconds_at(Instant::now())
     }
 
+    fn header_line(&self) -> Line<'static> {
+        let now = Instant::now();
+        let elapsed_duration = self.elapsed_duration_at(now);
+        let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
+
+        let mut spans = Vec::with_capacity(5);
+        spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
+        spans.push(" ".into());
+        if self.animations_enabled {
+            spans.extend(shimmer_spans(&self.header));
+        } else if !self.header.is_empty() {
+            spans.push(self.header.clone().into());
+        }
+        spans.push(" ".into());
+        if self.show_interrupt_hint {
+            spans.extend(vec![
+                format!("({pretty_elapsed} • ").dim(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to interrupt)".dim(),
+            ]);
+        } else {
+            spans.push(format!("({pretty_elapsed})").dim());
+        }
+        if let Some(message) = &self.inline_message {
+            // Keep optional context after elapsed/interrupt text so that core
+            // interrupt affordances stay in a fixed visual location.
+            spans.push(" · ".dim());
+            spans.push(message.clone().dim());
+        }
+
+        Line::from(spans)
+    }
+
+    fn wrapped_header_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width == 0 {
+            return Vec::new();
+        }
+        let header = self.header_line();
+        let wrapped = word_wrap_line(
+            &header,
+            RtOptions::new(usize::from(width)).break_words(true),
+        );
+        let mut out = Vec::with_capacity(wrapped.len());
+        push_owned_lines(&wrapped, &mut out);
+        out
+    }
+
     /// Wrap the details text into a fixed width and return the lines, truncating if necessary.
     fn wrapped_details_lines(&self, width: u16) -> Vec<Line<'static>> {
         let Some(details) = self.details.as_deref() else {
@@ -210,7 +259,9 @@ impl StatusIndicatorWidget {
 
 impl Renderable for StatusIndicatorWidget {
     fn desired_height(&self, width: u16) -> u16 {
-        1 + u16::try_from(self.wrapped_details_lines(width).len()).unwrap_or(0)
+        let header_lines = self.wrapped_header_lines(width);
+        let header_height = u16::try_from(header_lines.len()).unwrap_or(0).max(1);
+        header_height + u16::try_from(self.wrapped_details_lines(width).len()).unwrap_or(0)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -223,41 +274,19 @@ impl Renderable for StatusIndicatorWidget {
             self.frame_requester
                 .schedule_frame_in(Duration::from_millis(32));
         }
-        let now = Instant::now();
-        let elapsed_duration = self.elapsed_duration_at(now);
-        let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
-
-        let mut spans = Vec::with_capacity(5);
-        spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
-        spans.push(" ".into());
-        if self.animations_enabled {
-            spans.extend(shimmer_spans(&self.header));
-        } else if !self.header.is_empty() {
-            spans.push(self.header.clone().into());
-        }
-        spans.push(" ".into());
-        if self.show_interrupt_hint {
-            spans.extend(vec![
-                format!("({pretty_elapsed} • ").dim(),
-                key_hint::plain(KeyCode::Esc).into(),
-                " to interrupt)".dim(),
-            ]);
+        let header_lines = self.wrapped_header_lines(area.width);
+        let mut lines = if header_lines.is_empty() {
+            vec![self.header_line()]
         } else {
-            spans.push(format!("({pretty_elapsed})").dim());
-        }
-        if let Some(message) = &self.inline_message {
-            // Keep optional context after elapsed/interrupt text so that core
-            // interrupt affordances stay in a fixed visual location.
-            spans.push(" · ".dim());
-            spans.push(message.clone().dim());
-        }
-
-        let mut lines = Vec::new();
-        lines.push(Line::from(spans));
-        if area.height > 1 {
+            header_lines
+        };
+        if area.height > u16::try_from(lines.len()).unwrap_or(u16::MAX) {
             // If there is enough space, add the details lines below the header.
             let details = self.wrapped_details_lines(area.width);
-            let max_details = usize::from(area.height.saturating_sub(1));
+            let max_details = usize::from(
+                area.height
+                    .saturating_sub(u16::try_from(lines.len()).unwrap_or(u16::MAX)),
+            );
             lines.extend(details.into_iter().take(max_details));
         }
 
@@ -335,6 +364,25 @@ mod tests {
         // Prefix is 4 columns, so a width of 30 yields a content width of 26: one column
         // short of fitting the whole phrase (27 cols), forcing exactly one wrap without ellipsis.
         let mut terminal = Terminal::new(TestBackend::new(30, 3)).expect("terminal");
+        terminal
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn renders_wrapped_long_waiting_header() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), false);
+        w.update_header("Waiting for background terminal · cargo test -p codex-core".to_string());
+        w.set_interrupt_hint_visible(false);
+
+        // Freeze time-dependent rendering (elapsed + spinner) to keep the snapshot stable.
+        w.is_paused = true;
+        w.elapsed_running = Duration::ZERO;
+
+        let mut terminal = Terminal::new(TestBackend::new(36, 4)).expect("terminal");
         terminal
             .draw(|f| w.render(f.area(), f.buffer_mut()))
             .expect("draw");
