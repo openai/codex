@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::mcp::RequestId;
+use crate::models::AdditionalPermissions;
 use crate::parse_command::ParsedCommand;
 use crate::protocol::FileChange;
 use schemars::JsonSchema;
@@ -102,6 +103,10 @@ pub struct ExecApprovalRequestEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
+    /// Optional additional filesystem permissions requested for this command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub additional_permissions: Option<AdditionalPermissions>,
     pub parsed_cmd: Vec<ParsedCommand>,
 }
 

@@ -1,8 +1,10 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod admin;
+mod certs;
 mod config;
 mod http_proxy;
+mod mitm;
 mod network_policy;
 mod policy;
 mod proxy;

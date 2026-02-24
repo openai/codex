@@ -17,9 +17,14 @@ mod view_image;
 
 pub use plan::PLAN_TOOL;
 use serde::Deserialize;
+use std::path::Path;
 
 use crate::function_tool::FunctionCallError;
+use crate::sandboxing::SandboxPermissions;
+use crate::sandboxing::normalize_additional_permissions;
 pub use apply_patch::ApplyPatchHandler;
+use codex_protocol::models::AdditionalPermissions;
+use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
 pub use grep_files::GrepFilesHandler;
 pub use js_repl::JsReplHandler;
@@ -48,4 +53,59 @@ where
     serde_json::from_str(arguments).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}"))
     })
+}
+
+/// Validates feature/policy constraints for `with_additional_permissions` and
+/// returns normalized absolute paths. Errors if paths are invalid.
+pub(super) fn normalize_and_validate_additional_permissions(
+    request_permission_enabled: bool,
+    approval_policy: AskForApproval,
+    sandbox_permissions: SandboxPermissions,
+    additional_permissions: Option<AdditionalPermissions>,
+    cwd: &Path,
+) -> Result<Option<AdditionalPermissions>, String> {
+    let uses_additional_permissions = matches!(
+        sandbox_permissions,
+        SandboxPermissions::WithAdditionalPermissions
+    );
+
+    if !request_permission_enabled
+        && (uses_additional_permissions || additional_permissions.is_some())
+    {
+        return Err(
+            "additional permissions are disabled; enable `features.request_permission` before using `with_additional_permissions`"
+                .to_string(),
+        );
+    }
+
+    if uses_additional_permissions {
+        if !matches!(approval_policy, AskForApproval::OnRequest) {
+            return Err(format!(
+                "approval policy is {approval_policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest"
+            ));
+        }
+        let Some(additional_permissions) = additional_permissions else {
+            return Err(
+                "missing `additional_permissions`; provide `fs_read` and/or `fs_write` when using `with_additional_permissions`"
+                    .to_string(),
+            );
+        };
+        let normalized = normalize_additional_permissions(additional_permissions, cwd)?;
+        if normalized.is_empty() {
+            return Err(
+                "`additional_permissions` must include at least one path in `fs_read` or `fs_write`"
+                    .to_string(),
+            );
+        }
+        return Ok(Some(normalized));
+    }
+
+    if additional_permissions.is_some() {
+        Err(
+            "`additional_permissions` requires `sandbox_permissions` set to `with_additional_permissions`"
+                .to_string(),
+        )
+    } else {
+        Ok(None)
+    }
 }
