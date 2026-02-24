@@ -265,9 +265,14 @@ fn dynamic_network_policy(
     enforce_managed_network: bool,
     proxy: &ProxyPolicyInputs,
 ) -> String {
-    if !proxy.ports.is_empty() {
-        let mut policy =
-            String::from("; allow outbound access only to configured loopback proxy endpoints\n");
+    let should_use_restricted_network_policy =
+        !proxy.ports.is_empty() || proxy.has_proxy_config || enforce_managed_network;
+    if should_use_restricted_network_policy {
+        let mut policy = if proxy.ports.is_empty() {
+            String::from("; restrict network access without inferred proxy endpoints\n")
+        } else {
+            String::from("; allow outbound access only to configured loopback proxy endpoints\n")
+        };
         if proxy.allow_local_binding {
             policy.push_str("; allow dual-stack local binding and local-endpoint traffic\n");
             // Use wildcard local-endpoint rules so dual-stack listeners keep
@@ -287,18 +292,6 @@ fn dynamic_network_policy(
             policy.push_str(&unix_socket_policy);
         }
         return format!("{policy}{MACOS_SEATBELT_NETWORK_POLICY}");
-    }
-
-    if proxy.has_proxy_config {
-        // Proxy configuration is present but we could not infer any valid loopback endpoints.
-        // Fail closed to avoid silently widening network access in proxy-enforced sessions.
-        return String::new();
-    }
-
-    if enforce_managed_network {
-        // Managed network requirements are active but no usable proxy endpoints
-        // are available. Fail closed for network access.
-        return String::new();
     }
 
     if sandbox_policy.has_full_network_access() {
@@ -747,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_network_policy_fails_closed_when_proxy_config_without_ports() {
+    fn dynamic_network_policy_preserves_restricted_policy_when_proxy_config_without_ports() {
         let policy = dynamic_network_policy(
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
@@ -766,6 +759,10 @@ mod tests {
         );
 
         assert!(
+            policy.contains("(socket-domain AF_SYSTEM)"),
+            "policy should keep the restricted network profile when proxy config is present without ports:\n{policy}"
+        );
+        assert!(
             !policy.contains("\n(allow network-outbound)\n"),
             "policy should not include blanket outbound allowance when proxy config is present without ports:\n{policy}"
         );
@@ -776,7 +773,8 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_network_policy_fails_closed_for_managed_network_without_proxy_config() {
+    fn dynamic_network_policy_preserves_restricted_policy_for_managed_network_without_proxy_config()
+    {
         let policy = dynamic_network_policy(
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
@@ -794,7 +792,14 @@ mod tests {
             },
         );
 
-        assert_eq!(policy, "");
+        assert!(
+            policy.contains("(socket-domain AF_SYSTEM)"),
+            "policy should keep the restricted network profile when managed network is active without proxy endpoints:\n{policy}"
+        );
+        assert!(
+            !policy.contains("\n(allow network-outbound)\n"),
+            "policy should not include blanket outbound allowance when managed network is active without proxy endpoints:\n{policy}"
+        );
     }
 
     #[test]
