@@ -267,6 +267,9 @@ fn dynamic_network_policy(
             String::from("; allow outbound access only to configured loopback proxy endpoints\n");
         if proxy.allow_local_binding {
             policy.push_str("; allow dual-stack local binding and loopback traffic\n");
+            // Intentionally allows wildcard binds so dual-stack local listeners keep
+            // working under Seatbelt. Inbound and outbound traffic remain constrained
+            // by the narrower loopback rules below.
             policy.push_str("(allow network-bind (local ip \"*:*\"))\n");
             policy.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
             policy.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
