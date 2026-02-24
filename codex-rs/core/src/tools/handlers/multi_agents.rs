@@ -4,7 +4,6 @@ use crate::agent::max_thread_spawn_depth;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
-use crate::config::Constrained;
 use crate::error::CodexErr;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
@@ -18,7 +17,6 @@ use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
@@ -951,7 +949,6 @@ fn apply_spawn_agent_runtime_overrides(
 }
 
 fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
-    config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     let max_depth = max_thread_spawn_depth(config.agent_max_spawn_depth);
     if exceeds_thread_spawn_depth_limit(child_depth + 1, max_depth) {
         config.features.disable(Feature::Collab);
@@ -1106,7 +1103,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "No role requiring it for now"]
-    async fn spawn_agent_uses_explorer_role_and_sets_never_approval_policy() {
+    async fn spawn_agent_uses_explorer_role_and_inherits_approval_policy() {
         #[derive(Debug, Deserialize)]
         struct SpawnAgentResult {
             agent_id: String,
@@ -1160,7 +1157,7 @@ mod tests {
             .config_snapshot()
             .await;
         assert_eq!(snapshot.model, "gpt-5.1-codex-mini");
-        assert_eq!(snapshot.approval_policy, AskForApproval::Never);
+        assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
     }
 
     #[tokio::test]
@@ -1211,6 +1208,7 @@ mod tests {
             &turn.config.permissions.sandbox_policy,
             turn.config.permissions.sandbox_policy.get().clone(),
         );
+        let expected_approval = turn.config.permissions.approval_policy.get().clone();
         turn.sandbox_policy
             .set(expected_sandbox.clone())
             .expect("sandbox policy should be set");
@@ -1257,7 +1255,7 @@ mod tests {
             .config_snapshot()
             .await;
         assert_eq!(snapshot.sandbox_policy, expected_sandbox);
-        assert_eq!(snapshot.approval_policy, AskForApproval::Never);
+        assert_eq!(snapshot.approval_policy, expected_approval);
     }
 
     #[tokio::test]
@@ -2055,11 +2053,6 @@ mod tests {
         expected.cwd = turn.cwd.clone();
         expected
             .permissions
-            .approval_policy
-            .set(AskForApproval::Never)
-            .expect("approval policy set");
-        expected
-            .permissions
             .sandbox_policy
             .set(turn.sandbox_policy.get().clone())
             .expect("sandbox policy set");
@@ -2102,11 +2095,6 @@ mod tests {
         expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
         expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
         expected.cwd = turn.cwd.clone();
-        expected
-            .permissions
-            .approval_policy
-            .set(AskForApproval::Never)
-            .expect("approval policy set");
         expected
             .permissions
             .sandbox_policy
