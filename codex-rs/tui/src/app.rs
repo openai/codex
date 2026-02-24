@@ -1545,9 +1545,14 @@ impl App {
                         self.render_transcript_once(tui);
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
-                    if self.chat_widget.pre_draw_tick(tui.frame_requester()) {
+                    if self
+                        .chat_widget
+                        .handle_paste_burst_tick(tui.frame_requester())
+                    {
                         return Ok(AppRunControl::Continue);
                     }
+                    // Allow widgets to process any pending timers before rendering.
+                    self.chat_widget.pre_draw_tick();
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
@@ -2704,6 +2709,22 @@ impl App {
                     ));
                 }
             },
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::TranscriptionComplete { id, text } => {
+                self.chat_widget.replace_transcription(&id, &text);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::TranscriptionFailed { id, error: _ } => {
+                self.chat_widget.remove_transcription_placeholder(&id);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::UpdateRecordingMeter { id, text } => {
+                // Update in place to preserve the element id for subsequent frames.
+                let updated = self.chat_widget.update_transcription_in_place(&id, &text);
+                if updated {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
             AppEvent::StatusLineSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
                 let edit = codex_core::config::edit::status_line_items_edit(&ids);
@@ -3107,7 +3128,7 @@ impl App {
                 self.chat_widget.handle_key_event(key_event);
             }
             _ => {
-                // Ignore Release key events.
+                self.chat_widget.handle_key_event(key_event);
             }
         };
     }

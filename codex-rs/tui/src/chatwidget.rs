@@ -2282,6 +2282,15 @@ impl ChatWidget {
         );
     }
 
+    pub(crate) fn pre_draw_tick(&mut self) {
+        self.bottom_pane.pre_draw_tick();
+        self.update_realtime_composer_meter();
+        if self.realtime_conversation_state == RealtimeConversationUiState::Working {
+            self.frame_requester
+                .schedule_frame_in(Duration::from_millis(75));
+        }
+    }
+
     /// Handle completion of an `AgentMessage` turn item.
     ///
     /// Commentary completion sets a deferred restore flag so the status row
@@ -2880,6 +2889,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_voice_transcription_enabled(
+            widget.config.features.enabled(Feature::VoiceTranscription),
+        );
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3056,6 +3068,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_voice_transcription_enabled(
+            widget.config.features.enabled(Feature::VoiceTranscription),
+        );
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3222,6 +3237,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_voice_transcription_enabled(
+            widget.config.features.enabled(Feature::VoiceTranscription),
+        );
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -4026,19 +4044,6 @@ impl ChatWidget {
         } else {
             false
         }
-    }
-
-    pub(crate) fn pre_draw_tick(&mut self, frame_requester: FrameRequester) -> bool {
-        if self.handle_paste_burst_tick(frame_requester) {
-            return true;
-        }
-
-        self.update_realtime_composer_meter();
-        if self.realtime_conversation_state == RealtimeConversationUiState::Working {
-            self.frame_requester
-                .schedule_frame_in(Duration::from_millis(75));
-        }
-        false
     }
 
     fn flush_active_cell(&mut self) {
@@ -6604,6 +6609,9 @@ impl ChatWidget {
         if feature == Feature::Steer {
             self.bottom_pane.set_steer_enabled(enabled);
         }
+        if feature == Feature::VoiceTranscription {
+            self.bottom_pane.set_voice_transcription_enabled(enabled);
+        }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
@@ -7775,6 +7783,29 @@ impl ChatWidget {
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
         );
         RenderableItem::Owned(Box::new(flex))
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl ChatWidget {
+    pub(crate) fn replace_transcription(&mut self, id: &str, text: &str) {
+        self.bottom_pane.replace_transcription(id, text);
+        // Ensure the UI redraws to reflect the updated transcription.
+        self.request_redraw();
+    }
+
+    pub(crate) fn update_transcription_in_place(&mut self, id: &str, text: &str) -> bool {
+        let updated = self.bottom_pane.update_transcription_in_place(id, text);
+        if updated {
+            self.request_redraw();
+        }
+        updated
+    }
+
+    pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
+        self.bottom_pane.remove_transcription_placeholder(id);
+        // Ensure the UI redraws to reflect placeholder removal.
+        self.request_redraw();
     }
 }
 
