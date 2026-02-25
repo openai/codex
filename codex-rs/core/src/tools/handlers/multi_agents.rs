@@ -144,7 +144,8 @@ mod spawn {
                 .into(),
             )
             .await;
-        let mut config = build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+        let mut config =
+            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
         apply_role_to_config(&mut config, role_name)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
