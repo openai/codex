@@ -91,7 +91,6 @@ impl ModelsManager {
         Self {
             remote_models: RwLock::new(remote_models),
             catalog_mode,
-            catalog_mode,
             collaboration_modes_config,
             auth_manager,
             etag: RwLock::new(None),
@@ -389,11 +388,7 @@ impl ModelsManager {
                 Self::load_remote_models_from_file()
                     .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}")),
             ),
-<<<<<<< HEAD
             catalog_mode: CatalogMode::Default,
-=======
-            has_custom_model_catalog: false,
->>>>>>> ec21465e1 (Refactor collaboration mode preset availability config)
             collaboration_modes_config: CollaborationModesConfig::default(),
             auth_manager,
             etag: RwLock::new(None),
