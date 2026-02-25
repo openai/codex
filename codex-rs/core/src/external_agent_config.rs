@@ -647,7 +647,7 @@ mod tests {
         let items = service_for_paths(root.path().join(".claude"), root.path().join(".codex"))
             .detect(ExternalAgentConfigDetectOptions {
                 include_home: false,
-                cwds: Some(vec![nested.clone(), repo_root.clone()]),
+                cwds: Some(vec![nested, repo_root.clone()]),
             })
             .expect("detect");
 
