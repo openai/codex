@@ -18,8 +18,8 @@ impl Session {
         //   2) resume/fork hydration metadata (`previous_model` and
         //      `reference_context_item`)
         //
-        // `TurnContextItem` is now only persisted when the current user turn actually
-        // emits model-visible context items (during normal context updates or when
+        // A `TurnContextItem` appears in rollout only for user turns that
+        // emit model-visible context items (during normal context updates or when
         // mid-turn compaction reinjects full initial context). That means replay only
         // needs to answer:
         // - which surviving user turn last established a model baseline
