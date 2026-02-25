@@ -65,6 +65,7 @@ export type { ExperimentalFeature } from "./ExperimentalFeature";
 export type { ExperimentalFeatureListParams } from "./ExperimentalFeatureListParams";
 export type { ExperimentalFeatureListResponse } from "./ExperimentalFeatureListResponse";
 export type { ExperimentalFeatureStage } from "./ExperimentalFeatureStage";
+export type { ExternalAgentConfigDetectParams } from "./ExternalAgentConfigDetectParams";
 export type { ExternalAgentConfigDetectResponse } from "./ExternalAgentConfigDetectResponse";
 export type { ExternalAgentConfigImportParams } from "./ExternalAgentConfigImportParams";
 export type { ExternalAgentConfigImportResponse } from "./ExternalAgentConfigImportResponse";

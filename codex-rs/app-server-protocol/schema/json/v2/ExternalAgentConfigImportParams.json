@@ -1,6 +1,28 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "ExternalAgentConfigMigrationItem": {
+      "properties": {
+        "cwd": {
+          "description": "Null or empty means home-scoped migration; non-empty means repo-scoped migration.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "itemType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
+        }
+      },
+      "required": [
+        "description",
+        "itemType"
+      ],
+      "type": "object"
+    },
     "ExternalAgentConfigMigrationItemType": {
       "enum": [
         "AGENTS_MD",
@@ -12,15 +34,15 @@
     }
   },
   "properties": {
-    "migrationItemTypes": {
+    "migrationItems": {
       "items": {
-        "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
+        "$ref": "#/definitions/ExternalAgentConfigMigrationItem"
       },
       "type": "array"
     }
   },
   "required": [
-    "migrationItemTypes"
+    "migrationItems"
   ],
   "title": "ExternalAgentConfigImportParams",
   "type": "object"

@@ -656,6 +656,8 @@ pub enum ExternalAgentConfigMigrationItemType {
 pub struct ExternalAgentConfigMigrationItem {
     pub item_type: ExternalAgentConfigMigrationItemType,
     pub description: String,
+    /// Null or empty means home-scoped migration; non-empty means repo-scoped migration.
+    pub cwd: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -668,8 +670,20 @@ pub struct ExternalAgentConfigDetectResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigDetectParams {
+    /// If true, include detection under the user's home (~/.claude, ~/.codex, etc.).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_home: bool,
+    /// Zero or more working directories to include for repo-scoped detection.
+    #[ts(optional = nullable)]
+    pub cwds: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportParams {
-    pub migration_item_types: Vec<ExternalAgentConfigMigrationItemType>,
+    pub migration_items: Vec<ExternalAgentConfigMigrationItem>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

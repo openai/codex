@@ -3,6 +3,13 @@
   "definitions": {
     "ExternalAgentConfigMigrationItem": {
       "properties": {
+        "cwd": {
+          "description": "Null or empty means home-scoped migration; non-empty means repo-scoped migration.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": "string"
         },

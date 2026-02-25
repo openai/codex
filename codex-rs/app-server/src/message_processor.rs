@@ -24,6 +24,7 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
+use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -361,14 +362,14 @@ impl MessageProcessor {
                 )
                 .await;
             }
-            ClientRequest::ExternalAgentConfigDetect {
-                request_id,
-                params: _,
-            } => {
-                self.handle_external_agent_config_detect(ConnectionRequestId {
-                    connection_id,
-                    request_id,
-                })
+            ClientRequest::ExternalAgentConfigDetect { request_id, params } => {
+                self.handle_external_agent_config_detect(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
                 .await;
             }
             ClientRequest::ExternalAgentConfigImport { request_id, params } => {
@@ -506,8 +507,12 @@ impl MessageProcessor {
         }
     }
 
-    async fn handle_external_agent_config_detect(&self, request_id: ConnectionRequestId) {
-        match self.external_agent_config_api.detect().await {
+    async fn handle_external_agent_config_detect(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ExternalAgentConfigDetectParams,
+    ) {
+        match self.external_agent_config_api.detect(params).await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }

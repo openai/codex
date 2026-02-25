@@ -1091,12 +1091,13 @@
               "type": "string"
             },
             "params": {
-              "type": "null"
+              "$ref": "#/definitions/v2/ExternalAgentConfigDetectParams"
             }
           },
           "required": [
             "id",
-            "method"
+            "method",
+            "params"
           ],
           "title": "ExternalAgentConfig/detectRequest",
           "type": "object"
@@ -8924,6 +8925,27 @@
           }
         ]
       },
+      "ExternalAgentConfigDetectParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cwds": {
+            "description": "Zero or more working directories to include for repo-scoped detection.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "includeHome": {
+            "description": "If true, include detection under the user's home (~/.claude, ~/.codex, etc.).",
+            "type": "boolean"
+          }
+        },
+        "title": "ExternalAgentConfigDetectParams",
+        "type": "object"
+      },
       "ExternalAgentConfigDetectResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -8943,15 +8965,15 @@
       "ExternalAgentConfigImportParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "migrationItemTypes": {
+          "migrationItems": {
             "items": {
-              "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
+              "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItem"
             },
             "type": "array"
           }
         },
         "required": [
-          "migrationItemTypes"
+          "migrationItems"
         ],
         "title": "ExternalAgentConfigImportParams",
         "type": "object"
@@ -8963,6 +8985,13 @@
       },
       "ExternalAgentConfigMigrationItem": {
         "properties": {
+          "cwd": {
+            "description": "Null or empty means home-scoped migration; non-empty means repo-scoped migration.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "description": {
             "type": "string"
           },

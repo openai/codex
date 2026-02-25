@@ -153,8 +153,8 @@ Example with notification opt-out:
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `config/read` — fetch the effective config on disk after resolving config layering.
-- `externalAgentConfig/detect` — detect migratable external agent config artifacts and return supported migration options for onboarding UI selection.
-- `externalAgentConfig/import` — apply selected external-agent migration options.
+- `externalAgentConfig/detect` — detect migratable external-agent artifacts with `includeHome` and optional `cwds`; each detected item includes `cwd` (`null` for home).
+- `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home).
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), `enforceResidency`, and `network` constraints.

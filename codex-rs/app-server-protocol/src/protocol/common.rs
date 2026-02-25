@@ -351,7 +351,7 @@ client_request_definitions! {
         response: v2::ConfigReadResponse,
     },
     ExternalAgentConfigDetect => "externalAgentConfig/detect" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        params: v2::ExternalAgentConfigDetectParams,
         response: v2::ExternalAgentConfigDetectResponse,
     },
     ExternalAgentConfigImport => "externalAgentConfig/import" {
