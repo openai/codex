@@ -705,7 +705,24 @@ async fn run_ratatui_app(
                                     thread_id,
                                 },
                             ),
-                            None => resume_picker::SessionSelection::StartFresh,
+                            None => {
+                                let rollout_path = item.path.display();
+                                error!(
+                                    "Error reading session metadata from latest rollout: {rollout_path}"
+                                );
+                                restore();
+                                session_log::log_session_end();
+                                let _ = tui.terminal.clear();
+                                return Ok(AppExitInfo {
+                                    token_usage: codex_protocol::protocol::TokenUsage::default(),
+                                    thread_id: None,
+                                    thread_name: None,
+                                    update_action: None,
+                                    exit_reason: ExitReason::Fatal(format!(
+                                        "Found latest saved session at {rollout_path}, but failed to read its metadata. Run `codex fork` to choose from existing sessions."
+                                    )),
+                                });
+                            }
                         }
                     }
                     None => resume_picker::SessionSelection::StartFresh,
@@ -781,7 +798,22 @@ async fn run_ratatui_app(
                         thread_id,
                     })
                 }
-                None => resume_picker::SessionSelection::StartFresh,
+                None => {
+                    let rollout_path = path.display();
+                    error!("Error reading session metadata from latest rollout: {rollout_path}");
+                    restore();
+                    session_log::log_session_end();
+                    let _ = tui.terminal.clear();
+                    return Ok(AppExitInfo {
+                        token_usage: codex_protocol::protocol::TokenUsage::default(),
+                        thread_id: None,
+                        thread_name: None,
+                        update_action: None,
+                        exit_reason: ExitReason::Fatal(format!(
+                            "Found latest saved session at {rollout_path}, but failed to read its metadata. Run `codex resume` to choose from existing sessions."
+                        )),
+                    });
+                }
             },
             _ => resume_picker::SessionSelection::StartFresh,
         }
