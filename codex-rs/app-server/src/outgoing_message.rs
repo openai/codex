@@ -275,6 +275,10 @@ impl OutgoingMessageSender {
         connection_ids: &[ConnectionId],
         notification: ServerNotification,
     ) {
+        tracing::trace!(
+            targeted_connections = connection_ids.len(),
+            "app-server event: {notification}"
+        );
         let outgoing_message = OutgoingMessage::AppServerNotification(notification);
         if connection_ids.is_empty() {
             if let Err(err) = self

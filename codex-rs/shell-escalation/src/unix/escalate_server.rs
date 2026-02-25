@@ -1,16 +1,13 @@
 use std::collections::HashMap;
 use std::os::fd::AsRawFd;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use codex_execpolicy::Policy;
 use path_absolutize::Absolutize as _;
 use tokio::process::Command;
-use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::unix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
@@ -24,7 +21,6 @@ use crate::unix::escalate_protocol::SuperExecResult;
 use crate::unix::escalation_policy::EscalationPolicy;
 use crate::unix::socket::AsyncDatagramSocket;
 use crate::unix::socket::AsyncSocket;
-use crate::unix::stopwatch::Stopwatch;
 
 /// Adapter for running the shell command after the escalation server has been set up.
 ///
@@ -66,14 +62,14 @@ pub struct ExecResult {
     pub timed_out: bool,
 }
 
-struct EscalateServer {
+pub struct EscalateServer {
     bash_path: PathBuf,
     execve_wrapper: PathBuf,
     policy: Arc<dyn EscalationPolicy>,
 }
 
 impl EscalateServer {
-    fn new<P>(bash_path: PathBuf, execve_wrapper: PathBuf, policy: P) -> Self
+    pub fn new<P>(bash_path: PathBuf, execve_wrapper: PathBuf, policy: P) -> Self
     where
         P: EscalationPolicy + Send + Sync + 'static,
     {
@@ -84,7 +80,7 @@ impl EscalateServer {
         }
     }
 
-    async fn exec(
+    pub async fn exec(
         &self,
         params: ExecParams,
         cancel_rx: CancellationToken,
@@ -124,35 +120,6 @@ impl EscalateServer {
         escalate_task.abort();
         Ok(result)
     }
-}
-
-/// Factory for creating escalation policy instances for a single shell run.
-pub trait EscalationPolicyFactory {
-    type Policy: EscalationPolicy + Send + Sync + 'static;
-
-    fn create_policy(&self, policy: Arc<RwLock<Policy>>, stopwatch: Stopwatch) -> Self::Policy;
-}
-
-pub async fn run_escalate_server(
-    exec_params: ExecParams,
-    shell_program: impl AsRef<Path>,
-    execve_wrapper: impl AsRef<Path>,
-    policy: Arc<RwLock<Policy>>,
-    escalation_policy_factory: impl EscalationPolicyFactory,
-    effective_timeout: Duration,
-    command_executor: &dyn ShellCommandExecutor,
-) -> anyhow::Result<ExecResult> {
-    let stopwatch = Stopwatch::new(effective_timeout);
-    let cancel_token = stopwatch.cancellation_token();
-    let escalate_server = EscalateServer::new(
-        shell_program.as_ref().to_path_buf(),
-        execve_wrapper.as_ref().to_path_buf(),
-        escalation_policy_factory.create_policy(policy, stopwatch),
-    );
-
-    escalate_server
-        .exec(exec_params, cancel_token, command_executor)
-        .await
 }
 
 async fn escalate_task(

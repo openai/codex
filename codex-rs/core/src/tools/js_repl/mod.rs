@@ -269,7 +269,7 @@ pub struct JsReplManager {
     node_path: Option<PathBuf>,
     node_module_dirs: Vec<PathBuf>,
     tmp_dir: tempfile::TempDir,
-    kernel: Mutex<Option<KernelState>>,
+    kernel: Arc<Mutex<Option<KernelState>>>,
     exec_lock: Arc<tokio::sync::Semaphore>,
     exec_tool_calls: Arc<Mutex<HashMap<String, ExecToolCalls>>>,
 }
@@ -287,7 +287,7 @@ impl JsReplManager {
             node_path,
             node_module_dirs,
             tmp_dir,
-            kernel: Mutex::new(None),
+            kernel: Arc::new(Mutex::new(None)),
             exec_lock: Arc::new(tokio::sync::Semaphore::new(1)),
             exec_tool_calls: Arc::new(Mutex::new(HashMap::new())),
         });
@@ -669,6 +669,7 @@ impl JsReplManager {
         tokio::spawn(Self::read_stdout(
             stdout,
             Arc::clone(&child),
+            Arc::clone(&self.kernel),
             Arc::clone(&recent_stderr),
             Arc::clone(&pending_execs),
             Arc::clone(&exec_contexts),
@@ -811,6 +812,7 @@ impl JsReplManager {
     async fn read_stdout(
         stdout: tokio::process::ChildStdout,
         child: Arc<Mutex<Child>>,
+        manager_kernel: Arc<Mutex<Option<KernelState>>>,
         recent_stderr: Arc<Mutex<VecDeque<String>>>,
         pending_execs: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ExecResultMessage>>>>,
         exec_contexts: Arc<Mutex<HashMap<String, ExecContext>>>,
@@ -963,6 +965,16 @@ impl JsReplManager {
         let kernel_exit_message = kernel_failure_message
             .clone()
             .unwrap_or_else(|| "js_repl kernel exited unexpectedly".to_string());
+
+        {
+            let mut kernel = manager_kernel.lock().await;
+            let should_clear = kernel
+                .as_ref()
+                .is_some_and(|state| Arc::ptr_eq(&state.child, &child));
+            if should_clear {
+                kernel.take();
+            }
+        }
 
         let mut pending = pending_execs.lock().await;
         let pending_exec_ids = pending.keys().cloned().collect::<Vec<_>>();
@@ -1743,7 +1755,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn js_repl_kernel_failure_includes_model_diagnostics() -> anyhow::Result<()> {
+    async fn js_repl_forced_kernel_exit_recovers_on_next_exec() -> anyhow::Result<()> {
         if !can_run_js_repl_runtime_tests().await {
             return Ok(());
         }
@@ -1772,9 +1784,24 @@ mod tests {
             Arc::clone(&state.child)
         };
         JsReplManager::kill_kernel_child(&child, "test_crash").await;
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let cleared = {
+                    let guard = manager.kernel.lock().await;
+                    guard
+                        .as_ref()
+                        .is_none_or(|state| !Arc::ptr_eq(&state.child, &child))
+                };
+                if cleared {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("host should clear dead kernel state promptly");
 
-        let err = manager
+        let result = manager
             .execute(
                 session,
                 turn,
@@ -1784,13 +1811,107 @@ mod tests {
                     timeout_ms: Some(10_000),
                 },
             )
-            .await
-            .expect_err("expected kernel failure after forced kill");
+            .await?;
+        assert!(result.output.contains("after-kill"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_uncaught_exception_returns_exec_error_and_recovers() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = crate::codex::make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        manager
+            .execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                JsReplArgs {
+                    code: "console.log('warmup');".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+
+        let child = {
+            let guard = manager.kernel.lock().await;
+            let state = guard.as_ref().expect("kernel should exist after warmup");
+            Arc::clone(&state.child)
+        };
+
+        let err = tokio::time::timeout(
+            Duration::from_secs(3),
+            manager.execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                JsReplArgs {
+                    code: "setTimeout(() => { throw new Error('boom'); }, 0);\nawait new Promise(() => {});".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            ),
+        )
+        .await
+        .expect("uncaught exception should fail promptly")
+        .expect_err("expected uncaught exception to fail the exec");
 
         let message = err.to_string();
-        assert!(message.contains("js_repl diagnostics:"));
-        assert!(message.contains("\"reason\":\"write_failed\""));
-        assert!(message.contains("\"kernel_status\":\"exited("));
+        assert!(message.contains("js_repl kernel uncaught exception: boom"));
+        assert!(message.contains("kernel reset."));
+        assert!(message.contains("Catch or handle async errors"));
+        assert!(!message.contains("js_repl kernel exited unexpectedly"));
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let exited = {
+                    let mut child = child.lock().await;
+                    child.try_wait()?.is_some()
+                };
+                if exited {
+                    return Ok::<(), anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("uncaught exception should terminate the previous kernel process")?;
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let cleared = {
+                    let guard = manager.kernel.lock().await;
+                    guard
+                        .as_ref()
+                        .is_none_or(|state| !Arc::ptr_eq(&state.child, &child))
+                };
+                if cleared {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("host should clear dead kernel state promptly");
+
+        let next = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "console.log('after reset');".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(next.output.contains("after reset"));
         Ok(())
     }
 

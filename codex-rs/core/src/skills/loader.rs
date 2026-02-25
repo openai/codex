@@ -167,7 +167,7 @@ where
     let mut seen: HashSet<PathBuf> = HashSet::new();
     outcome
         .skills
-        .retain(|skill| seen.insert(skill.path.clone()));
+        .retain(|skill| seen.insert(skill.path_to_skills_md.clone()));
 
     fn scope_rank(scope: SkillScope) -> u8 {
         // Higher-priority scopes first (matches root scan order for dedupe).
@@ -183,7 +183,7 @@ where
         scope_rank(a.scope)
             .cmp(&scope_rank(b.scope))
             .then_with(|| a.name.cmp(&b.name))
-            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.path_to_skills_md.cmp(&b.path_to_skills_md))
     });
 
     outcome
@@ -528,7 +528,7 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         dependencies,
         policy,
         permissions,
-        path: resolved_path,
+        path_to_skills_md: resolved_path,
         scope,
     })
 }
@@ -1049,7 +1049,7 @@ mod tests {
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
         );
@@ -1197,7 +1197,7 @@ mod tests {
                 }),
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
         );
@@ -1253,7 +1253,7 @@ interface:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(skill_path.as_path()),
+                path_to_skills_md: normalized(skill_path.as_path()),
                 scope: SkillScope::User,
             }]
         );
@@ -1587,7 +1587,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
         );
@@ -1628,7 +1628,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
         );
@@ -1682,7 +1682,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
         );
@@ -1724,7 +1724,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
         );
@@ -1769,7 +1769,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&shared_skill_path),
+                path_to_skills_md: normalized(&shared_skill_path),
                 scope: SkillScope::User,
             }]
         );
@@ -1830,7 +1830,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
         );
@@ -1867,7 +1867,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&shared_skill_path),
+                path_to_skills_md: normalized(&shared_skill_path),
                 scope: SkillScope::Admin,
             }]
         );
@@ -1908,7 +1908,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&linked_skill_path),
+                path_to_skills_md: normalized(&linked_skill_path),
                 scope: SkillScope::Repo,
             }]
         );
@@ -1976,7 +1976,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&within_depth_path),
+                path_to_skills_md: normalized(&within_depth_path),
                 scope: SkillScope::User,
             }]
         );
@@ -2004,7 +2004,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
         );
@@ -2036,7 +2036,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
         );
@@ -2149,7 +2149,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
         );
@@ -2185,7 +2185,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
         );
@@ -2239,7 +2239,7 @@ permissions:
                     dependencies: None,
                     policy: None,
                     permissions: None,
-                    path: normalized(&nested_skill_path),
+                    path_to_skills_md: normalized(&nested_skill_path),
                     scope: SkillScope::Repo,
                 },
                 SkillMetadata {
@@ -2250,7 +2250,7 @@ permissions:
                     dependencies: None,
                     policy: None,
                     permissions: None,
-                    path: normalized(&root_skill_path),
+                    path_to_skills_md: normalized(&root_skill_path),
                     scope: SkillScope::Repo,
                 },
             ]
@@ -2290,7 +2290,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
         );
@@ -2328,7 +2328,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
         );
@@ -2370,7 +2370,7 @@ permissions:
                     dependencies: None,
                     policy: None,
                     permissions: None,
-                    path: normalized(&repo_skill_path),
+                    path_to_skills_md: normalized(&repo_skill_path),
                     scope: SkillScope::Repo,
                 },
                 SkillMetadata {
@@ -2381,7 +2381,7 @@ permissions:
                     dependencies: None,
                     policy: None,
                     permissions: None,
-                    path: normalized(&user_skill_path),
+                    path_to_skills_md: normalized(&user_skill_path),
                     scope: SkillScope::User,
                 },
             ]
@@ -2446,7 +2446,7 @@ permissions:
                     dependencies: None,
                     policy: None,
                     permissions: None,
-                    path: first_path,
+                    path_to_skills_md: first_path,
                     scope: SkillScope::Repo,
                 },
                 SkillMetadata {
@@ -2457,7 +2457,7 @@ permissions:
                     dependencies: None,
                     policy: None,
                     permissions: None,
-                    path: second_path,
+                    path_to_skills_md: second_path,
                     scope: SkillScope::Repo,
                 },
             ]
@@ -2529,7 +2529,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
         );
@@ -2588,7 +2588,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: normalized(&skill_path),
+                path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::System,
             }]
         );

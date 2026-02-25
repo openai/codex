@@ -24,13 +24,12 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
 use codex_shell_escalation::EscalateAction;
+use codex_shell_escalation::EscalateServer;
+use codex_shell_escalation::EscalationPolicy;
 use codex_shell_escalation::ExecParams;
 use codex_shell_escalation::ExecResult;
-use codex_shell_escalation::ShellActionProvider;
 use codex_shell_escalation::ShellCommandExecutor;
-use codex_shell_escalation::ShellPolicyFactory;
 use codex_shell_escalation::Stopwatch;
-use codex_shell_escalation::run_escalate_server;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -107,30 +106,39 @@ pub(super) async fn try_run_zsh_fork(
         justification,
         arg0,
     };
-    let exec_result = run_escalate_server(
-        ExecParams {
-            command: script,
-            workdir: req.cwd.to_string_lossy().to_string(),
-            timeout_ms: Some(effective_timeout.as_millis() as u64),
-            login: Some(login),
-        },
-        shell_zsh_path.clone(),
-        shell_execve_wrapper().map_err(|err| ToolError::Rejected(format!("{err}")))?,
-        exec_policy.clone(),
-        ShellPolicyFactory::new(CoreShellActionProvider {
-            policy: Arc::clone(&exec_policy),
-            session: Arc::clone(&ctx.session),
-            turn: Arc::clone(&ctx.turn),
-            call_id: ctx.call_id.clone(),
-            approval_policy: ctx.turn.approval_policy.value(),
-            sandbox_policy: attempt.policy.clone(),
-            sandbox_permissions: req.sandbox_permissions,
-        }),
-        effective_timeout,
-        &command_executor,
-    )
-    .await
-    .map_err(|err| ToolError::Rejected(err.to_string()))?;
+
+    let exec_params = ExecParams {
+        command: script,
+        workdir: req.cwd.to_string_lossy().to_string(),
+        timeout_ms: Some(effective_timeout.as_millis() as u64),
+        login: Some(login),
+    };
+    let execve_wrapper =
+        shell_execve_wrapper().map_err(|err| ToolError::Rejected(format!("{err}")))?;
+
+    // Note that Stopwatch starts immediately upon creation, so currently we try
+    // to minimize the time between creating the Stopwatch and starting the
+    // escalation server.
+    let stopwatch = Stopwatch::new(effective_timeout);
+    let cancel_token = stopwatch.cancellation_token();
+    let escalation_policy = CoreShellActionProvider {
+        policy: Arc::clone(&exec_policy),
+        session: Arc::clone(&ctx.session),
+        turn: Arc::clone(&ctx.turn),
+        call_id: ctx.call_id.clone(),
+        approval_policy: ctx.turn.approval_policy.value(),
+        sandbox_policy: attempt.policy.clone(),
+        sandbox_permissions: req.sandbox_permissions,
+        stopwatch: stopwatch.clone(),
+    };
+
+    let escalate_server =
+        EscalateServer::new(shell_zsh_path.clone(), execve_wrapper, escalation_policy);
+
+    let exec_result = escalate_server
+        .exec(exec_params, cancel_token, &command_executor)
+        .await
+        .map_err(|err| ToolError::Rejected(err.to_string()))?;
 
     map_exec_result(attempt.sandbox, exec_result).map(Some)
 }
@@ -143,6 +151,7 @@ struct CoreShellActionProvider {
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
     sandbox_permissions: SandboxPermissions,
+    stopwatch: Stopwatch,
 }
 
 impl CoreShellActionProvider {
@@ -186,13 +195,12 @@ impl CoreShellActionProvider {
 }
 
 #[async_trait::async_trait]
-impl ShellActionProvider for CoreShellActionProvider {
+impl EscalationPolicy for CoreShellActionProvider {
     async fn determine_action(
         &self,
         file: &Path,
         argv: &[String],
         workdir: &Path,
-        stopwatch: &Stopwatch,
     ) -> anyhow::Result<EscalateAction> {
         let command = std::iter::once(file.to_string_lossy().to_string())
             .chain(argv.iter().cloned())
@@ -240,7 +248,7 @@ impl ShellActionProvider for CoreShellActionProvider {
                         reason: Some("Execution forbidden by policy".to_string()),
                     }
                 } else {
-                    match self.prompt(&command, workdir, stopwatch).await? {
+                    match self.prompt(&command, workdir, &self.stopwatch).await? {
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                         | ReviewDecision::ApprovedForSession => {
