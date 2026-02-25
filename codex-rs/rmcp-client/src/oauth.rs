@@ -287,6 +287,7 @@ enum GuardedRefreshOutcome {
     ReloadedChanged(StoredOAuthTokens),
     ReloadedNoChange,
     MissingOrInvalid,
+    ReloadFailed,
 }
 
 impl OAuthPersistor {
@@ -401,6 +402,7 @@ impl OAuthPersistor {
                 self.persist_if_needed().await
             }
             GuardedRefreshOutcome::MissingOrInvalid => self.apply_runtime_credentials(None).await,
+            GuardedRefreshOutcome::ReloadFailed => Ok(()),
         }
     }
 
@@ -416,22 +418,15 @@ impl OAuthPersistor {
             return GuardedRefreshOutcome::NoAction;
         }
 
-        let persisted_credentials = match load_oauth_tokens(
+        guarded_refresh_outcome_from_load_result(
+            cached_credentials,
+            load_oauth_tokens(
+                &self.inner.server_name,
+                &self.inner.url,
+                self.inner.store_mode,
+            ),
             &self.inner.server_name,
-            &self.inner.url,
-            self.inner.store_mode,
-        ) {
-            Ok(credentials) => credentials,
-            Err(error) => {
-                warn!(
-                    "failed to reload OAuth tokens for server {}: {error}",
-                    self.inner.server_name
-                );
-                return GuardedRefreshOutcome::MissingOrInvalid;
-            }
-        };
-
-        determine_guarded_refresh_outcome(cached_credentials, persisted_credentials)
+        )
     }
 
     async fn apply_runtime_credentials(
@@ -470,6 +465,22 @@ impl OAuthPersistor {
         *last_credentials = credentials;
         Ok(())
     }
+}
+
+fn guarded_refresh_outcome_from_load_result(
+    cached_credentials: &StoredOAuthTokens,
+    persisted_credentials: Result<Option<StoredOAuthTokens>>,
+    server_name: &str,
+) -> GuardedRefreshOutcome {
+    let persisted_credentials = match persisted_credentials {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            warn!("failed to reload OAuth tokens for server {server_name}: {error}");
+            return GuardedRefreshOutcome::ReloadFailed;
+        }
+    };
+
+    determine_guarded_refresh_outcome(cached_credentials, persisted_credentials)
 }
 
 const FALLBACK_FILENAME: &str = ".credentials.json";
@@ -1047,6 +1058,20 @@ mod tests {
         assert_eq!(
             super::determine_guarded_refresh_outcome(&sample_tokens(), None),
             super::GuardedRefreshOutcome::MissingOrInvalid,
+        );
+    }
+
+    #[test]
+    fn guarded_refresh_outcome_keeps_state_recoverable_when_reload_fails() {
+        let error = anyhow::anyhow!("transient read failure");
+
+        assert_eq!(
+            super::guarded_refresh_outcome_from_load_result(
+                &sample_tokens(),
+                Err(error),
+                "test-server",
+            ),
+            super::GuardedRefreshOutcome::ReloadFailed,
         );
     }
 
