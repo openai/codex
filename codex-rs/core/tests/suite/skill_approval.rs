@@ -2,6 +2,8 @@
 
 use anyhow::Result;
 use codex_core::features::Feature;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -43,6 +45,13 @@ description: {name} skill
     let script_path = scripts_dir.join("run.py");
     fs::write(&script_path, script_body)?;
     Ok(script_path)
+}
+
+fn write_skill_metadata(home: &Path, name: &str, contents: &str) -> Result<()> {
+    let metadata_dir = home.join("skills").join(name).join("agents");
+    fs::create_dir_all(&metadata_dir)?;
+    fs::write(metadata_dir.join("openai.yaml"), contents)?;
+    Ok(())
 }
 
 fn shell_command_arguments(command: &str) -> Result<String> {
@@ -441,6 +450,19 @@ async fn shell_zsh_fork_prompts_for_skill_script_execution() -> Result<()> {
     let mut builder = test_codex()
         .with_pre_build_hook(|home| {
             write_skill_with_shell_script(home, "mbolin-test-skill", "hello-mbolin.sh").unwrap();
+            write_skill_metadata(
+                home,
+                "mbolin-test-skill",
+                r#"
+permissions:
+  file_system:
+    read:
+      - "./data"
+    write:
+      - "./output"
+"#,
+            )
+            .unwrap();
         })
         .with_config(move |config| {
             config.features.enable(Feature::ShellTool);
@@ -493,6 +515,16 @@ async fn shell_zsh_fork_prompts_for_skill_script_execution() -> Result<()> {
     };
     assert_eq!(approval.call_id, tool_call_id);
     assert_eq!(approval.command, vec![script_path_str.clone()]);
+    assert_eq!(
+        approval.additional_permissions,
+        Some(PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![PathBuf::from("./data")]),
+                write: Some(vec![PathBuf::from("./output")]),
+            }),
+            ..Default::default()
+        })
+    );
 
     test.codex
         .submit(Op::ExecApproval {

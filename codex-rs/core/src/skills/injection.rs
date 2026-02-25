@@ -482,6 +482,7 @@ mod tests {
             interface: None,
             dependencies: None,
             policy: None,
+            permission_profile: None,
             permissions: None,
             path_to_skills_md: PathBuf::from(path),
             scope: codex_protocol::protocol::SkillScope::User,

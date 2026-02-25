@@ -17,6 +17,7 @@ use codex_execpolicy::Decision;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::RejectConfig;
@@ -179,6 +180,7 @@ impl CoreShellActionProvider {
         argv: &[String],
         workdir: &AbsolutePathBuf,
         stopwatch: &Stopwatch,
+        additional_permissions: Option<PermissionProfile>,
     ) -> anyhow::Result<ReviewDecision> {
         let command = join_program_and_argv(program, argv);
         let workdir = workdir.to_path_buf();
@@ -198,7 +200,7 @@ impl CoreShellActionProvider {
                         None,
                         None,
                         None,
-                        None,
+                        additional_permissions,
                     )
                     .await
             })
@@ -238,6 +240,7 @@ impl CoreShellActionProvider {
         program: &AbsolutePathBuf,
         argv: &[String],
         workdir: &AbsolutePathBuf,
+        additional_permissions: Option<PermissionProfile>,
     ) -> anyhow::Result<EscalateAction> {
         let action = match decision {
             Decision::Forbidden => EscalateAction::Deny {
@@ -253,7 +256,16 @@ impl CoreShellActionProvider {
                         reason: Some("Execution forbidden by policy".to_string()),
                     }
                 } else {
-                    match self.prompt(program, argv, workdir, &self.stopwatch).await? {
+                    match self
+                        .prompt(
+                            program,
+                            argv,
+                            workdir,
+                            &self.stopwatch,
+                            additional_permissions,
+                        )
+                        .await?
+                    {
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                         | ReviewDecision::ApprovedForSession => {
@@ -326,7 +338,14 @@ impl EscalationPolicy for CoreShellActionProvider {
             // skill matches.
             let needs_escalation = true;
             return self
-                .process_decision(Decision::Prompt, needs_escalation, program, argv, workdir)
+                .process_decision(
+                    Decision::Prompt,
+                    needs_escalation,
+                    program,
+                    argv,
+                    workdir,
+                    skill.permission_profile.clone(),
+                )
                 .await;
         }
 
@@ -366,6 +385,7 @@ impl EscalationPolicy for CoreShellActionProvider {
             program,
             argv,
             workdir,
+            None,
         )
         .await
     }
