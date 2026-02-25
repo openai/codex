@@ -1206,7 +1206,7 @@ impl Session {
         let originator = crate::default_client::originator().value;
         let terminal_type = terminal::user_agent();
         let session_model = session_configuration.collaboration_mode.model().to_string();
-        let otel_manager = OtelManager::new(
+        let mut otel_manager = OtelManager::new(
             conversation_id,
             session_model.as_str(),
             session_model.as_str(),
@@ -1218,6 +1218,9 @@ impl Session {
             terminal_type.clone(),
             session_configuration.session_source.clone(),
         );
+        if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
+            otel_manager = otel_manager.with_metrics_service_name(service_name);
+        }
         let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
             conversation_id: Some(conversation_id.to_string()),
             app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
