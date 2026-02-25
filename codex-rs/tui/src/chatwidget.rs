@@ -1148,7 +1148,8 @@ impl ChatWidget {
         );
         let default_model = self.current_model().to_string();
         let default_effort = self.effective_reasoning_effort();
-        if let Some(saved_pair) = self.config.tui_model_toggle_pair.clone()
+        if self.recent_model_history.is_empty()
+            && let Some(saved_pair) = self.config.tui_model_toggle_pair.clone()
             && !default_model.is_empty()
         {
             let mut persisted: Vec<ModelHistoryEntry> = Vec::with_capacity(2);
@@ -1187,7 +1188,6 @@ impl ChatWidget {
                     (current, other)
                 };
 
-                self.recent_model_history.clear();
                 self.recent_model_history.push_back(current);
                 if let Some(other) = other
                     && self

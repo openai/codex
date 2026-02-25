@@ -6238,6 +6238,63 @@ async fn session_configured_replaces_current_when_default_not_in_persisted_pair(
 }
 
 #[tokio::test]
+async fn session_configured_does_not_restore_stale_startup_toggle_pair() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let startup_model = chat.current_model().to_string();
+    chat.config.tui_model_toggle_pair = Some(vec![
+        ModelTogglePairEntry {
+            model: "o3".to_string(),
+            effort: Some(ReasoningEffortConfig::High),
+        },
+        ModelTogglePairEntry {
+            model: startup_model.clone(),
+            effort: Some(ReasoningEffortConfig::Low),
+        },
+    ]);
+
+    let session_configured = |model: &str| codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: model.to_string(),
+        model_provider_id: "openai".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/tmp"),
+        reasoning_effort: Some(ReasoningEffortConfig::Medium),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+
+    chat.on_session_configured(session_configured(&startup_model));
+    chat.set_model("model-c");
+    chat.set_model("model-d");
+
+    let expected_live_history = vec![
+        ModelHistoryEntry {
+            model: "model-d".to_string(),
+            effort: Some(ReasoningEffortConfig::Medium),
+        },
+        ModelHistoryEntry {
+            model: "model-c".to_string(),
+            effort: Some(ReasoningEffortConfig::Medium),
+        },
+    ];
+    let before_second_session_configured: Vec<ModelHistoryEntry> =
+        chat.recent_model_history.iter().cloned().collect();
+    assert_eq!(before_second_session_configured, expected_live_history);
+
+    chat.on_session_configured(session_configured("model-d"));
+
+    let after_second_session_configured: Vec<ModelHistoryEntry> =
+        chat.recent_model_history.iter().cloned().collect();
+    assert_eq!(after_second_session_configured, expected_live_history);
+}
+
+#[tokio::test]
 async fn feedback_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
