@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "RealtimeConversationAudioChunk": {
-      "description": "EXPERIMENTAL - realtime conversation audio chunk.",
+    "ThreadRealtimeAudioChunk": {
+      "description": "EXPERIMENTAL - thread realtime audio chunk.",
       "properties": {
         "data": {
           "type": "string"
@@ -34,10 +34,10 @@
       "type": "object"
     }
   },
-  "description": "EXPERIMENTAL - streamed output audio emitted by the realtime backend.",
+  "description": "EXPERIMENTAL - streamed output audio emitted by thread realtime.",
   "properties": {
     "audio": {
-      "$ref": "#/definitions/RealtimeConversationAudioChunk"
+      "$ref": "#/definitions/ThreadRealtimeAudioChunk"
     },
     "threadId": {
       "type": "string"
@@ -47,6 +47,6 @@
     "audio",
     "threadId"
   ],
-  "title": "RealtimeConversationOutputAudioDeltaNotification",
+  "title": "ThreadRealtimeOutputAudioDeltaNotification",
   "type": "object"
 }

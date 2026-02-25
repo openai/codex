@@ -9,8 +9,8 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MockExperimentalMethodParams;
-use codex_app_server_protocol::RealtimeConversationStartParams;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadRealtimeStartParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use pretty_assertions::assert_eq;
@@ -70,7 +70,7 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
     };
 
     let request_id = mcp
-        .send_realtime_conversation_start_request(RealtimeConversationStartParams {
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: "thr_123".to_string(),
             prompt: "hello".to_string(),
             session_id: None,
@@ -81,7 +81,7 @@ async fn realtime_conversation_start_requires_experimental_api_capability() -> R
         mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    assert_experimental_capability_error(error, "realtimeConversation/start");
+    assert_experimental_capability_error(error, "thread/realtime/start");
     Ok(())
 }
 

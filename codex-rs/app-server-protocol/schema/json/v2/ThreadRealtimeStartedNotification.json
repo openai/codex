@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "description": "EXPERIMENTAL - emitted when the realtime transport closes.",
+  "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
   "properties": {
-    "reason": {
+    "sessionId": {
       "type": [
         "string",
         "null"
@@ -15,6 +15,6 @@
   "required": [
     "threadId"
   ],
-  "title": "RealtimeConversationClosedNotification",
+  "title": "ThreadRealtimeStartedNotification",
   "type": "object"
 }

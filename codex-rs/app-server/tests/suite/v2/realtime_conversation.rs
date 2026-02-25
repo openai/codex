@@ -5,21 +5,21 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RealtimeConversationAudioAppendParams;
-use codex_app_server_protocol::RealtimeConversationAudioAppendResponse;
-use codex_app_server_protocol::RealtimeConversationAudioChunk;
-use codex_app_server_protocol::RealtimeConversationClosedNotification;
-use codex_app_server_protocol::RealtimeConversationErrorNotification;
-use codex_app_server_protocol::RealtimeConversationItemAddedNotification;
-use codex_app_server_protocol::RealtimeConversationOutputAudioDeltaNotification;
-use codex_app_server_protocol::RealtimeConversationStartParams;
-use codex_app_server_protocol::RealtimeConversationStartResponse;
-use codex_app_server_protocol::RealtimeConversationStartedNotification;
-use codex_app_server_protocol::RealtimeConversationStopParams;
-use codex_app_server_protocol::RealtimeConversationStopResponse;
-use codex_app_server_protocol::RealtimeConversationTextAppendParams;
-use codex_app_server_protocol::RealtimeConversationTextAppendResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
+use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
+use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
+use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
+use codex_app_server_protocol::ThreadRealtimeAudioChunk;
+use codex_app_server_protocol::ThreadRealtimeClosedNotification;
+use codex_app_server_protocol::ThreadRealtimeErrorNotification;
+use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
+use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeStartParams;
+use codex_app_server_protocol::ThreadRealtimeStartResponse;
+use codex_app_server_protocol::ThreadRealtimeStartedNotification;
+use codex_app_server_protocol::ThreadRealtimeStopParams;
+use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_core::features::FEATURES;
@@ -96,7 +96,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
 
     let start_request_id = mcp
-        .send_realtime_conversation_start_request(RealtimeConversationStartParams {
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
             prompt: "backend prompt".to_string(),
             session_id: None,
@@ -107,20 +107,18 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
     )
     .await??;
-    let _: RealtimeConversationStartResponse = to_response(start_response)?;
+    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
 
-    let started = read_notification::<RealtimeConversationStartedNotification>(
-        &mut mcp,
-        "realtimeConversation/started",
-    )
-    .await?;
+    let started =
+        read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
+            .await?;
     assert_eq!(started.thread_id, thread_start.thread.id);
     assert!(started.session_id.is_some());
 
     let audio_append_request_id = mcp
-        .send_realtime_conversation_audio_append_request(RealtimeConversationAudioAppendParams {
+        .send_thread_realtime_append_audio_request(ThreadRealtimeAppendAudioParams {
             thread_id: started.thread_id.clone(),
-            audio: RealtimeConversationAudioChunk {
+            audio: ThreadRealtimeAudioChunk {
                 data: "BQYH".to_string(),
                 sample_rate: 24_000,
                 num_channels: 1,
@@ -133,10 +131,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(audio_append_request_id)),
     )
     .await??;
-    let _: RealtimeConversationAudioAppendResponse = to_response(audio_append_response)?;
+    let _: ThreadRealtimeAppendAudioResponse = to_response(audio_append_response)?;
 
     let text_append_request_id = mcp
-        .send_realtime_conversation_text_append_request(RealtimeConversationTextAppendParams {
+        .send_thread_realtime_append_text_request(ThreadRealtimeAppendTextParams {
             thread_id: started.thread_id.clone(),
             text: "hello".to_string(),
         })
@@ -146,11 +144,11 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(text_append_request_id)),
     )
     .await??;
-    let _: RealtimeConversationTextAppendResponse = to_response(text_append_response)?;
+    let _: ThreadRealtimeAppendTextResponse = to_response(text_append_response)?;
 
-    let output_audio = read_notification::<RealtimeConversationOutputAudioDeltaNotification>(
+    let output_audio = read_notification::<ThreadRealtimeOutputAudioDeltaNotification>(
         &mut mcp,
-        "realtimeConversation/outputAudio/delta",
+        "thread/realtime/outputAudio/delta",
     )
     .await?;
     assert_eq!(output_audio.audio.data, "AQID");
@@ -158,27 +156,23 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(output_audio.audio.num_channels, 1);
     assert_eq!(output_audio.audio.samples_per_channel, Some(512));
 
-    let item_added = read_notification::<RealtimeConversationItemAddedNotification>(
+    let item_added = read_notification::<ThreadRealtimeItemAddedNotification>(
         &mut mcp,
-        "realtimeConversation/itemAdded",
+        "thread/realtime/itemAdded",
     )
     .await?;
     assert_eq!(item_added.thread_id, output_audio.thread_id);
     assert_eq!(item_added.item["type"], json!("message"));
 
-    let realtime_error = read_notification::<RealtimeConversationErrorNotification>(
-        &mut mcp,
-        "realtimeConversation/error",
-    )
-    .await?;
+    let realtime_error =
+        read_notification::<ThreadRealtimeErrorNotification>(&mut mcp, "thread/realtime/error")
+            .await?;
     assert_eq!(realtime_error.thread_id, output_audio.thread_id);
     assert_eq!(realtime_error.message, "upstream boom");
 
-    let closed = read_notification::<RealtimeConversationClosedNotification>(
-        &mut mcp,
-        "realtimeConversation/closed",
-    )
-    .await?;
+    let closed =
+        read_notification::<ThreadRealtimeClosedNotification>(&mut mcp, "thread/realtime/closed")
+            .await?;
     assert_eq!(closed.thread_id, output_audio.thread_id);
     assert_eq!(closed.reason.as_deref(), Some("transport_closed"));
 
@@ -249,7 +243,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
 
     let start_request_id = mcp
-        .send_realtime_conversation_start_request(RealtimeConversationStartParams {
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
             prompt: "backend prompt".to_string(),
             session_id: None,
@@ -260,16 +254,14 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
     )
     .await??;
-    let _: RealtimeConversationStartResponse = to_response(start_response)?;
+    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
 
-    let started = read_notification::<RealtimeConversationStartedNotification>(
-        &mut mcp,
-        "realtimeConversation/started",
-    )
-    .await?;
+    let started =
+        read_notification::<ThreadRealtimeStartedNotification>(&mut mcp, "thread/realtime/started")
+            .await?;
 
     let stop_request_id = mcp
-        .send_realtime_conversation_stop_request(RealtimeConversationStopParams {
+        .send_thread_realtime_stop_request(ThreadRealtimeStopParams {
             thread_id: started.thread_id.clone(),
         })
         .await?;
@@ -278,13 +270,11 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(stop_request_id)),
     )
     .await??;
-    let _: RealtimeConversationStopResponse = to_response(stop_response)?;
+    let _: ThreadRealtimeStopResponse = to_response(stop_response)?;
 
-    let closed = read_notification::<RealtimeConversationClosedNotification>(
-        &mut mcp,
-        "realtimeConversation/closed",
-    )
-    .await?;
+    let closed =
+        read_notification::<ThreadRealtimeClosedNotification>(&mut mcp, "thread/realtime/closed")
+            .await?;
     assert_eq!(closed.thread_id, started.thread_id);
     assert!(matches!(
         closed.reason.as_deref(),
@@ -324,7 +314,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
     let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
 
     let start_request_id = mcp
-        .send_realtime_conversation_start_request(RealtimeConversationStartParams {
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
             prompt: "backend prompt".to_string(),
             session_id: None,

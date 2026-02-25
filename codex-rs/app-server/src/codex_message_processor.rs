@@ -96,14 +96,6 @@ use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::ProductSurface as ApiProductSurface;
-use codex_app_server_protocol::RealtimeConversationAudioAppendParams;
-use codex_app_server_protocol::RealtimeConversationAudioAppendResponse;
-use codex_app_server_protocol::RealtimeConversationStartParams;
-use codex_app_server_protocol::RealtimeConversationStartResponse;
-use codex_app_server_protocol::RealtimeConversationStopParams;
-use codex_app_server_protocol::RealtimeConversationStopResponse;
-use codex_app_server_protocol::RealtimeConversationTextAppendParams;
-use codex_app_server_protocol::RealtimeConversationTextAppendResponse;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::ResumeConversationParams;
@@ -146,6 +138,14 @@ use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
+use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
+use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
+use codex_app_server_protocol::ThreadRealtimeAppendTextResponse;
+use codex_app_server_protocol::ThreadRealtimeStartParams;
+use codex_app_server_protocol::ThreadRealtimeStartResponse;
+use codex_app_server_protocol::ThreadRealtimeStopParams;
+use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -636,26 +636,20 @@ impl CodexMessageProcessor {
                 self.turn_interrupt(to_connection_request_id(request_id), params)
                     .await;
             }
-            ClientRequest::RealtimeConversationStart { request_id, params } => {
-                self.realtime_conversation_start(to_connection_request_id(request_id), params)
+            ClientRequest::ThreadRealtimeStart { request_id, params } => {
+                self.thread_realtime_start(to_connection_request_id(request_id), params)
                     .await;
             }
-            ClientRequest::RealtimeConversationAudioAppend { request_id, params } => {
-                self.realtime_conversation_audio_append(
-                    to_connection_request_id(request_id),
-                    params,
-                )
-                .await;
+            ClientRequest::ThreadRealtimeAppendAudio { request_id, params } => {
+                self.thread_realtime_append_audio(to_connection_request_id(request_id), params)
+                    .await;
             }
-            ClientRequest::RealtimeConversationTextAppend { request_id, params } => {
-                self.realtime_conversation_text_append(
-                    to_connection_request_id(request_id),
-                    params,
-                )
-                .await;
+            ClientRequest::ThreadRealtimeAppendText { request_id, params } => {
+                self.thread_realtime_append_text(to_connection_request_id(request_id), params)
+                    .await;
             }
-            ClientRequest::RealtimeConversationStop { request_id, params } => {
-                self.realtime_conversation_stop(to_connection_request_id(request_id), params)
+            ClientRequest::ThreadRealtimeStop { request_id, params } => {
+                self.thread_realtime_stop(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ReviewStart { request_id, params } => {
@@ -5589,10 +5583,10 @@ impl CodexMessageProcessor {
         Some((thread_id, thread))
     }
 
-    async fn realtime_conversation_start(
+    async fn thread_realtime_start(
         &mut self,
         request_id: ConnectionRequestId,
-        params: RealtimeConversationStartParams,
+        params: ThreadRealtimeStartParams,
     ) {
         let Some((_, thread)) = self
             .prepare_realtime_conversation_thread(request_id.clone(), &params.thread_id)
@@ -5611,7 +5605,7 @@ impl CodexMessageProcessor {
         match submit {
             Ok(_) => {
                 self.outgoing
-                    .send_response(request_id, RealtimeConversationStartResponse::default())
+                    .send_response(request_id, ThreadRealtimeStartResponse::default())
                     .await;
             }
             Err(err) => {
@@ -5624,10 +5618,10 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn realtime_conversation_audio_append(
+    async fn thread_realtime_append_audio(
         &mut self,
         request_id: ConnectionRequestId,
-        params: RealtimeConversationAudioAppendParams,
+        params: ThreadRealtimeAppendAudioParams,
     ) {
         let Some((_, thread)) = self
             .prepare_realtime_conversation_thread(request_id.clone(), &params.thread_id)
@@ -5645,10 +5639,7 @@ impl CodexMessageProcessor {
         match submit {
             Ok(_) => {
                 self.outgoing
-                    .send_response(
-                        request_id,
-                        RealtimeConversationAudioAppendResponse::default(),
-                    )
+                    .send_response(request_id, ThreadRealtimeAppendAudioResponse::default())
                     .await;
             }
             Err(err) => {
@@ -5661,10 +5652,10 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn realtime_conversation_text_append(
+    async fn thread_realtime_append_text(
         &mut self,
         request_id: ConnectionRequestId,
-        params: RealtimeConversationTextAppendParams,
+        params: ThreadRealtimeAppendTextParams,
     ) {
         let Some((_, thread)) = self
             .prepare_realtime_conversation_thread(request_id.clone(), &params.thread_id)
@@ -5682,10 +5673,7 @@ impl CodexMessageProcessor {
         match submit {
             Ok(_) => {
                 self.outgoing
-                    .send_response(
-                        request_id,
-                        RealtimeConversationTextAppendResponse::default(),
-                    )
+                    .send_response(request_id, ThreadRealtimeAppendTextResponse::default())
                     .await;
             }
             Err(err) => {
@@ -5698,10 +5686,10 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn realtime_conversation_stop(
+    async fn thread_realtime_stop(
         &mut self,
         request_id: ConnectionRequestId,
-        params: RealtimeConversationStopParams,
+        params: ThreadRealtimeStopParams,
     ) {
         let Some((_, thread)) = self
             .prepare_realtime_conversation_thread(request_id.clone(), &params.thread_id)
@@ -5715,7 +5703,7 @@ impl CodexMessageProcessor {
         match submit {
             Ok(_) => {
                 self.outgoing
-                    .send_response(request_id, RealtimeConversationStopResponse::default())
+                    .send_response(request_id, ThreadRealtimeStopResponse::default())
                     .await;
             }
             Err(err) => {

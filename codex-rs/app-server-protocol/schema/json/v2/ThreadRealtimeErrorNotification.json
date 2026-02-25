@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "description": "EXPERIMENTAL - emitted when realtime conversation encounters an error.",
+  "description": "EXPERIMENTAL - emitted when thread realtime encounters an error.",
   "properties": {
     "message": {
       "type": "string"
@@ -13,6 +13,6 @@
     "message",
     "threadId"
   ],
-  "title": "RealtimeConversationErrorNotification",
+  "title": "ThreadRealtimeErrorNotification",
   "type": "object"
 }

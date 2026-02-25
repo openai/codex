@@ -135,10 +135,10 @@ Example with notification opt-out:
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 - `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
-- `realtimeConversation/start` — start a thread-scoped realtime conversation session (experimental); returns `{}` and streams `realtimeConversation/*` notifications.
-- `realtimeConversation/appendAudio` — append an input audio chunk to the active realtime conversation (experimental); returns `{}`.
-- `realtimeConversation/textAppend` — append text input to the active realtime conversation (experimental); returns `{}`.
-- `realtimeConversation/stop` — stop the active realtime conversation for the thread (experimental); returns `{}`.
+- `thread/realtime/start` — start a thread-scoped realtime session (experimental); returns `{}` and streams `thread/realtime/*` notifications.
+- `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
+- `thread/realtime/appendText` — append text input to the active realtime session (experimental); returns `{}`.
+- `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options and optional `upgrade` model ids.
@@ -557,7 +557,7 @@ Notes:
 
 Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `turn/*`, and `item/*` notifications.
 
-Realtime conversation uses a separate thread-scoped notification surface. `realtimeConversation/*` notifications are ephemeral transport events, not `ThreadItem`s, and are not returned by `thread/read`, `thread/resume`, or `thread/fork`.
+Thread realtime uses a separate thread-scoped notification surface. `thread/realtime/*` notifications are ephemeral transport events, not `ThreadItem`s, and are not returned by `thread/read`, `thread/resume`, or `thread/fork`.
 
 ### Notification opt-out
 
@@ -580,17 +580,17 @@ The fuzzy file search session API emits per-query notifications:
 - `fuzzyFileSearch/sessionUpdated` — `{ sessionId, query, files }` with the current matching files for the active query.
 - `fuzzyFileSearch/sessionCompleted` — `{ sessionId, query }` once indexing/matching for that query has completed.
 
-### Realtime conversation events (experimental)
+### Thread realtime events (experimental)
 
-The realtime conversation API emits thread-scoped notifications for session lifecycle and streaming media:
+The thread realtime API emits thread-scoped notifications for session lifecycle and streaming media:
 
-- `realtimeConversation/started` — `{ threadId, sessionId }` once realtime starts for the thread (experimental).
-- `realtimeConversation/itemAdded` — `{ threadId, item }` for non-audio realtime conversation items (experimental). `item` is forwarded as raw JSON while the upstream websocket item schema remains unstable.
-- `realtimeConversation/outputAudio/delta` — `{ threadId, audio }` for streamed output audio chunks (experimental). `audio` uses camelCase fields (`data`, `sampleRate`, `numChannels`, `samplesPerChannel`).
-- `realtimeConversation/error` — `{ threadId, message }` when realtime encounters a transport or backend error (experimental).
-- `realtimeConversation/closed` — `{ threadId, reason }` when the realtime transport closes (experimental).
+- `thread/realtime/started` — `{ threadId, sessionId }` once realtime starts for the thread (experimental).
+- `thread/realtime/itemAdded` — `{ threadId, item }` for non-audio realtime items (experimental). `item` is forwarded as raw JSON while the upstream websocket item schema remains unstable.
+- `thread/realtime/outputAudio/delta` — `{ threadId, audio }` for streamed output audio chunks (experimental). `audio` uses camelCase fields (`data`, `sampleRate`, `numChannels`, `samplesPerChannel`).
+- `thread/realtime/error` — `{ threadId, message }` when realtime encounters a transport or backend error (experimental).
+- `thread/realtime/closed` — `{ threadId, reason }` when the realtime transport closes (experimental).
 
-Because audio is intentionally separate from `ThreadItem`, clients can opt out of `realtimeConversation/outputAudio/delta` independently with `optOutNotificationMethods`.
+Because audio is intentionally separate from `ThreadItem`, clients can opt out of `thread/realtime/outputAudio/delta` independently with `optOutNotificationMethods`.
 
 ### Windows sandbox setup events
 

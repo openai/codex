@@ -51,11 +51,6 @@ use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAct
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
-use codex_app_server_protocol::RealtimeConversationClosedNotification;
-use codex_app_server_protocol::RealtimeConversationErrorNotification;
-use codex_app_server_protocol::RealtimeConversationItemAddedNotification;
-use codex_app_server_protocol::RealtimeConversationOutputAudioDeltaNotification;
-use codex_app_server_protocol::RealtimeConversationStartedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
@@ -67,6 +62,11 @@ use codex_app_server_protocol::SkillRequestApprovalResponse;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
+use codex_app_server_protocol::ThreadRealtimeClosedNotification;
+use codex_app_server_protocol::ThreadRealtimeErrorNotification;
+use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
+use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -181,12 +181,12 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::RealtimeConversationStarted(event) => {
             if let ApiVersion::V2 = api_version {
-                let notification = RealtimeConversationStartedNotification {
+                let notification = ThreadRealtimeStartedNotification {
                     thread_id: conversation_id.to_string(),
                     session_id: event.session_id,
                 };
                 outgoing
-                    .send_server_notification(ServerNotification::RealtimeConversationStarted(
+                    .send_server_notification(ServerNotification::ThreadRealtimeStarted(
                         notification,
                     ))
                     .await;
@@ -198,38 +198,36 @@ pub(crate) async fn apply_bespoke_event_handling(
                     RealtimeEvent::SessionCreated { .. } => {}
                     RealtimeEvent::SessionUpdated { .. } => {}
                     RealtimeEvent::AudioOut(audio) => {
-                        let notification = RealtimeConversationOutputAudioDeltaNotification {
+                        let notification = ThreadRealtimeOutputAudioDeltaNotification {
                             thread_id: conversation_id.to_string(),
                             audio: audio.into(),
                         };
                         outgoing
                             .send_server_notification(
-                                ServerNotification::RealtimeConversationOutputAudioDelta(
-                                    notification,
-                                ),
+                                ServerNotification::ThreadRealtimeOutputAudioDelta(notification),
                             )
                             .await;
                     }
                     RealtimeEvent::ConversationItemAdded(item) => {
-                        let notification = RealtimeConversationItemAddedNotification {
+                        let notification = ThreadRealtimeItemAddedNotification {
                             thread_id: conversation_id.to_string(),
                             item,
                         };
                         outgoing
-                            .send_server_notification(
-                                ServerNotification::RealtimeConversationItemAdded(notification),
-                            )
+                            .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                                notification,
+                            ))
                             .await;
                     }
                     RealtimeEvent::Error(message) => {
-                        let notification = RealtimeConversationErrorNotification {
+                        let notification = ThreadRealtimeErrorNotification {
                             thread_id: conversation_id.to_string(),
                             message,
                         };
                         outgoing
-                            .send_server_notification(
-                                ServerNotification::RealtimeConversationError(notification),
-                            )
+                            .send_server_notification(ServerNotification::ThreadRealtimeError(
+                                notification,
+                            ))
                             .await;
                     }
                 }
@@ -237,12 +235,12 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::RealtimeConversationClosed(event) => {
             if let ApiVersion::V2 = api_version {
-                let notification = RealtimeConversationClosedNotification {
+                let notification = ThreadRealtimeClosedNotification {
                     thread_id: conversation_id.to_string(),
                     reason: event.reason,
                 };
                 outgoing
-                    .send_server_notification(ServerNotification::RealtimeConversationClosed(
+                    .send_server_notification(ServerNotification::ThreadRealtimeClosed(
                         notification,
                     ))
                     .await;

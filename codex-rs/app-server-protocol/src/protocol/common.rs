@@ -269,25 +269,25 @@ client_request_definitions! {
         params: v2::TurnInterruptParams,
         response: v2::TurnInterruptResponse,
     },
-    #[experimental("realtimeConversation/start")]
-    RealtimeConversationStart => "realtimeConversation/start" {
-        params: v2::RealtimeConversationStartParams,
-        response: v2::RealtimeConversationStartResponse,
+    #[experimental("thread/realtime/start")]
+    ThreadRealtimeStart => "thread/realtime/start" {
+        params: v2::ThreadRealtimeStartParams,
+        response: v2::ThreadRealtimeStartResponse,
     },
-    #[experimental("realtimeConversation/appendAudio")]
-    RealtimeConversationAudioAppend => "realtimeConversation/appendAudio" {
-        params: v2::RealtimeConversationAudioAppendParams,
-        response: v2::RealtimeConversationAudioAppendResponse,
+    #[experimental("thread/realtime/appendAudio")]
+    ThreadRealtimeAppendAudio => "thread/realtime/appendAudio" {
+        params: v2::ThreadRealtimeAppendAudioParams,
+        response: v2::ThreadRealtimeAppendAudioResponse,
     },
-    #[experimental("realtimeConversation/textAppend")]
-    RealtimeConversationTextAppend => "realtimeConversation/textAppend" {
-        params: v2::RealtimeConversationTextAppendParams,
-        response: v2::RealtimeConversationTextAppendResponse,
+    #[experimental("thread/realtime/appendText")]
+    ThreadRealtimeAppendText => "thread/realtime/appendText" {
+        params: v2::ThreadRealtimeAppendTextParams,
+        response: v2::ThreadRealtimeAppendTextResponse,
     },
-    #[experimental("realtimeConversation/stop")]
-    RealtimeConversationStop => "realtimeConversation/stop" {
-        params: v2::RealtimeConversationStopParams,
-        response: v2::RealtimeConversationStopResponse,
+    #[experimental("thread/realtime/stop")]
+    ThreadRealtimeStop => "thread/realtime/stop" {
+        params: v2::ThreadRealtimeStopParams,
+        response: v2::ThreadRealtimeStopResponse,
     },
     ReviewStart => "review/start" {
         params: v2::ReviewStartParams,
@@ -853,16 +853,16 @@ server_notification_definitions! {
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
     FuzzyFileSearchSessionCompleted => "fuzzyFileSearch/sessionCompleted" (FuzzyFileSearchSessionCompletedNotification),
-    #[experimental("realtimeConversation/started")]
-    RealtimeConversationStarted => "realtimeConversation/started" (v2::RealtimeConversationStartedNotification),
-    #[experimental("realtimeConversation/itemAdded")]
-    RealtimeConversationItemAdded => "realtimeConversation/itemAdded" (v2::RealtimeConversationItemAddedNotification),
-    #[experimental("realtimeConversation/outputAudio/delta")]
-    RealtimeConversationOutputAudioDelta => "realtimeConversation/outputAudio/delta" (v2::RealtimeConversationOutputAudioDeltaNotification),
-    #[experimental("realtimeConversation/error")]
-    RealtimeConversationError => "realtimeConversation/error" (v2::RealtimeConversationErrorNotification),
-    #[experimental("realtimeConversation/closed")]
-    RealtimeConversationClosed => "realtimeConversation/closed" (v2::RealtimeConversationClosedNotification),
+    #[experimental("thread/realtime/started")]
+    ThreadRealtimeStarted => "thread/realtime/started" (v2::ThreadRealtimeStartedNotification),
+    #[experimental("thread/realtime/itemAdded")]
+    ThreadRealtimeItemAdded => "thread/realtime/itemAdded" (v2::ThreadRealtimeItemAddedNotification),
+    #[experimental("thread/realtime/outputAudio/delta")]
+    ThreadRealtimeOutputAudioDelta => "thread/realtime/outputAudio/delta" (v2::ThreadRealtimeOutputAudioDeltaNotification),
+    #[experimental("thread/realtime/error")]
+    ThreadRealtimeError => "thread/realtime/error" (v2::ThreadRealtimeErrorNotification),
+    #[experimental("thread/realtime/closed")]
+    ThreadRealtimeClosed => "thread/realtime/closed" (v2::ThreadRealtimeClosedNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
@@ -1391,10 +1391,10 @@ mod tests {
     }
 
     #[test]
-    fn serialize_realtime_conversation_start() -> Result<()> {
-        let request = ClientRequest::RealtimeConversationStart {
+    fn serialize_thread_realtime_start() -> Result<()> {
+        let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(9),
-            params: v2::RealtimeConversationStartParams {
+            params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
                 prompt: "You are on a call".to_string(),
                 session_id: Some("sess_456".to_string()),
@@ -1402,7 +1402,7 @@ mod tests {
         };
         assert_eq!(
             json!({
-                "method": "realtimeConversation/start",
+                "method": "thread/realtime/start",
                 "id": 9,
                 "params": {
                     "threadId": "thr_123",
@@ -1438,11 +1438,11 @@ mod tests {
     }
 
     #[test]
-    fn serialize_realtime_conversation_output_audio_delta_notification() -> Result<()> {
-        let notification = ServerNotification::RealtimeConversationOutputAudioDelta(
-            v2::RealtimeConversationOutputAudioDeltaNotification {
+    fn serialize_thread_realtime_output_audio_delta_notification() -> Result<()> {
+        let notification = ServerNotification::ThreadRealtimeOutputAudioDelta(
+            v2::ThreadRealtimeOutputAudioDeltaNotification {
                 thread_id: "thr_123".to_string(),
-                audio: v2::RealtimeConversationAudioChunk {
+                audio: v2::ThreadRealtimeAudioChunk {
                     data: "AQID".to_string(),
                     sample_rate: 24_000,
                     num_channels: 1,
@@ -1452,7 +1452,7 @@ mod tests {
         );
         assert_eq!(
             json!({
-                "method": "realtimeConversation/outputAudio/delta",
+                "method": "thread/realtime/outputAudio/delta",
                 "params": {
                     "threadId": "thr_123",
                     "audio": {
@@ -1478,36 +1478,35 @@ mod tests {
         assert_eq!(reason, Some("mock/experimentalMethod"));
     }
     #[test]
-    fn realtime_conversation_start_is_marked_experimental() {
-        let request = ClientRequest::RealtimeConversationStart {
+    fn thread_realtime_start_is_marked_experimental() {
+        let request = ClientRequest::ThreadRealtimeStart {
             request_id: RequestId::Integer(1),
-            params: v2::RealtimeConversationStartParams {
+            params: v2::ThreadRealtimeStartParams {
                 thread_id: "thr_123".to_string(),
                 prompt: "You are on a call".to_string(),
                 session_id: None,
             },
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
-        assert_eq!(reason, Some("realtimeConversation/start"));
+        assert_eq!(reason, Some("thread/realtime/start"));
     }
     #[test]
-    fn realtime_conversation_started_notification_is_marked_experimental() {
-        let notification = ServerNotification::RealtimeConversationStarted(
-            v2::RealtimeConversationStartedNotification {
+    fn thread_realtime_started_notification_is_marked_experimental() {
+        let notification =
+            ServerNotification::ThreadRealtimeStarted(v2::ThreadRealtimeStartedNotification {
                 thread_id: "thr_123".to_string(),
                 session_id: Some("sess_456".to_string()),
-            },
-        );
+            });
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);
-        assert_eq!(reason, Some("realtimeConversation/started"));
+        assert_eq!(reason, Some("thread/realtime/started"));
     }
 
     #[test]
-    fn realtime_conversation_output_audio_delta_notification_is_marked_experimental() {
-        let notification = ServerNotification::RealtimeConversationOutputAudioDelta(
-            v2::RealtimeConversationOutputAudioDeltaNotification {
+    fn thread_realtime_output_audio_delta_notification_is_marked_experimental() {
+        let notification = ServerNotification::ThreadRealtimeOutputAudioDelta(
+            v2::ThreadRealtimeOutputAudioDeltaNotification {
                 thread_id: "thr_123".to_string(),
-                audio: v2::RealtimeConversationAudioChunk {
+                audio: v2::ThreadRealtimeAudioChunk {
                     data: "AQID".to_string(),
                     sample_rate: 24_000,
                     num_channels: 1,
@@ -1516,7 +1515,7 @@ mod tests {
             },
         );
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);
-        assert_eq!(reason, Some("realtimeConversation/outputAudio/delta"));
+        assert_eq!(reason, Some("thread/realtime/outputAudio/delta"));
     }
 
     #[test]
