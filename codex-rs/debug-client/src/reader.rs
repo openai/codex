@@ -44,7 +44,7 @@ pub fn start_reader(
         let command_decision = if auto_approve {
             CommandExecutionApprovalDecision::Accept
         } else {
-            CommandExecutionApprovalDecision::Decline
+            CommandExecutionApprovalDecision::Cancel
         };
         let file_decision = if auto_approve {
             FileChangeApprovalDecision::Accept

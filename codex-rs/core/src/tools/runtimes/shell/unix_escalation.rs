@@ -194,6 +194,7 @@ impl CoreShellActionProvider {
         let approval_id = Some(Uuid::new_v4().to_string());
         Ok(stopwatch
             .pause_for(async move {
+                let available_decisions = None;
                 session
                     .request_command_approval(
                         &turn,
@@ -205,6 +206,7 @@ impl CoreShellActionProvider {
                         None,
                         None,
                         additional_permissions,
+                        available_decisions,
                     )
                     .await
             })

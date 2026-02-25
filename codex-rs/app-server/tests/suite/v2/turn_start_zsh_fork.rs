@@ -277,7 +277,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     else {
         unreachable!("loop ensures we break on command execution items");
     };
-    assert_eq!(id, "call-zsh-fork-decline");
+    assert_eq!(id, "call-zsh-fork-cancel");
     assert_eq!(status, CommandExecutionStatus::Declined);
     assert!(exit_code.is_none());
     assert!(aggregated_output.is_none());
@@ -403,7 +403,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
     let ThreadItem::CommandExecution { id, status, .. } = completed_command_execution else {
         unreachable!("loop ensures we break on command execution items");
     };
-    assert_eq!(id, "call-zsh-fork-cancel");
+    assert_eq!(id, "call-zsh-fork-decline");
     assert_eq!(status, CommandExecutionStatus::Declined);
 
     let completed_notif = timeout(
