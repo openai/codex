@@ -67,52 +67,29 @@ use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 #[cfg(test)]
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 
-/// The replay result produced by [`build_thread_history_from_rollout_items`].
-///
-/// `turns` contains the reconstructed app-server view of the rollout. `has_synthetic_turn_ids`
-/// tells callers whether any of those turns only have replay-generated ids, which means those ids
-/// are not stable enough to reuse as external anchors across repeated reads.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ThreadHistoryBuildResult {
-    /// Reconstructed turns in replay order.
-    pub turns: Vec<Turn>,
-    /// True when any turn id had to be synthesized during replay because the
-    /// rollout history lacked explicit turn lifecycle events.
-    pub has_synthetic_turn_ids: bool,
-}
-
-/// Convert persisted [`RolloutItem`] entries into a sequence of [`Turn`] values and
-/// annotate whether any turn ids were synthesized during replay.
+/// Convert persisted [`RolloutItem`] entries into a sequence of [`Turn`] values.
 ///
 /// When available, this uses `TurnContext.turn_id` as the canonical turn id so
-/// resumed/rebuilt thread history preserves the original turn identifiers. Callers that need a
-/// stable external anchor should prefer this over [`build_turns_from_rollout_items`]; otherwise it
-/// is easy to treat a replay-generated id as durable and later fail to find the same turn again.
-pub fn build_thread_history_from_rollout_items(items: &[RolloutItem]) -> ThreadHistoryBuildResult {
+/// resumed/rebuilt thread history preserves the original turn identifiers. Callers that also need
+/// to distinguish between stable and replay-synthesized turn ids should drive
+/// [`ThreadHistoryBuilder`] directly and inspect [`ThreadHistoryBuilder::has_synthetic_turn_ids`]
+/// before consuming the final turn list.
+pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
     let mut builder = ThreadHistoryBuilder::new();
     for item in items {
         builder.handle_rollout_item(item);
     }
-    builder.finish_result()
-}
-
-/// Convert persisted [`RolloutItem`] entries into a sequence of [`Turn`] values.
-///
-/// When available, this uses `TurnContext.turn_id` as the canonical turn id so
-/// resumed/rebuilt thread history preserves the original turn identifiers. Use
-/// [`build_thread_history_from_rollout_items`] instead when the caller must distinguish between
-/// stable and replay-synthesized turn ids.
-pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
-    build_thread_history_from_rollout_items(items).turns
+    builder.finish()
 }
 
 /// Stateful reducer that groups rollout lifecycle items into app-server turns.
 ///
 /// The builder owns the in-progress turn boundary while replay is in flight, then emits the
-/// finalized `Turn` list once all items have been applied. It intentionally exposes both replay
-/// metadata and an active-turn snapshot so app-server can share the same reduction rules for
-/// stored history and live notifications. Reusing a builder across unrelated transcripts without
-/// calling [`Self::reset`] can leak late events from one transcript into the next.
+/// finalized `Turn` list once all items have been applied. It also tracks whether replay had to
+/// synthesize any turn ids so app-server can share the same reduction rules for stored history
+/// and live notifications without exposing that metadata in every convenience return type.
+/// Reusing a builder across unrelated transcripts without calling [`Self::reset`] can leak late
+/// events from one transcript into the next.
 pub struct ThreadHistoryBuilder {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
@@ -147,25 +124,19 @@ impl ThreadHistoryBuilder {
     }
 
     /// Finalize replay and return only the reconstructed turns.
-    ///
-    /// This is the convenience API for callers that only need the `Turn` list. If a caller needs
-    /// to know whether any ids were synthesized, using this method would hide that fact and could
-    /// lead to invalid assumptions about turn-id stability.
     pub fn finish(self) -> Vec<Turn> {
-        self.finish_result().turns
+        let mut this = self;
+        this.finish_current_turn();
+        this.turns
     }
 
-    /// Finalize replay and return both the turns and replay metadata.
+    /// Return whether replay had to synthesize any turn ids so far.
     ///
-    /// This consumes the builder, closes any active turn, and reports whether replay had to mint
-    /// any replacement ids. Consumers that derive new API contracts from turn ids, such as
-    /// turn-based forking, should use this method so they can reject legacy rollouts explicitly.
-    pub fn finish_result(mut self) -> ThreadHistoryBuildResult {
-        self.finish_current_turn();
-        ThreadHistoryBuildResult {
-            turns: self.turns,
-            has_synthetic_turn_ids: self.has_synthetic_turn_ids,
-        }
+    /// This becomes true when replay encounters legacy history without explicit turn lifecycle
+    /// events and must mint replacement ids while rebuilding turns. Callers that want to use turn
+    /// ids as stable anchors should check this before trusting replayed ids.
+    pub fn has_synthetic_turn_ids(&self) -> bool {
+        self.has_synthetic_turn_ids
     }
 
     /// Return the current turn view without consuming the builder.
@@ -1309,9 +1280,13 @@ mod tests {
             })),
         ];
 
-        let result = build_thread_history_from_rollout_items(&items);
-        assert_eq!(result.turns.len(), 1);
-        assert_eq!(result.has_synthetic_turn_ids, true);
+        let mut builder = ThreadHistoryBuilder::new();
+        for item in &items {
+            builder.handle_rollout_item(item);
+        }
+
+        assert!(builder.has_synthetic_turn_ids());
+        assert_eq!(builder.finish().len(), 1);
     }
 
     #[test]
@@ -1339,10 +1314,15 @@ mod tests {
             })),
         ];
 
-        let result = build_thread_history_from_rollout_items(&items);
-        assert_eq!(result.turns.len(), 1);
-        assert_eq!(result.turns[0].id, turn_id);
-        assert_eq!(result.has_synthetic_turn_ids, false);
+        let mut builder = ThreadHistoryBuilder::new();
+        for item in &items {
+            builder.handle_rollout_item(item);
+        }
+
+        assert!(!builder.has_synthetic_turn_ids());
+        let turns = builder.finish();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].id, turn_id);
     }
 
     #[test]

@@ -131,6 +131,7 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -175,7 +176,6 @@ use codex_app_server_protocol::WindowsSandboxSetupCompletedNotification;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
-use codex_app_server_protocol::build_thread_history_from_rollout_items;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
@@ -6970,24 +6970,24 @@ fn resolve_thread_fork_history_from_anchor(
     rollout_items: &[RolloutItem],
     fork_after_turn_id: &str,
 ) -> Result<Vec<RolloutItem>, String> {
-    let history = build_thread_history_from_rollout_items(rollout_items);
-    if history.has_synthetic_turn_ids {
+    let mut history_builder = ThreadHistoryBuilder::new();
+    for item in rollout_items {
+        history_builder.handle_rollout_item(item);
+    }
+    if history_builder.has_synthetic_turn_ids() {
         return Err(
             "turn-based forking is not supported for legacy thread history; use full thread/fork"
                 .to_string(),
         );
     }
+    let turns = history_builder.finish();
 
-    let Some(target_turn_idx) = history
-        .turns
-        .iter()
-        .position(|turn| turn.id == fork_after_turn_id)
-    else {
+    let Some(target_turn_idx) = turns.iter().position(|turn| turn.id == fork_after_turn_id) else {
         return Err(format!(
             "fork turn not found in source thread history: {fork_after_turn_id}"
         ));
     };
-    let target_turn = &history.turns[target_turn_idx];
+    let target_turn = &turns[target_turn_idx];
     let has_user_message = target_turn
         .items
         .iter()
@@ -7007,7 +7007,7 @@ fn resolve_thread_fork_history_from_anchor(
         return Err("fork turn must contain an agent message".to_string());
     }
 
-    let Some(next_turn) = history.turns.get(target_turn_idx.saturating_add(1)) else {
+    let Some(next_turn) = turns.get(target_turn_idx.saturating_add(1)) else {
         return Ok(rollout_items.to_vec());
     };
     let next_turn_id = next_turn.id.as_str();
