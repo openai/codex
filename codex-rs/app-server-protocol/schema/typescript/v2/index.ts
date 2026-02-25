@@ -130,7 +130,6 @@ export type { RealtimeConversationClosedNotification } from "./RealtimeConversat
 export type { RealtimeConversationErrorNotification } from "./RealtimeConversationErrorNotification";
 export type { RealtimeConversationItemAddedNotification } from "./RealtimeConversationItemAddedNotification";
 export type { RealtimeConversationOutputAudioDeltaNotification } from "./RealtimeConversationOutputAudioDeltaNotification";
-export type { RealtimeConversationSessionUpdatedNotification } from "./RealtimeConversationSessionUpdatedNotification";
 export type { RealtimeConversationStartedNotification } from "./RealtimeConversationStartedNotification";
 export type { ReasoningEffortOption } from "./ReasoningEffortOption";
 export type { ReasoningSummaryPartAddedNotification } from "./ReasoningSummaryPartAddedNotification";

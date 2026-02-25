@@ -855,8 +855,6 @@ server_notification_definitions! {
     FuzzyFileSearchSessionCompleted => "fuzzyFileSearch/sessionCompleted" (FuzzyFileSearchSessionCompletedNotification),
     #[experimental("realtimeConversation/started")]
     RealtimeConversationStarted => "realtimeConversation/started" (v2::RealtimeConversationStartedNotification),
-    #[experimental("realtimeConversation/sessionUpdated")]
-    RealtimeConversationSessionUpdated => "realtimeConversation/sessionUpdated" (v2::RealtimeConversationSessionUpdatedNotification),
     #[experimental("realtimeConversation/itemAdded")]
     RealtimeConversationItemAdded => "realtimeConversation/itemAdded" (v2::RealtimeConversationItemAddedNotification),
     #[experimental("realtimeConversation/outputAudio/delta")]

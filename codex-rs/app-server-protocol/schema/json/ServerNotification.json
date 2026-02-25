@@ -1386,24 +1386,6 @@
       ],
       "type": "object"
     },
-    "RealtimeConversationSessionUpdatedNotification": {
-      "description": "EXPERIMENTAL - emitted when the backend prompt for realtime changes.",
-      "properties": {
-        "backendPrompt": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "threadId"
-      ],
-      "type": "object"
-    },
     "RealtimeConversationStartedNotification": {
       "description": "EXPERIMENTAL - emitted when realtime conversation startup is accepted.",
       "properties": {
@@ -3603,26 +3585,6 @@
         "params"
       ],
       "title": "RealtimeConversation/startedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "realtimeConversation/sessionUpdated"
-          ],
-          "title": "RealtimeConversation/sessionUpdatedNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/RealtimeConversationSessionUpdatedNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "RealtimeConversation/sessionUpdatedNotification",
       "type": "object"
     },
     {

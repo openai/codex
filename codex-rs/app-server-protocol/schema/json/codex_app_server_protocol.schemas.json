@@ -6449,26 +6449,6 @@
           "properties": {
             "method": {
               "enum": [
-                "realtimeConversation/sessionUpdated"
-              ],
-              "title": "RealtimeConversation/sessionUpdatedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/RealtimeConversationSessionUpdatedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "RealtimeConversation/sessionUpdatedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
                 "realtimeConversation/itemAdded"
               ],
               "title": "RealtimeConversation/itemAddedNotificationMethod",
@@ -10917,26 +10897,6 @@
           "threadId"
         ],
         "title": "RealtimeConversationOutputAudioDeltaNotification",
-        "type": "object"
-      },
-      "RealtimeConversationSessionUpdatedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "EXPERIMENTAL - emitted when the backend prompt for realtime changes.",
-        "properties": {
-          "backendPrompt": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId"
-        ],
-        "title": "RealtimeConversationSessionUpdatedNotification",
         "type": "object"
       },
       "RealtimeConversationStartedNotification": {

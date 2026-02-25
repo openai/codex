@@ -12,7 +12,6 @@ use codex_app_server_protocol::RealtimeConversationClosedNotification;
 use codex_app_server_protocol::RealtimeConversationErrorNotification;
 use codex_app_server_protocol::RealtimeConversationItemAddedNotification;
 use codex_app_server_protocol::RealtimeConversationOutputAudioDeltaNotification;
-use codex_app_server_protocol::RealtimeConversationSessionUpdatedNotification;
 use codex_app_server_protocol::RealtimeConversationStartParams;
 use codex_app_server_protocol::RealtimeConversationStartResponse;
 use codex_app_server_protocol::RealtimeConversationStartedNotification;
@@ -148,17 +147,6 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     )
     .await??;
     let _: RealtimeConversationTextAppendResponse = to_response(text_append_response)?;
-
-    let session_updated = read_notification::<RealtimeConversationSessionUpdatedNotification>(
-        &mut mcp,
-        "realtimeConversation/sessionUpdated",
-    )
-    .await?;
-    assert_eq!(session_updated.thread_id, started.thread_id);
-    assert_eq!(
-        session_updated.backend_prompt.as_deref(),
-        Some("backend prompt")
-    );
 
     let output_audio = read_notification::<RealtimeConversationOutputAudioDeltaNotification>(
         &mut mcp,

@@ -55,7 +55,6 @@ use codex_app_server_protocol::RealtimeConversationClosedNotification;
 use codex_app_server_protocol::RealtimeConversationErrorNotification;
 use codex_app_server_protocol::RealtimeConversationItemAddedNotification;
 use codex_app_server_protocol::RealtimeConversationOutputAudioDeltaNotification;
-use codex_app_server_protocol::RealtimeConversationSessionUpdatedNotification;
 use codex_app_server_protocol::RealtimeConversationStartedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
@@ -197,19 +196,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             if let ApiVersion::V2 = api_version {
                 match event.payload {
                     RealtimeEvent::SessionCreated { .. } => {}
-                    RealtimeEvent::SessionUpdated { backend_prompt } => {
-                        let notification = RealtimeConversationSessionUpdatedNotification {
-                            thread_id: conversation_id.to_string(),
-                            backend_prompt,
-                        };
-                        outgoing
-                            .send_server_notification(
-                                ServerNotification::RealtimeConversationSessionUpdated(
-                                    notification,
-                                ),
-                            )
-                            .await;
-                    }
+                    RealtimeEvent::SessionUpdated { .. } => {}
                     RealtimeEvent::AudioOut(audio) => {
                         let notification = RealtimeConversationOutputAudioDeltaNotification {
                             thread_id: conversation_id.to_string(),

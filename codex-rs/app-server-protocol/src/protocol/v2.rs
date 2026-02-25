@@ -2667,15 +2667,6 @@ pub struct RealtimeConversationStartedNotification {
     pub session_id: Option<String>,
 }
 
-/// EXPERIMENTAL - emitted when the backend prompt for realtime changes.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct RealtimeConversationSessionUpdatedNotification {
-    pub thread_id: String,
-    pub backend_prompt: Option<String>,
-}
-
 /// EXPERIMENTAL - raw non-audio realtime item emitted by the backend.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
