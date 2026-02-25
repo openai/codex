@@ -39,11 +39,18 @@ use unicode_width::UnicodeWidthStr;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
+
+#[derive(Debug, Clone)]
+pub struct SessionTarget {
+    pub path: PathBuf,
+    pub thread_id: Option<ThreadId>,
+}
+
 #[derive(Debug, Clone)]
 pub enum SessionSelection {
     StartFresh,
-    Resume(PathBuf),
-    Fork(PathBuf),
+    Resume(SessionTarget),
+    Fork(SessionTarget),
     Exit,
 }
 
@@ -68,10 +75,11 @@ impl SessionPickerAction {
         }
     }
 
-    fn selection(self, path: PathBuf) -> SessionSelection {
+    fn selection(self, path: PathBuf, thread_id: Option<ThreadId>) -> SessionSelection {
+        let target = SessionTarget { path, thread_id };
         match self {
-            SessionPickerAction::Resume => SessionSelection::Resume(path),
-            SessionPickerAction::Fork => SessionSelection::Fork(path),
+            SessionPickerAction::Resume => SessionSelection::Resume(target),
+            SessionPickerAction::Fork => SessionSelection::Fork(target),
         }
     }
 }
@@ -401,7 +409,7 @@ impl PickerState {
             }
             KeyCode::Enter => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
-                    return Ok(Some(self.action.selection(row.path.clone())));
+                    return Ok(Some(self.action.selection(row.path.clone(), row.thread_id)));
                 }
             }
             KeyCode::Up => {
