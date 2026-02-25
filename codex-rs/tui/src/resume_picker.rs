@@ -43,7 +43,7 @@ const LOAD_NEAR_THRESHOLD: usize = 5;
 #[derive(Debug, Clone)]
 pub struct SessionTarget {
     pub path: PathBuf,
-    pub thread_id: Option<ThreadId>,
+    pub thread_id: ThreadId,
 }
 
 #[derive(Debug, Clone)]
@@ -75,11 +75,11 @@ impl SessionPickerAction {
         }
     }
 
-    fn selection(self, path: PathBuf, thread_id: Option<ThreadId>) -> SessionSelection {
-        let target = SessionTarget { path, thread_id };
+    fn selection(self, path: PathBuf, thread_id: ThreadId) -> SessionSelection {
+        let target_session = SessionTarget { path, thread_id };
         match self {
-            SessionPickerAction::Resume => SessionSelection::Resume(target),
-            SessionPickerAction::Fork => SessionSelection::Fork(target),
+            SessionPickerAction::Resume => SessionSelection::Resume(target_session),
+            SessionPickerAction::Fork => SessionSelection::Fork(target_session),
         }
     }
 }
@@ -409,7 +409,14 @@ impl PickerState {
             }
             KeyCode::Enter => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
-                    return Ok(Some(self.action.selection(row.path.clone(), row.thread_id)));
+                    let path = row.path.clone();
+                    let thread_id = match row.thread_id {
+                        Some(thread_id) => Some(thread_id),
+                        None => crate::resolve_thread_id_for_session_path(path.as_path()).await,
+                    };
+                    if let Some(thread_id) = thread_id {
+                        return Ok(Some(self.action.selection(path, thread_id)));
+                    }
                 }
             }
             KeyCode::Up => {

@@ -662,21 +662,29 @@ async fn run_ratatui_app(
     let session_selection = if use_fork {
         if let Some(id_str) = cli.fork_session_id.as_deref() {
             let is_uuid = Uuid::parse_str(id_str).is_ok();
-            let thread_id = if is_uuid {
-                ThreadId::from_string(id_str).ok()
-            } else {
-                None
-            };
             let path = if is_uuid {
                 find_thread_path_by_id_str(&config.codex_home, id_str).await?
             } else {
                 find_thread_path_by_name_str(&config.codex_home, id_str).await?
             };
             match path {
-                Some(path) => resume_picker::SessionSelection::Fork(resume_picker::SessionTarget {
-                    path,
-                    thread_id,
-                }),
+                Some(path) => {
+                    let thread_id = if is_uuid {
+                        match ThreadId::from_string(id_str) {
+                            Ok(thread_id) => thread_id,
+                            Err(_) => return missing_session_exit(id_str, "fork"),
+                        }
+                    } else {
+                        match resolve_thread_id_for_session_path(path.as_path()).await {
+                            Some(thread_id) => thread_id,
+                            None => return missing_session_exit(id_str, "fork"),
+                        }
+                    };
+                    resume_picker::SessionSelection::Fork(resume_picker::SessionTarget {
+                        path,
+                        thread_id,
+                    })
+                }
                 None => return missing_session_exit(id_str, "fork"),
             }
         } else if cli.fork_last {
@@ -692,16 +700,20 @@ async fn run_ratatui_app(
             )
             .await
             {
-                Ok(page) => page
-                    .items
-                    .first()
-                    .map(|it| {
-                        resume_picker::SessionSelection::Fork(resume_picker::SessionTarget {
-                            path: it.path.clone(),
-                            thread_id: it.thread_id,
-                        })
-                    })
-                    .unwrap_or(resume_picker::SessionSelection::StartFresh),
+                Ok(page) => match page.items.first() {
+                    Some(item) => {
+                        match resolve_thread_id_for_session_path(item.path.as_path()).await {
+                            Some(thread_id) => resume_picker::SessionSelection::Fork(
+                                resume_picker::SessionTarget {
+                                    path: item.path.clone(),
+                                    thread_id,
+                                },
+                            ),
+                            None => resume_picker::SessionSelection::StartFresh,
+                        }
+                    }
+                    None => resume_picker::SessionSelection::StartFresh,
+                },
                 Err(_) => resume_picker::SessionSelection::StartFresh,
             }
         } else if cli.fork_picker {
@@ -724,21 +736,29 @@ async fn run_ratatui_app(
         }
     } else if let Some(id_str) = cli.resume_session_id.as_deref() {
         let is_uuid = Uuid::parse_str(id_str).is_ok();
-        let thread_id = if is_uuid {
-            ThreadId::from_string(id_str).ok()
-        } else {
-            None
-        };
         let path = if is_uuid {
             find_thread_path_by_id_str(&config.codex_home, id_str).await?
         } else {
             find_thread_path_by_name_str(&config.codex_home, id_str).await?
         };
         match path {
-            Some(path) => resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
-                path,
-                thread_id,
-            }),
+            Some(path) => {
+                let thread_id = if is_uuid {
+                    match ThreadId::from_string(id_str) {
+                        Ok(thread_id) => thread_id,
+                        Err(_) => return missing_session_exit(id_str, "resume"),
+                    }
+                } else {
+                    match resolve_thread_id_for_session_path(path.as_path()).await {
+                        Some(thread_id) => thread_id,
+                        None => return missing_session_exit(id_str, "resume"),
+                    }
+                };
+                resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
+                    path,
+                    thread_id,
+                })
+            }
             None => return missing_session_exit(id_str, "resume"),
         }
     } else if cli.resume_last {
@@ -760,12 +780,15 @@ async fn run_ratatui_app(
         )
         .await
         {
-            Ok(Some(path)) => {
-                resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
-                    path,
-                    thread_id: None,
-                })
-            }
+            Ok(Some(path)) => match resolve_thread_id_for_session_path(path.as_path()).await {
+                Some(thread_id) => {
+                    resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
+                        path,
+                        thread_id,
+                    })
+                }
+                None => resume_picker::SessionSelection::StartFresh,
+            },
             _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
@@ -789,19 +812,23 @@ async fn run_ratatui_app(
 
     let current_cwd = config.cwd.clone();
     let allow_prompt = cli.cwd.is_none();
-    let action_and_target_if_resume_or_fork = match &session_selection {
-        resume_picker::SessionSelection::Resume(target) => Some((CwdPromptAction::Resume, target)),
-        resume_picker::SessionSelection::Fork(target) => Some((CwdPromptAction::Fork, target)),
+    let action_and_target_session_if_resume_or_fork = match &session_selection {
+        resume_picker::SessionSelection::Resume(target_session) => {
+            Some((CwdPromptAction::Resume, target_session))
+        }
+        resume_picker::SessionSelection::Fork(target_session) => {
+            Some((CwdPromptAction::Fork, target_session))
+        }
         _ => None,
     };
-    let fallback_cwd = match action_and_target_if_resume_or_fork {
-        Some((action, target)) => {
+    let fallback_cwd = match action_and_target_session_if_resume_or_fork {
+        Some((action, target_session)) => {
             match resolve_cwd_for_resume_or_fork(
                 &mut tui,
                 &config,
                 &current_cwd,
-                target.thread_id,
-                &target.path,
+                target_session.thread_id,
+                &target_session.path,
                 action,
                 allow_prompt,
             )
@@ -887,13 +914,30 @@ async fn run_ratatui_app(
     app_result
 }
 
+pub(crate) fn parse_thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
+    let file_name = path.file_name()?.to_str()?;
+    let core = file_name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    core.match_indices('-')
+        .rev()
+        .find_map(|(index, _)| ThreadId::from_string(&core[index + 1..]).ok())
+}
+
+pub(crate) async fn resolve_thread_id_for_session_path(path: &Path) -> Option<ThreadId> {
+    if let Some(thread_id) = parse_thread_id_from_rollout_path(path) {
+        return Some(thread_id);
+    }
+    read_session_meta_line(path)
+        .await
+        .ok()
+        .map(|meta_line| meta_line.meta.id)
+}
+
 pub(crate) async fn read_session_cwd(
     config: &Config,
-    thread_id: Option<ThreadId>,
+    thread_id: ThreadId,
     path: &Path,
 ) -> Option<PathBuf> {
     if let Some(state_db_ctx) = get_state_db(config, None).await
-        && let Some(thread_id) = thread_id
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
         return Some(metadata.cwd);
@@ -957,7 +1001,7 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     tui: &mut Tui,
     config: &Config,
     current_cwd: &Path,
-    thread_id: Option<ThreadId>,
+    thread_id: ThreadId,
     path: &Path,
     action: CwdPromptAction,
     allow_prompt: bool,
@@ -1246,7 +1290,7 @@ mod tests {
         }
         std::fs::write(&rollout_path, text)?;
 
-        let cwd = read_session_cwd(&config, None, &rollout_path)
+        let cwd = read_session_cwd(&config, ThreadId::new(), &rollout_path)
             .await
             .expect("expected cwd");
         assert_eq!(cwd, second);
@@ -1288,7 +1332,7 @@ mod tests {
         }
         std::fs::write(&rollout_path, text)?;
 
-        let session_cwd = read_session_cwd(&config, None, &rollout_path)
+        let session_cwd = read_session_cwd(&config, ThreadId::new(), &rollout_path)
             .await
             .expect("expected cwd");
         assert_eq!(session_cwd, latest);
@@ -1417,7 +1461,7 @@ trust_level = "untrusted"
         );
         std::fs::write(&rollout_path, text)?;
 
-        let cwd = read_session_cwd(&config, None, &rollout_path)
+        let cwd = read_session_cwd(&config, ThreadId::new(), &rollout_path)
             .await
             .expect("expected cwd");
         assert_eq!(cwd, session_cwd);
@@ -1474,7 +1518,7 @@ trust_level = "untrusted"
             .await
             .map_err(std::io::Error::other)?;
 
-        let cwd = read_session_cwd(&config, Some(thread_id), &rollout_path)
+        let cwd = read_session_cwd(&config, thread_id, &rollout_path)
             .await
             .expect("expected cwd");
         assert_eq!(cwd, sqlite_cwd);
