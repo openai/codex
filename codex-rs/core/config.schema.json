@@ -636,6 +636,11 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "max_unused_days": {
+          "description": "Maximum age of a phase-1 memory's last use before phase 2 stops selecting it.",
+          "format": "int64",
+          "type": "integer"
+        },
         "min_rollout_idle_hours": {
           "description": "Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.",
           "format": "int64",

@@ -8,6 +8,7 @@ use crate::memories::metrics;
 use crate::memories::phase_two;
 use crate::memories::prompts::build_consolidation_prompt;
 use crate::memories::storage::rebuild_raw_memories_file_from_memories;
+use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
 use codex_config::Constrained;
 use codex_protocol::ThreadId;
@@ -19,6 +20,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -73,14 +75,22 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     };
 
     // 3. Query the memories
-    let raw_memories = match db.list_stage1_outputs_for_global(max_raw_memories).await {
-        Ok(memories) => memories,
+    let phase2_selection = match db
+        .select_stage1_outputs_for_phase2(max_raw_memories, config.memories.max_unused_days)
+        .await
+    {
+        Ok(selection) => selection,
         Err(err) => {
-            tracing::error!("failed to list stage1 outputs from global: {}", err);
+            tracing::error!("failed to select stage1 outputs for phase 2: {err}");
             job::failed(session, db, &claim, "failed_load_stage1_outputs").await;
             return;
         }
     };
+    log_selection_diff(
+        &phase2_selection.previously_selected,
+        &phase2_selection.selected,
+    );
+    let raw_memories = phase2_selection.selected;
     let new_watermark = get_watermark(claim.watermark, &raw_memories);
 
     // 4. Update the file system by syncing the raw memories with the one extracted from DB at
@@ -398,6 +408,35 @@ pub(super) fn get_watermark(
         .max()
         .unwrap_or(claimed_watermark)
         .max(claimed_watermark) // todo double check the claimed here.
+}
+
+fn log_selection_diff(
+    previous: &[codex_state::Stage1Output],
+    current: &[codex_state::Stage1Output],
+) {
+    let previous_rollouts = previous
+        .iter()
+        .map(|memory| format!("{}.md", rollout_summary_file_stem(memory)))
+        .collect::<BTreeSet<_>>();
+    let current_rollouts = current
+        .iter()
+        .map(|memory| format!("{}.md", rollout_summary_file_stem(memory)))
+        .collect::<BTreeSet<_>>();
+    let added = current_rollouts
+        .difference(&previous_rollouts)
+        .cloned()
+        .collect::<Vec<_>>();
+    let removed = previous_rollouts
+        .difference(&current_rollouts)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    tracing::info!(
+        selected = current.len(),
+        added = ?added,
+        removed = ?removed,
+        "updated stage-1 outputs selected for phase 2"
+    );
 }
 
 fn emit_metrics(session: &Arc<Session>, counters: Counters) {
