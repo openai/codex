@@ -99,6 +99,10 @@ pub struct Cli {
     )]
     pub json: bool,
 
+    /// Suppress non-essential stderr output and print only the final response to stdout.
+    #[arg(long = "quiet", default_value_t = false, global = true)]
+    pub quiet: bool,
+
     /// Specifies file where the last message from the agent should be written.
     #[arg(
         long = "output-last-message",
@@ -314,5 +318,12 @@ mod tests {
         };
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some(PROMPT));
+    }
+
+    #[test]
+    fn quiet_flag_parses() {
+        let cli = Cli::parse_from(["codex-exec", "--quiet", "echo hello"]);
+        assert!(cli.quiet);
+        assert_eq!(cli.prompt.as_deref(), Some("echo hello"));
     }
 }

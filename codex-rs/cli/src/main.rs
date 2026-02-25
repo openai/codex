@@ -76,6 +76,10 @@ struct MultitoolCli {
     #[arg(short = 'P', long = "prompt", value_name = "PROMPT")]
     one_shot_prompt: Option<String>,
 
+    /// Suppress non-essential non-interactive output and print only the final response.
+    #[arg(long = "quiet", default_value_t = false)]
+    quiet: bool,
+
     #[clap(flatten)]
     interactive: TuiCli,
 
@@ -559,6 +563,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         config_overrides: mut root_config_overrides,
         feature_toggles,
         one_shot_prompt,
+        quiet,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
@@ -572,6 +577,22 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     }
     if one_shot_prompt.is_some() && interactive.prompt.is_some() {
         anyhow::bail!("Use either positional `PROMPT` or `-P`/`--prompt`, not both.");
+    }
+    if quiet && one_shot_prompt.is_none() && subcommand.is_none() {
+        anyhow::bail!(
+            "`--quiet` is only supported with `codex -P`, `codex exec`, or `codex review`."
+        );
+    }
+    if quiet
+        && one_shot_prompt.is_none()
+        && !matches!(
+            &subcommand,
+            Some(Subcommand::Exec(_)) | Some(Subcommand::Review(_))
+        )
+    {
+        anyhow::bail!(
+            "`--quiet` is only supported with `codex -P`, `codex exec`, or `codex review`."
+        );
     }
 
     match subcommand {
@@ -589,6 +610,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     interactive.dangerously_bypass_approvals_and_sandbox;
                 exec_cli.cwd = interactive.cwd;
                 exec_cli.add_dir = interactive.add_dir;
+                exec_cli.quiet = quiet;
                 exec_cli.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
                 if interactive.web_search {
                     exec_cli
@@ -611,6 +633,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             }
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
+            exec_cli.quiet |= quiet;
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -620,6 +643,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::Review(review_args)) => {
             let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
             exec_cli.command = Some(ExecCommand::Review(review_args));
+            exec_cli.quiet = quiet;
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -1087,6 +1111,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             one_shot_prompt: _,
+            quiet: _,
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {
@@ -1117,6 +1142,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             one_shot_prompt: _,
+            quiet: _,
         } = cli;
 
         let Subcommand::Fork(ForkCommand {
@@ -1186,6 +1212,16 @@ mod tests {
         assert_eq!(cli.one_shot_prompt.as_deref(), Some("say hi"));
         assert!(cli.subcommand.is_none());
         assert_eq!(cli.interactive.prompt, None);
+    }
+
+    #[test]
+    fn one_shot_prompt_flag_accepts_quiet() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-P", "say hi", "--quiet"])
+            .expect("parse should succeed");
+
+        assert_eq!(cli.one_shot_prompt.as_deref(), Some("say hi"));
+        assert!(cli.quiet);
+        assert!(cli.subcommand.is_none());
     }
 
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {

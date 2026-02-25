@@ -75,6 +75,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     /// Whether to include `AgentReasoning` events in the output.
     show_agent_reasoning: bool,
     show_raw_agent_reasoning: bool,
+    quiet: bool,
     last_message_path: Option<PathBuf>,
     last_total_token_usage: Option<codex_protocol::protocol::TokenUsageInfo>,
     final_message: Option<String>,
@@ -91,6 +92,7 @@ impl EventProcessorWithHumanOutput {
         with_ansi: bool,
         cursor_ansi: bool,
         config: &Config,
+        quiet: bool,
         last_message_path: Option<PathBuf>,
     ) -> Self {
         let call_id_to_patch = HashMap::new();
@@ -108,6 +110,7 @@ impl EventProcessorWithHumanOutput {
                 yellow: Style::new().yellow(),
                 show_agent_reasoning: !config.hide_agent_reasoning,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+                quiet,
                 last_message_path,
                 last_total_token_usage: None,
                 final_message: None,
@@ -131,6 +134,7 @@ impl EventProcessorWithHumanOutput {
                 yellow: Style::new(),
                 show_agent_reasoning: !config.hide_agent_reasoning,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+                quiet,
                 last_message_path,
                 last_total_token_usage: None,
                 final_message: None,
@@ -178,6 +182,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         prompt: &str,
         session_configured_event: &SessionConfiguredEvent,
     ) {
+        if self.quiet {
+            return;
+        }
+
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         ts_msg!(
             self,
@@ -206,6 +214,37 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 
     fn process_event(&mut self, event: Event) -> CodexStatus {
         let Event { id: _, msg } = event;
+        if self.quiet {
+            match msg {
+                EventMsg::TurnComplete(TurnCompleteEvent {
+                    last_agent_message, ..
+                }) => {
+                    let last_message = last_agent_message
+                        .as_deref()
+                        .or(self.last_proposed_plan.as_deref());
+                    if let Some(output_file) = self.last_message_path.as_deref() {
+                        handle_last_message(last_message, output_file);
+                    }
+                    self.final_message =
+                        last_agent_message.or_else(|| self.last_proposed_plan.clone());
+                    return CodexStatus::InitiateShutdown;
+                }
+                EventMsg::TokenCount(ev) => {
+                    self.last_total_token_usage = ev.info;
+                }
+                EventMsg::ItemCompleted(ItemCompletedEvent {
+                    item: TurnItem::Plan(item),
+                    ..
+                }) => {
+                    self.last_proposed_plan = Some(item.text);
+                }
+                EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
+                _ => {}
+            }
+
+            return CodexStatus::Running;
+        }
+
         if let EventMsg::BackgroundEvent(BackgroundEventEvent { message }) = &msg
             && let Some(update) = Self::parse_agent_job_progress(message)
         {
@@ -861,7 +900,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 
     fn print_final_output(&mut self) {
         self.finish_progress_line();
-        if let Some(usage_info) = &self.last_total_token_usage {
+        if !self.quiet
+            && let Some(usage_info) = &self.last_total_token_usage
+        {
             eprintln!(
                 "{}\n{}",
                 "tokens used".style(self.magenta).style(self.italic),
