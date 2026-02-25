@@ -29,13 +29,13 @@ use once_cell::sync::Lazy;
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthCredentialsStoreMode {
+    /// Use keyring when available; otherwise, fall back to a file in CODEX_HOME.
     #[default]
+    Auto,
     /// Persist credentials in CODEX_HOME/auth.json.
     File,
     /// Persist credentials in the keyring. Fail if unavailable.
     Keyring,
-    /// Use keyring when available; otherwise, fall back to a file in CODEX_HOME.
-    Auto,
     /// Store credentials in memory only for the current process.
     Ephemeral,
 }
@@ -190,6 +190,15 @@ impl KeyringAuthStorage {
             }
         }
     }
+
+    fn delete_from_keyring_only(&self) -> std::io::Result<bool> {
+        let key = compute_store_key(&self.codex_home)?;
+        self.keyring_store
+            .delete(KEYRING_SERVICE, &key)
+            .map_err(|err| {
+                std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
+            })
+    }
 }
 
 impl AuthStorageBackend for KeyringAuthStorage {
@@ -210,13 +219,7 @@ impl AuthStorageBackend for KeyringAuthStorage {
     }
 
     fn delete(&self) -> std::io::Result<bool> {
-        let key = compute_store_key(&self.codex_home)?;
-        let keyring_removed = self
-            .keyring_store
-            .delete(KEYRING_SERVICE, &key)
-            .map_err(|err| {
-                std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
-            })?;
+        let keyring_removed = self.delete_from_keyring_only()?;
         let file_removed = delete_file_if_exists(&self.codex_home)?;
         Ok(keyring_removed || file_removed)
     }
@@ -254,14 +257,37 @@ impl AuthStorageBackend for AutoAuthStorage {
             Ok(()) => Ok(()),
             Err(err) => {
                 warn!("failed to save auth to keyring, falling back to file storage: {err}");
-                self.file_storage.save(auth)
+                self.file_storage.save(auth)?;
+                if let Err(delete_err) = self.keyring_storage.delete_from_keyring_only() {
+                    warn!(
+                        "failed to clear stale keyring auth after fallback file save: {delete_err}"
+                    );
+                }
+                Ok(())
             }
         }
     }
 
     fn delete(&self) -> std::io::Result<bool> {
-        // Keyring storage will delete from disk as well
-        self.keyring_storage.delete()
+        match self.keyring_storage.delete() {
+            Ok(removed) => Ok(removed),
+            Err(err) => {
+                warn!("failed to delete auth from keyring, falling back to file deletion: {err}");
+                match self.file_storage.delete() {
+                    Ok(file_removed) => {
+                        if file_removed {
+                            warn!(
+                                "deleted fallback auth.json after keyring delete failure; returning keyring error"
+                            );
+                        }
+                        Err(err)
+                    }
+                    Err(file_err) => Err(std::io::Error::other(format!(
+                        "{err}; additionally failed to delete fallback auth.json: {file_err}"
+                    ))),
+                }
+            }
+        }
     }
 }
 
@@ -729,6 +755,44 @@ mod tests {
     }
 
     #[test]
+    fn auto_auth_storage_save_fallback_clears_stale_keyring_to_prevent_stale_load()
+    -> anyhow::Result<()> {
+        let codex_home = tempdir()?;
+        let mock_keyring = MockKeyringStore::default();
+        let storage = AutoAuthStorage::new(
+            codex_home.path().to_path_buf(),
+            Arc::new(mock_keyring.clone()),
+        );
+        let key = compute_store_key(codex_home.path())?;
+
+        let stale_keyring_auth = auth_with_prefix("stale-keyring");
+        seed_keyring_with_auth(
+            &mock_keyring,
+            || compute_store_key(codex_home.path()),
+            &stale_keyring_auth,
+        )?;
+
+        // Make the next keyring save fail so AutoAuthStorage falls back to auth.json.
+        mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "save".into()));
+
+        let expected = auth_with_prefix("fallback-file");
+        storage.save(&expected)?;
+
+        assert!(
+            !mock_keyring.contains(&key),
+            "stale keyring entry should be cleared after fallback file save"
+        );
+
+        let loaded = storage.load()?;
+        assert_eq!(
+            loaded,
+            Some(expected),
+            "load should not resurrect stale keyring credentials after fallback save"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn auto_auth_storage_delete_removes_keyring_and_file() -> anyhow::Result<()> {
         let codex_home = tempdir()?;
         let mock_keyring = MockKeyringStore::default();
@@ -752,6 +816,39 @@ mod tests {
         assert!(
             !auth_file.exists(),
             "fallback auth.json should be removed after delete"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn auto_auth_storage_delete_reports_error_when_keyring_delete_fails() -> anyhow::Result<()> {
+        let codex_home = tempdir()?;
+        let mock_keyring = MockKeyringStore::default();
+        let storage = AutoAuthStorage::new(
+            codex_home.path().to_path_buf(),
+            Arc::new(mock_keyring.clone()),
+        );
+        let (key, auth_file) = seed_keyring_and_fallback_auth_file_for_delete(
+            &mock_keyring,
+            codex_home.path(),
+            || compute_store_key(codex_home.path()),
+        )?;
+        mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "delete".into()));
+        let err = storage
+            .delete()
+            .expect_err("keyring delete failure should propagate");
+        assert!(
+            err.to_string()
+                .contains("failed to delete auth from keyring"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !auth_file.exists(),
+            "fallback auth.json should still be removed when keyring delete fails"
+        );
+        assert!(
+            mock_keyring.contains(&key),
+            "keyring entry should remain when keyring delete fails"
         );
         Ok(())
     }

@@ -804,7 +804,13 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
 #[tokio::test]
 async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            ..Default::default()
+        },
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -844,7 +850,28 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     };
     pretty_assertions::assert_eq!(payload.auth_mode, Some(AuthMode::ApiKey));
 
-    assert!(codex_home.path().join("auth.json").exists());
+    drop(mcp);
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let get_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let get_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(get_id)),
+    )
+    .await??;
+    let account: GetAccountResponse = to_response(get_resp)?;
+    let expected = GetAccountResponse {
+        account: Some(Account::ApiKey {}),
+        requires_openai_auth: true,
+    };
+    assert_eq!(account, expected);
+
     Ok(())
 }
 
