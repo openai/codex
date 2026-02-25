@@ -10,7 +10,7 @@ use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalPro
 use codex_protocol::approvals::NetworkPolicyAmendment as CoreNetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction as CoreNetworkPolicyRuleAction;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::config_types::CollaborationModeMask as CoreCollaborationModeMask;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -1414,7 +1414,7 @@ pub struct CollaborationModeListParams {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct CollaborationModePreset {
+pub struct CollaborationModeMask {
     pub name: String,
     pub mode: Option<ModeKind>,
     pub model: Option<String>,
@@ -1429,9 +1429,9 @@ pub struct CollaborationModePreset {
     pub developer_instructions: Option<Option<String>>,
 }
 
-impl From<CollaborationModeMask> for CollaborationModePreset {
+impl From<CoreCollaborationModeMask> for CollaborationModeMask {
     #[allow(deprecated)]
-    fn from(value: CollaborationModeMask) -> Self {
+    fn from(value: CoreCollaborationModeMask) -> Self {
         Self {
             name: value.name,
             mode: value.mode,
@@ -1447,7 +1447,7 @@ impl From<CollaborationModeMask> for CollaborationModePreset {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CollaborationModeListResponse {
-    pub data: Vec<CollaborationModePreset>,
+    pub data: Vec<CollaborationModeMask>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]

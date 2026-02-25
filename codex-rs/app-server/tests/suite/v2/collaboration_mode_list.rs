@@ -13,7 +13,7 @@ use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
-use codex_app_server_protocol::CollaborationModePreset;
+use codex_app_server_protocol::CollaborationModeMask;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::test_support::builtin_collaboration_mode_presets;
@@ -45,9 +45,9 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
     let CollaborationModeListResponse { data: items } =
         to_response::<CollaborationModeListResponse>(response)?;
 
-    let expected: Vec<CollaborationModePreset> = builtin_collaboration_mode_presets()
+    let expected: Vec<CollaborationModeMask> = builtin_collaboration_mode_presets()
         .into_iter()
-        .map(|preset| CollaborationModePreset {
+        .map(|preset| CollaborationModeMask {
             name: preset.name,
             mode: preset.mode,
             model: preset.model,

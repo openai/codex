@@ -7,4 +7,4 @@ import type { ReasoningEffort } from "../ReasoningEffort";
 /**
  * EXPERIMENTAL - collaboration mode preset metadata for clients.
  */
-export type CollaborationModePreset = { name: string, mode: ModeKind | null, model: string | null, reasoning_effort: ReasoningEffort | null | null, developer_instructions: string | null | null, };
+export type CollaborationModeMask = { name: string, mode: ModeKind | null, model: string | null, reasoning_effort: ReasoningEffort | null | null, developer_instructions: string | null | null, };
