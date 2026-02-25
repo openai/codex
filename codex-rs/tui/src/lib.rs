@@ -669,21 +669,13 @@ async fn run_ratatui_app(
             };
             match path {
                 Some(path) => {
-                    let thread_id = if is_uuid {
-                        match ThreadId::from_string(id_str) {
-                            Ok(thread_id) => thread_id,
-                            Err(_) => return missing_session_exit(id_str, "fork"),
-                        }
-                    } else {
-                        match read_session_meta_line(path.as_path())
+                    let thread_id =
+                        match resolve_session_thread_id(path.as_path(), is_uuid.then_some(id_str))
                             .await
-                            .ok()
-                            .map(|meta_line| meta_line.meta.id)
                         {
                             Some(thread_id) => thread_id,
                             None => return missing_session_exit(id_str, "fork"),
-                        }
-                    };
+                        };
                     resume_picker::SessionSelection::Fork(resume_picker::SessionTarget {
                         path,
                         thread_id,
@@ -706,11 +698,7 @@ async fn run_ratatui_app(
             {
                 Ok(page) => match page.items.first() {
                     Some(item) => {
-                        match read_session_meta_line(item.path.as_path())
-                            .await
-                            .ok()
-                            .map(|meta_line| meta_line.meta.id)
-                        {
+                        match resolve_session_thread_id(item.path.as_path(), None).await {
                             Some(thread_id) => resume_picker::SessionSelection::Fork(
                                 resume_picker::SessionTarget {
                                     path: item.path.clone(),
@@ -751,20 +739,14 @@ async fn run_ratatui_app(
         };
         match path {
             Some(path) => {
-                let thread_id = if is_uuid {
-                    match ThreadId::from_string(id_str) {
-                        Ok(thread_id) => thread_id,
-                        Err(_) => return missing_session_exit(id_str, "resume"),
-                    }
-                } else {
-                    match read_session_meta_line(path.as_path())
-                        .await
-                        .ok()
-                        .map(|meta_line| meta_line.meta.id)
-                    {
-                        Some(thread_id) => thread_id,
-                        None => return missing_session_exit(id_str, "resume"),
-                    }
+                let thread_id = match resolve_session_thread_id(
+                    path.as_path(),
+                    is_uuid.then_some(id_str),
+                )
+                .await
+                {
+                    Some(thread_id) => thread_id,
+                    None => return missing_session_exit(id_str, "resume"),
                 };
                 resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
                     path,
@@ -792,11 +774,7 @@ async fn run_ratatui_app(
         )
         .await
         {
-            Ok(Some(path)) => match read_session_meta_line(path.as_path())
-                .await
-                .ok()
-                .map(|meta_line| meta_line.meta.id)
-            {
+            Ok(Some(path)) => match resolve_session_thread_id(path.as_path(), None).await {
                 Some(thread_id) => {
                     resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
                         path,
@@ -928,6 +906,19 @@ async fn run_ratatui_app(
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
     app_result
+}
+
+pub(crate) async fn resolve_session_thread_id(
+    path: &Path,
+    id_str_if_uuid: Option<&str>,
+) -> Option<ThreadId> {
+    match id_str_if_uuid {
+        Some(id_str) => ThreadId::from_string(id_str).ok(),
+        None => read_session_meta_line(path)
+            .await
+            .ok()
+            .map(|meta_line| meta_line.meta.id),
+    }
 }
 
 pub(crate) async fn read_session_cwd(
