@@ -2095,6 +2095,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-string",
  "eventsource-stream",
+ "gethostname",
  "http 1.4.0",
  "opentelemetry",
  "opentelemetry-appender-tracing",
