@@ -41,11 +41,20 @@ pub enum RefreshStrategy {
     OnlineIfUncached,
 }
 
+/// How the manager's base catalog is sourced for the lifetime of the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogMode {
+    /// Start from bundled `models.json` and allow cache/network refresh updates.
+    Default,
+    /// Use a caller-provided catalog as authoritative and do not mutate it via refresh.
+    Custom,
+}
+
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
     remote_models: RwLock<Vec<ModelInfo>>,
-    has_custom_model_catalog: bool,
+    catalog_mode: CatalogMode,
     auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
@@ -65,7 +74,11 @@ impl ModelsManager {
     ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
-        let has_custom_model_catalog = model_catalog.is_some();
+        let catalog_mode = if model_catalog.is_some() {
+            CatalogMode::Custom
+        } else {
+            CatalogMode::Default
+        };
         let remote_models = model_catalog
             .map(|catalog| catalog.models)
             .unwrap_or_else(|| {
@@ -74,7 +87,7 @@ impl ModelsManager {
             });
         Self {
             remote_models: RwLock::new(remote_models),
-            has_custom_model_catalog,
+            catalog_mode,
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
@@ -217,7 +230,7 @@ impl ModelsManager {
     /// Refresh available models according to the specified strategy.
     async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
         // don't override the custom model catalog if one was provided by the user
-        if self.has_custom_model_catalog {
+        if matches!(self.catalog_mode, CatalogMode::Custom) {
             return Ok(());
         }
 
@@ -364,7 +377,7 @@ impl ModelsManager {
                 Self::load_remote_models_from_file()
                     .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}")),
             ),
-            has_custom_model_catalog: false,
+            catalog_mode: CatalogMode::Default,
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,

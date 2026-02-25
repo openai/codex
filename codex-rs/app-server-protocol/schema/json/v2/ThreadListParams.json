@@ -65,6 +65,13 @@
         "null"
       ]
     },
+    "searchTerm": {
+      "description": "Optional substring filter for the extracted thread title.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "sortKey": {
       "anyOf": [
         {

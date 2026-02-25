@@ -43,6 +43,7 @@ pub use runtime::BlockedRequestObserver;
 pub use runtime::ConfigReloader;
 pub use runtime::ConfigState;
 pub use runtime::NetworkProxyState;
+pub use state::NetworkProxyAuditMetadata;
 pub use state::NetworkProxyConstraintError;
 pub use state::NetworkProxyConstraints;
 pub use state::PartialNetworkConfig;

@@ -24,7 +24,7 @@ use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::normalize_additional_permissions;
 pub use apply_patch::ApplyPatchHandler;
-use codex_protocol::models::AdditionalPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
 pub use grep_files::GrepFilesHandler;
@@ -62,9 +62,9 @@ pub(super) fn normalize_and_validate_additional_permissions(
     request_permission_enabled: bool,
     approval_policy: AskForApproval,
     sandbox_permissions: SandboxPermissions,
-    additional_permissions: Option<AdditionalPermissions>,
+    additional_permissions: Option<PermissionProfile>,
     cwd: &Path,
-) -> Result<Option<AdditionalPermissions>, String> {
+) -> Result<Option<PermissionProfile>, String> {
     let uses_additional_permissions = matches!(
         sandbox_permissions,
         SandboxPermissions::WithAdditionalPermissions
@@ -87,14 +87,14 @@ pub(super) fn normalize_and_validate_additional_permissions(
         }
         let Some(additional_permissions) = additional_permissions else {
             return Err(
-                "missing `additional_permissions`; provide `fs_read` and/or `fs_write` when using `with_additional_permissions`"
+                "missing `additional_permissions`; provide `file_system.read` and/or `file_system.write` when using `with_additional_permissions`"
                     .to_string(),
             );
         };
         let normalized = normalize_additional_permissions(additional_permissions, cwd)?;
         if normalized.is_empty() {
             return Err(
-                "`additional_permissions` must include at least one path in `fs_read` or `fs_write`"
+                "`additional_permissions` must include at least one path in `file_system.read` or `file_system.write`"
                     .to_string(),
             );
         }

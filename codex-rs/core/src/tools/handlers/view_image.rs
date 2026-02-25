@@ -8,7 +8,6 @@ use tokio::fs;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
 use crate::protocol::ViewImageToolCallEvent;
-use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -16,7 +15,6 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::local_image_content_items_with_label_number;
 
 pub struct ViewImageHandler;
@@ -52,7 +50,6 @@ impl ToolHandler for ViewImageHandler {
             turn,
             payload,
             call_id,
-            source,
             ..
         } = invocation;
 
@@ -85,24 +82,6 @@ impl ToolHandler for ViewImageHandler {
         let event_path = abs_path.clone();
 
         let content = local_image_content_items_with_label_number(&abs_path, None);
-        if source == ToolCallSource::JsRepl
-            && content
-                .iter()
-                .any(|item| matches!(item, ContentItem::InputImage { .. }))
-        {
-            let input_item = ResponseInputItem::Message {
-                role: "user".to_string(),
-                content: content.clone(),
-            };
-            if session
-                .inject_response_items(vec![input_item])
-                .await
-                .is_err()
-            {
-                tracing::warn!("view_image could not find an active turn to attach image input");
-            }
-        }
-
         let content = content
             .into_iter()
             .map(|item| match item {

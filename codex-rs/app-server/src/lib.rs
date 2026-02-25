@@ -1,5 +1,6 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
 use codex_core::config::Config;
@@ -12,7 +13,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
@@ -57,6 +57,7 @@ mod codex_message_processor;
 mod config_api;
 mod dynamic_tools;
 mod error_code;
+mod external_agent_config_api;
 mod filters;
 mod fuzzy_file_search;
 mod message_processor;
@@ -94,6 +95,7 @@ enum OutboundControlEvent {
         writer: mpsc::Sender<crate::outgoing_message::OutgoingMessage>,
         disconnect_sender: Option<CancellationToken>,
         initialized: Arc<AtomicBool>,
+        experimental_api_enabled: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     },
     /// Remove state for a closed/disconnected connection.
@@ -291,13 +293,13 @@ fn log_format_from_env() -> LogFormat {
 }
 
 pub async fn run_main(
-    codex_linux_sandbox_exe: Option<PathBuf>,
+    arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     default_analytics_enabled: bool,
 ) -> IoResult<()> {
     run_main_with_transport(
-        codex_linux_sandbox_exe,
+        arg0_paths,
         cli_config_overrides,
         loader_overrides,
         default_analytics_enabled,
@@ -307,7 +309,7 @@ pub async fn run_main(
 }
 
 pub async fn run_main_with_transport(
-    codex_linux_sandbox_exe: Option<PathBuf>,
+    arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     default_analytics_enabled: bool,
@@ -503,6 +505,7 @@ pub async fn run_main_with_transport(
                                 writer,
                                 disconnect_sender,
                                 initialized,
+                                experimental_api_enabled,
                                 opted_out_notification_methods,
                             } => {
                                 outbound_connections.insert(
@@ -510,6 +513,7 @@ pub async fn run_main_with_transport(
                                     OutboundConnectionState::new(
                                         writer,
                                         initialized,
+                                        experimental_api_enabled,
                                         opted_out_notification_methods,
                                         disconnect_sender,
                                     ),
@@ -548,7 +552,7 @@ pub async fn run_main_with_transport(
         let loader_overrides = loader_overrides_for_config_api;
         let mut processor = MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
-            codex_linux_sandbox_exe,
+            arg0_paths,
             config: Arc::new(config),
             single_client_mode,
             cli_overrides,
@@ -609,6 +613,8 @@ pub async fn run_main_with_transport(
                                 disconnect_sender,
                             } => {
                                 let outbound_initialized = Arc::new(AtomicBool::new(false));
+                                let outbound_experimental_api_enabled =
+                                    Arc::new(AtomicBool::new(false));
                                 let outbound_opted_out_notification_methods =
                                     Arc::new(RwLock::new(HashSet::new()));
                                 if outbound_control_tx
@@ -617,6 +623,9 @@ pub async fn run_main_with_transport(
                                         writer,
                                         disconnect_sender,
                                         initialized: Arc::clone(&outbound_initialized),
+                                        experimental_api_enabled: Arc::clone(
+                                            &outbound_experimental_api_enabled,
+                                        ),
                                         opted_out_notification_methods: Arc::clone(
                                             &outbound_opted_out_notification_methods,
                                         ),
@@ -630,6 +639,7 @@ pub async fn run_main_with_transport(
                                     connection_id,
                                     ConnectionState::new(
                                         outbound_initialized,
+                                        outbound_experimental_api_enabled,
                                         outbound_opted_out_notification_methods,
                                     ),
                                 );
@@ -679,6 +689,12 @@ pub async fn run_main_with_transport(
                                                 "failed to update outbound opted-out notifications"
                                             );
                                         }
+                                        connection_state
+                                            .outbound_experimental_api_enabled
+                                            .store(
+                                                connection_state.session.experimental_api_enabled,
+                                                std::sync::atomic::Ordering::Release,
+                                            );
                                         if !was_initialized && connection_state.session.initialized {
                                             processor.send_initialize_notifications().await;
                                         }
