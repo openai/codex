@@ -53,6 +53,24 @@ You can enable notifications by configuring a script that is run whenever the ag
 To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
 Use `codex exec --ephemeral ...` to run without persisting session rollout files to disk.
 
+### Launching Codex in a git worktree
+
+Use `--worktree` to run Codex in a dedicated linked worktree:
+
+```shell
+# prompt + explicit branch
+codex "fix auth timeout handling" --worktree feature/auth-timeout
+
+# explicit branch without an initial prompt
+codex --worktree=feature/auth-timeout
+
+# auto-generate a branch name
+codex --worktree
+```
+
+Worktrees are created (or reused) under `~/.codex/worktrees/` (or `$CODEX_HOME/worktrees/` when `CODEX_HOME` is set).
+Codex keeps worktrees after exit and prints a cleanup command (`git worktree remove <path>`).
+
 ### Experimenting with the Codex Sandbox
 
 To test to see what happens when a command is run under the sandbox provided by Codex, we provide the following subcommands in Codex CLI:

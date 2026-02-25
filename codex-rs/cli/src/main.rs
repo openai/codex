@@ -37,6 +37,7 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
+mod worktree;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -71,6 +72,19 @@ struct MultitoolCli {
 
     #[clap(flatten)]
     pub feature_toggles: FeatureToggles,
+
+    /// Launch Codex in a dedicated git worktree.
+    ///
+    /// When omitted, Codex runs in the current directory. Pass `--worktree` to
+    /// auto-generate a branch name, or `--worktree <branch>` to use a specific
+    /// branch.
+    #[arg(
+        long = "worktree",
+        value_name = "BRANCH",
+        num_args = 0..=1,
+        default_missing_value = worktree::WORKTREE_AUTO_BRANCH_SENTINEL
+    )]
+    worktree: Option<String>,
 
     #[clap(flatten)]
     interactive: TuiCli,
@@ -377,7 +391,11 @@ struct StdioToUdsCommand {
     socket_path: PathBuf,
 }
 
-fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
+fn format_exit_messages(
+    exit_info: AppExitInfo,
+    color_enabled: bool,
+    worktree_result: Option<&worktree::WorktreeLaunchResult>,
+) -> Vec<String> {
     let AppExitInfo {
         token_usage,
         thread_id: conversation_id,
@@ -385,31 +403,58 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         ..
     } = exit_info;
 
-    if token_usage.is_zero() {
-        return Vec::new();
+    let mut lines = Vec::new();
+    if !token_usage.is_zero() {
+        lines.push(format!(
+            "{}",
+            codex_protocol::protocol::FinalOutput::from(token_usage)
+        ));
+
+        if let Some(resume_cmd) =
+            codex_core::util::resume_command(thread_name.as_deref(), conversation_id)
+        {
+            let command = if color_enabled {
+                resume_cmd.cyan().to_string()
+            } else {
+                resume_cmd
+            };
+            lines.push(format!("To continue this session, run {command}"));
+        }
     }
 
-    let mut lines = vec![format!(
-        "{}",
-        codex_protocol::protocol::FinalOutput::from(token_usage)
-    )];
-
-    if let Some(resume_cmd) =
-        codex_core::util::resume_command(thread_name.as_deref(), conversation_id)
-    {
-        let command = if color_enabled {
-            resume_cmd.cyan().to_string()
+    if let Some(worktree_result) = worktree_result {
+        let action = if worktree_result.reused_existing {
+            "Using"
         } else {
-            resume_cmd
+            "Created"
         };
-        lines.push(format!("To continue this session, run {command}"));
+        let quoted_path = format!(
+            "'{}'",
+            worktree_result
+                .path
+                .display()
+                .to_string()
+                .replace('\'', "'\\''")
+        );
+        lines.push(format!(
+            "{action} git worktree `{}` on branch `{}`.",
+            worktree_result.path.display(),
+            worktree_result.branch
+        ));
+        lines.push(format!(
+            "To remove it later, run `git worktree remove {}`.",
+            quoted_path
+        ));
     }
 
     lines
 }
 
 /// Handle the app exit and print the results. Optionally run the update action.
-fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
+fn handle_app_exit(
+    exit_info: AppExitInfo,
+    worktree_result: Option<&worktree::WorktreeLaunchResult>,
+) -> anyhow::Result<()> {
     match exit_info.exit_reason {
         ExitReason::Fatal(message) => {
             eprintln!("ERROR: {message}");
@@ -420,7 +465,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 
     let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
-    for line in format_exit_messages(exit_info, color_enabled) {
+    for line in format_exit_messages(exit_info, color_enabled, worktree_result) {
         println!("{line}");
     }
     if let Some(action) = update_action {
@@ -554,6 +599,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
+        worktree,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
@@ -562,14 +608,39 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
 
+    let requested_worktree_branch = match worktree {
+        Some(branch) if branch == worktree::WORKTREE_AUTO_BRANCH_SENTINEL => Some(None),
+        Some(branch) => {
+            let trimmed = branch.trim();
+            if trimmed.is_empty() {
+                anyhow::bail!("--worktree branch name cannot be empty");
+            }
+            Some(Some(trimmed.to_string()))
+        }
+        None => None,
+    };
+    if subcommand.is_some() && requested_worktree_branch.is_some() {
+        anyhow::bail!("--worktree is only supported for the interactive `codex` command");
+    }
+
     match subcommand {
         None => {
+            let worktree_result = if let Some(branch) = requested_worktree_branch.as_ref() {
+                let result = worktree::prepare_worktree_launch(
+                    interactive.cwd.as_deref(),
+                    branch.as_deref(),
+                )?;
+                interactive.cwd = Some(result.path.clone());
+                Some(result)
+            } else {
+                None
+            };
             prepend_config_flags(
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
             );
             let exit_info = run_interactive_tui(interactive, arg0_paths.clone()).await?;
-            handle_app_exit(exit_info)?;
+            handle_app_exit(exit_info, worktree_result.as_ref())?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(
@@ -644,7 +715,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 config_overrides,
             );
             let exit_info = run_interactive_tui(interactive, arg0_paths.clone()).await?;
-            handle_app_exit(exit_info)?;
+            handle_app_exit(exit_info, None)?;
         }
         Some(Subcommand::Fork(ForkCommand {
             session_id,
@@ -661,7 +732,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 config_overrides,
             );
             let exit_info = run_interactive_tui(interactive, arg0_paths.clone()).await?;
-            handle_app_exit(exit_info)?;
+            handle_app_exit(exit_info, None)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
@@ -1046,6 +1117,7 @@ mod tests {
             interactive,
             config_overrides: root_overrides,
             subcommand,
+            worktree: _,
             feature_toggles: _,
         } = cli;
 
@@ -1075,6 +1147,7 @@ mod tests {
             interactive,
             config_overrides: root_overrides,
             subcommand,
+            worktree: _,
             feature_toggles: _,
         } = cli;
 
@@ -1171,14 +1244,14 @@ mod tests {
             update_action: None,
             exit_reason: ExitReason::UserRequested,
         };
-        let lines = format_exit_messages(exit_info, false);
+        let lines = format_exit_messages(exit_info, false, None);
         assert!(lines.is_empty());
     }
 
     #[test]
     fn format_exit_messages_includes_resume_hint_without_color() {
         let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"), None);
-        let lines = format_exit_messages(exit_info, false);
+        let lines = format_exit_messages(exit_info, false, None);
         assert_eq!(
             lines,
             vec![
@@ -1192,7 +1265,7 @@ mod tests {
     #[test]
     fn format_exit_messages_applies_color_when_enabled() {
         let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"), None);
-        let lines = format_exit_messages(exit_info, true);
+        let lines = format_exit_messages(exit_info, true, None);
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("\u{1b}[36m"));
     }
@@ -1203,7 +1276,7 @@ mod tests {
             Some("123e4567-e89b-12d3-a456-426614174000"),
             Some("my-thread"),
         );
-        let lines = format_exit_messages(exit_info, false);
+        let lines = format_exit_messages(exit_info, false, None);
         assert_eq!(
             lines,
             vec![
@@ -1410,6 +1483,36 @@ mod tests {
         let parse_result =
             MultitoolCli::try_parse_from(["codex", "app-server", "--listen", "http://foo"]);
         assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn worktree_flag_parses_prompt_and_branch_value() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "fix lint", "--worktree", "feature/cli-wt"])
+                .expect("parse should succeed");
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("fix lint"));
+        assert_eq!(cli.worktree.as_deref(), Some("feature/cli-wt"));
+        assert!(cli.subcommand.is_none());
+    }
+
+    #[test]
+    fn worktree_equals_form_parses_without_prompt() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--worktree=feature/cli-wt"])
+            .expect("parse should succeed");
+        assert_eq!(cli.interactive.prompt, None);
+        assert_eq!(cli.worktree.as_deref(), Some("feature/cli-wt"));
+        assert!(cli.subcommand.is_none());
+    }
+
+    #[test]
+    fn worktree_without_value_uses_auto_branch_sentinel() {
+        let cli = MultitoolCli::try_parse_from(["codex", "create docs", "--worktree"])
+            .expect("parse should succeed");
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("create docs"));
+        assert_eq!(
+            cli.worktree.as_deref(),
+            Some(worktree::WORKTREE_AUTO_BRANCH_SENTINEL)
+        );
     }
 
     #[test]

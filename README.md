@@ -28,6 +28,12 @@ brew install --cask codex
 
 Then simply run `codex` to get started.
 
+To launch Codex in a separate git worktree (for isolated changes), run:
+
+```shell
+codex "implement this new feature" --worktree feature/new
+```
+
 <details>
 <summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
 
