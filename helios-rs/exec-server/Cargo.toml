@@ -1,0 +1,64 @@
+[package]
+name = "helios-exec-server"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "helios-execve-wrapper"
+path = "src/bin/main_execve_wrapper.rs"
+
+[[bin]]
+name = "helios-exec-mcp-server"
+path = "src/bin/main_mcp_server.rs"
+
+[lib]
+name = "helios_exec_server"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[package.metadata.cargo-shear]
+# This appears to be due to #[derive(rmcp::schemars::JsonSchema)], which
+# requires use of schemars via a macro that shear cannot detect.
+ignored = ["schemars"]
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+helios-core = { workspace = true }
+helios-execpolicy = { workspace = true }
+helios-protocol = { workspace = true }
+helios-shell-command = { workspace = true }
+helios-shell-escalation = { workspace = true }
+rmcp = { workspace = true, default-features = false, features = [
+    "auth",
+    "elicitation",
+    "base64",
+    "client",
+    "macros",
+    "schemars",
+    "server",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+    "transport-streamable-http-server",
+    "transport-io",
+] }
+schemars = { version = "1.2.1" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+helios-protocol = { workspace = true }
+helios-utils-cargo-bin = { workspace = true }
+core_test_support = { workspace = true }
+exec_server_test_support = { workspace = true }
+maplit = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

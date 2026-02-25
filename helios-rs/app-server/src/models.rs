@@ -1,0 +1,51 @@
+use std::sync::Arc;
+
+use helios_app_server_protocol::Model;
+use helios_app_server_protocol::ReasoningEffortOption;
+use helios_core::ThreadManager;
+use helios_core::models_manager::manager::RefreshStrategy;
+use helios_protocol::openai_models::ModelPreset;
+use helios_protocol::openai_models::ReasoningEffortPreset;
+
+pub async fn supported_models(
+    thread_manager: Arc<ThreadManager>,
+    include_hidden: bool,
+) -> Vec<Model> {
+    thread_manager
+        .list_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .into_iter()
+        .filter(|preset| include_hidden || preset.show_in_picker)
+        .map(model_from_preset)
+        .collect()
+}
+
+fn model_from_preset(preset: ModelPreset) -> Model {
+    Model {
+        id: preset.id.to_string(),
+        model: preset.model.to_string(),
+        upgrade: preset.upgrade.map(|upgrade| upgrade.id),
+        display_name: preset.display_name.to_string(),
+        description: preset.description.to_string(),
+        hidden: !preset.show_in_picker,
+        supported_reasoning_efforts: reasoning_efforts_from_preset(
+            preset.supported_reasoning_efforts,
+        ),
+        default_reasoning_effort: preset.default_reasoning_effort,
+        input_modalities: preset.input_modalities,
+        supports_personality: preset.supports_personality,
+        is_default: preset.is_default,
+    }
+}
+
+fn reasoning_efforts_from_preset(
+    efforts: Vec<ReasoningEffortPreset>,
+) -> Vec<ReasoningEffortOption> {
+    efforts
+        .iter()
+        .map(|preset| ReasoningEffortOption {
+            reasoning_effort: preset.effort,
+            description: preset.description.to_string(),
+        })
+        .collect()
+}

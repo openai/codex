@@ -1,0 +1,8327 @@
+//! Exercises `ChatWidget` event handling and rendering invariants.
+//!
+//! These tests treat the widget as the adapter between `helios_protocol::protocol::EventMsg` inputs and
+//! the TUI output. Many assertions are snapshot-based so that layout regressions and status/header
+//! changes show up as stable, reviewable diffs.
+
+use super::*;
+use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
+use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::FeedbackAudience;
+use crate::bottom_pane::LocalImageAttachment;
+use crate::bottom_pane::MentionBinding;
+use crate::history_cell::UserHistoryCell;
+use crate::test_backend::VT100Backend;
+use crate::tui::FrameRequester;
+use assert_matches::assert_matches;
+use helios_core::CodexAuth;
+use helios_core::config::Config;
+use helios_core::config::ConfigBuilder;
+use helios_core::config::Constrained;
+use helios_core::config::ConstraintError;
+#[cfg(target_os = "windows")]
+use helios_core::config::types::WindowsSandboxModeToml;
+use helios_core::config_loader::RequirementSource;
+use helios_core::features::Feature;
+use helios_core::models_manager::manager::ModelsManager;
+use helios_core::skills::model::SkillMetadata;
+use helios_core::terminal::TerminalName;
+use helios_otel::OtelManager;
+use helios_otel::RuntimeMetricsSummary;
+use helios_protocol::ThreadId;
+use helios_protocol::account::PlanType;
+use helios_protocol::config_types::CollaborationMode;
+use helios_protocol::config_types::ModeKind;
+use helios_protocol::config_types::Personality;
+use helios_protocol::config_types::Settings;
+use helios_protocol::items::AgentMessageContent;
+use helios_protocol::items::AgentMessageItem;
+use helios_protocol::items::TurnItem;
+use helios_protocol::models::MessagePhase;
+use helios_protocol::openai_models::ModelPreset;
+use helios_protocol::openai_models::ReasoningEffortPreset;
+use helios_protocol::openai_models::default_input_modalities;
+use helios_protocol::parse_command::ParsedCommand;
+use helios_protocol::plan_tool::PlanItemArg;
+use helios_protocol::plan_tool::StepStatus;
+use helios_protocol::plan_tool::UpdatePlanArgs;
+use helios_protocol::protocol::AgentMessageDeltaEvent;
+use helios_protocol::protocol::AgentMessageEvent;
+use helios_protocol::protocol::AgentReasoningDeltaEvent;
+use helios_protocol::protocol::AgentReasoningEvent;
+use helios_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use helios_protocol::protocol::BackgroundEventEvent;
+use helios_protocol::protocol::CodexErrorInfo;
+use helios_protocol::protocol::CreditsSnapshot;
+use helios_protocol::protocol::Event;
+use helios_protocol::protocol::EventMsg;
+use helios_protocol::protocol::ExecApprovalRequestEvent;
+use helios_protocol::protocol::ExecCommandBeginEvent;
+use helios_protocol::protocol::ExecCommandEndEvent;
+use helios_protocol::protocol::ExecCommandSource;
+use helios_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
+use helios_protocol::protocol::ExecPolicyAmendment;
+use helios_protocol::protocol::ExitedReviewModeEvent;
+use helios_protocol::protocol::FileChange;
+use helios_protocol::protocol::ItemCompletedEvent;
+use helios_protocol::protocol::McpStartupCompleteEvent;
+use helios_protocol::protocol::McpStartupStatus;
+use helios_protocol::protocol::McpStartupUpdateEvent;
+use helios_protocol::protocol::Op;
+use helios_protocol::protocol::PatchApplyBeginEvent;
+use helios_protocol::protocol::PatchApplyEndEvent;
+use helios_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
+use helios_protocol::protocol::RateLimitWindow;
+use helios_protocol::protocol::ReviewRequest;
+use helios_protocol::protocol::ReviewTarget;
+use helios_protocol::protocol::SessionSource;
+use helios_protocol::protocol::SkillScope;
+use helios_protocol::protocol::StreamErrorEvent;
+use helios_protocol::protocol::TerminalInteractionEvent;
+use helios_protocol::protocol::ThreadRolledBackEvent;
+use helios_protocol::protocol::TokenCountEvent;
+use helios_protocol::protocol::TokenUsage;
+use helios_protocol::protocol::TokenUsageInfo;
+use helios_protocol::protocol::TurnCompleteEvent;
+use helios_protocol::protocol::TurnStartedEvent;
+use helios_protocol::protocol::UndoCompletedEvent;
+use helios_protocol::protocol::UndoStartedEvent;
+use helios_protocol::protocol::ViewImageToolCallEvent;
+use helios_protocol::protocol::WarningEvent;
+use helios_protocol::user_input::TextElement;
+use helios_protocol::user_input::UserInput;
+use helios_utils_absolute_path::AbsolutePathBuf;
+use helios_utils_approval_presets::builtin_approval_presets;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
+use insta::assert_snapshot;
+use pretty_assertions::assert_eq;
+#[cfg(target_os = "windows")]
+use serial_test::serial;
+use std::collections::BTreeMap;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use tempfile::NamedTempFile;
+use tempfile::tempdir;
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::unbounded_channel;
+use toml::Value as TomlValue;
+
+async fn test_config() -> Config {
+    // Use base defaults to avoid depending on host state.
+    let helios_home = std::env::temp_dir();
+    ConfigBuilder::default()
+        .helios_home(helios_home.clone())
+        .build()
+        .await
+        .expect("config")
+}
+
+fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
+    ConstraintError::InvalidValue {
+        field_name: "<unknown>",
+        candidate: candidate.into(),
+        allowed: allowed.into(),
+        requirement_source: RequirementSource::Unknown,
+    }
+}
+
+fn snapshot(percent: f64) -> RateLimitSnapshot {
+    RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: Some(RateLimitWindow {
+            used_percent: percent,
+            window_minutes: Some(60),
+            resets_at: None,
+        }),
+        secondary: None,
+        credits: None,
+        plan_type: None,
+    }
+}
+
+#[tokio::test]
+async fn resumed_initial_messages_render_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "hello from user".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "assistant reply".to_string(),
+                phase: None,
+            }),
+        ]),
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_helios_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let mut merged_lines = Vec::new();
+    for lines in cells {
+        let text = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.clone())
+            .collect::<String>();
+        merged_lines.push(text);
+    }
+
+    let text_blob = merged_lines.join("\n");
+    assert!(
+        text_blob.contains("hello from user"),
+        "expected replayed user message",
+    );
+    assert!(
+        text_blob.contains("assistant reply"),
+        "expected replayed agent message",
+    );
+}
+
+#[tokio::test]
+async fn replayed_user_message_preserves_text_elements_and_local_images() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let placeholder = "[Image #1]";
+    let message = format!("{placeholder} replayed");
+    let text_elements = vec![TextElement::new(
+        (0..placeholder.len()).into(),
+        Some(placeholder.to_string()),
+    )];
+    let local_images = vec![PathBuf::from("/tmp/replay.png")];
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![EventMsg::UserMessage(UserMessageEvent {
+            message: message.clone(),
+            images: None,
+            text_elements: text_elements.clone(),
+            local_images: local_images.clone(),
+        })]),
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_helios_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((
+                cell.message.clone(),
+                cell.text_elements.clone(),
+                cell.local_image_paths.clone(),
+                cell.remote_image_urls.clone(),
+            ));
+            break;
+        }
+    }
+
+    let (stored_message, stored_elements, stored_images, stored_remote_image_urls) =
+        user_cell.expect("expected a replayed user history cell");
+    assert_eq!(stored_message, message);
+    assert_eq!(stored_elements, text_elements);
+    assert_eq!(stored_images, local_images);
+    assert!(stored_remote_image_urls.is_empty());
+}
+
+#[tokio::test]
+async fn replayed_user_message_preserves_remote_image_urls() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let message = "replayed with remote image".to_string();
+    let remote_image_urls = vec!["https://example.com/image.png".to_string()];
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![EventMsg::UserMessage(UserMessageEvent {
+            message: message.clone(),
+            images: Some(remote_image_urls.clone()),
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        })]),
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_helios_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((
+                cell.message.clone(),
+                cell.local_image_paths.clone(),
+                cell.remote_image_urls.clone(),
+            ));
+            break;
+        }
+    }
+
+    let (stored_message, stored_local_images, stored_remote_image_urls) =
+        user_cell.expect("expected a replayed user history cell");
+    assert_eq!(stored_message, message);
+    assert!(stored_local_images.is_empty());
+    assert_eq!(stored_remote_image_urls, remote_image_urls);
+}
+
+#[tokio::test]
+async fn session_configured_syncs_widget_config_permissions_and_cwd() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
+    chat.config.cwd = PathBuf::from("/home/user/main");
+
+    let expected_sandbox = SandboxPolicy::new_read_only_policy();
+    let expected_cwd = PathBuf::from("/home/user/sub-agent");
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: expected_sandbox.clone(),
+        cwd: expected_cwd.clone(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+
+    chat.handle_helios_event(Event {
+        id: "session-configured".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    assert_eq!(
+        chat.config_ref().permissions.approval_policy.value(),
+        AskForApproval::Never
+    );
+    assert_eq!(
+        chat.config_ref().permissions.sandbox_policy.get(),
+        &expected_sandbox
+    );
+    assert_eq!(&chat.config_ref().cwd, &expected_cwd);
+}
+
+#[tokio::test]
+async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let remote_image_urls = vec!["https://example.com/remote-only.png".to_string()];
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![EventMsg::UserMessage(UserMessageEvent {
+            message: String::new(),
+            images: Some(remote_image_urls.clone()),
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        })]),
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_helios_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((cell.message.clone(), cell.remote_image_urls.clone()));
+            break;
+        }
+    }
+
+    let (stored_message, stored_remote_image_urls) =
+        user_cell.expect("expected a replayed remote-image-only user history cell");
+    assert!(stored_message.is_empty());
+    assert_eq!(stored_remote_image_urls, remote_image_urls);
+}
+
+#[tokio::test]
+async fn replayed_user_message_with_only_local_images_does_not_render_history_cell() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let local_images = vec![PathBuf::from("/tmp/replay-local-only.png")];
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![EventMsg::UserMessage(UserMessageEvent {
+            message: String::new(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images,
+        })]),
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_helios_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let mut found_user_history_cell = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && cell.as_any().downcast_ref::<UserHistoryCell>().is_some()
+        {
+            found_user_history_cell = true;
+            break;
+        }
+    }
+
+    assert!(!found_user_history_cell);
+}
+
+#[tokio::test]
+async fn forked_thread_history_line_includes_name_and_id_snapshot() {
+    let (chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let mut chat = chat;
+    let temp = tempdir().expect("tempdir");
+    chat.config.helios_home = temp.path().to_path_buf();
+
+    let forked_from_id =
+        ThreadId::from_string("e9f18a88-8081-4e51-9d4e-8af5cde2d8dd").expect("forked id");
+    let session_index_entry = format!(
+        "{{\"id\":\"{forked_from_id}\",\"thread_name\":\"named-thread\",\"updated_at\":\"2024-01-02T00:00:00Z\"}}\n"
+    );
+    std::fs::write(temp.path().join("session_index.jsonl"), session_index_entry)
+        .expect("write session index");
+
+    chat.emit_forked_thread_event(forked_from_id);
+
+    let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match rx.recv().await {
+                Some(AppEvent::InsertHistoryCell(cell)) => break cell,
+                Some(_) => continue,
+                None => panic!("app event channel closed before forked thread history was emitted"),
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for forked thread history");
+    let combined = lines_to_single_string(&history_cell.display_lines(80));
+
+    assert!(
+        combined.contains("Thread forked from"),
+        "expected forked thread message in history"
+    );
+    assert_snapshot!("forked_thread_history_line", combined);
+}
+
+#[tokio::test]
+async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
+    let (chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let mut chat = chat;
+    let temp = tempdir().expect("tempdir");
+    chat.config.helios_home = temp.path().to_path_buf();
+
+    let forked_from_id =
+        ThreadId::from_string("019c2d47-4935-7423-a190-05691f566092").expect("forked id");
+    chat.emit_forked_thread_event(forked_from_id);
+
+    let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match rx.recv().await {
+                Some(AppEvent::InsertHistoryCell(cell)) => break cell,
+                Some(_) => continue,
+                None => panic!("app event channel closed before forked thread history was emitted"),
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for forked thread history");
+    let combined = lines_to_single_string(&history_cell.display_lines(80));
+
+    assert_snapshot!("forked_thread_history_line_without_name", combined);
+}
+
+#[tokio::test]
+async fn submission_preserves_text_elements_and_local_images() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_helios_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let placeholder = "[Image #1]";
+    let text = format!("{placeholder} submit");
+    let text_elements = vec![TextElement::new(
+        (0..placeholder.len()).into(),
+        Some(placeholder.to_string()),
+    )];
+    let local_images = vec![PathBuf::from("/tmp/submitted.png")];
+
+    chat.bottom_pane
+        .set_composer_text(text.clone(), text_elements.clone(), local_images.clone());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        items[0],
+        UserInput::LocalImage {
+            path: local_images[0].clone()
+        }
+    );
+    assert_eq!(
+        items[1],
+        UserInput::Text {
+            text: text.clone(),
+            text_elements: text_elements.clone(),
+        }
+    );
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((
+                cell.message.clone(),
+                cell.text_elements.clone(),
+                cell.local_image_paths.clone(),
+                cell.remote_image_urls.clone(),
+            ));
+            break;
+        }
+    }
+
+    let (stored_message, stored_elements, stored_images, stored_remote_image_urls) =
+        user_cell.expect("expected submitted user history cell");
+    assert_eq!(stored_message, text);
+    assert_eq!(stored_elements, text_elements);
+    assert_eq!(stored_images, local_images);
+    assert!(stored_remote_image_urls.is_empty());
+}
+
+#[tokio::test]
+async fn submission_with_remote_and_local_images_keeps_local_placeholder_numbering() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_helios_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let remote_url = "https://example.com/remote.png".to_string();
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+
+    let placeholder = "[Image #2]";
+    let text = format!("{placeholder} submit mixed");
+    let text_elements = vec![TextElement::new(
+        (0..placeholder.len()).into(),
+        Some(placeholder.to_string()),
+    )];
+    let local_images = vec![PathBuf::from("/tmp/submitted-mixed.png")];
+
+    chat.bottom_pane
+        .set_composer_text(text.clone(), text_elements.clone(), local_images.clone());
+    assert_eq!(chat.bottom_pane.composer_text(), "[Image #2] submit mixed");
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(items.len(), 3);
+    assert_eq!(
+        items[0],
+        UserInput::Image {
+            image_url: remote_url.clone(),
+        }
+    );
+    assert_eq!(
+        items[1],
+        UserInput::LocalImage {
+            path: local_images[0].clone(),
+        }
+    );
+    assert_eq!(
+        items[2],
+        UserInput::Text {
+            text: text.clone(),
+            text_elements: text_elements.clone(),
+        }
+    );
+    assert_eq!(text_elements[0].placeholder(&text), Some("[Image #2]"));
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((
+                cell.message.clone(),
+                cell.text_elements.clone(),
+                cell.local_image_paths.clone(),
+                cell.remote_image_urls.clone(),
+            ));
+            break;
+        }
+    }
+
+    let (stored_message, stored_elements, stored_images, stored_remote_image_urls) =
+        user_cell.expect("expected submitted user history cell");
+    assert_eq!(stored_message, text);
+    assert_eq!(stored_elements, text_elements);
+    assert_eq!(stored_images, local_images);
+    assert_eq!(stored_remote_image_urls, vec![remote_url]);
+}
+
+#[tokio::test]
+async fn enter_with_only_remote_images_submits_user_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_helios_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let remote_url = "https://example.com/remote-only.png".to_string();
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Image {
+            image_url: remote_url.clone(),
+        }]
+    );
+    assert!(chat.remote_image_urls().is_empty());
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((cell.message.clone(), cell.remote_image_urls.clone()));
+            break;
+        }
+    }
+
+    let (stored_message, stored_remote_image_urls) =
+        user_cell.expect("expected submitted user history cell");
+    assert_eq!(stored_message, String::new());
+    assert_eq!(stored_remote_image_urls, vec![remote_url]);
+}
+
+#[tokio::test]
+async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_helios_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let remote_url = "https://example.com/remote-only.png".to_string();
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(chat.remote_image_urls(), vec![remote_url]);
+}
+
+#[tokio::test]
+async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_helios_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let remote_url = "https://example.com/remote-only.png".to_string();
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+
+    chat.open_review_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.remote_image_urls(), vec![remote_url]);
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_helios_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let remote_url = "https://example.com/remote-only.png".to_string();
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+    chat.bottom_pane
+        .set_composer_input_enabled(false, Some("Input disabled for test.".to_string()));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.remote_image_urls(), vec![remote_url]);
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn submission_prefers_selected_duplicate_skill_path() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_helios_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    let repo_skill_path = PathBuf::from("/tmp/repo/figma/SKILL.md");
+    let user_skill_path = PathBuf::from("/tmp/user/figma/SKILL.md");
+    chat.set_skills(Some(vec![
+        SkillMetadata {
+            name: "figma".to_string(),
+            description: "Repo skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            permissions: None,
+            path: repo_skill_path,
+            scope: SkillScope::Repo,
+        },
+        SkillMetadata {
+            name: "figma".to_string(),
+            description: "User skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            permissions: None,
+            path: user_skill_path.clone(),
+            scope: SkillScope::User,
+        },
+    ]));
+
+    chat.bottom_pane.set_composer_text_with_mention_bindings(
+        "please use $figma now".to_string(),
+        Vec::new(),
+        Vec::new(),
+        vec![MentionBinding {
+            mention: "figma".to_string(),
+            path: user_skill_path.to_string_lossy().into_owned(),
+        }],
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    let selected_skill_paths = items
+        .iter()
+        .filter_map(|item| match item {
+            UserInput::Skill { path, .. } => Some(path.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(selected_skill_paths, vec![user_skill_path]);
+}
+
+#[tokio::test]
+async fn blocked_image_restore_preserves_mention_bindings() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let placeholder = "[Image #1]";
+    let text = format!("{placeholder} check $file");
+    let text_elements = vec![TextElement::new(
+        (0..placeholder.len()).into(),
+        Some(placeholder.to_string()),
+    )];
+    let local_images = vec![LocalImageAttachment {
+        placeholder: placeholder.to_string(),
+        path: PathBuf::from("/tmp/blocked.png"),
+    }];
+    let mention_bindings = vec![MentionBinding {
+        mention: "file".to_string(),
+        path: "/tmp/skills/file/SKILL.md".to_string(),
+    }];
+
+    chat.restore_blocked_image_submission(
+        text.clone(),
+        text_elements,
+        local_images.clone(),
+        mention_bindings.clone(),
+        Vec::new(),
+    );
+
+    let mention_start = text.find("$file").expect("mention token exists");
+    let expected_elements = vec![
+        TextElement::new((0..placeholder.len()).into(), Some(placeholder.to_string())),
+        TextElement::new(
+            (mention_start..mention_start + "$file".len()).into(),
+            Some("$file".to_string()),
+        ),
+    ];
+    assert_eq!(chat.bottom_pane.composer_text(), text);
+    assert_eq!(chat.bottom_pane.composer_text_elements(), expected_elements);
+    assert_eq!(
+        chat.bottom_pane.composer_local_image_paths(),
+        vec![local_images[0].path.clone()],
+    );
+    assert_eq!(chat.bottom_pane.take_mention_bindings(), mention_bindings);
+
+    let cells = drain_insert_history(&mut rx);
+    let warning = cells
+        .last()
+        .map(|lines| lines_to_single_string(lines))
+        .expect("expected warning cell");
+    assert!(
+        warning.contains("does not support image inputs"),
+        "expected image warning, got: {warning:?}"
+    );
+}
+
+#[tokio::test]
+async fn blocked_image_restore_with_remote_images_keeps_local_placeholder_mapping() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let first_placeholder = "[Image #2]";
+    let second_placeholder = "[Image #3]";
+    let text = format!("{first_placeholder} first\n{second_placeholder} second");
+    let second_start = text.find(second_placeholder).expect("second placeholder");
+    let text_elements = vec![
+        TextElement::new(
+            (0..first_placeholder.len()).into(),
+            Some(first_placeholder.to_string()),
+        ),
+        TextElement::new(
+            (second_start..second_start + second_placeholder.len()).into(),
+            Some(second_placeholder.to_string()),
+        ),
+    ];
+    let local_images = vec![
+        LocalImageAttachment {
+            placeholder: first_placeholder.to_string(),
+            path: PathBuf::from("/tmp/blocked-first.png"),
+        },
+        LocalImageAttachment {
+            placeholder: second_placeholder.to_string(),
+            path: PathBuf::from("/tmp/blocked-second.png"),
+        },
+    ];
+    let remote_image_urls = vec!["https://example.com/blocked-remote.png".to_string()];
+
+    chat.restore_blocked_image_submission(
+        text.clone(),
+        text_elements.clone(),
+        local_images.clone(),
+        Vec::new(),
+        remote_image_urls.clone(),
+    );
+
+    assert_eq!(chat.bottom_pane.composer_text(), text);
+    assert_eq!(chat.bottom_pane.composer_text_elements(), text_elements);
+    assert_eq!(chat.bottom_pane.composer_local_images(), local_images);
+    assert_eq!(chat.remote_image_urls(), remote_image_urls);
+}
+
+#[tokio::test]
+async fn queued_restore_with_remote_images_keeps_local_placeholder_mapping() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let first_placeholder = "[Image #2]";
+    let second_placeholder = "[Image #3]";
+    let text = format!("{first_placeholder} first\n{second_placeholder} second");
+    let second_start = text.find(second_placeholder).expect("second placeholder");
+    let text_elements = vec![
+        TextElement::new(
+            (0..first_placeholder.len()).into(),
+            Some(first_placeholder.to_string()),
+        ),
+        TextElement::new(
+            (second_start..second_start + second_placeholder.len()).into(),
+            Some(second_placeholder.to_string()),
+        ),
+    ];
+    let local_images = vec![
+        LocalImageAttachment {
+            placeholder: first_placeholder.to_string(),
+            path: PathBuf::from("/tmp/queued-first.png"),
+        },
+        LocalImageAttachment {
+            placeholder: second_placeholder.to_string(),
+            path: PathBuf::from("/tmp/queued-second.png"),
+        },
+    ];
+    let remote_image_urls = vec!["https://example.com/queued-remote.png".to_string()];
+
+    chat.restore_user_message_to_composer(UserMessage {
+        text: text.clone(),
+        local_images: local_images.clone(),
+        remote_image_urls: remote_image_urls.clone(),
+        text_elements: text_elements.clone(),
+        mention_bindings: Vec::new(),
+    });
+
+    assert_eq!(chat.bottom_pane.composer_text(), text);
+    assert_eq!(chat.bottom_pane.composer_text_elements(), text_elements);
+    assert_eq!(chat.bottom_pane.composer_local_images(), local_images);
+    assert_eq!(chat.remote_image_urls(), remote_image_urls);
+}
+
+#[tokio::test]
+async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let first_placeholder = "[Image #1]";
+    let first_text = format!("{first_placeholder} first");
+    let first_elements = vec![TextElement::new(
+        (0..first_placeholder.len()).into(),
+        Some(first_placeholder.to_string()),
+    )];
+    let first_images = [PathBuf::from("/tmp/first.png")];
+
+    let second_placeholder = "[Image #1]";
+    let second_text = format!("{second_placeholder} second");
+    let second_elements = vec![TextElement::new(
+        (0..second_placeholder.len()).into(),
+        Some(second_placeholder.to_string()),
+    )];
+    let second_images = [PathBuf::from("/tmp/second.png")];
+
+    let existing_placeholder = "[Image #1]";
+    let existing_text = format!("{existing_placeholder} existing");
+    let existing_elements = vec![TextElement::new(
+        (0..existing_placeholder.len()).into(),
+        Some(existing_placeholder.to_string()),
+    )];
+    let existing_images = vec![PathBuf::from("/tmp/existing.png")];
+
+    chat.queued_user_messages.push_back(UserMessage {
+        text: first_text,
+        local_images: vec![LocalImageAttachment {
+            placeholder: first_placeholder.to_string(),
+            path: first_images[0].clone(),
+        }],
+        remote_image_urls: Vec::new(),
+        text_elements: first_elements,
+        mention_bindings: Vec::new(),
+    });
+    chat.queued_user_messages.push_back(UserMessage {
+        text: second_text,
+        local_images: vec![LocalImageAttachment {
+            placeholder: second_placeholder.to_string(),
+            path: second_images[0].clone(),
+        }],
+        remote_image_urls: Vec::new(),
+        text_elements: second_elements,
+        mention_bindings: Vec::new(),
+    });
+    chat.refresh_queued_user_messages();
+
+    chat.bottom_pane
+        .set_composer_text(existing_text, existing_elements, existing_images.clone());
+
+    // When interrupted, queued messages are merged into the composer; image placeholders
+    // must be renumbered to match the combined local image list.
+    chat.handle_helios_event(Event {
+        id: "interrupt".into(),
+        msg: EventMsg::TurnAborted(helios_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    let first = "[Image #1] first".to_string();
+    let second = "[Image #2] second".to_string();
+    let third = "[Image #3] existing".to_string();
+    let expected_text = format!("{first}\n{second}\n{third}");
+    assert_eq!(chat.bottom_pane.composer_text(), expected_text);
+
+    let first_start = 0;
+    let second_start = first.len() + 1;
+    let third_start = second_start + second.len() + 1;
+    let expected_elements = vec![
+        TextElement::new(
+            (first_start..first_start + "[Image #1]".len()).into(),
+            Some("[Image #1]".to_string()),
+        ),
+        TextElement::new(
+            (second_start..second_start + "[Image #2]".len()).into(),
+            Some("[Image #2]".to_string()),
+        ),
+        TextElement::new(
+            (third_start..third_start + "[Image #3]".len()).into(),
+            Some("[Image #3]".to_string()),
+        ),
+    ];
+    assert_eq!(chat.bottom_pane.composer_text_elements(), expected_elements);
+    assert_eq!(
+        chat.bottom_pane.composer_local_image_paths(),
+        vec![
+            first_images[0].clone(),
+            second_images[0].clone(),
+            existing_images[0].clone(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    let expected_mode = plan_mask
+        .mode
+        .expect("expected mode kind on plan collaboration mode");
+
+    chat.set_collaboration_mask(plan_mask);
+    chat.on_task_started();
+    chat.queued_user_messages.push_back(UserMessage {
+        text: "Implement the plan.".to_string(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        text_elements: Vec::new(),
+        mention_bindings: Vec::new(),
+    });
+    chat.refresh_queued_user_messages();
+
+    chat.handle_helios_event(Event {
+        id: "interrupt".into(),
+        msg: EventMsg::TurnAborted(helios_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert_eq!(chat.bottom_pane.composer_text(), "Implement the plan.");
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.active_collaboration_mode_kind(), expected_mode);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode: Some(CollaborationMode { mode, .. }),
+            personality: None,
+            ..
+        } => assert_eq!(mode, expected_mode),
+        other => {
+            panic!("expected Op::UserTurn with active mode, got {other:?}")
+        }
+    }
+    assert_eq!(chat.active_collaboration_mode_kind(), expected_mode);
+}
+
+#[tokio::test]
+async fn remap_placeholders_uses_attachment_labels() {
+    let placeholder_one = "[Image #1]";
+    let placeholder_two = "[Image #2]";
+    let text = format!("{placeholder_two} before {placeholder_one}");
+    let elements = vec![
+        TextElement::new(
+            (0..placeholder_two.len()).into(),
+            Some(placeholder_two.to_string()),
+        ),
+        TextElement::new(
+            ("[Image #2] before ".len().."[Image #2] before [Image #1]".len()).into(),
+            Some(placeholder_one.to_string()),
+        ),
+    ];
+
+    let attachments = vec![
+        LocalImageAttachment {
+            placeholder: placeholder_one.to_string(),
+            path: PathBuf::from("/tmp/one.png"),
+        },
+        LocalImageAttachment {
+            placeholder: placeholder_two.to_string(),
+            path: PathBuf::from("/tmp/two.png"),
+        },
+    ];
+    let message = UserMessage {
+        text,
+        text_elements: elements,
+        local_images: attachments,
+        remote_image_urls: vec!["https://example.com/a.png".to_string()],
+        mention_bindings: Vec::new(),
+    };
+    let mut next_label = 3usize;
+    let remapped = remap_placeholders_for_message(message, &mut next_label);
+
+    assert_eq!(remapped.text, "[Image #4] before [Image #3]");
+    assert_eq!(
+        remapped.text_elements,
+        vec![
+            TextElement::new(
+                (0.."[Image #4]".len()).into(),
+                Some("[Image #4]".to_string()),
+            ),
+            TextElement::new(
+                ("[Image #4] before ".len().."[Image #4] before [Image #3]".len()).into(),
+                Some("[Image #3]".to_string()),
+            ),
+        ]
+    );
+    assert_eq!(
+        remapped.local_images,
+        vec![
+            LocalImageAttachment {
+                placeholder: "[Image #3]".to_string(),
+                path: PathBuf::from("/tmp/one.png"),
+            },
+            LocalImageAttachment {
+                placeholder: "[Image #4]".to_string(),
+                path: PathBuf::from("/tmp/two.png"),
+            },
+        ]
+    );
+    assert_eq!(
+        remapped.remote_image_urls,
+        vec!["https://example.com/a.png".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
+    let placeholder_one = "[Image #1]";
+    let placeholder_two = "[Image #2]";
+    let text = format!("{placeholder_two} before {placeholder_one}");
+    let elements = vec![
+        TextElement::new((0..placeholder_two.len()).into(), None),
+        TextElement::new(
+            ("[Image #2] before ".len().."[Image #2] before [Image #1]".len()).into(),
+            None,
+        ),
+    ];
+
+    let attachments = vec![
+        LocalImageAttachment {
+            placeholder: placeholder_one.to_string(),
+            path: PathBuf::from("/tmp/one.png"),
+        },
+        LocalImageAttachment {
+            placeholder: placeholder_two.to_string(),
+            path: PathBuf::from("/tmp/two.png"),
+        },
+    ];
+    let message = UserMessage {
+        text,
+        text_elements: elements,
+        local_images: attachments,
+        remote_image_urls: Vec::new(),
+        mention_bindings: Vec::new(),
+    };
+    let mut next_label = 3usize;
+    let remapped = remap_placeholders_for_message(message, &mut next_label);
+
+    assert_eq!(remapped.text, "[Image #4] before [Image #3]");
+    assert_eq!(
+        remapped.text_elements,
+        vec![
+            TextElement::new(
+                (0.."[Image #4]".len()).into(),
+                Some("[Image #4]".to_string()),
+            ),
+            TextElement::new(
+                ("[Image #4] before ".len().."[Image #4] before [Image #3]".len()).into(),
+                Some("[Image #3]".to_string()),
+            ),
+        ]
+    );
+    assert_eq!(
+        remapped.local_images,
+        vec![
+            LocalImageAttachment {
+                placeholder: "[Image #3]".to_string(),
+                path: PathBuf::from("/tmp/one.png"),
+            },
+            LocalImageAttachment {
+                placeholder: "[Image #4]".to_string(),
+                path: PathBuf::from("/tmp/two.png"),
+            },
+        ]
+    );
+}
+
+/// Entering review mode uses the hint provided by the review request.
+#[tokio::test]
+async fn entered_review_mode_uses_request_hint() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_helios_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::BaseBranch {
+                branch: "feature".to_string(),
+            },
+            user_facing_hint: Some("feature branch".to_string()),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let banner = lines_to_single_string(cells.last().expect("review banner"));
+    assert_eq!(banner, ">> Code review started: feature branch <<\n");
+    assert!(chat.is_review_mode);
+}
+
+/// Entering review mode renders the current changes banner when requested.
+#[tokio::test]
+async fn entered_review_mode_defaults_to_current_changes_banner() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_helios_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let banner = lines_to_single_string(cells.last().expect("review banner"));
+    assert_eq!(banner, ">> Code review started: current changes <<\n");
+    assert!(chat.is_review_mode);
+}
+
+/// Exiting review restores the pre-review context window indicator.
+#[tokio::test]
+async fn review_restores_context_window_indicator() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let context_window = 13_000;
+    let pre_review_tokens = 12_700; // ~30% remaining after subtracting baseline.
+    let review_tokens = 12_030; // ~97% remaining after subtracting baseline.
+
+    chat.handle_helios_event(Event {
+        id: "token-before".into(),
+        msg: EventMsg::TokenCount(TokenCountEvent {
+            info: Some(make_token_info(pre_review_tokens, context_window)),
+            rate_limits: None,
+        }),
+    });
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
+
+    chat.handle_helios_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::BaseBranch {
+                branch: "feature".to_string(),
+            },
+            user_facing_hint: Some("feature branch".to_string()),
+        }),
+    });
+
+    chat.handle_helios_event(Event {
+        id: "token-review".into(),
+        msg: EventMsg::TokenCount(TokenCountEvent {
+            info: Some(make_token_info(review_tokens, context_window)),
+            rate_limits: None,
+        }),
+    });
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(97));
+
+    chat.handle_helios_event(Event {
+        id: "review-end".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
+    assert!(!chat.is_review_mode);
+}
+
+/// Receiving a TokenCount event without usage clears the context indicator.
+#[tokio::test]
+async fn token_count_none_resets_context_indicator() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    let context_window = 13_000;
+    let pre_compact_tokens = 12_700;
+
+    chat.handle_helios_event(Event {
+        id: "token-before".into(),
+        msg: EventMsg::TokenCount(TokenCountEvent {
+            info: Some(make_token_info(pre_compact_tokens, context_window)),
+            rate_limits: None,
+        }),
+    });
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
+
+    chat.handle_helios_event(Event {
+        id: "token-cleared".into(),
+        msg: EventMsg::TokenCount(TokenCountEvent {
+            info: None,
+            rate_limits: None,
+        }),
+    });
+    assert_eq!(chat.bottom_pane.context_window_percent(), None);
+}
+
+#[tokio::test]
+async fn context_indicator_shows_used_tokens_when_window_unknown() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("unknown-model")).await;
+
+    chat.config.model_context_window = None;
+    let auto_compact_limit = 200_000;
+    chat.config.model_auto_compact_token_limit = Some(auto_compact_limit);
+
+    // No model window, so the indicator should fall back to showing tokens used.
+    let total_tokens = 106_000;
+    let token_usage = TokenUsage {
+        total_tokens,
+        ..TokenUsage::default()
+    };
+    let token_info = TokenUsageInfo {
+        total_token_usage: token_usage.clone(),
+        last_token_usage: token_usage,
+        model_context_window: None,
+    };
+
+    chat.handle_helios_event(Event {
+        id: "token-usage".into(),
+        msg: EventMsg::TokenCount(TokenCountEvent {
+            info: Some(token_info),
+            rate_limits: None,
+        }),
+    });
+
+    assert_eq!(chat.bottom_pane.context_window_percent(), None);
+    assert_eq!(
+        chat.bottom_pane.context_window_used_tokens(),
+        Some(total_tokens)
+    );
+}
+
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "system configuration APIs are blocked under macOS seatbelt"
+)]
+#[tokio::test]
+async fn helpers_are_available_and_do_not_panic() {
+    let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+    let tx = AppEventSender::new(tx_raw);
+    let cfg = test_config().await;
+    let resolved_model = helios_core::test_support::get_model_offline(cfg.model.as_deref());
+    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let thread_manager = Arc::new(
+        helios_core::test_support::thread_manager_with_models_provider(
+            CodexAuth::from_api_key("test"),
+            cfg.model_provider.clone(),
+        ),
+    );
+    let auth_manager =
+        helios_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
+    let init = ChatWidgetInit {
+        config: cfg,
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx: tx,
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        auth_manager,
+        models_manager: thread_manager.get_models_manager(),
+        feedback: helios_feedback::CodexFeedback::new(),
+        is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
+        model: Some(resolved_model),
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        otel_manager,
+    };
+    let mut w = ChatWidget::new(init, thread_manager);
+    // Basic construction sanity.
+    let _ = &mut w;
+}
+
+fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
+    let model_info = helios_core::test_support::construct_model_info_offline(model, config);
+    OtelManager::new(
+        ThreadId::new(),
+        model,
+        model_info.slug.as_str(),
+        None,
+        None,
+        None,
+        "test_originator".to_string(),
+        false,
+        "test".to_string(),
+        SessionSource::Cli,
+    )
+}
+
+// --- Helpers for tests that need direct construction and event draining ---
+async fn make_chatwidget_manual(
+    model_override: Option<&str>,
+) -> (
+    ChatWidget,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tokio::sync::mpsc::UnboundedReceiver<Op>,
+) {
+    let (tx_raw, rx) = unbounded_channel::<AppEvent>();
+    let app_event_tx = AppEventSender::new(tx_raw);
+    let (op_tx, op_rx) = unbounded_channel::<Op>();
+    let mut cfg = test_config().await;
+    let resolved_model = model_override
+        .map(str::to_owned)
+        .unwrap_or_else(|| helios_core::test_support::get_model_offline(cfg.model.as_deref()));
+    if let Some(model) = model_override {
+        cfg.model = Some(model.to_string());
+    }
+    let prevent_idle_sleep = cfg.features.enabled(Feature::PreventIdleSleep);
+    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let mut bottom = BottomPane::new(BottomPaneParams {
+        app_event_tx: app_event_tx.clone(),
+        frame_requester: FrameRequester::test_dummy(),
+        has_input_focus: true,
+        enhanced_keys_supported: false,
+        placeholder_text: "Ask Codex to do anything".to_string(),
+        disable_paste_burst: false,
+        animations_enabled: cfg.animations,
+        skills: None,
+    });
+    bottom.set_steer_enabled(true);
+    bottom.set_collaboration_modes_enabled(true);
+    let auth_manager =
+        helios_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
+    let helios_home = cfg.helios_home.clone();
+    let models_manager = Arc::new(ModelsManager::new(helios_home, auth_manager.clone(), None));
+    let reasoning_effort = None;
+    let base_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model: resolved_model.clone(),
+            reasoning_effort,
+            developer_instructions: None,
+        },
+    };
+    let current_collaboration_mode = base_mode;
+    let active_collaboration_mask = collaboration_modes::default_mask(models_manager.as_ref());
+    let mut widget = ChatWidget {
+        app_event_tx,
+        helios_op_tx: op_tx,
+        bottom_pane: bottom,
+        active_cell: None,
+        active_cell_revision: 0,
+        config: cfg,
+        current_collaboration_mode,
+        active_collaboration_mask,
+        auth_manager,
+        models_manager,
+        otel_manager,
+        session_header: SessionHeader::new(resolved_model.clone()),
+        initial_user_message: None,
+        token_info: None,
+        rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+        plan_type: None,
+        rate_limit_warnings: RateLimitWarningState::default(),
+        rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+        rate_limit_poller: None,
+        adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),
+        stream_controller: None,
+        plan_stream_controller: None,
+        running_commands: HashMap::new(),
+        suppressed_exec_calls: HashSet::new(),
+        skills_all: Vec::new(),
+        skills_initial_state: None,
+        last_unified_wait: None,
+        unified_exec_wait_streak: None,
+        turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
+        task_complete_pending: false,
+        unified_exec_processes: Vec::new(),
+        agent_turn_running: false,
+        mcp_startup_status: None,
+        connectors_cache: ConnectorsCacheState::default(),
+        connectors_prefetch_in_flight: false,
+        connectors_force_refetch_pending: false,
+        interrupts: InterruptManager::new(),
+        reasoning_buffer: String::new(),
+        full_reasoning_buffer: String::new(),
+        current_status_header: String::from("Working"),
+        retry_status_header: None,
+        pending_status_indicator_restore: false,
+        thread_id: None,
+        thread_name: None,
+        forked_from: None,
+        frame_requester: FrameRequester::test_dummy(),
+        show_welcome_banner: true,
+        queued_user_messages: VecDeque::new(),
+        queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
+        suppress_session_configured_redraw: false,
+        pending_notification: None,
+        quit_shortcut_expires_at: None,
+        quit_shortcut_key: None,
+        is_review_mode: false,
+        pre_review_token_info: None,
+        needs_final_message_separator: false,
+        had_work_activity: false,
+        saw_plan_update_this_turn: false,
+        saw_plan_item_this_turn: false,
+        plan_delta_buffer: String::new(),
+        plan_item_active: false,
+        last_separator_elapsed_secs: None,
+        turn_runtime_metrics: RuntimeMetricsSummary::default(),
+        last_rendered_width: std::cell::Cell::new(None),
+        feedback: helios_feedback::CodexFeedback::new(),
+        feedback_audience: FeedbackAudience::External,
+        current_rollout_path: None,
+        current_cwd: None,
+        session_network_proxy: None,
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        status_line_branch: None,
+        status_line_branch_cwd: None,
+        status_line_branch_pending: false,
+        status_line_branch_lookup_complete: false,
+        external_editor_state: ExternalEditorState::Closed,
+    };
+    widget.set_model(&resolved_model);
+    (widget, rx, op_rx)
+}
+
+// ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper
+// filters until we see a submission op.
+fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
+    loop {
+        match op_rx.try_recv() {
+            Ok(op @ Op::UserTurn { .. }) => return op,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected a submit op but queue was empty"),
+            Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),
+        }
+    }
+}
+
+fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
+    while let Ok(op) = op_rx.try_recv() {
+        assert!(
+            !matches!(op, Op::UserTurn { .. }),
+            "unexpected submit op: {op:?}"
+        );
+    }
+}
+
+fn set_chatgpt_auth(chat: &mut ChatWidget) {
+    chat.auth_manager = helios_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
+    chat.models_manager = Arc::new(ModelsManager::new(
+        chat.config.helios_home.clone(),
+        chat.auth_manager.clone(),
+        None,
+    ));
+}
+
+#[tokio::test]
+async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    assert!(!chat.should_prefetch_rate_limits());
+
+    set_chatgpt_auth(&mut chat);
+    assert!(chat.should_prefetch_rate_limits());
+
+    chat.config.model_provider.requires_openai_auth = false;
+    assert!(!chat.should_prefetch_rate_limits());
+
+    chat.prefetch_rate_limits();
+    assert!(chat.rate_limit_poller.is_none());
+}
+
+#[tokio::test]
+async fn worked_elapsed_from_resets_when_timer_restarts() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    assert_eq!(chat.worked_elapsed_from(5), 5);
+    assert_eq!(chat.worked_elapsed_from(9), 4);
+    // Simulate status timer resetting (e.g., status indicator recreated for a new task).
+    assert_eq!(chat.worked_elapsed_from(3), 3);
+    assert_eq!(chat.worked_elapsed_from(7), 4);
+}
+
+pub(crate) async fn make_chatwidget_manual_with_sender() -> (
+    ChatWidget,
+    AppEventSender,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tokio::sync::mpsc::UnboundedReceiver<Op>,
+) {
+    let (widget, rx, op_rx) = make_chatwidget_manual(None).await;
+    let app_event_tx = widget.app_event_tx.clone();
+    (widget, app_event_tx, rx, op_rx)
+}
+
+fn drain_insert_history(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> Vec<Vec<ratatui::text::Line<'static>>> {
+    let mut out = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev {
+            let mut lines = cell.display_lines(80);
+            if !cell.is_stream_continuation() && !out.is_empty() && !lines.is_empty() {
+                lines.insert(0, "".into());
+            }
+            out.push(lines)
+        }
+    }
+    out
+}
+
+fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
+    let mut s = String::new();
+    for line in lines {
+        for span in &line.spans {
+            s.push_str(&span.content);
+        }
+        s.push('\n');
+    }
+    s
+}
+
+fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
+    fn usage(total_tokens: i64) -> TokenUsage {
+        TokenUsage {
+            total_tokens,
+            ..TokenUsage::default()
+        }
+    }
+
+    TokenUsageInfo {
+        total_token_usage: usage(total_tokens),
+        last_token_usage: usage(total_tokens),
+        model_context_window: Some(context_window),
+    }
+}
+
+#[tokio::test]
+async fn rate_limit_warnings_emit_thresholds() {
+    let mut state = RateLimitWarningState::default();
+    let mut warnings: Vec<String> = Vec::new();
+
+    warnings.extend(state.take_warnings(Some(10.0), Some(10079), Some(55.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(55.0), Some(10081), Some(10.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(10.0), Some(10081), Some(80.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(80.0), Some(10081), Some(10.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(10.0), Some(10081), Some(95.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(95.0), Some(10079), Some(10.0), Some(299)));
+
+    assert_eq!(
+        warnings,
+        vec![
+            String::from(
+                "Heads up, you have less than 25% of your 5h limit left. Run /status for a breakdown."
+            ),
+            String::from(
+                "Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.",
+            ),
+            String::from(
+                "Heads up, you have less than 5% of your 5h limit left. Run /status for a breakdown."
+            ),
+            String::from(
+                "Heads up, you have less than 5% of your weekly limit left. Run /status for a breakdown.",
+            ),
+        ],
+        "expected one warning per limit for the highest crossed threshold"
+    );
+}
+
+#[tokio::test]
+async fn test_rate_limit_warnings_monthly() {
+    let mut state = RateLimitWarningState::default();
+    let mut warnings: Vec<String> = Vec::new();
+
+    warnings.extend(state.take_warnings(Some(75.0), Some(43199), None, None));
+    assert_eq!(
+        warnings,
+        vec![String::from(
+            "Heads up, you have less than 25% of your monthly limit left. Run /status for a breakdown.",
+        ),],
+        "expected one warning per limit for the highest crossed threshold"
+    );
+}
+
+#[tokio::test]
+async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: Some("17.5".to_string()),
+        }),
+        plan_type: None,
+    }));
+    let initial_balance = chat
+        .rate_limit_snapshots_by_limit_id
+        .get("codex")
+        .and_then(|snapshot| snapshot.credits.as_ref())
+        .and_then(|credits| credits.balance.as_deref());
+    assert_eq!(initial_balance, Some("17.5"));
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 80.0,
+            window_minutes: Some(60),
+            resets_at: Some(123),
+        }),
+        secondary: None,
+        credits: None,
+        plan_type: None,
+    }));
+
+    let display = chat
+        .rate_limit_snapshots_by_limit_id
+        .get("codex")
+        .expect("rate limits should be cached");
+    let credits = display
+        .credits
+        .as_ref()
+        .expect("credits should persist when headers omit them");
+
+    assert_eq!(credits.balance.as_deref(), Some("17.5"));
+    assert!(!credits.unlimited);
+    assert_eq!(
+        display.primary.as_ref().map(|window| window.used_percent),
+        Some(80.0)
+    );
+}
+
+#[tokio::test]
+async fn rate_limit_snapshot_updates_and_retains_plan_type() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 10.0,
+            window_minutes: Some(60),
+            resets_at: None,
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 5.0,
+            window_minutes: Some(300),
+            resets_at: None,
+        }),
+        credits: None,
+        plan_type: Some(PlanType::Plus),
+    }));
+    assert_eq!(chat.plan_type, Some(PlanType::Plus));
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 25.0,
+            window_minutes: Some(30),
+            resets_at: Some(123),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 15.0,
+            window_minutes: Some(300),
+            resets_at: Some(234),
+        }),
+        credits: None,
+        plan_type: Some(PlanType::Pro),
+    }));
+    assert_eq!(chat.plan_type, Some(PlanType::Pro));
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 30.0,
+            window_minutes: Some(60),
+            resets_at: Some(456),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 18.0,
+            window_minutes: Some(300),
+            resets_at: Some(567),
+        }),
+        credits: None,
+        plan_type: None,
+    }));
+    assert_eq!(chat.plan_type, Some(PlanType::Pro));
+}
+
+#[tokio::test]
+async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: Some(RateLimitWindow {
+            used_percent: 20.0,
+            window_minutes: Some(300),
+            resets_at: Some(100),
+        }),
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: Some("5.00".to_string()),
+        }),
+        plan_type: Some(PlanType::Pro),
+    }));
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("helios_other".to_string()),
+        limit_name: Some("helios_other".to_string()),
+        primary: Some(RateLimitWindow {
+            used_percent: 90.0,
+            window_minutes: Some(60),
+            resets_at: Some(200),
+        }),
+        secondary: None,
+        credits: None,
+        plan_type: Some(PlanType::Pro),
+    }));
+
+    let codex = chat
+        .rate_limit_snapshots_by_limit_id
+        .get("codex")
+        .expect("codex snapshot should exist");
+    let other = chat
+        .rate_limit_snapshots_by_limit_id
+        .get("helios_other")
+        .expect("helios_other snapshot should exist");
+
+    assert_eq!(codex.primary.as_ref().map(|w| w.used_percent), Some(20.0));
+    assert_eq!(
+        codex
+            .credits
+            .as_ref()
+            .and_then(|credits| credits.balance.as_deref()),
+        Some("5.00")
+    );
+    assert_eq!(other.primary.as_ref().map(|w| w.used_percent), Some(90.0));
+    assert!(other.credits.is_none());
+}
+
+#[tokio::test]
+async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
+    let (mut chat, _, _) = make_chatwidget_manual(Some(NUDGE_MODEL_SLUG)).await;
+    chat.auth_manager = helios_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[tokio::test]
+async fn rate_limit_switch_prompt_skips_non_helios_limit() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.auth_manager = helios_core::test_support::auth_manager_from_auth(auth);
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("helios_other".to_string()),
+        limit_name: Some("helios_other".to_string()),
+        primary: Some(RateLimitWindow {
+            used_percent: 95.0,
+            window_minutes: Some(60),
+            resets_at: None,
+        }),
+        secondary: None,
+        credits: None,
+        plan_type: None,
+    }));
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[tokio::test]
+async fn rate_limit_switch_prompt_shows_once_per_session() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.auth_manager = helios_core::test_support::auth_manager_from_auth(auth);
+
+    chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
+    assert!(
+        chat.rate_limit_warnings.primary_index >= 1,
+        "warnings not emitted"
+    );
+    chat.maybe_show_pending_rate_limit_prompt();
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+}
+
+#[tokio::test]
+async fn rate_limit_switch_prompt_respects_hidden_notice() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.auth_manager = helios_core::test_support::auth_manager_from_auth(auth);
+    chat.config.notices.hide_rate_limit_model_nudge = Some(true);
+
+    chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[tokio::test]
+async fn rate_limit_switch_prompt_defers_until_task_complete() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.auth_manager = helios_core::test_support::auth_manager_from_auth(auth);
+
+    chat.bottom_pane.set_task_running(true);
+    chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Pending
+    ));
+
+    chat.bottom_pane.set_task_running(false);
+    chat.maybe_show_pending_rate_limit_prompt();
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Shown
+    ));
+}
+
+#[tokio::test]
+async fn rate_limit_switch_prompt_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.auth_manager = helios_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
+
+    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
+    chat.maybe_show_pending_rate_limit_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("rate_limit_switch_prompt_popup", popup);
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.open_plan_implementation_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("plan_implementation_popup", popup);
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_no_selected_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("plan_implementation_popup_no_selected", popup);
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_yes_emits_submit_message_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.open_plan_implementation_prompt();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::SubmitUserMessageWithMode {
+        text,
+        collaboration_mode,
+    } = event
+    else {
+        panic!("expected SubmitUserMessageWithMode, got {event:?}");
+    };
+    assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
+    assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
+}
+
+#[tokio::test]
+async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let default_mode = collaboration_modes::default_mode_mask(chat.models_manager.as_ref())
+        .expect("expected default collaboration mode");
+    chat.submit_user_message_with_mode("Implement the plan.".to_string(), default_mode);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    ..
+                }),
+            personality: None,
+            ..
+        } => {}
+        other => {
+            panic!("expected Op::UserTurn with default collab mode, got {other:?}")
+        }
+    }
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let preset = get_available_model(&chat, "gpt-5.1-helios-max");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    assert_matches!(
+        event,
+        AppEvent::OpenPlanReasoningScopePrompt {
+            model,
+            effort: Some(_)
+        } if model == "gpt-5.1-helios-max"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    let current_preset = get_available_model(&chat, "gpt-5.1-helios-max");
+    chat.set_reasoning_effort(Some(current_preset.default_reasoning_effort));
+
+    let preset = get_available_model(&chat, "gpt-5.1-helios-max");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateModel(model) if model == "gpt-5.1-helios-max"
+        )),
+        "expected model update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
+        "expected reasoning update event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_global_opens_scope_prompt()
+ {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    // Reproduce: Plan effective reasoning remains the preset (medium), but the
+    // global default differs (high). Pressing Enter on the current Plan choice
+    // should open the scope prompt rather than silently rewriting the global default.
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let preset = get_available_model(&chat, "gpt-5.1-helios-max");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    assert_matches!(
+        event,
+        AppEvent::OpenPlanReasoningScopePrompt {
+            model,
+            effort: Some(ReasoningEffortConfig::Medium)
+        } if model == "gpt-5.1-helios-max"
+    );
+}
+
+#[tokio::test]
+async fn plan_mode_reasoning_override_is_marked_current_in_reasoning_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    set_chatgpt_auth(&mut chat);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
+
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+
+    let preset = get_available_model(&chat, "gpt-5.1-helios-max");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("Low (current)"));
+    assert!(
+        !popup.contains("High (current)"),
+        "expected Plan override to drive current reasoning label, got: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_prompt_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
+    set_chatgpt_auth(&mut chat);
+
+    let preset = get_available_model(&chat, "gpt-5");
+    chat.open_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateModel(model) if model == "gpt-5"
+        )),
+        "expected model update event; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
+        "expected reasoning update event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-helios-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected plan override to be updated; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistPlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected updated plan override to be persisted; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelection { model, effort: Some(ReasoningEffortConfig::High) }
+                if model == "gpt-5.1-helios-max"
+        )),
+        "expected global model reasoning selection persistence; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_mentions_selected_reasoning() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-helios-max".to_string(),
+        Some(ReasoningEffortConfig::Medium),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("Choose where to apply medium reasoning."));
+    assert!(popup.contains("Always use medium reasoning in Plan mode."));
+    assert!(popup.contains("Apply to Plan mode override"));
+    assert!(popup.contains("Apply to global default and Plan mode override"));
+    assert!(popup.contains("user-chosen Plan override (low)"));
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_mentions_built_in_plan_default_when_no_override() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-helios-max".to_string(),
+        Some(ReasoningEffortConfig::Medium),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("built-in Plan default (medium)"));
+}
+
+#[tokio::test]
+async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasoning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+    chat.open_plan_reasoning_scope_prompt(
+        "gpt-5.1-helios-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected plan-only reasoning update; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::UpdateReasoningEffort(_))),
+        "did not expect all-modes reasoning update; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn submit_user_message_with_mode_errors_when_mode_changes_during_running_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+    chat.on_task_started();
+
+    let default_mode = collaboration_modes::default_mask(chat.models_manager.as_ref())
+        .expect("expected default collaboration mode");
+    chat.submit_user_message_with_mode("Implement the plan.".to_string(), default_mode);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert!(chat.queued_user_messages.is_empty());
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Cannot switch collaboration mode while a turn is running."),
+        "expected running-turn error message, got: {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn submit_user_message_with_mode_allows_same_mode_during_running_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask.clone());
+    chat.on_task_started();
+
+    chat.submit_user_message_with_mode("Continue planning.".to_string(), plan_mask);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert!(chat.queued_user_messages.is_empty());
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Plan,
+                    ..
+                }),
+            personality: None,
+            ..
+        } => {}
+        other => {
+            panic!("expected Op::UserTurn with plan collab mode, got {other:?}")
+        }
+    }
+}
+
+#[tokio::test]
+async fn submit_user_message_with_mode_submits_when_plan_stream_is_not_active() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    let default_mode = collaboration_modes::default_mask(chat.models_manager.as_ref())
+        .expect("expected default collaboration mode");
+    let expected_mode = default_mode
+        .mode
+        .expect("expected default collaboration mode kind");
+    chat.submit_user_message_with_mode("Implement the plan.".to_string(), default_mode);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), expected_mode);
+    assert!(chat.queued_user_messages.is_empty());
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode: Some(CollaborationMode { mode, .. }),
+            personality: None,
+            ..
+        } => assert_eq!(mode, expected_mode),
+        other => {
+            panic!("expected Op::UserTurn with default collab mode, got {other:?}")
+        }
+    }
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_skips_replayed_turn_complete() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
+        turn_id: "turn-1".to_string(),
+        last_agent_message: Some("Plan details".to_string()),
+    })]);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no plan popup for replayed turn, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_complete() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+
+    chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
+        turn_id: "turn-1".to_string(),
+        last_agent_message: Some("Plan details".to_string()),
+    })]);
+    let replay_popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !replay_popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no prompt for replayed turn completion, got {replay_popup:?}"
+    );
+
+    chat.handle_helios_event(Event {
+        id: "live-turn-complete-1".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("Plan details".to_string()),
+        }),
+    });
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected prompt for first live turn completion after replay, got {popup:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let dismissed_popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !dismissed_popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected prompt to dismiss on Esc, got {dismissed_popup:?}"
+    );
+
+    chat.handle_helios_event(Event {
+        id: "live-turn-complete-2".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("Plan details".to_string()),
+        }),
+    });
+    let duplicate_popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !duplicate_popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no prompt for duplicate live completion, got {duplicate_popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn replayed_thread_rollback_emits_ordered_app_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+
+    chat.replay_initial_messages(vec![EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+        num_turns: 2,
+    })]);
+
+    let mut saw = false;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::ApplyThreadRollback { num_turns } = event {
+            saw = true;
+            assert_eq!(num_turns, 2);
+            break;
+        }
+    }
+
+    assert!(saw, "expected replay rollback app event");
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_skips_when_messages_queued() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+    chat.bottom_pane.set_task_running(true);
+    chat.queue_user_message("Queued message".into());
+
+    chat.on_task_complete(Some("Plan details".to_string()), false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no plan popup with queued messages, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_skips_without_proposed_plan() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_update(UpdatePlanArgs {
+        explanation: None,
+        plan: vec![PlanItemArg {
+            step: "First".to_string(),
+            status: StepStatus::Pending,
+        }],
+    });
+    chat.on_task_complete(None, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no plan popup without proposed plan output, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_shows_after_proposed_plan_output() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.on_task_complete(None, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup after proposed plan output, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.auth_manager = helios_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_update(UpdatePlanArgs {
+        explanation: None,
+        plan: vec![PlanItemArg {
+            step: "First".to_string(),
+            status: StepStatus::Pending,
+        }],
+    });
+    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
+    chat.on_task_complete(None, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Approaching rate limits"),
+        "expected rate limit popup, got {popup:?}"
+    );
+    assert!(
+        !popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup to be skipped, got {popup:?}"
+    );
+}
+
+// (removed experimental resize snapshot test)
+
+#[tokio::test]
+async fn exec_approval_emits_proposed_command_and_decision_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Trigger an exec approval request with a short, single-line command
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-short".into(),
+        approval_id: Some("call-short".into()),
+        turn_id: "turn-short".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
+        network_approval_context: None,
+        proposed_execpolicy_amendment: None,
+        parsed_cmd: vec![],
+    };
+    chat.handle_helios_event(Event {
+        id: "sub-short".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+
+    let proposed_cells = drain_insert_history(&mut rx);
+    assert!(
+        proposed_cells.is_empty(),
+        "expected approval request to render via modal without emitting history cells"
+    );
+
+    // The approval modal should display the command snippet for user confirmation.
+    let area = Rect::new(0, 0, 80, chat.desired_height(80));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    chat.render(area, &mut buf);
+    assert_snapshot!("exec_approval_modal_exec", format!("{buf:?}"));
+
+    // Approve via keyboard and verify a concise decision history line is added
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    let decision = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected decision cell in history");
+    assert_snapshot!(
+        "exec_approval_history_decision_approved_short",
+        lines_to_single_string(&decision)
+    );
+}
+
+#[tokio::test]
+async fn exec_approval_decision_truncates_multiline_and_long_commands() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Multiline command: modal should show full command, history records decision only
+    let ev_multi = ExecApprovalRequestEvent {
+        call_id: "call-multi".into(),
+        approval_id: Some("call-multi".into()),
+        turn_id: "turn-multi".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
+        network_approval_context: None,
+        proposed_execpolicy_amendment: None,
+        parsed_cmd: vec![],
+    };
+    chat.handle_helios_event(Event {
+        id: "sub-multi".into(),
+        msg: EventMsg::ExecApprovalRequest(ev_multi),
+    });
+    let proposed_multi = drain_insert_history(&mut rx);
+    assert!(
+        proposed_multi.is_empty(),
+        "expected multiline approval request to render via modal without emitting history cells"
+    );
+
+    let area = Rect::new(0, 0, 80, chat.desired_height(80));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let mut saw_first_line = false;
+    for y in 0..area.height {
+        let mut row = String::new();
+        for x in 0..area.width {
+            row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+        }
+        if row.contains("echo line1") {
+            saw_first_line = true;
+            break;
+        }
+    }
+    assert!(
+        saw_first_line,
+        "expected modal to show first line of multiline snippet"
+    );
+
+    // Deny via keyboard; decision snippet should be single-line and elided with " ..."
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    let aborted_multi = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected aborted decision cell (multiline)");
+    assert_snapshot!(
+        "exec_approval_history_decision_aborted_multiline",
+        lines_to_single_string(&aborted_multi)
+    );
+
+    // Very long single-line command: decision snippet should be truncated <= 80 chars with trailing ...
+    let long = format!("echo {}", "a".repeat(200));
+    let ev_long = ExecApprovalRequestEvent {
+        call_id: "call-long".into(),
+        approval_id: Some("call-long".into()),
+        turn_id: "turn-long".into(),
+        command: vec!["bash".into(), "-lc".into(), long],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: None,
+        network_approval_context: None,
+        proposed_execpolicy_amendment: None,
+        parsed_cmd: vec![],
+    };
+    chat.handle_helios_event(Event {
+        id: "sub-long".into(),
+        msg: EventMsg::ExecApprovalRequest(ev_long),
+    });
+    let proposed_long = drain_insert_history(&mut rx);
+    assert!(
+        proposed_long.is_empty(),
+        "expected long approval request to avoid emitting history cells before decision"
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    let aborted_long = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected aborted decision cell (long)");
+    assert_snapshot!(
+        "exec_approval_history_decision_aborted_long",
+        lines_to_single_string(&aborted_long)
+    );
+}
+
+// --- Small helpers to tersely drive exec begin/end and snapshot active cell ---
+fn begin_exec_with_source(
+    chat: &mut ChatWidget,
+    call_id: &str,
+    raw_cmd: &str,
+    source: ExecCommandSource,
+) -> ExecCommandBeginEvent {
+    // Build the full command vec and parse it using core's parser,
+    // then convert to protocol variants for the event payload.
+    let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
+    let parsed_cmd: Vec<ParsedCommand> =
+        helios_shell_command::parse_command::parse_command(&command);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let interaction_input = None;
+    let event = ExecCommandBeginEvent {
+        call_id: call_id.to_string(),
+        process_id: None,
+        turn_id: "turn-1".to_string(),
+        command,
+        cwd,
+        parsed_cmd,
+        source,
+        interaction_input,
+    };
+    chat.handle_helios_event(Event {
+        id: call_id.to_string(),
+        msg: EventMsg::ExecCommandBegin(event.clone()),
+    });
+    event
+}
+
+fn begin_unified_exec_startup(
+    chat: &mut ChatWidget,
+    call_id: &str,
+    process_id: &str,
+    raw_cmd: &str,
+) -> ExecCommandBeginEvent {
+    let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let event = ExecCommandBeginEvent {
+        call_id: call_id.to_string(),
+        process_id: Some(process_id.to_string()),
+        turn_id: "turn-1".to_string(),
+        command,
+        cwd,
+        parsed_cmd: Vec::new(),
+        source: ExecCommandSource::UnifiedExecStartup,
+        interaction_input: None,
+    };
+    chat.handle_helios_event(Event {
+        id: call_id.to_string(),
+        msg: EventMsg::ExecCommandBegin(event.clone()),
+    });
+    event
+}
+
+fn terminal_interaction(chat: &mut ChatWidget, call_id: &str, process_id: &str, stdin: &str) {
+    chat.handle_helios_event(Event {
+        id: call_id.to_string(),
+        msg: EventMsg::TerminalInteraction(TerminalInteractionEvent {
+            call_id: call_id.to_string(),
+            process_id: process_id.to_string(),
+            stdin: stdin.to_string(),
+        }),
+    });
+}
+
+fn complete_assistant_message(
+    chat: &mut ChatWidget,
+    item_id: &str,
+    text: &str,
+    phase: Option<MessagePhase>,
+) {
+    chat.handle_helios_event(Event {
+        id: format!("raw-{item_id}"),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::AgentMessage(AgentMessageItem {
+                id: item_id.to_string(),
+                content: vec![AgentMessageContent::Text {
+                    text: text.to_string(),
+                }],
+                phase,
+            }),
+        }),
+    });
+}
+
+fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) -> ExecCommandBeginEvent {
+    begin_exec_with_source(chat, call_id, raw_cmd, ExecCommandSource::Agent)
+}
+
+fn end_exec(
+    chat: &mut ChatWidget,
+    begin_event: ExecCommandBeginEvent,
+    stdout: &str,
+    stderr: &str,
+    exit_code: i32,
+) {
+    let aggregated = if stderr.is_empty() {
+        stdout.to_string()
+    } else {
+        format!("{stdout}{stderr}")
+    };
+    let ExecCommandBeginEvent {
+        call_id,
+        turn_id,
+        command,
+        cwd,
+        parsed_cmd,
+        source,
+        interaction_input,
+        process_id,
+    } = begin_event;
+    chat.handle_helios_event(Event {
+        id: call_id.clone(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id,
+            process_id,
+            turn_id,
+            command,
+            cwd,
+            parsed_cmd,
+            source,
+            interaction_input,
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            aggregated_output: aggregated.clone(),
+            exit_code,
+            duration: std::time::Duration::from_millis(5),
+            formatted_output: aggregated,
+            status: if exit_code == 0 {
+                CoreExecCommandStatus::Completed
+            } else {
+                CoreExecCommandStatus::Failed
+            },
+        }),
+    });
+}
+
+fn active_blob(chat: &ChatWidget) -> String {
+    let lines = chat
+        .active_cell
+        .as_ref()
+        .expect("active cell present")
+        .display_lines(80);
+    lines_to_single_string(&lines)
+}
+
+fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
+    let models = chat
+        .models_manager
+        .try_list_models()
+        .expect("models lock available");
+    models
+        .iter()
+        .find(|&preset| preset.model == model)
+        .cloned()
+        .unwrap_or_else(|| panic!("{model} preset not found"))
+}
+
+#[tokio::test]
+async fn empty_enter_during_task_does_not_queue() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Simulate running task so submissions would normally be queued.
+    chat.bottom_pane.set_task_running(true);
+
+    // Press Enter with an empty composer.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Ensure nothing was queued.
+    assert!(chat.queued_user_messages.is_empty());
+}
+
+#[tokio::test]
+async fn alt_up_edits_most_recent_queued_message() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_message_edit_binding = crate::key_hint::alt(KeyCode::Up);
+    chat.bottom_pane
+        .set_queued_message_edit_binding(crate::key_hint::alt(KeyCode::Up));
+
+    // Simulate a running task so messages would normally be queued.
+    chat.bottom_pane.set_task_running(true);
+
+    // Seed two queued messages.
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    // Press Alt+Up to edit the most recent (last) queued message.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+
+    // Composer should now contain the last queued message.
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "second queued".to_string()
+    );
+    // And the queue should now contain only the remaining (older) item.
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "first queued"
+    );
+}
+
+async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
+    terminal_name: TerminalName,
+) {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_name);
+    chat.bottom_pane
+        .set_queued_message_edit_binding(chat.queued_message_edit_binding);
+
+    // Simulate a running task so messages would normally be queued.
+    chat.bottom_pane.set_task_running(true);
+
+    // Seed two queued messages.
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    // Press Shift+Left to edit the most recent (last) queued message.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+
+    // Composer should now contain the last queued message.
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "second queued".to_string()
+    );
+    // And the queue should now contain only the remaining (older) item.
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "first queued"
+    );
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_apple_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::AppleTerminal)
+        .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_warp_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::WarpTerminal)
+        .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_vscode_terminal() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::VsCode).await;
+}
+
+#[test]
+fn queued_message_edit_binding_mapping_covers_special_terminals() {
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::AppleTerminal),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::WarpTerminal),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::VsCode),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalName::Iterm2),
+        crate::key_hint::alt(KeyCode::Up)
+    );
+}
+
+/// Pressing Up to recall the most recent history entry and immediately queuing
+/// it while a task is running should always enqueue the same text, even when it
+/// is queued repeatedly.
+#[tokio::test]
+async fn enqueueing_history_prompt_multiple_times_is_stable() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    // Submit an initial prompt to seed history.
+    chat.bottom_pane
+        .set_composer_text("repeat me".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Simulate an active task so further submissions are queued.
+    chat.bottom_pane.set_task_running(true);
+
+    for _ in 0..3 {
+        // Recall the prompt from history and ensure it is what we expect.
+        chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(chat.bottom_pane.composer_text(), "repeat me");
+
+        // Queue the prompt while the task is running.
+        chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    }
+
+    assert_eq!(chat.queued_user_messages.len(), 3);
+    for message in chat.queued_user_messages.iter() {
+        assert_eq!(message.text, "repeat me");
+    }
+}
+
+#[tokio::test]
+async fn streaming_final_answer_keeps_task_running_state() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(!chat.bottom_pane.status_indicator_visible());
+
+    chat.bottom_pane
+        .set_composer_text("queued submission".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "queued submission"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    match op_rx.try_recv() {
+        Ok(Op::Interrupt) => {}
+        other => panic!("expected Op::Interrupt, got {other:?}"),
+    }
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+}
+
+#[tokio::test]
+async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    // A second idle tick should not toggle the row back on and cause jitter.
+    chat.on_commit_tick();
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+}
+
+#[tokio::test]
+async fn commentary_completion_restores_status_indicator_before_exec_begin() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+
+    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+
+    complete_assistant_message(
+        &mut chat,
+        "msg-commentary",
+        "Preamble line\n",
+        Some(MessagePhase::Commentary),
+    );
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    begin_exec(&mut chat, "call-1", "echo hi");
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+}
+
+#[tokio::test]
+async fn plan_completion_restores_status_indicator_after_streaming_plan_output() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.on_task_started();
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+
+    chat.on_plan_delta("- Step 1\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    chat.on_plan_item_completed("- Step 1\n".to_string());
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+}
+
+#[tokio::test]
+async fn preamble_keeps_working_status_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    // Regression sequence: a preamble line is committed to history before any exec/tool event.
+    // After commentary completes, the status row should be restored before subsequent work.
+    chat.on_task_started();
+    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+    complete_assistant_message(
+        &mut chat,
+        "msg-commentary-snapshot",
+        "Preamble line\n",
+        Some(MessagePhase::Commentary),
+    );
+
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw preamble + status widget");
+    assert_snapshot!("preamble_keeps_working_status", terminal.backend());
+}
+
+#[tokio::test]
+async fn unified_exec_begin_restores_status_indicator_after_preamble() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+
+    // Simulate a hidden status row during an active turn.
+    chat.bottom_pane.hide_status_indicator();
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    begin_unified_exec_startup(&mut chat, "call-1", "proc-1", "sleep 2");
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+}
+
+#[tokio::test]
+async fn unified_exec_begin_restores_working_status_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    begin_unified_exec_startup(&mut chat, "call-1", "proc-1", "sleep 2");
+
+    let width: u16 = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
+        .expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw chatwidget");
+    assert_snapshot!(
+        "unified_exec_begin_restores_working_status",
+        terminal.backend()
+    );
+}
+
+#[tokio::test]
+async fn steer_enter_queues_while_plan_stream_is_active() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1".to_string());
+
+    chat.bottom_pane
+        .set_composer_text("queued submission".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "queued submission"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn steer_enter_queues_while_final_answer_stream_is_active() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    // Keep the assistant stream open (no commit tick/finalize) to model the repro window:
+    // user presses Enter while the final answer is still streaming.
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+
+    chat.bottom_pane.set_composer_text(
+        "queued while streaming".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "queued while streaming"
+    );
+    assert_no_submit_op(&mut op_rx);
+
+    // Once final output ends, the queued input must be submitted automatically.
+    chat.on_task_complete(None, false);
+
+    assert!(chat.queued_user_messages.is_empty());
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected Op::UserTurn after stream completion, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    // Simulate "dead mode" repro timing by keeping a final-answer stream active while the
+    // user submits multiple follow-up prompts.
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+
+    chat.bottom_pane
+        .set_composer_text("first follow-up".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.bottom_pane
+        .set_composer_text("second follow-up".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.queued_user_messages.len(), 2);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "first follow-up"
+    );
+    assert_eq!(
+        chat.queued_user_messages.back().unwrap().text,
+        "second follow-up"
+    );
+    assert_no_submit_op(&mut op_rx);
+
+    // Completion must recover by submitting the oldest queued prompt first.
+    chat.on_task_complete(None, false);
+
+    let first_items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        first_items,
+        vec![UserInput::Text {
+            text: "first follow-up".to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "second follow-up"
+    );
+
+    // A subsequent turn lifecycle should continue draining remaining queued prompts, proving
+    // the widget did not enter a permanently stuck state.
+    chat.on_task_started();
+    chat.on_task_complete(None, false);
+
+    let second_items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        second_items,
+        vec![UserInput::Text {
+            text: "second follow-up".to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+    assert!(chat.queued_user_messages.is_empty());
+}
+
+#[tokio::test]
+async fn steer_enter_submits_when_plan_stream_is_not_active() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+    chat.on_task_started();
+
+    chat.bottom_pane
+        .set_composer_text("submitted immediately".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.queued_user_messages.is_empty());
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            personality: Some(Personality::Pragmatic),
+            ..
+        } => {}
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn ctrl_c_shutdown_works_with_caps_lock() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn ctrl_d_quits_without_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn ctrl_d_with_modal_open_does_not_quit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_approvals_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.insert_str("draft message ");
+    chat.bottom_pane
+        .attach_image(PathBuf::from("/tmp/preview.png"));
+    let placeholder = "[Image #1]";
+    assert!(
+        chat.bottom_pane.composer_text().ends_with(placeholder),
+        "expected placeholder {placeholder:?} in composer text"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(chat.bottom_pane.composer_text().is_empty());
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    let restored_text = chat.bottom_pane.composer_text();
+    assert!(
+        restored_text.ends_with(placeholder),
+        "expected placeholder {placeholder:?} after history recall"
+    );
+    assert!(restored_text.starts_with("draft message "));
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+
+    let images = chat.bottom_pane.take_recent_submission_images();
+    assert_eq!(vec![PathBuf::from("/tmp/preview.png")], images);
+}
+
+#[tokio::test]
+async fn exec_history_cell_shows_working_then_completed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Begin command
+    let begin = begin_exec(&mut chat, "call-1", "echo done");
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 0, "no exec cell should have been flushed yet");
+
+    // End command successfully
+    end_exec(&mut chat, begin, "done", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    // Exec end now finalizes and flushes the exec cell immediately.
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+    // Inspect the flushed exec cell rendering.
+    let lines = &cells[0];
+    let blob = lines_to_single_string(lines);
+    // New behavior: no glyph markers; ensure command is shown and no panic.
+    assert!(
+        blob.contains("• Ran"),
+        "expected summary header present: {blob:?}"
+    );
+    assert!(
+        blob.contains("echo done"),
+        "expected command text to be present: {blob:?}"
+    );
+}
+
+#[tokio::test]
+async fn exec_history_cell_shows_working_then_failed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Begin command
+    let begin = begin_exec(&mut chat, "call-2", "false");
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 0, "no exec cell should have been flushed yet");
+
+    // End command with failure
+    end_exec(&mut chat, begin, "", "Bloop", 2);
+
+    let cells = drain_insert_history(&mut rx);
+    // Exec end with failure should also flush immediately.
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+    let lines = &cells[0];
+    let blob = lines_to_single_string(lines);
+    assert!(
+        blob.contains("• Ran false"),
+        "expected command and header text present: {blob:?}"
+    );
+    assert!(blob.to_lowercase().contains("bloop"), "expected error text");
+}
+
+#[tokio::test]
+async fn exec_end_without_begin_uses_event_command() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "echo orphaned".to_string(),
+    ];
+    let parsed_cmd = helios_shell_command::parse_command::parse_command(&command);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    chat.handle_helios_event(Event {
+        id: "call-orphan".to_string(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-orphan".to_string(),
+            process_id: None,
+            turn_id: "turn-1".to_string(),
+            command,
+            cwd,
+            parsed_cmd,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            stdout: "done".to_string(),
+            stderr: String::new(),
+            aggregated_output: "done".to_string(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(5),
+            formatted_output: "done".to_string(),
+            status: CoreExecCommandStatus::Completed,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+    let blob = lines_to_single_string(&cells[0]);
+    assert!(
+        blob.contains("• Ran echo orphaned"),
+        "expected command text to come from event: {blob:?}"
+    );
+    assert!(
+        !blob.contains("call-orphan"),
+        "call id should not be rendered when event has the command: {blob:?}"
+    );
+}
+
+#[tokio::test]
+async fn exec_end_without_begin_does_not_flush_unrelated_running_exploring_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    begin_exec(&mut chat, "call-exploring", "cat /dev/null");
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(active_blob(&chat).contains("Read null"));
+
+    let orphan =
+        begin_unified_exec_startup(&mut chat, "call-orphan", "proc-1", "echo repro-marker");
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    end_exec(&mut chat, orphan, "repro-marker\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "only the orphan end should be inserted");
+    let orphan_blob = lines_to_single_string(&cells[0]);
+    assert!(
+        orphan_blob.contains("• Ran echo repro-marker"),
+        "expected orphan end to render a standalone entry: {orphan_blob:?}"
+    );
+    let active = active_blob(&chat);
+    assert!(
+        active.contains("• Exploring"),
+        "expected unrelated exploring call to remain active: {active:?}"
+    );
+    assert!(
+        active.contains("Read null"),
+        "expected active exploring command to remain visible: {active:?}"
+    );
+    assert!(
+        !active.contains("echo repro-marker"),
+        "orphaned end should not replace the active exploring cell: {active:?}"
+    );
+}
+
+#[tokio::test]
+async fn exec_end_without_begin_flushes_completed_unrelated_exploring_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin_ls = begin_exec(&mut chat, "call-ls", "ls -la");
+    end_exec(&mut chat, begin_ls, "", "", 0);
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(active_blob(&chat).contains("ls -la"));
+
+    let orphan = begin_unified_exec_startup(&mut chat, "call-after", "proc-1", "echo after");
+    end_exec(&mut chat, orphan, "after\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        2,
+        "completed exploring cell should flush before the orphan entry"
+    );
+    let first = lines_to_single_string(&cells[0]);
+    let second = lines_to_single_string(&cells[1]);
+    assert!(
+        first.contains("• Explored"),
+        "expected flushed exploring cell: {first:?}"
+    );
+    assert!(
+        first.contains("List ls -la"),
+        "expected flushed exploring cell: {first:?}"
+    );
+    assert!(
+        second.contains("• Ran echo after"),
+        "expected orphan end entry after flush: {second:?}"
+    );
+    assert!(
+        chat.active_cell.is_none(),
+        "both entries should be finalized"
+    );
+}
+
+#[tokio::test]
+async fn overlapping_exploring_exec_end_is_not_misclassified_as_orphan() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let begin_ls = begin_exec(&mut chat, "call-ls", "ls -la");
+    let begin_cat = begin_exec(&mut chat, "call-cat", "cat foo.txt");
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    end_exec(&mut chat, begin_ls, "foo.txt\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "tracked end inside an exploring cell should not render as an orphan"
+    );
+    let active = active_blob(&chat);
+    assert!(
+        active.contains("List ls -la"),
+        "expected first command still grouped: {active:?}"
+    );
+    assert!(
+        active.contains("Read foo.txt"),
+        "expected second running command to stay in the same active cell: {active:?}"
+    );
+    assert!(
+        active.contains("• Exploring"),
+        "expected grouped exploring header to remain active: {active:?}"
+    );
+
+    end_exec(&mut chat, begin_cat, "hello\n", "", 0);
+}
+
+#[tokio::test]
+async fn exec_history_shows_unified_exec_startup_commands() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "call-startup",
+        "echo unified exec startup",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "exec begin should not flush until completion"
+    );
+
+    end_exec(&mut chat, begin, "echo unified exec startup\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+    let blob = lines_to_single_string(&cells[0]);
+    assert!(
+        blob.contains("• Ran echo unified exec startup"),
+        "expected startup command to render: {blob:?}"
+    );
+}
+
+#[tokio::test]
+async fn exec_history_shows_unified_exec_tool_calls() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "call-startup",
+        "ls",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    end_exec(&mut chat, begin, "", "", 0);
+
+    let blob = active_blob(&chat);
+    assert_eq!(blob, "• Explored\n  └ List ls\n");
+}
+
+#[tokio::test]
+async fn unified_exec_unknown_end_with_active_exploring_cell_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    begin_exec(&mut chat, "call-exploring", "cat /dev/null");
+    let orphan =
+        begin_unified_exec_startup(&mut chat, "call-orphan", "proc-1", "echo repro-marker");
+    end_exec(&mut chat, orphan, "repro-marker\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    let history = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let active = active_blob(&chat);
+    let snapshot = format!("History:\n{history}\nActive:\n{active}");
+    assert_snapshot!(
+        "unified_exec_unknown_end_with_active_exploring_cell",
+        snapshot
+    );
+}
+
+#[tokio::test]
+async fn unified_exec_end_after_task_complete_is_suppressed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "call-startup",
+        "echo unified exec startup",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    drain_insert_history(&mut rx);
+
+    chat.on_task_complete(None, false);
+    end_exec(&mut chat, begin, "", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected unified exec end after task complete to be suppressed"
+    );
+}
+
+#[tokio::test]
+async fn unified_exec_interaction_after_task_complete_is_suppressed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_task_complete(None, false);
+
+    chat.handle_helios_event(Event {
+        id: "call-1".to_string(),
+        msg: EventMsg::TerminalInteraction(TerminalInteractionEvent {
+            call_id: "call-1".to_string(),
+            process_id: "proc-1".to_string(),
+            stdin: "ls\n".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected unified exec interaction after task complete to be suppressed"
+    );
+}
+
+#[tokio::test]
+async fn unified_exec_wait_after_final_agent_message_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    begin_unified_exec_startup(&mut chat, "call-wait", "proc-1", "cargo test -p helios-core");
+    terminal_interaction(&mut chat, "call-wait-stdin", "proc-1", "");
+
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Final response.".into(),
+            phase: None,
+        }),
+    });
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("Final response.".into()),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!("unified_exec_wait_after_final_agent_message", combined);
+}
+
+#[tokio::test]
+async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    begin_unified_exec_startup(
+        &mut chat,
+        "call-wait-stream",
+        "proc-1",
+        "cargo test -p helios-core",
+    );
+    terminal_interaction(&mut chat, "call-wait-stream-stdin", "proc-1", "");
+
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "Streaming response.".into(),
+        }),
+    });
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!("unified_exec_wait_before_streamed_agent_message", combined);
+}
+
+#[tokio::test]
+async fn unified_exec_wait_status_header_updates_on_late_command_display() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.unified_exec_processes.push(UnifiedExecProcessSummary {
+        key: "proc-1".to_string(),
+        call_id: "call-1".to_string(),
+        command_display: "sleep 5".to_string(),
+        recent_chunks: Vec::new(),
+    });
+
+    chat.on_terminal_interaction(TerminalInteractionEvent {
+        call_id: "call-1".to_string(),
+        process_id: "proc-1".to_string(),
+        stdin: String::new(),
+    });
+
+    assert!(chat.active_cell.is_none());
+    assert_eq!(
+        chat.current_status_header,
+        "Waiting for background terminal"
+    );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Waiting for background terminal");
+    assert_eq!(status.details(), Some("sleep 5"));
+}
+
+#[tokio::test]
+async fn unified_exec_waiting_multiple_empty_snapshots() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    begin_unified_exec_startup(&mut chat, "call-wait-1", "proc-1", "just fix");
+
+    terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
+    terminal_interaction(&mut chat, "call-wait-1b", "proc-1", "");
+    assert_eq!(
+        chat.current_status_header,
+        "Waiting for background terminal"
+    );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Waiting for background terminal");
+    assert_eq!(status.details(), Some("just fix"));
+
+    chat.handle_helios_event(Event {
+        id: "turn-wait-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!("unified_exec_waiting_multiple_empty_after", combined);
+}
+
+#[tokio::test]
+async fn unified_exec_wait_status_renders_command_in_single_details_row_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    begin_unified_exec_startup(
+        &mut chat,
+        "call-wait-ui",
+        "proc-ui",
+        "cargo test -p helios-core -- --exact some::very::long::test::name",
+    );
+
+    terminal_interaction(&mut chat, "call-wait-ui-stdin", "proc-ui", "");
+
+    let rendered = render_bottom_popup(&chat, 48);
+    assert_snapshot!(
+        "unified_exec_wait_status_renders_command_in_single_details_row",
+        rendered
+    );
+}
+
+#[tokio::test]
+async fn unified_exec_empty_then_non_empty_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    begin_unified_exec_startup(&mut chat, "call-wait-2", "proc-2", "just fix");
+
+    terminal_interaction(&mut chat, "call-wait-2a", "proc-2", "");
+    terminal_interaction(&mut chat, "call-wait-2b", "proc-2", "ls\n");
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!("unified_exec_empty_then_non_empty_after", combined);
+}
+
+#[tokio::test]
+async fn unified_exec_non_empty_then_empty_snapshots() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    begin_unified_exec_startup(&mut chat, "call-wait-3", "proc-3", "just fix");
+
+    terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
+    terminal_interaction(&mut chat, "call-wait-3b", "proc-3", "");
+    assert_eq!(
+        chat.current_status_header,
+        "Waiting for background terminal"
+    );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Waiting for background terminal");
+    assert_eq!(status.details(), Some("just fix"));
+    let pre_cells = drain_insert_history(&mut rx);
+    let active_combined = pre_cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!("unified_exec_non_empty_then_empty_active", active_combined);
+
+    chat.handle_helios_event(Event {
+        id: "turn-wait-3".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    let post_cells = drain_insert_history(&mut rx);
+    let mut combined = pre_cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let post = post_cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    if !combined.is_empty() && !post.is_empty() {
+        combined.push('\n');
+    }
+    combined.push_str(&post);
+    assert_snapshot!("unified_exec_non_empty_then_empty_after", combined);
+}
+
+/// Selecting the custom prompt option from the review popup sends
+/// OpenReviewCustomPrompt to the app event channel.
+#[tokio::test]
+async fn review_popup_custom_prompt_action_sends_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Open the preset selection popup
+    chat.open_review_popup();
+
+    // Move selection down to the fourth item: "Custom review instructions"
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    // Activate
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Drain events and ensure we saw the OpenReviewCustomPrompt request
+    let mut found = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::OpenReviewCustomPrompt = ev {
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "expected OpenReviewCustomPrompt event to be sent");
+}
+
+#[tokio::test]
+async fn slash_init_skips_when_project_doc_exists() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let tempdir = tempdir().unwrap();
+    let existing_path = tempdir.path().join(DEFAULT_PROJECT_DOC_FILENAME);
+    std::fs::write(&existing_path, "existing instructions").unwrap();
+    chat.config.cwd = tempdir.path().to_path_buf();
+
+    chat.dispatch_command(SlashCommand::Init);
+
+    match op_rx.try_recv() {
+        Err(TryRecvError::Empty) => {}
+        other => panic!("expected no Codex op to be sent, got {other:?}"),
+    }
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(DEFAULT_PROJECT_DOC_FILENAME),
+        "info message should mention the existing file: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Skipping /init"),
+        "info message should explain why /init was skipped: {rendered:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(existing_path).unwrap(),
+        "existing instructions"
+    );
+}
+
+#[tokio::test]
+async fn collab_mode_shift_tab_cycles_only_when_idle() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let initial = chat.current_collaboration_mode().clone();
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_collaboration_mode(), &initial);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.current_collaboration_mode(), &initial);
+
+    chat.on_task_started();
+    let before = chat.active_collaboration_mode_kind();
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.active_collaboration_mode_kind(), before);
+}
+
+#[tokio::test]
+async fn mode_switch_surfaces_model_change_notification_when_effective_model_changes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let default_model = chat.current_model().to_string();
+
+    let mut plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mode");
+    plan_mask.model = Some("gpt-5.1-helios-mini".to_string());
+    chat.set_collaboration_mask(plan_mask);
+
+    let plan_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan_messages.contains("Model changed to gpt-5.1-helios-mini medium for Plan mode."),
+        "expected Plan-mode model switch notice, got: {plan_messages:?}"
+    );
+
+    let default_mask = collaboration_modes::default_mask(chat.models_manager.as_ref())
+        .expect("expected default collaboration mode");
+    chat.set_collaboration_mask(default_mask);
+
+    let default_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let expected_default_message =
+        format!("Model changed to {default_model} default for Default mode.");
+    assert!(
+        default_messages.contains(&expected_default_message),
+        "expected Default-mode model switch notice, got: {default_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_same() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+
+    let plan_messages = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plan_messages.contains("Model changed to gpt-5.3-codex medium for Plan mode."),
+        "expected reasoning-change notice in Plan mode, got: {plan_messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn collab_slash_command_opens_picker_and_updates_mode() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.dispatch_command(SlashCommand::Collab);
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Select Collaboration Mode"),
+        "expected collaboration picker: {popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let selected_mask = match rx.try_recv() {
+        Ok(AppEvent::UpdateCollaborationMode(mask)) => mask,
+        other => panic!("expected UpdateCollaborationMode event, got {other:?}"),
+    };
+    chat.set_collaboration_mask(selected_mask);
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    ..
+                }),
+            personality: Some(Personality::Pragmatic),
+            ..
+        } => {}
+        other => {
+            panic!("expected Op::UserTurn with code collab mode, got {other:?}")
+        }
+    }
+
+    chat.bottom_pane
+        .set_composer_text("follow up".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    ..
+                }),
+            personality: Some(Personality::Pragmatic),
+            ..
+        } => {}
+        other => {
+            panic!("expected Op::UserTurn with code collab mode, got {other:?}")
+        }
+    }
+}
+
+#[tokio::test]
+async fn plan_slash_command_switches_to_plan_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let initial = chat.current_collaboration_mode().clone();
+
+    chat.dispatch_command(SlashCommand::Plan);
+
+    while let Ok(event) = rx.try_recv() {
+        assert!(
+            matches!(event, AppEvent::InsertHistoryCell(_)),
+            "plan should not emit a non-history app event: {event:?}"
+        );
+    }
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_collaboration_mode(), &initial);
+}
+
+#[tokio::test]
+async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let configured = helios_protocol::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+    chat.handle_helios_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    chat.bottom_pane
+        .set_composer_text("/plan build the plan".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0],
+        UserInput::Text {
+            text: "build the plan".to_string(),
+            text_elements: Vec::new(),
+        }
+    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn collaboration_modes_defaults_to_code_on_startup() {
+    let helios_home = tempdir().expect("tempdir");
+    let cfg = ConfigBuilder::default()
+        .helios_home(helios_home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "features.collaboration_modes".to_string(),
+            TomlValue::Boolean(true),
+        )])
+        .build()
+        .await
+        .expect("config");
+    let resolved_model = helios_core::test_support::get_model_offline(cfg.model.as_deref());
+    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let thread_manager = Arc::new(
+        helios_core::test_support::thread_manager_with_models_provider(
+            CodexAuth::from_api_key("test"),
+            cfg.model_provider.clone(),
+        ),
+    );
+    let auth_manager =
+        helios_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
+    let init = ChatWidgetInit {
+        config: cfg,
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        auth_manager,
+        models_manager: thread_manager.get_models_manager(),
+        feedback: helios_feedback::CodexFeedback::new(),
+        is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
+        model: Some(resolved_model.clone()),
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        otel_manager,
+    };
+
+    let chat = ChatWidget::new(init, thread_manager);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.current_model(), resolved_model);
+}
+
+#[tokio::test]
+async fn experimental_mode_plan_is_ignored_on_startup() {
+    let helios_home = tempdir().expect("tempdir");
+    let cfg = ConfigBuilder::default()
+        .helios_home(helios_home.path().to_path_buf())
+        .cli_overrides(vec![
+            (
+                "features.collaboration_modes".to_string(),
+                TomlValue::Boolean(true),
+            ),
+            (
+                "tui.experimental_mode".to_string(),
+                TomlValue::String("plan".to_string()),
+            ),
+        ])
+        .build()
+        .await
+        .expect("config");
+    let resolved_model = helios_core::test_support::get_model_offline(cfg.model.as_deref());
+    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let thread_manager = Arc::new(
+        helios_core::test_support::thread_manager_with_models_provider(
+            CodexAuth::from_api_key("test"),
+            cfg.model_provider.clone(),
+        ),
+    );
+    let auth_manager =
+        helios_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
+    let init = ChatWidgetInit {
+        config: cfg,
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        auth_manager,
+        models_manager: thread_manager.get_models_manager(),
+        feedback: helios_feedback::CodexFeedback::new(),
+        is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
+        model: Some(resolved_model.clone()),
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        otel_manager,
+    };
+
+    let chat = ChatWidget::new(init, thread_manager);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.current_model(), resolved_model);
+}
+
+#[tokio::test]
+async fn set_model_updates_active_collaboration_mask() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.set_model("gpt-5.1-helios-mini");
+
+    assert_eq!(chat.current_model(), "gpt-5.1-helios-mini");
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn set_reasoning_effort_updates_active_collaboration_mask() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.set_reasoning_effort(None);
+
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Medium)
+    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn set_reasoning_effort_does_not_override_active_plan_override() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::High));
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
+
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn collab_mode_is_sent_after_enabling() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    ..
+                }),
+            personality: Some(Personality::Pragmatic),
+            ..
+        } => {}
+        other => {
+            panic!("expected Op::UserTurn, got {other:?}")
+        }
+    }
+}
+
+#[tokio::test]
+async fn collab_mode_applies_default_preset() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    ..
+                }),
+            personality: Some(Personality::Pragmatic),
+            ..
+        } => {}
+        other => {
+            panic!("expected Op::UserTurn with default collaboration_mode, got {other:?}")
+        }
+    }
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.current_collaboration_mode().mode, ModeKind::Default);
+}
+
+#[tokio::test]
+async fn user_turn_includes_personality_from_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    chat.set_feature_enabled(Feature::Personality, true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_model("bengalfox");
+    chat.set_personality(Personality::Friendly);
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            personality: Some(Personality::Friendly),
+            ..
+        } => {}
+        other => panic!("expected Op::UserTurn with friendly personality, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_quit_requests_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Quit);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn slash_exit_requests_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Exit);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn slash_clean_submits_background_terminal_cleanup() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Clean);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::CleanBackgroundTerminals));
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected cleanup confirmation message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Stopping all background terminals."),
+        "expected cleanup confirmation, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_clear_requests_ui_clear_when_idle() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Clear);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ClearUi));
+}
+
+#[tokio::test]
+async fn slash_clear_is_disabled_while_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_task_running(true);
+
+    chat.dispatch_command(SlashCommand::Clear);
+
+    let event = rx.try_recv().expect("expected disabled command error");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            assert!(
+                rendered.contains("'/clear' is disabled while a task is in progress."),
+                "expected /clear task-running error, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "expected no follow-up events");
+}
+
+#[tokio::test]
+async fn slash_memory_drop_submits_drop_memories_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryDrop);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
+}
+
+#[tokio::test]
+async fn slash_memory_update_submits_update_memories_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryUpdate);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
+}
+
+#[tokio::test]
+async fn slash_resume_opens_picker() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Resume);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
+}
+
+#[tokio::test]
+async fn slash_fork_requests_current_fork() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Fork);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
+}
+
+#[tokio::test]
+async fn slash_rollout_displays_current_path() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let rollout_path = PathBuf::from("/tmp/helios-test-rollout.jsonl");
+    chat.current_rollout_path = Some(rollout_path.clone());
+
+    chat.dispatch_command(SlashCommand::Rollout);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected info message for rollout path");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(&rollout_path.display().to_string()),
+        "expected rollout path to be shown: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn slash_rollout_handles_missing_path() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Rollout);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected info message explaining missing path"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("not available"),
+        "expected missing rollout path message: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn undo_success_events_render_info_messages() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_helios_event(Event {
+        id: "turn-1".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent {
+            message: Some("Undo requested for the last turn...".to_string()),
+        }),
+    });
+    assert!(
+        chat.bottom_pane.status_indicator_visible(),
+        "status indicator should be visible during undo"
+    );
+
+    chat.handle_helios_event(Event {
+        id: "turn-1".to_string(),
+        msg: EventMsg::UndoCompleted(UndoCompletedEvent {
+            success: true,
+            message: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected final status only");
+    assert!(
+        !chat.bottom_pane.status_indicator_visible(),
+        "status indicator should be hidden after successful undo"
+    );
+
+    let completed = lines_to_single_string(&cells[0]);
+    assert!(
+        completed.contains("Undo completed successfully."),
+        "expected default success message, got {completed:?}"
+    );
+}
+
+#[tokio::test]
+async fn undo_failure_events_render_error_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_helios_event(Event {
+        id: "turn-2".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
+    });
+    assert!(
+        chat.bottom_pane.status_indicator_visible(),
+        "status indicator should be visible during undo"
+    );
+
+    chat.handle_helios_event(Event {
+        id: "turn-2".to_string(),
+        msg: EventMsg::UndoCompleted(UndoCompletedEvent {
+            success: false,
+            message: Some("Failed to restore workspace state.".to_string()),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected final status only");
+    assert!(
+        !chat.bottom_pane.status_indicator_visible(),
+        "status indicator should be hidden after failed undo"
+    );
+
+    let completed = lines_to_single_string(&cells[0]);
+    assert!(
+        completed.contains("Failed to restore workspace state."),
+        "expected failure message, got {completed:?}"
+    );
+}
+
+#[tokio::test]
+async fn undo_started_hides_interrupt_hint() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_helios_event(Event {
+        id: "turn-hint".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
+    });
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be active");
+    assert!(
+        !status.interrupt_hint_visible(),
+        "undo should hide the interrupt hint because the operation cannot be cancelled"
+    );
+}
+
+/// The commit picker shows only commit subjects (no timestamps).
+#[tokio::test]
+async fn review_commit_picker_shows_subjects_without_timestamps() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Open the Review presets parent popup.
+    chat.open_review_popup();
+
+    // Show commit picker with synthetic entries.
+    let entries = vec![
+        helios_core::git_info::CommitLogEntry {
+            sha: "1111111deadbeef".to_string(),
+            timestamp: 0,
+            subject: "Add new feature X".to_string(),
+        },
+        helios_core::git_info::CommitLogEntry {
+            sha: "2222222cafebabe".to_string(),
+            timestamp: 0,
+            subject: "Fix bug Y".to_string(),
+        },
+    ];
+    super::show_review_commit_picker_with_entries(&mut chat, entries);
+
+    // Render the bottom pane and inspect the lines for subjects and absence of time words.
+    let width = 72;
+    let height = chat.desired_height(width);
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    let mut blob = String::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let s = buf[(x, y)].symbol();
+            if s.is_empty() {
+                blob.push(' ');
+            } else {
+                blob.push_str(s);
+            }
+        }
+        blob.push('\n');
+    }
+
+    assert!(
+        blob.contains("Add new feature X"),
+        "expected subject in output"
+    );
+    assert!(blob.contains("Fix bug Y"), "expected subject in output");
+
+    // Ensure no relative-time phrasing is present.
+    let lowered = blob.to_lowercase();
+    assert!(
+        !lowered.contains("ago")
+            && !lowered.contains(" second")
+            && !lowered.contains(" minute")
+            && !lowered.contains(" hour")
+            && !lowered.contains(" day"),
+        "expected no relative time in commit picker output: {blob:?}"
+    );
+}
+
+/// Submitting the custom prompt view sends Op::Review with the typed prompt
+/// and uses the same text for the user-facing hint.
+#[tokio::test]
+async fn custom_prompt_submit_sends_review_op() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.show_review_custom_prompt();
+    // Paste prompt text via ChatWidget handler, then submit
+    chat.handle_paste("  please audit dependencies  ".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Expect AppEvent::CodexOp(Op::Review { .. }) with trimmed prompt
+    let evt = rx.try_recv().expect("expected one app event");
+    match evt {
+        AppEvent::CodexOp(Op::Review { review_request }) => {
+            assert_eq!(
+                review_request,
+                ReviewRequest {
+                    target: ReviewTarget::Custom {
+                        instructions: "please audit dependencies".to_string(),
+                    },
+                    user_facing_hint: None,
+                }
+            );
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
+}
+
+/// Hitting Enter on an empty custom prompt view does not submit.
+#[tokio::test]
+async fn custom_prompt_enter_empty_does_not_send() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.show_review_custom_prompt();
+    // Enter without any text
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // No AppEvent::CodexOp should be sent
+    assert!(rx.try_recv().is_err(), "no app event should be sent");
+}
+
+#[tokio::test]
+async fn view_image_tool_call_adds_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let image_path = chat.config.cwd.join("example.png");
+
+    chat.handle_helios_event(Event {
+        id: "sub-image".into(),
+        msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+            call_id: "call-image".into(),
+            path: image_path,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected a single history cell");
+    let combined = lines_to_single_string(&cells[0]);
+    assert_snapshot!("local_image_attachment_history_snapshot", combined);
+}
+
+// Snapshot test: interrupting a running exec finalizes the active cell with a red ✗
+// marker (replacing the spinner) and flushes it into history.
+#[tokio::test]
+async fn interrupt_exec_marks_failed_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Begin a long-running command so we have an active exec cell with a spinner.
+    begin_exec(&mut chat, "call-int", "sleep 1");
+
+    // Simulate the task being aborted (as if ESC was pressed), which should
+    // cause the active exec cell to be finalized as failed and flushed.
+    chat.handle_helios_event(Event {
+        id: "call-int".into(),
+        msg: EventMsg::TurnAborted(helios_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected finalized exec cell to be inserted into history"
+    );
+
+    // The first inserted cell should be the finalized exec; snapshot its text.
+    let exec_blob = lines_to_single_string(&cells[0]);
+    assert_snapshot!("interrupt_exec_marks_failed", exec_blob);
+}
+
+// Snapshot test: after an interrupted turn, a gentle error message is inserted
+// suggesting the user to tell the model what to do differently and to use /feedback.
+#[tokio::test]
+async fn interrupted_turn_error_message_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Simulate an in-progress task so the widget is in a running state.
+    chat.handle_helios_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    // Abort the turn (like pressing Esc) and drain inserted history.
+    chat.handle_helios_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnAborted(helios_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected error message to be inserted after interruption"
+    );
+    let last = lines_to_single_string(cells.last().unwrap());
+    assert_snapshot!("interrupted_turn_error_message", last);
+}
+
+/// Opening custom prompt from the review popup, pressing Esc returns to the
+/// parent popup, pressing Esc again dismisses all panels (back to normal mode).
+#[tokio::test]
+async fn review_custom_prompt_escape_navigates_back_then_dismisses() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Open the Review presets parent popup.
+    chat.open_review_popup();
+
+    // Open the custom prompt submenu (child view) directly.
+    chat.show_review_custom_prompt();
+
+    // Verify child view is on top.
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Custom review instructions"),
+        "expected custom prompt view header: {header:?}"
+    );
+
+    // Esc once: child view closes, parent (review presets) remains.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Select a review preset"),
+        "expected to return to parent review popup: {header:?}"
+    );
+
+    // Esc again: parent closes; back to normal composer state.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        chat.is_normal_backtrack_mode(),
+        "expected to be back in normal composer mode"
+    );
+}
+
+/// Opening base-branch picker from the review popup, pressing Esc returns to the
+/// parent popup, pressing Esc again dismisses all panels (back to normal mode).
+#[tokio::test]
+async fn review_branch_picker_escape_navigates_back_then_dismisses() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Open the Review presets parent popup.
+    chat.open_review_popup();
+
+    // Open the branch picker submenu (child view). Using a temp cwd with no git repo is fine.
+    let cwd = std::env::temp_dir();
+    chat.show_review_branch_picker(&cwd).await;
+
+    // Verify child view header.
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Select a base branch"),
+        "expected branch picker header: {header:?}"
+    );
+
+    // Esc once: child view closes, parent remains.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Select a review preset"),
+        "expected to return to parent review popup: {header:?}"
+    );
+
+    // Esc again: parent closes; back to normal composer state.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        chat.is_normal_backtrack_mode(),
+        "expected to be back in normal composer mode"
+    );
+}
+
+fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
+    let height = chat.desired_height(width);
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+    for y in 0..area.height {
+        let mut row = String::new();
+        for x in 0..area.width {
+            let s = buf[(x, y)].symbol();
+            if s.is_empty() {
+                row.push(' ');
+            } else {
+                row.push_str(s);
+            }
+        }
+        if !row.trim().is_empty() {
+            return row;
+        }
+    }
+    String::new()
+}
+
+fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
+    let height = chat.desired_height(width);
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    let mut lines: Vec<String> = (0..area.height)
+        .map(|row| {
+            let mut line = String::new();
+            for col in 0..area.width {
+                let symbol = buf[(area.x + col, area.y + row)].symbol();
+                if symbol.is_empty() {
+                    line.push(' ');
+                } else {
+                    line.push_str(symbol);
+                }
+            }
+            line.trim_end().to_string()
+        })
+        .collect();
+
+    while lines.first().is_some_and(|line| line.trim().is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+
+    lines.join("\n")
+}
+
+#[tokio::test]
+async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+    let notion_id = "unit_test_apps_popup_refresh_connector_1";
+    let linear_id = "unit_test_apps_popup_refresh_connector_2";
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![helios_chatgpt::connectors::AppInfo {
+                id: notion_id.to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+            }],
+        }),
+        false,
+    );
+    chat.add_connectors_output();
+    assert!(
+        chat.connectors_prefetch_in_flight,
+        "expected /apps to trigger a forced connectors refresh"
+    );
+
+    let before = render_bottom_popup(&chat, 80);
+    assert!(
+        before.contains("Installed 1 of 1 available apps."),
+        "expected initial apps popup snapshot, got:\n{before}"
+    );
+    assert!(
+        before.contains("Installed. Press Enter to open the app page"),
+        "expected selected app description to explain the app page action, got:\n{before}"
+    );
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![
+                helios_chatgpt::connectors::AppInfo {
+                    id: notion_id.to_string(),
+                    name: "Notion".to_string(),
+                    description: Some("Workspace docs".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/notion".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                },
+                helios_chatgpt::connectors::AppInfo {
+                    id: linear_id.to_string(),
+                    name: "Linear".to_string(),
+                    description: Some("Project tracking".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/linear".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                },
+            ],
+        }),
+        true,
+    );
+
+    let after = render_bottom_popup(&chat, 80);
+    assert!(
+        after.contains("Installed 2 of 2 available apps."),
+        "expected refreshed apps popup snapshot, got:\n{after}"
+    );
+    assert!(
+        after.contains("Linear"),
+        "expected refreshed popup to include new connector, got:\n{after}"
+    );
+}
+
+#[tokio::test]
+async fn apps_refresh_failure_keeps_existing_full_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+    let notion_id = "unit_test_apps_refresh_failure_connector_1";
+    let linear_id = "unit_test_apps_refresh_failure_connector_2";
+
+    let full_connectors = vec![
+        helios_chatgpt::connectors::AppInfo {
+            id: notion_id.to_string(),
+            name: "Notion".to_string(),
+            description: Some("Workspace docs".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://example.test/notion".to_string()),
+            is_accessible: true,
+            is_enabled: true,
+        },
+        helios_chatgpt::connectors::AppInfo {
+            id: linear_id.to_string(),
+            name: "Linear".to_string(),
+            description: Some("Project tracking".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://example.test/linear".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+        },
+    ];
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: full_connectors.clone(),
+        }),
+        true,
+    );
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![helios_chatgpt::connectors::AppInfo {
+                id: notion_id.to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+            }],
+        }),
+        false,
+    );
+    chat.on_connectors_loaded(Err("failed to load apps".to_string()), true);
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed 1 of 2 available apps."),
+        "expected previous full snapshot to be preserved, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetch() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+    chat.connectors_prefetch_in_flight = true;
+    chat.connectors_force_refetch_pending = true;
+
+    let full_connectors = vec![helios_chatgpt::connectors::AppInfo {
+        id: "unit_test_apps_refresh_failure_pending_connector".to_string(),
+        name: "Notion".to_string(),
+        description: Some("Workspace docs".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: Some("https://example.test/notion".to_string()),
+        is_accessible: true,
+        is_enabled: true,
+    }];
+    chat.connectors_cache = ConnectorsCacheState::Ready(ConnectorsSnapshot {
+        connectors: full_connectors.clone(),
+    });
+
+    chat.on_connectors_loaded(Err("failed to load apps".to_string()), true);
+
+    assert!(chat.connectors_prefetch_in_flight);
+    assert!(!chat.connectors_force_refetch_pending);
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
+    );
+}
+
+#[tokio::test]
+async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    let full_connectors = vec![
+        helios_chatgpt::connectors::AppInfo {
+            id: "unit_test_connector_1".to_string(),
+            name: "Notion".to_string(),
+            description: Some("Workspace docs".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://example.test/notion".to_string()),
+            is_accessible: true,
+            is_enabled: true,
+        },
+        helios_chatgpt::connectors::AppInfo {
+            id: "unit_test_connector_2".to_string(),
+            name: "Linear".to_string(),
+            description: Some("Project tracking".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://example.test/linear".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+        },
+    ];
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: full_connectors.clone(),
+        }),
+        true,
+    );
+    chat.add_connectors_output();
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![
+                helios_chatgpt::connectors::AppInfo {
+                    id: "unit_test_connector_1".to_string(),
+                    name: "Notion".to_string(),
+                    description: Some("Workspace docs".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/notion".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                },
+                helios_chatgpt::connectors::AppInfo {
+                    id: "connector_openai_hidden".to_string(),
+                    name: "Hidden OpenAI".to_string(),
+                    description: Some("Should be filtered".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/hidden-openai".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                },
+            ],
+        }),
+        false,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed 1 of 1 available apps."),
+        "expected partial refresh popup to use filtered connectors, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("Hidden OpenAI"),
+        "expected disallowed connector to be filtered from partial refresh popup, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![helios_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: false,
+            }],
+        }),
+        true,
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed · Disabled. Press Enter to open the app page"),
+        "expected selected app description to include disabled status, got:\n{popup}"
+    );
+    assert!(
+        popup.contains("enable/disable this app."),
+        "expected selected app description to mention enable/disable action, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_initial_load_applies_enabled_state_from_config() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let user_config = toml::from_str::<TomlValue>(
+        "[apps.connector_1]\nenabled = false\ndisabled_reason = \"user\"\n",
+    )
+    .expect("apps config");
+    chat.config.config_layer_stack = chat
+        .config
+        .config_layer_stack
+        .with_user_config(&config_toml_path, user_config);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![helios_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot)
+            if snapshot
+                .connectors
+                .iter()
+                .find(|connector| connector.id == "connector_1")
+                .is_some_and(|connector| !connector.is_enabled)
+    );
+}
+
+#[tokio::test]
+async fn apps_refresh_preserves_toggled_enabled_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![helios_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+    chat.update_connector_enabled("connector_1", false);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![helios_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot)
+            if snapshot
+                .connectors
+                .iter()
+                .find(|connector| connector.id == "connector_1")
+                .is_some_and(|connector| !connector.is_enabled)
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed · Disabled. Press Enter to open the app page"),
+        "expected disabled status to persist after reload, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_popup_for_not_installed_app_uses_install_only_selected_description() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![helios_chatgpt::connectors::AppInfo {
+                id: "connector_2".to_string(),
+                name: "Linear".to_string(),
+                description: Some("Project tracking".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/linear".to_string()),
+                is_accessible: false,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Can be installed. Press Enter to open the app page to install"),
+        "expected selected app description to be install-only for not-installed apps, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("enable/disable this app."),
+        "did not expect enable/disable text for not-installed apps, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn experimental_features_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let features = vec![
+        ExperimentalFeatureItem {
+            feature: Feature::GhostCommit,
+            name: "Ghost snapshots".to_string(),
+            description: "Capture undo snapshots each turn.".to_string(),
+            enabled: false,
+        },
+        ExperimentalFeatureItem {
+            feature: Feature::ShellTool,
+            name: "Shell tool".to_string(),
+            description: "Allow the model to run shell commands.".to_string(),
+            enabled: true,
+        },
+    ];
+    let view = ExperimentalFeaturesView::new(features, chat.app_event_tx.clone());
+    chat.bottom_pane.show_view(Box::new(view));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("experimental_features_popup", popup);
+}
+
+#[tokio::test]
+async fn experimental_features_toggle_saves_on_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let expected_feature = Feature::GhostCommit;
+    let view = ExperimentalFeaturesView::new(
+        vec![ExperimentalFeatureItem {
+            feature: expected_feature,
+            name: "Ghost snapshots".to_string(),
+            description: "Capture undo snapshots each turn.".to_string(),
+            enabled: false,
+        }],
+        chat.app_event_tx.clone(),
+    );
+    chat.bottom_pane.show_view(Box::new(view));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no updates until saving the popup"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut updates = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::UpdateFeatureFlags {
+            updates: event_updates,
+        } = event
+        {
+            updates = Some(event_updates);
+            break;
+        }
+    }
+
+    let updates = updates.expect("expected UpdateFeatureFlags event");
+    assert_eq!(updates, vec![(expected_feature, true)]);
+}
+
+#[tokio::test]
+async fn model_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_model_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("model_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn personality_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_personality_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("personality_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn model_picker_hides_show_in_picker_false_models_from_cache() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let preset = |slug: &str, show_in_picker: bool| ModelPreset {
+        id: slug.to_string(),
+        model: slug.to_string(),
+        display_name: slug.to_string(),
+        description: format!("{slug} description"),
+        default_reasoning_effort: ReasoningEffortConfig::Medium,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Medium,
+            description: "medium".to_string(),
+        }],
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+    };
+
+    chat.open_model_popup_with_presets(vec![
+        preset("test-visible-model", true),
+        preset("test-hidden-model", false),
+    ]);
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("model_picker_filters_hidden_models", popup);
+    assert!(
+        popup.contains("test-visible-model"),
+        "expected visible model to appear in picker:\n{popup}"
+    );
+    assert!(
+        !popup.contains("test-hidden-model"),
+        "expected hidden model to be excluded from picker:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn server_overloaded_error_does_not_switch_models() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("boomslang")).await;
+    chat.set_model("boomslang");
+    while rx.try_recv().is_ok() {}
+    while op_rx.try_recv().is_ok() {}
+
+    chat.handle_helios_event(Event {
+        id: "err-1".to_string(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "server overloaded".to_string(),
+            helios_error_info: Some(CodexErrorInfo::ServerOverloaded),
+        }),
+    });
+
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::UpdateModel(model) = event {
+            assert_eq!(
+                model, "boomslang",
+                "did not expect model switch on server-overloaded error"
+            );
+        }
+    }
+
+    while let Ok(event) = op_rx.try_recv() {
+        if let Op::OverrideTurnContext { model, .. } = event {
+            assert!(
+                model.is_none(),
+                "did not expect OverrideTurnContext model update on server-overloaded error"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn approvals_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.config.notices.hide_full_access_warning = None;
+    chat.open_approvals_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    #[cfg(target_os = "windows")]
+    insta::with_settings!({ snapshot_suffix => "windows" }, {
+        assert_snapshot!("approvals_selection_popup", popup);
+    });
+    #[cfg(not(target_os = "windows"))]
+    assert_snapshot!("approvals_selection_popup", popup);
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+#[serial]
+async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.config.notices.hide_full_access_warning = None;
+    chat.set_feature_enabled(Feature::WindowsSandbox, true);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
+
+    chat.open_approvals_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Default (non-admin sandbox)"),
+        "expected degraded sandbox label in approvals popup: {popup}"
+    );
+    assert!(
+        popup.contains("/setup-default-sandbox"),
+        "expected setup hint in approvals popup: {popup}"
+    );
+    assert!(
+        popup.contains("non-admin sandbox"),
+        "expected degraded sandbox note in approvals popup: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn preset_matching_requires_exact_workspace_write_settings() {
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|p| p.id == "auto")
+        .expect("auto preset exists");
+    let current_sandbox = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![AbsolutePathBuf::try_from("C:\\extra").unwrap()],
+        read_only_access: Default::default(),
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+
+    assert!(
+        !ChatWidget::preset_matches_current(AskForApproval::OnRequest, &current_sandbox, &preset),
+        "WorkspaceWrite with extra roots should not match the Default preset"
+    );
+    assert!(
+        !ChatWidget::preset_matches_current(AskForApproval::Never, &current_sandbox, &preset),
+        "approval mismatch should prevent matching the preset"
+    );
+}
+
+#[tokio::test]
+async fn full_access_confirmation_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "full-access")
+        .expect("full access preset");
+    chat.open_full_access_confirmation(preset, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("full_access_confirmation_popup", popup);
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+    chat.open_windows_sandbox_enable_prompt(preset);
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("requires Administrator permissions"),
+        "expected auto mode prompt to mention Administrator permissions, popup: {popup}"
+    );
+    assert!(
+        popup.contains("Use non-admin sandbox"),
+        "expected auto mode prompt to include non-admin fallback option, popup: {popup}"
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.set_feature_enabled(Feature::WindowsSandbox, false);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
+
+    chat.maybe_prompt_windows_sandbox_enable(true);
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("requires Administrator permissions"),
+        "expected startup prompt to mention Administrator permissions: {popup}"
+    );
+    assert!(
+        popup.contains("Set up default sandbox"),
+        "expected startup prompt to offer default sandbox setup: {popup}"
+    );
+    assert!(
+        popup.contains("Use non-admin sandbox"),
+        "expected startup prompt to offer non-admin fallback: {popup}"
+    );
+    assert!(
+        popup.contains("Quit"),
+        "expected startup prompt to offer quit action: {popup}"
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn startup_does_not_prompt_for_windows_sandbox_when_not_requested() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.set_feature_enabled(Feature::WindowsSandbox, false);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
+    chat.maybe_prompt_windows_sandbox_enable(false);
+
+    assert!(
+        chat.bottom_pane.no_modal_or_popup_active(),
+        "expected no startup sandbox NUX popup when startup trigger is false"
+    );
+}
+
+#[tokio::test]
+async fn model_reasoning_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+
+    set_chatgpt_auth(&mut chat);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let preset = get_available_model(&chat, "gpt-5.1-helios-max");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+
+    set_chatgpt_auth(&mut chat);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+
+    let preset = get_available_model(&chat, "gpt-5.1-helios-max");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
+}
+
+#[tokio::test]
+async fn reasoning_popup_shows_extra_high_with_space() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+
+    set_chatgpt_auth(&mut chat);
+
+    let preset = get_available_model(&chat, "gpt-5.1-helios-max");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup.contains("Extra high"),
+        "expected popup to include 'Extra high'; popup: {popup}"
+    );
+    assert!(
+        !popup.contains("Extrahigh"),
+        "expected popup not to include 'Extrahigh'; popup: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn single_reasoning_option_skips_selection() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let single_effort = vec![ReasoningEffortPreset {
+        effort: ReasoningEffortConfig::High,
+        description: "Greater reasoning depth for complex or ambiguous problems".to_string(),
+    }];
+    let preset = ModelPreset {
+        id: "model-with-single-reasoning".to_string(),
+        model: "model-with-single-reasoning".to_string(),
+        display_name: "model-with-single-reasoning".to_string(),
+        description: "".to_string(),
+        default_reasoning_effort: ReasoningEffortConfig::High,
+        supported_reasoning_efforts: single_effort,
+        supports_personality: false,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+    };
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains("Select Reasoning Level"),
+        "expected reasoning selection popup to be skipped"
+    );
+
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == ReasoningEffortConfig::High)),
+        "expected reasoning effort to be applied automatically; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn feedback_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Open the feedback category selection popup via slash command.
+    chat.dispatch_command(SlashCommand::Feedback);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("feedback_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn feedback_upload_consent_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Open the consent popup directly for a chosen category.
+    chat.open_feedback_consent(crate::app_event::FeedbackCategory::Bug);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("feedback_upload_consent_popup", popup);
+}
+
+#[tokio::test]
+async fn reasoning_popup_escape_returns_to_model_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-helios-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_model_popup();
+
+    let preset = get_available_model(&chat, "gpt-5.1-helios-max");
+    chat.open_reasoning_popup(preset);
+
+    let before_escape = render_bottom_popup(&chat, 80);
+    assert!(before_escape.contains("Select Reasoning Level"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    let after_escape = render_bottom_popup(&chat, 80);
+    assert!(after_escape.contains("Select Model"));
+    assert!(!after_escape.contains("Select Reasoning Level"));
+}
+
+#[tokio::test]
+async fn exec_history_extends_previous_when_consecutive() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // 1) Start "ls -la" (List)
+    let begin_ls = begin_exec(&mut chat, "call-ls", "ls -la");
+    assert_snapshot!("exploring_step1_start_ls", active_blob(&chat));
+
+    // 2) Finish "ls -la"
+    end_exec(&mut chat, begin_ls, "", "", 0);
+    assert_snapshot!("exploring_step2_finish_ls", active_blob(&chat));
+
+    // 3) Start "cat foo.txt" (Read)
+    let begin_cat_foo = begin_exec(&mut chat, "call-cat-foo", "cat foo.txt");
+    assert_snapshot!("exploring_step3_start_cat_foo", active_blob(&chat));
+
+    // 4) Complete "cat foo.txt"
+    end_exec(&mut chat, begin_cat_foo, "hello from foo", "", 0);
+    assert_snapshot!("exploring_step4_finish_cat_foo", active_blob(&chat));
+
+    // 5) Start & complete "sed -n 100,200p foo.txt" (treated as Read of foo.txt)
+    let begin_sed_range = begin_exec(&mut chat, "call-sed-range", "sed -n 100,200p foo.txt");
+    end_exec(&mut chat, begin_sed_range, "chunk", "", 0);
+    assert_snapshot!("exploring_step5_finish_sed_range", active_blob(&chat));
+
+    // 6) Start & complete "cat bar.txt"
+    let begin_cat_bar = begin_exec(&mut chat, "call-cat-bar", "cat bar.txt");
+    end_exec(&mut chat, begin_cat_bar, "hello from bar", "", 0);
+    assert_snapshot!("exploring_step6_finish_cat_bar", active_blob(&chat));
+}
+
+#[tokio::test]
+async fn user_shell_command_renders_output_not_exploring() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let begin_ls = begin_exec_with_source(
+        &mut chat,
+        "user-shell-ls",
+        "ls",
+        ExecCommandSource::UserShell,
+    );
+    end_exec(&mut chat, begin_ls, "file1\nfile2\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected a single history cell for the user command"
+    );
+    let blob = lines_to_single_string(cells.first().unwrap());
+    assert_snapshot!("user_shell_ls_output", blob);
+}
+
+#[tokio::test]
+async fn disabled_slash_command_while_task_running_snapshot() {
+    // Build a chat widget and simulate an active task
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_task_running(true);
+
+    // Dispatch a command that is unavailable while a task runs (e.g., /model)
+    chat.dispatch_command(SlashCommand::Model);
+
+    // Drain history and snapshot the rendered error line(s)
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected an error message history cell to be emitted",
+    );
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert_snapshot!(blob);
+}
+
+#[tokio::test]
+async fn approvals_popup_shows_disabled_presets() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.config.permissions.approval_policy =
+        Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
+            AskForApproval::OnRequest => Ok(()),
+            _ => Err(invalid_value(
+                candidate.to_string(),
+                "this message should be printed in the description",
+            )),
+        })
+        .expect("construct constrained approval policy");
+    chat.open_approvals_popup();
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("render approvals popup");
+
+    let screen = terminal.backend().vt100().screen().contents();
+    let collapsed = screen.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        collapsed.contains("(disabled)"),
+        "disabled preset label should be shown"
+    );
+    assert!(
+        collapsed.contains("this message should be printed in the description"),
+        "disabled preset reason should be shown"
+    );
+}
+
+#[tokio::test]
+async fn approvals_popup_navigation_skips_disabled() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.config.permissions.approval_policy =
+        Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
+            AskForApproval::OnRequest => Ok(()),
+            _ => Err(invalid_value(candidate.to_string(), "[on-request]")),
+        })
+        .expect("construct constrained approval policy");
+    chat.open_approvals_popup();
+
+    // The approvals popup is the active bottom-pane view; drive navigation via chat handle_key_event.
+    // Start selected at idx 0 (enabled), move down twice; the disabled option should be skipped
+    // and selection should wrap back to idx 0 (also enabled).
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    // Press numeric shortcut for the disabled row (3 => idx 2); should not close or accept.
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('3')));
+
+    // Ensure the popup remains open and no selection actions were sent.
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("render approvals popup after disabled selection");
+    let screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        screen.contains("Update Model Permissions"),
+        "popup should remain open after selecting a disabled entry"
+    );
+    assert!(
+        op_rx.try_recv().is_err(),
+        "no actions should be dispatched yet"
+    );
+    assert!(rx.try_recv().is_err(), "no history should be emitted");
+
+    // Press Enter; selection should land on an enabled preset and dispatch updates.
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let mut app_events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        app_events.push(ev);
+    }
+    assert!(
+        app_events.iter().any(|ev| matches!(
+            ev,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                approval_policy: Some(AskForApproval::OnRequest),
+                personality: None,
+                ..
+            })
+        )),
+        "enter should select an enabled preset"
+    );
+    assert!(
+        !app_events.iter().any(|ev| matches!(
+            ev,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                approval_policy: Some(AskForApproval::Never),
+                personality: None,
+                ..
+            })
+        )),
+        "disabled preset should not be selected"
+    );
+}
+
+#[tokio::test]
+async fn permissions_selection_emits_history_cell_when_selection_changes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected one permissions selection history cell"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Permissions updated to"),
+        "expected permissions selection history message, got: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn permissions_selection_history_snapshot_after_mode_switch() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    #[cfg(target_os = "windows")]
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one mode-switch history cell");
+    assert_snapshot!(
+        "permissions_selection_history_after_mode_switch",
+        lines_to_single_string(&cells[0])
+    );
+}
+
+#[tokio::test]
+async fn permissions_selection_history_snapshot_full_access_to_default() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::Never)
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::DangerFullAccess)
+        .expect("set sandbox policy");
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one mode-switch history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    #[cfg(target_os = "windows")]
+    insta::with_settings!({ snapshot_suffix => "windows" }, {
+        assert_snapshot!("permissions_selection_history_full_access_to_default", rendered);
+    });
+    #[cfg(not(target_os = "windows"))]
+    assert_snapshot!(
+        "permissions_selection_history_full_access_to_default",
+        rendered
+    );
+}
+
+#[tokio::test]
+async fn permissions_selection_emits_history_cell_when_current_is_selected() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected history cell even when selecting current permissions"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Permissions updated to"),
+        "expected permissions update history message, got: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn permissions_full_access_history_cell_emitted_only_after_confirmation() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = None;
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    #[cfg(target_os = "windows")]
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let mut open_confirmation_event = None;
+    let mut cells_before_confirmation = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                cells_before_confirmation.push(cell.display_lines(80));
+            }
+            AppEvent::OpenFullAccessConfirmation {
+                preset,
+                return_to_permissions,
+            } => {
+                open_confirmation_event = Some((preset, return_to_permissions));
+            }
+            _ => {}
+        }
+    }
+    if cfg!(not(target_os = "windows")) {
+        assert!(
+            cells_before_confirmation.is_empty(),
+            "did not expect history cell before confirming full access"
+        );
+    }
+    let (preset, return_to_permissions) =
+        open_confirmation_event.expect("expected full access confirmation event");
+    chat.open_full_access_confirmation(preset, return_to_permissions);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Enable full access?"),
+        "expected full access confirmation popup, got: {popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let cells_after_confirmation = drain_insert_history(&mut rx);
+    let total_history_cells = cells_before_confirmation.len() + cells_after_confirmation.len();
+    assert_eq!(
+        total_history_cells, 1,
+        "expected one full access history cell total"
+    );
+    let rendered = if !cells_before_confirmation.is_empty() {
+        lines_to_single_string(&cells_before_confirmation[0])
+    } else {
+        lines_to_single_string(&cells_after_confirmation[0])
+    };
+    assert!(
+        rendered.contains("Permissions updated to Full Access"),
+        "expected full access update history message, got: {rendered}"
+    );
+}
+
+//
+// Snapshot test: command approval modal
+//
+// Synthesizes a Codex ExecApprovalRequest event to trigger the approval modal
+// and snapshots the visual output using the ratatui TestBackend.
+#[tokio::test]
+async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
+    // Build a chat widget with manual channels to avoid spawning the agent.
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    // Ensure policy allows surfacing approvals explicitly (not strictly required for direct event).
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
+    // Inject an exec approval request to display the approval modal.
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-approve-cmd".into(),
+        approval_id: Some("call-approve-cmd".into()),
+        turn_id: "turn-approve-cmd".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
+        network_approval_context: None,
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+            "echo".into(),
+            "hello".into(),
+            "world".into(),
+        ])),
+        parsed_cmd: vec![],
+    };
+    chat.handle_helios_event(Event {
+        id: "sub-approve".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+    // Render to a fixed-size test terminal and snapshot.
+    // Call desired_height first and use that exact height for rendering.
+    let width = 100;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        crate::custom_terminal::Terminal::with_options(VT100Backend::new(width, height))
+            .expect("create terminal");
+    let viewport = Rect::new(0, 0, width, height);
+    terminal.set_viewport_area(viewport);
+
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw approval modal");
+    assert!(
+        terminal
+            .backend()
+            .vt100()
+            .screen()
+            .contents()
+            .contains("echo hello world")
+    );
+    assert_snapshot!(
+        "approval_modal_exec",
+        terminal.backend().vt100().screen().contents()
+    );
+
+    Ok(())
+}
+
+// Snapshot test: command approval modal without a reason
+// Ensures spacing looks correct when no reason text is provided.
+#[tokio::test]
+async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
+
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-approve-cmd-noreason".into(),
+        approval_id: Some("call-approve-cmd-noreason".into()),
+        turn_id: "turn-approve-cmd-noreason".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: None,
+        network_approval_context: None,
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+            "echo".into(),
+            "hello".into(),
+            "world".into(),
+        ])),
+        parsed_cmd: vec![],
+    };
+    chat.handle_helios_event(Event {
+        id: "sub-approve-noreason".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+
+    let width = 100;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw approval modal (no reason)");
+    assert_snapshot!(
+        "approval_modal_exec_no_reason",
+        terminal.backend().vt100().screen().contents()
+    );
+
+    Ok(())
+}
+
+// Snapshot test: approval modal with a proposed execpolicy prefix that is multi-line;
+// we should not offer adding it to execpolicy.
+#[tokio::test]
+async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
+-> anyhow::Result<()> {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
+
+    let script = "python - <<'PY'\nprint('hello')\nPY".to_string();
+    let command = vec!["bash".into(), "-lc".into(), script];
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-approve-cmd-multiline-trunc".into(),
+        approval_id: Some("call-approve-cmd-multiline-trunc".into()),
+        turn_id: "turn-approve-cmd-multiline-trunc".into(),
+        command: command.clone(),
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: None,
+        network_approval_context: None,
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        parsed_cmd: vec![],
+    };
+    chat.handle_helios_event(Event {
+        id: "sub-approve-multiline-trunc".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+
+    let width = 100;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw approval modal (multiline prefix)");
+    let contents = terminal.backend().vt100().screen().contents();
+    assert!(!contents.contains("don't ask again"));
+    assert_snapshot!(
+        "approval_modal_exec_multiline_prefix_no_execpolicy",
+        contents
+    );
+
+    Ok(())
+}
+
+// Snapshot test: patch approval modal
+#[tokio::test]
+async fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
+
+    // Build a small changeset and a reason/grant_root to exercise the prompt text.
+    let mut changes = HashMap::new();
+    changes.insert(
+        PathBuf::from("README.md"),
+        FileChange::Add {
+            content: "hello\nworld\n".into(),
+        },
+    );
+    let ev = ApplyPatchApprovalRequestEvent {
+        call_id: "call-approve-patch".into(),
+        turn_id: "turn-approve-patch".into(),
+        changes,
+        reason: Some("The model wants to apply changes".into()),
+        grant_root: Some(PathBuf::from("/tmp")),
+    };
+    chat.handle_helios_event(Event {
+        id: "sub-approve-patch".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ev),
+    });
+
+    // Render at the widget's desired height and snapshot.
+    let height = chat.desired_height(80);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(80, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, 80, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw patch approval modal");
+    assert_snapshot!(
+        "approval_modal_patch",
+        terminal.backend().vt100().screen().contents()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn interrupt_restores_queued_messages_into_composer() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    // Simulate a running task to enable queuing of user inputs.
+    chat.bottom_pane.set_task_running(true);
+
+    // Queue two user messages while the task is running.
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(helios_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    // Composer should now contain the queued messages joined by newlines, in order.
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "first queued\nsecond queued"
+    );
+
+    // Queue should be cleared and no new user input should have been auto-submitted.
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(
+        op_rx.try_recv().is_err(),
+        "unexpected outbound op after interrupt"
+    );
+
+    // Drain rx to avoid unused warnings.
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
+async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane.set_task_running(true);
+    chat.bottom_pane
+        .set_composer_text("current draft".to_string(), Vec::new(), Vec::new());
+
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(helios_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "first queued\nsecond queued\ncurrent draft"
+    );
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(
+        op_rx.try_recv().is_err(),
+        "unexpected outbound op after interrupt"
+    );
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
+async fn interrupt_clears_unified_exec_processes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
+    begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
+    assert_eq!(chat.unified_exec_processes.len(), 2);
+
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(helios_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert!(chat.unified_exec_processes.is_empty());
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
+async fn review_ended_keeps_unified_exec_processes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
+    begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
+    assert_eq!(chat.unified_exec_processes.len(), 2);
+
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(helios_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::ReviewEnded,
+        }),
+    });
+
+    assert_eq!(chat.unified_exec_processes.len(), 2);
+
+    chat.add_ps_output();
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        combined.contains("Background terminals"),
+        "expected /ps to remain available after review-ended abort; got {combined:?}"
+    );
+    assert!(
+        combined.contains("sleep 5") && combined.contains("sleep 6"),
+        "expected /ps to list running unified exec processes; got {combined:?}"
+    );
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
+async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    let begin = begin_unified_exec_startup(&mut chat, "call-1", "process-1", "just fix");
+    terminal_interaction(&mut chat, "call-1a", "process-1", "");
+
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(helios_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    end_exec(&mut chat, begin, "", "", 0);
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let snapshot = format!("cells={}\n{combined}", cells.len());
+    assert_snapshot!("interrupt_clears_unified_exec_wait_streak", snapshot);
+}
+
+#[tokio::test]
+async fn turn_complete_keeps_unified_exec_processes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
+    begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
+    assert_eq!(chat.unified_exec_processes.len(), 2);
+
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    assert_eq!(chat.unified_exec_processes.len(), 2);
+
+    chat.add_ps_output();
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        combined.contains("Background terminals"),
+        "expected /ps to remain available after turn complete; got {combined:?}"
+    );
+    assert!(
+        combined.contains("sleep 5") && combined.contains("sleep 6"),
+        "expected /ps to list running unified exec processes; got {combined:?}"
+    );
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+// Snapshot test: ChatWidget at very small heights (idle)
+// Ensures overall layout behaves when terminal height is extremely constrained.
+#[tokio::test]
+async fn ui_snapshots_small_heights_idle() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    for h in [1u16, 2, 3] {
+        let name = format!("chat_small_idle_h{h}");
+        let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
+        terminal
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
+            .expect("draw chat idle");
+        assert_snapshot!(name, terminal.backend());
+    }
+}
+
+// Snapshot test: ChatWidget at very small heights (task running)
+// Validates how status + composer are presented within tight space.
+#[tokio::test]
+async fn ui_snapshots_small_heights_task_running() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    // Activate status line
+    chat.handle_helios_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_helios_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Thinking**".into(),
+        }),
+    });
+    for h in [1u16, 2, 3] {
+        let name = format!("chat_small_running_h{h}");
+        let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
+        terminal
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
+            .expect("draw chat running");
+        assert_snapshot!(name, terminal.backend());
+    }
+}
+
+// Snapshot test: status widget + approval modal active together
+// The modal takes precedence visually; this captures the layout with a running
+// task (status indicator active) while an approval request is shown.
+#[tokio::test]
+async fn status_widget_and_approval_modal_snapshot() {
+    use helios_protocol::protocol::ExecApprovalRequestEvent;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    // Begin a running task so the status indicator would be active.
+    chat.handle_helios_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    // Provide a deterministic header for the status line.
+    chat.handle_helios_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Analyzing**".into(),
+        }),
+    });
+
+    // Now show an approval modal (e.g. exec approval).
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-approve-exec".into(),
+        approval_id: Some("call-approve-exec".into()),
+        turn_id: "turn-approve-exec".into(),
+        command: vec!["echo".into(), "hello world".into()],
+        cwd: PathBuf::from("/tmp"),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
+        network_approval_context: None,
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+            "echo".into(),
+            "hello world".into(),
+        ])),
+        parsed_cmd: vec![],
+    };
+    chat.handle_helios_event(Event {
+        id: "sub-approve-exec".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+
+    // Render at the widget's desired height and snapshot.
+    let width: u16 = 100;
+    let height = chat.desired_height(width);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
+        .expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw status + approval modal");
+    assert_snapshot!("status_widget_and_approval_modal", terminal.backend());
+}
+
+// Snapshot test: status widget active (StatusIndicatorView)
+// Ensures the VT100 rendering of the status indicator is stable when active.
+#[tokio::test]
+async fn status_widget_active_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    // Activate the status indicator by simulating a task start.
+    chat.handle_helios_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    // Provide a deterministic header via a bold reasoning chunk.
+    chat.handle_helios_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Analyzing**".into(),
+        }),
+    });
+    // Render and snapshot.
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw status widget");
+    assert_snapshot!("status_widget_active", terminal.backend());
+}
+
+#[tokio::test]
+async fn mcp_startup_header_booting_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+
+    chat.handle_helios_event(Event {
+        id: "mcp-1".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw chat widget");
+    assert_snapshot!("mcp_startup_header_booting", terminal.backend());
+}
+
+#[tokio::test]
+async fn mcp_startup_complete_does_not_clear_running_task() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_helios_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_indicator_visible());
+
+    chat.handle_helios_event(Event {
+        id: "mcp-1".into(),
+        msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
+            ready: vec!["schaltwerk".into()],
+            ..Default::default()
+        }),
+    });
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_indicator_visible());
+}
+
+#[tokio::test]
+async fn background_event_updates_status_header() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_helios_event(Event {
+        id: "bg-1".into(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: "Waiting for `vim`".to_string(),
+        }),
+    });
+
+    assert!(chat.bottom_pane.status_indicator_visible());
+    assert_eq!(chat.current_status_header, "Waiting for `vim`");
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn apply_patch_events_emit_history_cells() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // 1) Approval request -> proposed patch summary cell
+    let mut changes = HashMap::new();
+    changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    let ev = ApplyPatchApprovalRequestEvent {
+        call_id: "c1".into(),
+        turn_id: "turn-c1".into(),
+        changes,
+        reason: None,
+        grant_root: None,
+    };
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ev),
+    });
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected approval request to surface via modal without emitting history cells"
+    );
+
+    let area = Rect::new(0, 0, 80, chat.desired_height(80));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    chat.render(area, &mut buf);
+    let mut saw_summary = false;
+    for y in 0..area.height {
+        let mut row = String::new();
+        for x in 0..area.width {
+            row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+        }
+        if row.contains("foo.txt (+1 -0)") {
+            saw_summary = true;
+            break;
+        }
+    }
+    assert!(saw_summary, "expected approval modal to show diff summary");
+
+    // 2) Begin apply -> per-file apply block cell (no global header)
+    let mut changes2 = HashMap::new();
+    changes2.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    let begin = PatchApplyBeginEvent {
+        call_id: "c1".into(),
+        turn_id: "turn-c1".into(),
+        auto_approved: true,
+        changes: changes2,
+    };
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::PatchApplyBegin(begin),
+    });
+    let cells = drain_insert_history(&mut rx);
+    assert!(!cells.is_empty(), "expected apply block cell to be sent");
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert!(
+        blob.contains("Added foo.txt") || blob.contains("Edited foo.txt"),
+        "expected single-file header with filename (Added/Edited): {blob:?}"
+    );
+
+    // 3) End apply success -> success cell
+    let mut end_changes = HashMap::new();
+    end_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    let end = PatchApplyEndEvent {
+        call_id: "c1".into(),
+        turn_id: "turn-c1".into(),
+        stdout: "ok\n".into(),
+        stderr: String::new(),
+        success: true,
+        changes: end_changes,
+        status: CorePatchApplyStatus::Completed,
+    };
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::PatchApplyEnd(end),
+    });
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "no success cell should be emitted anymore"
+    );
+}
+
+#[tokio::test]
+async fn apply_patch_manual_approval_adjusts_header() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let mut proposed_changes = HashMap::new();
+    proposed_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
+            changes: proposed_changes,
+            reason: None,
+            grant_root: None,
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    let mut apply_changes = HashMap::new();
+    apply_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
+            auto_approved: false,
+            changes: apply_changes,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(!cells.is_empty(), "expected apply block cell to be sent");
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert!(
+        blob.contains("Added foo.txt") || blob.contains("Edited foo.txt"),
+        "expected apply summary header for foo.txt: {blob:?}"
+    );
+}
+
+#[tokio::test]
+async fn apply_patch_manual_flow_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let mut proposed_changes = HashMap::new();
+    proposed_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
+            changes: proposed_changes,
+            reason: Some("Manual review required".into()),
+            grant_root: None,
+        }),
+    });
+    let history_before_apply = drain_insert_history(&mut rx);
+    assert!(
+        history_before_apply.is_empty(),
+        "expected approval modal to defer history emission"
+    );
+
+    let mut apply_changes = HashMap::new();
+    apply_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            call_id: "c1".into(),
+            turn_id: "turn-c1".into(),
+            auto_approved: false,
+            changes: apply_changes,
+        }),
+    });
+    let approved_lines = drain_insert_history(&mut rx)
+        .pop()
+        .expect("approved patch cell");
+
+    assert_snapshot!(
+        "apply_patch_manual_flow_history_approved",
+        lines_to_single_string(&approved_lines)
+    );
+}
+
+#[tokio::test]
+async fn apply_patch_approval_sends_op_with_call_id() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    // Simulate receiving an approval request with a distinct event id and call id.
+    let mut changes = HashMap::new();
+    changes.insert(
+        PathBuf::from("file.rs"),
+        FileChange::Add {
+            content: "fn main(){}\n".into(),
+        },
+    );
+    let ev = ApplyPatchApprovalRequestEvent {
+        call_id: "call-999".into(),
+        turn_id: "turn-999".into(),
+        changes,
+        reason: None,
+        grant_root: None,
+    };
+    chat.handle_helios_event(Event {
+        id: "sub-123".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ev),
+    });
+
+    // Approve via key press 'y'
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+    // Expect a CodexOp with PatchApproval carrying the call id.
+    let mut found = false;
+    while let Ok(app_ev) = rx.try_recv() {
+        if let AppEvent::CodexOp(Op::PatchApproval { id, decision }) = app_ev {
+            assert_eq!(id, "call-999");
+            assert_matches!(decision, helios_protocol::protocol::ReviewDecision::Approved);
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "expected PatchApproval op to be sent");
+}
+
+#[tokio::test]
+async fn apply_patch_full_flow_integration_like() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    // 1) Backend requests approval
+    let mut changes = HashMap::new();
+    changes.insert(
+        PathBuf::from("pkg.rs"),
+        FileChange::Add { content: "".into() },
+    );
+    chat.handle_helios_event(Event {
+        id: "sub-xyz".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            call_id: "call-1".into(),
+            turn_id: "turn-call-1".into(),
+            changes,
+            reason: None,
+            grant_root: None,
+        }),
+    });
+
+    // 2) User approves via 'y' and App receives a CodexOp
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    let mut maybe_op: Option<Op> = None;
+    while let Ok(app_ev) = rx.try_recv() {
+        if let AppEvent::CodexOp(op) = app_ev {
+            maybe_op = Some(op);
+            break;
+        }
+    }
+    let op = maybe_op.expect("expected CodexOp after key press");
+
+    // 3) App forwards to widget.submit_op, which pushes onto helios_op_tx
+    chat.submit_op(op);
+    let forwarded = op_rx
+        .try_recv()
+        .expect("expected op forwarded to codex channel");
+    match forwarded {
+        Op::PatchApproval { id, decision } => {
+            assert_eq!(id, "call-1");
+            assert_matches!(decision, helios_protocol::protocol::ReviewDecision::Approved);
+        }
+        other => panic!("unexpected op forwarded: {other:?}"),
+    }
+
+    // 4) Simulate patch begin/end events from backend; ensure history cells are emitted
+    let mut changes2 = HashMap::new();
+    changes2.insert(
+        PathBuf::from("pkg.rs"),
+        FileChange::Add { content: "".into() },
+    );
+    chat.handle_helios_event(Event {
+        id: "sub-xyz".into(),
+        msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            call_id: "call-1".into(),
+            turn_id: "turn-call-1".into(),
+            auto_approved: false,
+            changes: changes2,
+        }),
+    });
+    let mut end_changes = HashMap::new();
+    end_changes.insert(
+        PathBuf::from("pkg.rs"),
+        FileChange::Add { content: "".into() },
+    );
+    chat.handle_helios_event(Event {
+        id: "sub-xyz".into(),
+        msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+            call_id: "call-1".into(),
+            turn_id: "turn-call-1".into(),
+            stdout: String::from("ok"),
+            stderr: String::new(),
+            success: true,
+            changes: end_changes,
+            status: CorePatchApplyStatus::Completed,
+        }),
+    });
+}
+
+#[tokio::test]
+async fn apply_patch_untrusted_shows_approval_modal() -> anyhow::Result<()> {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    // Ensure approval policy is untrusted (OnRequest)
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
+
+    // Simulate a patch approval request from backend
+    let mut changes = HashMap::new();
+    changes.insert(
+        PathBuf::from("a.rs"),
+        FileChange::Add { content: "".into() },
+    );
+    chat.handle_helios_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            call_id: "call-1".into(),
+            turn_id: "turn-call-1".into(),
+            changes,
+            reason: None,
+            grant_root: None,
+        }),
+    });
+
+    // Render and ensure the approval modal title is present
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    let mut contains_title = false;
+    for y in 0..area.height {
+        let mut row = String::new();
+        for x in 0..area.width {
+            row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+        }
+        if row.contains("Would you like to make the following edits?") {
+            contains_title = true;
+            break;
+        }
+    }
+    assert!(
+        contains_title,
+        "expected approval modal to be visible with title 'Would you like to make the following edits?'"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Ensure we are in OnRequest so an approval is surfaced
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)?;
+
+    // Simulate backend asking to apply a patch adding two lines to README.md
+    let mut changes = HashMap::new();
+    changes.insert(
+        PathBuf::from("README.md"),
+        FileChange::Add {
+            // Two lines (no trailing empty line counted)
+            content: "line one\nline two\n".into(),
+        },
+    );
+    chat.handle_helios_event(Event {
+        id: "sub-apply".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            call_id: "call-apply".into(),
+            turn_id: "turn-apply".into(),
+            changes,
+            reason: None,
+            grant_root: None,
+        }),
+    });
+
+    // No history entries yet; the modal should contain the diff summary
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected approval request to render via modal instead of history"
+    );
+
+    let area = Rect::new(0, 0, 80, chat.desired_height(80));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    chat.render(area, &mut buf);
+
+    let mut saw_header = false;
+    let mut saw_line1 = false;
+    let mut saw_line2 = false;
+    for y in 0..area.height {
+        let mut row = String::new();
+        for x in 0..area.width {
+            row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+        }
+        if row.contains("README.md (+2 -0)") {
+            saw_header = true;
+        }
+        if row.contains("+line one") {
+            saw_line1 = true;
+        }
+        if row.contains("+line two") {
+            saw_line2 = true;
+        }
+        if saw_header && saw_line1 && saw_line2 {
+            break;
+        }
+    }
+    assert!(saw_header, "expected modal to show diff header with totals");
+    assert!(
+        saw_line1 && saw_line2,
+        "expected modal to show per-line diff summary"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plan_update_renders_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let update = UpdatePlanArgs {
+        explanation: Some("Adapting plan".to_string()),
+        plan: vec![
+            PlanItemArg {
+                step: "Explore codebase".into(),
+                status: StepStatus::Completed,
+            },
+            PlanItemArg {
+                step: "Implement feature".into(),
+                status: StepStatus::InProgress,
+            },
+            PlanItemArg {
+                step: "Write tests".into(),
+                status: StepStatus::Pending,
+            },
+        ],
+    };
+    chat.handle_helios_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::PlanUpdate(update),
+    });
+    let cells = drain_insert_history(&mut rx);
+    assert!(!cells.is_empty(), "expected plan update cell to be sent");
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert!(
+        blob.contains("Updated Plan"),
+        "missing plan header: {blob:?}"
+    );
+    assert!(blob.contains("Explore codebase"));
+    assert!(blob.contains("Implement feature"));
+    assert!(blob.contains("Write tests"));
+}
+
+#[tokio::test]
+async fn stream_error_updates_status_indicator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_task_running(true);
+    let msg = "Reconnecting... 2/5";
+    let details = "Idle timeout waiting for SSE";
+    chat.handle_helios_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: msg.to_string(),
+            helios_error_info: Some(CodexErrorInfo::Other),
+            additional_details: Some(details.to_string()),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected no history cell for StreamError event"
+    );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), msg);
+    assert_eq!(status.details(), Some(details));
+}
+
+#[tokio::test]
+async fn replayed_turn_started_does_not_mark_task_running() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.replay_initial_messages(vec![EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: "turn-1".to_string(),
+        model_context_window: None,
+        collaboration_mode_kind: ModeKind::Default,
+    })]);
+
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget().is_none());
+}
+
+#[tokio::test]
+async fn thread_snapshot_replayed_turn_started_marks_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_helios_event_replay(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    drain_insert_history(&mut rx);
+    assert!(chat.bottom_pane.is_task_running());
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Working");
+}
+
+#[tokio::test]
+async fn replayed_stream_error_does_not_set_retry_status_or_status_indicator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_status_header("Idle".to_string());
+
+    chat.replay_initial_messages(vec![EventMsg::StreamError(StreamErrorEvent {
+        message: "Reconnecting... 2/5".to_string(),
+        helios_error_info: Some(CodexErrorInfo::Other),
+        additional_details: Some("Idle timeout waiting for SSE".to_string()),
+    })]);
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected no history cell for replayed StreamError event"
+    );
+    assert_eq!(chat.current_status_header, "Idle");
+    assert!(chat.retry_status_header.is_none());
+    assert!(chat.bottom_pane.status_widget().is_none());
+}
+
+#[tokio::test]
+async fn thread_snapshot_replayed_stream_recovery_restores_previous_status_header() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_helios_event_replay(Event {
+        id: "task".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    chat.handle_helios_event_replay(Event {
+        id: "retry".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting... 1/5".to_string(),
+            helios_error_info: Some(CodexErrorInfo::Other),
+            additional_details: None,
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    chat.handle_helios_event_replay(Event {
+        id: "delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "hello".to_string(),
+        }),
+    });
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Working");
+    assert_eq!(status.details(), None);
+    assert!(chat.retry_status_header.is_none());
+}
+
+#[tokio::test]
+async fn resume_replay_interrupted_reconnect_does_not_leave_stale_working_state() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_status_header("Idle".to_string());
+
+    chat.replay_initial_messages(vec![
+        EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+        EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting... 1/5".to_string(),
+            helios_error_info: Some(CodexErrorInfo::Other),
+            additional_details: None,
+        }),
+        EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "hello".to_string(),
+        }),
+    ]);
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected no history cells for replayed interrupted reconnect sequence"
+    );
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget().is_none());
+    assert_eq!(chat.current_status_header, "Idle");
+    assert!(chat.retry_status_header.is_none());
+}
+
+#[tokio::test]
+async fn replayed_interrupted_reconnect_footer_row_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.replay_initial_messages(vec![
+        EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+        EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting... 2/5".to_string(),
+            helios_error_info: Some(CodexErrorInfo::Other),
+            additional_details: Some("Idle timeout waiting for SSE".to_string()),
+        }),
+    ]);
+
+    let header = render_bottom_first_row(&chat, 80);
+    assert!(
+        !header.contains("Reconnecting") && !header.contains("Working"),
+        "expected replayed interrupted reconnect to avoid active status row, got {header:?}"
+    );
+    assert_snapshot!("replayed_interrupted_reconnect_footer_row", header);
+}
+
+#[tokio::test]
+async fn stream_error_restores_hidden_status_indicator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+    assert!(!chat.bottom_pane.status_indicator_visible());
+
+    let msg = "Reconnecting... 2/5";
+    let details = "Idle timeout waiting for SSE";
+    chat.handle_helios_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: msg.to_string(),
+            helios_error_info: Some(CodexErrorInfo::Other),
+            additional_details: Some(details.to_string()),
+        }),
+    });
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), msg);
+    assert_eq!(status.details(), Some(details));
+}
+
+#[tokio::test]
+async fn warning_event_adds_warning_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_helios_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::Warning(WarningEvent {
+            message: "test warning message".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("test warning message"),
+        "warning cell missing content: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn status_line_invalid_items_warn_once() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_status_line = Some(vec![
+        "model_name".to_string(),
+        "bogus_item".to_string(),
+        "lines_changed".to_string(),
+        "bogus_item".to_string(),
+    ]);
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.refresh_status_line();
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("bogus_item"),
+        "warning cell missing invalid item content: {rendered}"
+    );
+
+    chat.refresh_status_line();
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected invalid status line warning to emit only once"
+    );
+}
+
+#[tokio::test]
+async fn status_line_branch_state_resets_when_git_branch_disabled() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.status_line_branch = Some("main".to_string());
+    chat.status_line_branch_pending = true;
+    chat.status_line_branch_lookup_complete = true;
+    chat.config.tui_status_line = Some(vec!["model_name".to_string()]);
+
+    chat.refresh_status_line();
+
+    assert_eq!(chat.status_line_branch, None);
+    assert!(!chat.status_line_branch_pending);
+    assert!(!chat.status_line_branch_lookup_complete);
+}
+
+#[tokio::test]
+async fn status_line_branch_refreshes_after_turn_complete() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_status_line = Some(vec!["git-branch".to_string()]);
+    chat.status_line_branch_lookup_complete = true;
+    chat.status_line_branch_pending = false;
+
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    assert!(chat.status_line_branch_pending);
+}
+
+#[tokio::test]
+async fn status_line_branch_refreshes_after_interrupt() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_status_line = Some(vec!["git-branch".to_string()]);
+    chat.status_line_branch_lookup_complete = true;
+    chat.status_line_branch_pending = false;
+
+    chat.handle_helios_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(helios_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert!(chat.status_line_branch_pending);
+}
+
+#[tokio::test]
+async fn stream_recovery_restores_previous_status_header() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_helios_event(Event {
+        id: "task".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    drain_insert_history(&mut rx);
+    chat.handle_helios_event(Event {
+        id: "retry".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting... 1/5".to_string(),
+            helios_error_info: Some(CodexErrorInfo::Other),
+            additional_details: None,
+        }),
+    });
+    drain_insert_history(&mut rx);
+    chat.handle_helios_event(Event {
+        id: "delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "hello".to_string(),
+        }),
+    });
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Working");
+    assert_eq!(status.details(), None);
+    assert!(chat.retry_status_header.is_none());
+}
+
+#[tokio::test]
+async fn runtime_metrics_websocket_timing_logs_and_final_separator_sums_totals() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::RuntimeMetrics, true);
+
+    chat.on_task_started();
+    chat.apply_runtime_metrics_delta(RuntimeMetricsSummary {
+        responses_api_engine_iapi_ttft_ms: 120,
+        responses_api_engine_service_tbt_ms: 50,
+        ..RuntimeMetricsSummary::default()
+    });
+
+    let first_log = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .find(|line| line.contains("WebSocket timing:"))
+        .expect("expected websocket timing log");
+    assert!(first_log.contains("TTFT: 120ms (iapi)"));
+    assert!(first_log.contains("TBT: 50ms (service)"));
+
+    chat.apply_runtime_metrics_delta(RuntimeMetricsSummary {
+        responses_api_engine_iapi_ttft_ms: 80,
+        ..RuntimeMetricsSummary::default()
+    });
+
+    let second_log = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .find(|line| line.contains("WebSocket timing:"))
+        .expect("expected websocket timing log");
+    assert!(second_log.contains("TTFT: 80ms (iapi)"));
+
+    chat.on_task_complete(None, false);
+    let mut final_separator = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            final_separator = Some(lines_to_single_string(&cell.display_lines(300)));
+        }
+    }
+    let final_separator = final_separator.expect("expected final separator with runtime metrics");
+    assert!(final_separator.contains("TTFT: 80ms (iapi)"));
+    assert!(final_separator.contains("TBT: 50ms (service)"));
+}
+
+#[tokio::test]
+async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Begin turn
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    // First finalized assistant message
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "First message".into(),
+            phase: None,
+        }),
+    });
+
+    // Second finalized assistant message in the same turn
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Second message".into(),
+            phase: None,
+        }),
+    });
+
+    // End turn
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined: String = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect();
+    assert!(
+        combined.contains("First message"),
+        "missing first message: {combined}"
+    );
+    assert!(
+        combined.contains("Second message"),
+        "missing second message: {combined}"
+    );
+    let first_idx = combined.find("First message").unwrap();
+    let second_idx = combined.find("Second message").unwrap();
+    assert!(first_idx < second_idx, "messages out of order: {combined}");
+}
+
+#[tokio::test]
+async fn final_reasoning_then_message_without_deltas_are_rendered() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // No deltas; only final reasoning followed by final message.
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "I will first analyze the request.".into(),
+        }),
+    });
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Here is the result.".into(),
+            phase: None,
+        }),
+    });
+
+    // Drain history and snapshot the combined visible content.
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!(combined);
+}
+
+#[tokio::test]
+async fn deltas_then_same_final_message_are_rendered_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Stream some reasoning deltas first.
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "I will ".into(),
+        }),
+    });
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "first analyze the ".into(),
+        }),
+    });
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "request.".into(),
+        }),
+    });
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "request.".into(),
+        }),
+    });
+
+    // Then stream answer deltas, followed by the exact same final message.
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "Here is the ".into(),
+        }),
+    });
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "result.".into(),
+        }),
+    });
+
+    chat.handle_helios_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Here is the result.".into(),
+            phase: None,
+        }),
+    });
+
+    // Snapshot the combined visible content to ensure we render as expected
+    // when deltas are followed by the identical final message.
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!(combined);
+}
+
+// Combined visual snapshot using vt100 for history + direct buffer overlay for UI.
+// This renders the final visual as seen in a terminal: history above, then a blank line,
+// then the exec block, another blank line, the status line, a blank line, and the composer.
+#[tokio::test]
+async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_helios_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message:
+                "I’m going to search the repo for where “Change Approved” is rendered to update that view."
+                    .into(),
+            phase: None,
+        }),
+    });
+
+    let command = vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()];
+    let parsed_cmd = vec![
+        ParsedCommand::Search {
+            query: Some("Change Approved".into()),
+            path: None,
+            cmd: "rg \"Change Approved\"".into(),
+        },
+        ParsedCommand::Read {
+            name: "diff_render.rs".into(),
+            cmd: "cat diff_render.rs".into(),
+            path: "diff_render.rs".into(),
+        },
+    ];
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    chat.handle_helios_event(Event {
+        id: "c1".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "c1".into(),
+            process_id: None,
+            turn_id: "turn-1".into(),
+            command: command.clone(),
+            cwd: cwd.clone(),
+            parsed_cmd: parsed_cmd.clone(),
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+        }),
+    });
+    chat.handle_helios_event(Event {
+        id: "c1".into(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "c1".into(),
+            process_id: None,
+            turn_id: "turn-1".into(),
+            command,
+            cwd,
+            parsed_cmd,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            aggregated_output: String::new(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(16000),
+            formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
+        }),
+    });
+    chat.handle_helios_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_helios_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Investigating rendering code**".into(),
+        }),
+    });
+    chat.bottom_pane.set_composer_text(
+        "Summarize recent commits".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    let width: u16 = 80;
+    let ui_height: u16 = chat.desired_height(width);
+    let vt_height: u16 = 40;
+    let viewport = Rect::new(0, vt_height - ui_height - 1, width, ui_height);
+
+    let backend = VT100Backend::new(width, vt_height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    term.set_viewport_area(viewport);
+
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines(&mut term, lines)
+            .expect("Failed to insert history lines in test");
+    }
+
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
+
+    assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+// E2E vt100 snapshot for complex markdown with indented and nested fenced code blocks
+#[tokio::test]
+async fn chatwidget_markdown_code_blocks_vt100_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    // Simulate a final agent message via streaming deltas instead of a single message
+
+    chat.handle_helios_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    // Build a vt100 visual from the history insertions only (no UI overlay)
+    let width: u16 = 80;
+    let height: u16 = 50;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    // Place viewport at the last line so that history lines insert above it
+    term.set_viewport_area(Rect::new(0, height - 1, width, 1));
+
+    // Simulate streaming via AgentMessageDelta in 2-character chunks (no final AgentMessage).
+    let source: &str = r#"
+
+    -- Indented code block (4 spaces)
+    SELECT *
+    FROM "users"
+    WHERE "email" LIKE '%@example.com';
+
+````markdown
+```sh
+printf 'fenced within fenced\n'
+```
+````
+
+```jsonc
+{
+  // comment allowed in jsonc
+  "path": "C:\\Program Files\\App",
+  "regex": "^foo.*(bar)?$"
+}
+```
+"#;
+
+    let mut it = source.chars();
+    loop {
+        let mut delta = String::new();
+        match it.next() {
+            Some(c) => delta.push(c),
+            None => break,
+        }
+        if let Some(c2) = it.next() {
+            delta.push(c2);
+        }
+
+        chat.handle_helios_event(Event {
+            id: "t1".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+        });
+        // Drive commit ticks and drain emitted history lines into the vt100 buffer.
+        loop {
+            chat.on_commit_tick();
+            let mut inserted_any = false;
+            while let Ok(app_ev) = rx.try_recv() {
+                if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                    let lines = cell.display_lines(width);
+                    crate::insert_history::insert_history_lines(&mut term, lines)
+                        .expect("Failed to insert history lines in test");
+                    inserted_any = true;
+                }
+            }
+            if !inserted_any {
+                break;
+            }
+        }
+    }
+
+    // Finalize the stream without sending a final AgentMessage, to flush any tail.
+    chat.handle_helios_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines(&mut term, lines)
+            .expect("Failed to insert history lines in test");
+    }
+
+    assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+#[tokio::test]
+async fn chatwidget_tall() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_helios_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    for i in 0..30 {
+        chat.queue_user_message(format!("Hello, world! {i}").into());
+    }
+    let width: u16 = 80;
+    let height: u16 = 24;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    let desired_height = chat.desired_height(width).min(height);
+    term.set_viewport_area(Rect::new(0, height - desired_height, width, desired_height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
+    assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+#[tokio::test]
+async fn review_queues_user_messages_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.handle_helios_event(Event {
+        id: "review-1".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: Some("current changes".to_string()),
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.queue_user_message(UserMessage::from(
+        "Queued while /review is running.".to_string(),
+    ));
+
+    let width: u16 = 80;
+    let height: u16 = 18;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    let desired_height = chat.desired_height(width).min(height);
+    term.set_viewport_area(Rect::new(0, height - desired_height, width, desired_height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
+    assert_snapshot!(term.backend().vt100().screen().contents());
+}

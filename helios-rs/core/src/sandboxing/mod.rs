@@ -1,0 +1,279 @@
+/*
+Module: sandboxing
+
+Build platform wrappers and produce ExecRequest for execution. Owns low-level
+sandbox placement and transformation of portable CommandSpec into a
+ready‑to‑spawn environment.
+*/
+
+use crate::exec::ExecExpiration;
+use crate::exec::ExecToolCallOutput;
+use crate::exec::SandboxType;
+use crate::exec::StdoutStream;
+use crate::exec::execute_exec_env;
+use crate::landlock::allow_network_for_proxy;
+use crate::landlock::create_linux_sandbox_command_args;
+use crate::protocol::SandboxPolicy;
+#[cfg(target_os = "macos")]
+use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+#[cfg(target_os = "macos")]
+use crate::seatbelt::create_seatbelt_command_args;
+#[cfg(target_os = "macos")]
+use crate::spawn::HELIOS_SANDBOX_ENV_VAR;
+use crate::spawn::HELIOS_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use crate::tools::sandboxing::SandboxablePreference;
+use helios_network_proxy::NetworkProxy;
+use helios_protocol::config_types::WindowsSandboxLevel;
+pub use helios_protocol::models::SandboxPermissions;
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
+
+#[derive(Debug)]
+pub struct CommandSpec {
+    pub program: String,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+    pub env: HashMap<String, String>,
+    pub expiration: ExecExpiration,
+    pub sandbox_permissions: SandboxPermissions,
+    pub justification: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct ExecRequest {
+    pub command: Vec<String>,
+    pub cwd: PathBuf,
+    pub env: HashMap<String, String>,
+    pub network: Option<NetworkProxy>,
+    pub expiration: ExecExpiration,
+    pub sandbox: SandboxType,
+    pub windows_sandbox_level: WindowsSandboxLevel,
+    pub sandbox_permissions: SandboxPermissions,
+    pub justification: Option<String>,
+    pub arg0: Option<String>,
+}
+
+/// Bundled arguments for sandbox transformation.
+///
+/// This keeps call sites self-documenting when several fields are optional.
+pub(crate) struct SandboxTransformRequest<'a> {
+    pub spec: CommandSpec,
+    pub policy: &'a SandboxPolicy,
+    pub sandbox: SandboxType,
+    pub enforce_managed_network: bool,
+    // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
+    // to make shared ownership explicit across runtime/sandbox plumbing.
+    pub network: Option<&'a NetworkProxy>,
+    pub sandbox_policy_cwd: &'a Path,
+    pub helios_linux_sandbox_exe: Option<&'a PathBuf>,
+    pub use_linux_sandbox_bwrap: bool,
+    pub windows_sandbox_level: WindowsSandboxLevel,
+}
+
+pub enum SandboxPreference {
+    Auto,
+    Require,
+    Forbid,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SandboxTransformError {
+    #[error("missing helios-linux-sandbox executable path")]
+    MissingLinuxSandboxExecutable,
+    #[cfg(not(target_os = "macos"))]
+    #[error("seatbelt sandbox is only available on macOS")]
+    SeatbeltUnavailable,
+}
+
+#[derive(Default)]
+pub struct SandboxManager;
+
+impl SandboxManager {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub(crate) fn select_initial(
+        &self,
+        policy: &SandboxPolicy,
+        pref: SandboxablePreference,
+        windows_sandbox_level: WindowsSandboxLevel,
+        has_managed_network_requirements: bool,
+    ) -> SandboxType {
+        match pref {
+            SandboxablePreference::Forbid => SandboxType::None,
+            SandboxablePreference::Require => {
+                // Require a platform sandbox when available; on Windows this
+                // respects the experimental_windows_sandbox feature.
+                crate::safety::get_platform_sandbox(
+                    windows_sandbox_level != WindowsSandboxLevel::Disabled,
+                )
+                .unwrap_or(SandboxType::None)
+            }
+            SandboxablePreference::Auto => match policy {
+                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                    if has_managed_network_requirements {
+                        crate::safety::get_platform_sandbox(
+                            windows_sandbox_level != WindowsSandboxLevel::Disabled,
+                        )
+                        .unwrap_or(SandboxType::None)
+                    } else {
+                        SandboxType::None
+                    }
+                }
+                _ => crate::safety::get_platform_sandbox(
+                    windows_sandbox_level != WindowsSandboxLevel::Disabled,
+                )
+                .unwrap_or(SandboxType::None),
+            },
+        }
+    }
+
+    pub(crate) fn transform(
+        &self,
+        request: SandboxTransformRequest<'_>,
+    ) -> Result<ExecRequest, SandboxTransformError> {
+        let SandboxTransformRequest {
+            mut spec,
+            policy,
+            sandbox,
+            enforce_managed_network,
+            network,
+            sandbox_policy_cwd,
+            helios_linux_sandbox_exe,
+            use_linux_sandbox_bwrap,
+            windows_sandbox_level,
+        } = request;
+        let mut env = spec.env;
+        if !policy.has_full_network_access() {
+            env.insert(
+                HELIOS_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
+                "1".to_string(),
+            );
+        }
+
+        let mut command = Vec::with_capacity(1 + spec.args.len());
+        command.push(spec.program);
+        command.append(&mut spec.args);
+
+        let (command, sandbox_env, arg0_override) = match sandbox {
+            SandboxType::None => (command, HashMap::new(), None),
+            #[cfg(target_os = "macos")]
+            SandboxType::MacosSeatbelt => {
+                let mut seatbelt_env = HashMap::new();
+                seatbelt_env.insert(HELIOS_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
+                let zsh_exec_bridge_wrapper_socket = env
+                    .get(crate::zsh_exec_bridge::ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR)
+                    .map(PathBuf::from);
+                let zsh_exec_bridge_allowed_unix_sockets = zsh_exec_bridge_wrapper_socket
+                    .as_ref()
+                    .map_or_else(Vec::new, |path| vec![path.clone()]);
+                let mut args = create_seatbelt_command_args(
+                    command.clone(),
+                    policy,
+                    sandbox_policy_cwd,
+                    enforce_managed_network,
+                    network,
+                    &zsh_exec_bridge_allowed_unix_sockets,
+                );
+                let mut full_command = Vec::with_capacity(1 + args.len());
+                full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
+                full_command.append(&mut args);
+                (full_command, seatbelt_env, None)
+            }
+            #[cfg(not(target_os = "macos"))]
+            SandboxType::MacosSeatbelt => return Err(SandboxTransformError::SeatbeltUnavailable),
+            SandboxType::LinuxSeccomp => {
+                let exe = helios_linux_sandbox_exe
+                    .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
+                let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
+                let mut args = create_linux_sandbox_command_args(
+                    command.clone(),
+                    policy,
+                    sandbox_policy_cwd,
+                    use_linux_sandbox_bwrap,
+                    allow_proxy_network,
+                );
+                let mut full_command = Vec::with_capacity(1 + args.len());
+                full_command.push(exe.to_string_lossy().to_string());
+                full_command.append(&mut args);
+                (
+                    full_command,
+                    HashMap::new(),
+                    Some("helios-linux-sandbox".to_string()),
+                )
+            }
+            // On Windows, the restricted token sandbox executes in-process via the
+            // helios-windows-sandbox crate. We leave the command unchanged here and
+            // branch during execution based on the sandbox type.
+            #[cfg(target_os = "windows")]
+            SandboxType::WindowsRestrictedToken => (command, HashMap::new(), None),
+            // When building for non-Windows targets, this variant is never constructed.
+            #[cfg(not(target_os = "windows"))]
+            SandboxType::WindowsRestrictedToken => (command, HashMap::new(), None),
+        };
+
+        env.extend(sandbox_env);
+
+        Ok(ExecRequest {
+            command,
+            cwd: spec.cwd,
+            env,
+            network: network.cloned(),
+            expiration: spec.expiration,
+            sandbox,
+            windows_sandbox_level,
+            sandbox_permissions: spec.sandbox_permissions,
+            justification: spec.justification,
+            arg0: arg0_override,
+        })
+    }
+
+    pub fn denied(&self, sandbox: SandboxType, out: &ExecToolCallOutput) -> bool {
+        crate::exec::is_likely_sandbox_denied(sandbox, out)
+    }
+}
+
+pub async fn execute_env(
+    env: ExecRequest,
+    policy: &SandboxPolicy,
+    stdout_stream: Option<StdoutStream>,
+) -> crate::error::Result<ExecToolCallOutput> {
+    execute_exec_env(env, policy, stdout_stream).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SandboxManager;
+    use crate::exec::SandboxType;
+    use crate::protocol::SandboxPolicy;
+    use crate::tools::sandboxing::SandboxablePreference;
+    use helios_protocol::config_types::WindowsSandboxLevel;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
+        let manager = SandboxManager::new();
+        let sandbox = manager.select_initial(
+            &SandboxPolicy::DangerFullAccess,
+            SandboxablePreference::Auto,
+            WindowsSandboxLevel::Disabled,
+            false,
+        );
+        assert_eq!(sandbox, SandboxType::None);
+    }
+
+    #[test]
+    fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
+        let manager = SandboxManager::new();
+        let expected = crate::safety::get_platform_sandbox(false).unwrap_or(SandboxType::None);
+        let sandbox = manager.select_initial(
+            &SandboxPolicy::DangerFullAccess,
+            SandboxablePreference::Auto,
+            WindowsSandboxLevel::Disabled,
+            true,
+        );
+        assert_eq!(sandbox, expected);
+    }
+}

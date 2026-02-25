@@ -1,0 +1,64 @@
+[package]
+name = "helios-exec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "helios-exec"
+path = "src/main.rs"
+
+[lib]
+name = "helios_exec"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+helios-arg0 = { workspace = true }
+helios-cloud-requirements = { workspace = true }
+helios-core = { workspace = true }
+helios-protocol = { workspace = true }
+helios-utils-absolute-path = { workspace = true }
+helios-utils-cli = { workspace = true }
+helios-utils-elapsed = { workspace = true }
+helios-utils-oss = { workspace = true }
+helios-utils-sandbox-summary = { workspace = true }
+owo-colors = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+supports-color = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tracing = { workspace = true, features = ["log"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+ts-rs = { workspace = true, features = [
+    "uuid-impl",
+    "serde-json-impl",
+    "no-serde-warnings",
+] }
+uuid = { workspace = true }
+
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+helios-apply-patch = { workspace = true }
+helios-utils-cargo-bin = { workspace = true }
+core_test_support = { workspace = true }
+libc = { workspace = true }
+predicates = { workspace = true }
+pretty_assertions = { workspace = true }
+rmcp = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true }
+walkdir = { workspace = true }
+wiremock = { workspace = true }

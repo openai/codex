@@ -1,0 +1,504 @@
+#![cfg(target_os = "linux")]
+#![allow(clippy::unwrap_used)]
+use helios_core::config::types::ShellEnvironmentPolicy;
+use helios_core::error::CodexErr;
+use helios_core::error::Result;
+use helios_core::error::SandboxErr;
+use helios_core::exec::ExecParams;
+use helios_core::exec::process_exec_tool_call;
+use helios_core::exec_env::create_env;
+use helios_core::sandboxing::SandboxPermissions;
+use helios_protocol::config_types::WindowsSandboxLevel;
+use helios_protocol::protocol::SandboxPolicy;
+use helios_utils_absolute_path::AbsolutePathBuf;
+use pretty_assertions::assert_eq;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use tempfile::NamedTempFile;
+
+// At least on GitHub CI, the arm64 tests appear to need longer timeouts.
+
+#[cfg(not(target_arch = "aarch64"))]
+const SHORT_TIMEOUT_MS: u64 = 200;
+#[cfg(target_arch = "aarch64")]
+const SHORT_TIMEOUT_MS: u64 = 5_000;
+
+#[cfg(not(target_arch = "aarch64"))]
+const LONG_TIMEOUT_MS: u64 = 1_000;
+#[cfg(target_arch = "aarch64")]
+const LONG_TIMEOUT_MS: u64 = 5_000;
+
+#[cfg(not(target_arch = "aarch64"))]
+const NETWORK_TIMEOUT_MS: u64 = 2_000;
+#[cfg(target_arch = "aarch64")]
+const NETWORK_TIMEOUT_MS: u64 = 10_000;
+
+const BWRAP_UNAVAILABLE_ERR: &str = "build-time bubblewrap is not available in this build.";
+
+fn create_env_from_core_vars() -> HashMap<String, String> {
+    let policy = ShellEnvironmentPolicy::default();
+    create_env(&policy, None)
+}
+
+#[expect(clippy::print_stdout)]
+async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
+    let output = run_cmd_output(cmd, writable_roots, timeout_ms).await;
+    if output.exit_code != 0 {
+        println!("stdout:\n{}", output.stdout.text);
+        println!("stderr:\n{}", output.stderr.text);
+        panic!("exit code: {}", output.exit_code);
+    }
+}
+
+#[expect(clippy::expect_used)]
+async fn run_cmd_output(
+    cmd: &[&str],
+    writable_roots: &[PathBuf],
+    timeout_ms: u64,
+) -> helios_core::exec::ExecToolCallOutput {
+    run_cmd_result_with_writable_roots(cmd, writable_roots, timeout_ms, false, false)
+        .await
+        .expect("sandboxed command should execute")
+}
+
+#[expect(clippy::expect_used)]
+async fn run_cmd_result_with_writable_roots(
+    cmd: &[&str],
+    writable_roots: &[PathBuf],
+    timeout_ms: u64,
+    use_bwrap_sandbox: bool,
+    network_access: bool,
+) -> Result<helios_core::exec::ExecToolCallOutput> {
+    let cwd = std::env::current_dir().expect("cwd should exist");
+    let sandbox_cwd = cwd.clone();
+    let params = ExecParams {
+        command: cmd.iter().copied().map(str::to_owned).collect(),
+        original_command: cmd.iter().copied().map(str::to_owned).collect(),
+        cwd,
+        expiration: timeout_ms.into(),
+        env: create_env_from_core_vars(),
+        network: None,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        justification: None,
+        arg0: None,
+    };
+
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: writable_roots
+            .iter()
+            .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
+            .collect(),
+        read_only_access: Default::default(),
+        network_access,
+        // Exclude tmp-related folders from writable roots because we need a
+        // folder that is writable by tests but that we intentionally disallow
+        // writing to in the sandbox.
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let sandbox_program = env!("CARGO_BIN_EXE_helios-linux-sandbox");
+    let helios_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
+
+    process_exec_tool_call(
+        params,
+        &sandbox_policy,
+        sandbox_cwd.as_path(),
+        &helios_linux_sandbox_exe,
+        use_bwrap_sandbox,
+        None,
+    )
+    .await
+}
+
+fn is_bwrap_unavailable_output(output: &helios_core::exec::ExecToolCallOutput) -> bool {
+    output.stderr.text.contains(BWRAP_UNAVAILABLE_ERR)
+        || (output
+            .stderr
+            .text
+            .contains("Can't mount proc on /newroot/proc")
+            && (output.stderr.text.contains("Operation not permitted")
+                || output.stderr.text.contains("Permission denied")
+                || output.stderr.text.contains("Invalid argument")))
+}
+
+async fn should_skip_bwrap_tests() -> bool {
+    match run_cmd_result_with_writable_roots(
+        &["bash", "-lc", "true"],
+        &[],
+        NETWORK_TIMEOUT_MS,
+        true,
+        true,
+    )
+    .await
+    {
+        Ok(output) => is_bwrap_unavailable_output(&output),
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => {
+            is_bwrap_unavailable_output(&output)
+        }
+        // Probe timeouts are not actionable for the bwrap-specific assertions below;
+        // skip rather than fail the whole suite.
+        Err(CodexErr::Sandbox(SandboxErr::Timeout { .. })) => true,
+        Err(err) => panic!("bwrap availability probe failed unexpectedly: {err:?}"),
+    }
+}
+
+fn expect_denied(
+    result: Result<helios_core::exec::ExecToolCallOutput>,
+    context: &str,
+) -> helios_core::exec::ExecToolCallOutput {
+    match result {
+        Ok(output) => {
+            assert_ne!(output.exit_code, 0, "{context}: expected nonzero exit code");
+            output
+        }
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => *output,
+        Err(err) => panic!("{context}: {err:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_root_read() {
+    run_cmd(&["ls", "-l", "/bin"], &[], SHORT_TIMEOUT_MS).await;
+}
+
+#[tokio::test]
+#[should_panic]
+async fn test_root_write() {
+    let tmpfile = NamedTempFile::new().unwrap();
+    let tmpfile_path = tmpfile.path().to_string_lossy();
+    run_cmd(
+        &["bash", "-lc", &format!("echo blah > {tmpfile_path}")],
+        &[],
+        SHORT_TIMEOUT_MS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_dev_null_write() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let output = run_cmd_result_with_writable_roots(
+        &["bash", "-lc", "echo blah > /dev/null"],
+        &[],
+        // We have seen timeouts when running this test in CI on GitHub,
+        // so we are using a generous timeout until we can diagnose further.
+        LONG_TIMEOUT_MS,
+        true,
+        true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn bwrap_populates_minimal_dev_nodes() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let output = run_cmd_result_with_writable_roots(
+        &[
+            "bash",
+            "-lc",
+            "for node in null zero full random urandom tty; do [ -c \"/dev/$node\" ] || { echo \"missing /dev/$node\" >&2; exit 1; }; done",
+        ],
+        &[],
+        LONG_TIMEOUT_MS,
+        true,
+        true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn bwrap_preserves_writable_dev_shm_bind_mount() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+    if !std::path::Path::new("/dev/shm").exists() {
+        eprintln!("skipping bwrap test: /dev/shm is unavailable in this environment");
+        return;
+    }
+
+    let target_file = match NamedTempFile::new_in("/dev/shm") {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("skipping bwrap test: failed to create /dev/shm temp file: {err}");
+            return;
+        }
+    };
+    let target_path = target_file.path().to_path_buf();
+    std::fs::write(&target_path, "host-before").expect("seed /dev/shm file");
+
+    let output = run_cmd_result_with_writable_roots(
+        &[
+            "bash",
+            "-lc",
+            &format!("printf sandbox-after > {}", target_path.to_string_lossy()),
+        ],
+        &[PathBuf::from("/dev/shm")],
+        LONG_TIMEOUT_MS,
+        true,
+        true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+    assert_eq!(
+        std::fs::read_to_string(&target_path).expect("read /dev/shm file"),
+        "sandbox-after"
+    );
+}
+
+#[tokio::test]
+async fn test_writable_root() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let file_path = tmpdir.path().join("test");
+    run_cmd(
+        &[
+            "bash",
+            "-lc",
+            &format!("echo blah > {}", file_path.to_string_lossy()),
+        ],
+        &[tmpdir.path().to_path_buf()],
+        // We have seen timeouts when running this test in CI on GitHub,
+        // so we are using a generous timeout until we can diagnose further.
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_no_new_privs_is_enabled() {
+    let output = run_cmd_output(
+        &["bash", "-lc", "grep '^NoNewPrivs:' /proc/self/status"],
+        &[],
+        // We have seen timeouts when running this test in CI on GitHub,
+        // so we are using a generous timeout until we can diagnose further.
+        LONG_TIMEOUT_MS,
+    )
+    .await;
+    let line = output
+        .stdout
+        .text
+        .lines()
+        .find(|line| line.starts_with("NoNewPrivs:"))
+        .unwrap_or("");
+    assert_eq!(line.trim(), "NoNewPrivs:\t1");
+}
+
+#[tokio::test]
+#[should_panic(expected = "Sandbox(Timeout")]
+async fn test_timeout() {
+    run_cmd(&["sleep", "2"], &[], 50).await;
+}
+
+/// Helper that runs `cmd` under the Linux sandbox and asserts that the command
+/// does NOT succeed (i.e. returns a non‑zero exit code) **unless** the binary
+/// is missing in which case we silently treat it as an accepted skip so the
+/// suite remains green on leaner CI images.
+#[expect(clippy::expect_used)]
+async fn assert_network_blocked(cmd: &[&str]) {
+    let cwd = std::env::current_dir().expect("cwd should exist");
+    let sandbox_cwd = cwd.clone();
+    let params = ExecParams {
+        command: cmd.iter().copied().map(str::to_owned).collect(),
+        original_command: cmd.iter().copied().map(str::to_owned).collect(),
+        cwd,
+        // Give the tool a generous 2-second timeout so even slow DNS timeouts
+        // do not stall the suite.
+        expiration: NETWORK_TIMEOUT_MS.into(),
+        env: create_env_from_core_vars(),
+        network: None,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        justification: None,
+        arg0: None,
+    };
+
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_program = env!("CARGO_BIN_EXE_helios-linux-sandbox");
+    let helios_linux_sandbox_exe: Option<PathBuf> = Some(PathBuf::from(sandbox_program));
+    let result = process_exec_tool_call(
+        params,
+        &sandbox_policy,
+        sandbox_cwd.as_path(),
+        &helios_linux_sandbox_exe,
+        false,
+        None,
+    )
+    .await;
+
+    let output = match result {
+        Ok(output) => output,
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => *output,
+        _ => {
+            panic!("expected sandbox denied error, got: {result:?}");
+        }
+    };
+
+    dbg!(&output.stderr.text);
+    dbg!(&output.stdout.text);
+    dbg!(&output.exit_code);
+
+    // A completely missing binary exits with 127.  Anything else should also
+    // be non‑zero (EPERM from seccomp will usually bubble up as 1, 2, 13…)
+    // If—*and only if*—the command exits 0 we consider the sandbox breached.
+
+    if output.exit_code == 0 {
+        panic!(
+            "Network sandbox FAILED - {cmd:?} exited 0\nstdout:\n{}\nstderr:\n{}",
+            output.stdout.text, output.stderr.text
+        );
+    }
+}
+
+#[tokio::test]
+async fn sandbox_blocks_curl() {
+    assert_network_blocked(&["curl", "-I", "http://openai.com"]).await;
+}
+
+#[tokio::test]
+async fn sandbox_blocks_wget() {
+    assert_network_blocked(&["wget", "-qO-", "http://openai.com"]).await;
+}
+
+#[tokio::test]
+async fn sandbox_blocks_ping() {
+    // ICMP requires raw socket – should be denied quickly with EPERM.
+    assert_network_blocked(&["ping", "-c", "1", "8.8.8.8"]).await;
+}
+
+#[tokio::test]
+async fn sandbox_blocks_nc() {
+    // Zero‑length connection attempt to localhost.
+    assert_network_blocked(&["nc", "-z", "127.0.0.1", "80"]).await;
+}
+
+#[tokio::test]
+async fn sandbox_blocks_git_and_helios_writes_inside_writable_root() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tmpdir = tempfile::tempdir().expect("tempdir");
+    let dot_git = tmpdir.path().join(".git");
+    let dot_codex = tmpdir.path().join(".codex");
+    std::fs::create_dir_all(&dot_git).expect("create .git");
+    std::fs::create_dir_all(&dot_codex).expect("create .codex");
+
+    let git_target = dot_git.join("config");
+    let helios_target = dot_codex.join("config.toml");
+
+    let git_output = expect_denied(
+        run_cmd_result_with_writable_roots(
+            &[
+                "bash",
+                "-lc",
+                &format!("echo denied > {}", git_target.to_string_lossy()),
+            ],
+            &[tmpdir.path().to_path_buf()],
+            LONG_TIMEOUT_MS,
+            true,
+            true,
+        )
+        .await,
+        ".git write should be denied under bubblewrap",
+    );
+
+    let helios_output = expect_denied(
+        run_cmd_result_with_writable_roots(
+            &[
+                "bash",
+                "-lc",
+                &format!("echo denied > {}", helios_target.to_string_lossy()),
+            ],
+            &[tmpdir.path().to_path_buf()],
+            LONG_TIMEOUT_MS,
+            true,
+            true,
+        )
+        .await,
+        ".codex write should be denied under bubblewrap",
+    );
+    assert_ne!(git_output.exit_code, 0);
+    assert_ne!(helios_output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn sandbox_blocks_helios_symlink_replacement_attack() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    use std::os::unix::fs::symlink;
+
+    let tmpdir = tempfile::tempdir().expect("tempdir");
+    let decoy = tmpdir.path().join("decoy-codex");
+    std::fs::create_dir_all(&decoy).expect("create decoy dir");
+
+    let dot_codex = tmpdir.path().join(".codex");
+    symlink(&decoy, &dot_codex).expect("create .codex symlink");
+
+    let helios_target = dot_codex.join("config.toml");
+
+    let helios_output = expect_denied(
+        run_cmd_result_with_writable_roots(
+            &[
+                "bash",
+                "-lc",
+                &format!("echo denied > {}", helios_target.to_string_lossy()),
+            ],
+            &[tmpdir.path().to_path_buf()],
+            LONG_TIMEOUT_MS,
+            true,
+            true,
+        )
+        .await,
+        ".codex symlink replacement should be denied",
+    );
+    assert_ne!(helios_output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn sandbox_blocks_ssh() {
+    // Force ssh to attempt a real TCP connection but fail quickly.  `BatchMode`
+    // avoids password prompts, and `ConnectTimeout` keeps the hang time low.
+    assert_network_blocked(&[
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=1",
+        "github.com",
+    ])
+    .await;
+}
+
+#[tokio::test]
+async fn sandbox_blocks_getent() {
+    assert_network_blocked(&["getent", "ahosts", "openai.com"]).await;
+}
+
+#[tokio::test]
+async fn sandbox_blocks_dev_tcp_redirection() {
+    // This syntax is only supported by bash and zsh. We try bash first.
+    // Fallback generic socket attempt using /bin/sh with bash‑style /dev/tcp.  Not
+    // all images ship bash, so we guard against 127 as well.
+    assert_network_blocked(&["bash", "-c", "echo hi > /dev/tcp/127.0.0.1/80"]).await;
+}

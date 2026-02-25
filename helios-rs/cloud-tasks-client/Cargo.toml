@@ -1,0 +1,28 @@
+[package]
+name = "helios-cloud-tasks-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "helios_cloud_tasks_client"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[features]
+default = ["online"]
+online = ["dep:helios-backend-client"]
+mock = []
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+diffy = "0.4.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2.0.17"
+helios-backend-client = { path = "../backend-client", optional = true }
+helios-git = { workspace = true }

@@ -1,0 +1,36 @@
+[package]
+name = "helios-app-server-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "helios_app_server_protocol"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+helios-protocol = { workspace = true }
+helios-experimental-api-macros = { workspace = true }
+helios-utils-absolute-path = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+strum_macros = { workspace = true }
+thiserror = { workspace = true }
+ts-rs = { workspace = true }
+inventory = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v7"] }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+helios-utils-cargo-bin = { workspace = true }
+pretty_assertions = { workspace = true }
+similar = { workspace = true }
+tempfile = { workspace = true }

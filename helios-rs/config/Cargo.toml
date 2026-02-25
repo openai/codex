@@ -1,0 +1,30 @@
+[package]
+name = "helios-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+helios-app-server-protocol = { workspace = true }
+helios-execpolicy = { workspace = true }
+helios-protocol = { workspace = true }
+helios-utils-absolute-path = { workspace = true }
+futures = { workspace = true, features = ["alloc", "std"] }
+multimap = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_path_to_error = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["full"] }

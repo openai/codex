@@ -1,0 +1,65 @@
+use clap::Parser;
+use helios_app_server::AppServerTransport;
+use helios_app_server::run_main_with_transport;
+use helios_arg0::arg0_dispatch_or_else;
+use helios_core::config_loader::LoaderOverrides;
+use helios_utils_cli::CliConfigOverrides;
+use std::path::PathBuf;
+
+// Debug-only test hook: lets integration tests point the server at a temporary
+// managed config file without writing to /etc.
+const MANAGED_CONFIG_PATH_ENV_VAR: &str = "HELIOS_APP_SERVER_MANAGED_CONFIG_PATH";
+
+#[derive(Debug, Parser)]
+struct AppServerArgs {
+    /// Transport endpoint URL. Supported values: `stdio://` (default),
+    /// `ws://IP:PORT`.
+    #[arg(
+        long = "listen",
+        value_name = "URL",
+        default_value = AppServerTransport::DEFAULT_LISTEN_URL
+    )]
+    listen: AppServerTransport,
+}
+
+fn main() -> anyhow::Result<()> {
+    arg0_dispatch_or_else(|helios_linux_sandbox_exe| async move {
+        // Run wrapper mode only after arg0 dispatch so `helios-linux-sandbox`
+        // invocations don't get misclassified as zsh exec-wrapper calls.
+        if helios_core::maybe_run_zsh_exec_wrapper_mode()? {
+            return Ok(());
+        }
+        let args = AppServerArgs::parse();
+        let managed_config_path = managed_config_path_from_debug_env();
+        let loader_overrides = LoaderOverrides {
+            managed_config_path,
+            ..Default::default()
+        };
+        let transport = args.listen;
+
+        run_main_with_transport(
+            helios_linux_sandbox_exe,
+            CliConfigOverrides::default(),
+            loader_overrides,
+            false,
+            transport,
+        )
+        .await?;
+        Ok(())
+    })
+}
+
+fn managed_config_path_from_debug_env() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(value) = std::env::var(MANAGED_CONFIG_PATH_ENV_VAR) {
+            return if value.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(value))
+            };
+        }
+    }
+
+    None
+}

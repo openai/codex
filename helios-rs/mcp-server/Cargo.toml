@@ -1,0 +1,47 @@
+[package]
+name = "helios-mcp-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "helios-mcp-server"
+path = "src/main.rs"
+
+[lib]
+name = "helios_mcp_server"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+helios-arg0 = { workspace = true }
+helios-core = { workspace = true }
+helios-protocol = { workspace = true }
+helios-shell-command = { workspace = true }
+helios-utils-cli = { workspace = true }
+helios-utils-json-to-toml = { workspace = true }
+rmcp = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tracing = { workspace = true, features = ["log"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+core_test_support = { workspace = true }
+mcp_test_support = { workspace = true }
+os_info = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+wiremock = { workspace = true }

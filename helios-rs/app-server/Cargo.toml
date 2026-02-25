@@ -1,0 +1,78 @@
+[package]
+name = "helios-app-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "helios-app-server"
+path = "src/main.rs"
+
+[lib]
+name = "helios_app_server"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+helios-arg0 = { workspace = true }
+helios-cloud-requirements = { workspace = true }
+helios-core = { workspace = true }
+helios-shell-command = { workspace = true }
+helios-utils-cli = { workspace = true }
+helios-backend-client = { workspace = true }
+helios-file-search = { workspace = true }
+helios-chatgpt = { workspace = true }
+helios-login = { workspace = true }
+helios-protocol = { workspace = true }
+helios-app-server-protocol = { workspace = true }
+helios-feedback = { workspace = true }
+helios-rmcp-client = { workspace = true }
+helios-utils-absolute-path = { workspace = true }
+helios-utils-json-to-toml = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+futures = { workspace = true }
+owo-colors = { workspace = true, features = ["supports-colors"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+time = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tokio-util = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
+uuid = { workspace = true, features = ["serde", "v7"] }
+
+[dev-dependencies]
+app_test_support = { workspace = true }
+axum = { workspace = true, default-features = false, features = [
+    "http1",
+    "json",
+    "tokio",
+] }
+base64 = { workspace = true }
+helios-execpolicy = { workspace = true }
+core_test_support = { workspace = true }
+helios-utils-cargo-bin = { workspace = true }
+os_info = { workspace = true }
+pretty_assertions = { workspace = true }
+rmcp = { workspace = true, default-features = false, features = [
+    "server",
+    "transport-streamable-http-server",
+] }
+serial_test = { workspace = true }
+tokio-tungstenite = { workspace = true }
+wiremock = { workspace = true }
+shlex = { workspace = true }

@@ -1,0 +1,33 @@
+name: Auto Merge Gate
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+      - synchronize
+      - labeled
+  pull_request_review:
+    types:
+      - submitted
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  enable-automerge:
+    if: |
+      (github.event_name != 'pull_request_review') ||
+      (github.event.review.state == 'APPROVED')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge for labeled PRs
+        if: |
+          contains(github.event.pull_request.labels.*.name, 'automerge') &&
+          !contains(github.event.pull_request.labels.*.name, 'do-not-merge')
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          merge-method: squash

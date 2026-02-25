@@ -1,0 +1,142 @@
+[package]
+name = "helios-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "helios-tui"
+path = "src/main.rs"
+
+[lib]
+name = "helios_tui"
+path = "src/lib.rs"
+
+[features]
+default = ["voice-input"]
+# Enable vt100-based tests (emulator) when running with `--features vt100-tests`.
+vt100-tests = []
+# Gate verbose debug logging inside the TUI implementation.
+debug-logs = []
+voice-input = ["dep:cpal", "dep:hound"]
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
+helios-ansi-escape = { workspace = true }
+helios-app-server-protocol = { workspace = true }
+helios-arg0 = { workspace = true }
+helios-backend-client = { workspace = true }
+helios-chatgpt = { workspace = true }
+helios-cloud-requirements = { workspace = true }
+helios-core = { workspace = true }
+helios-feedback = { workspace = true }
+helios-file-search = { workspace = true }
+helios-login = { workspace = true }
+helios-otel = { workspace = true }
+helios-protocol = { workspace = true }
+helios-shell-command = { workspace = true }
+helios-state = { workspace = true }
+helios-utils-approval-presets = { workspace = true }
+helios-utils-absolute-path = { workspace = true }
+helios-utils-cli = { workspace = true }
+helios-utils-elapsed = { workspace = true }
+helios-utils-fuzzy-match = { workspace = true }
+helios-utils-oss = { workspace = true }
+helios-utils-sandbox-summary = { workspace = true }
+helios-utils-sleep-inhibitor = { workspace = true }
+color-eyre = { workspace = true }
+crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
+derive_more = { workspace = true, features = ["is_variant"] }
+diffy = { workspace = true }
+dirs = { workspace = true }
+dunce = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
+itertools = { workspace = true }
+lazy_static = { workspace = true }
+pathdiff = { workspace = true }
+pulldown-cmark = { workspace = true }
+rand = { workspace = true }
+ratatui = { workspace = true, features = [
+    "scrolling-regions",
+    "unstable-backend-writer",
+    "unstable-rendered-line-info",
+    "unstable-widget-ref",
+] }
+ratatui-macros = { workspace = true }
+regex-lite = { workspace = true }
+reqwest = { workspace = true, features = ["json", "multipart"] }
+rmcp = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+shlex = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+supports-color = { workspace = true }
+tempfile = { workspace = true }
+textwrap = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+    "test-util",
+    "time",
+] }
+tokio-stream = { workspace = true, features = ["sync"] }
+toml = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+syntect = "5"
+two-face = { version = "0.5", default-features = false, features = ["syntect-default-onig"] }
+unicode-segmentation = { workspace = true }
+unicode-width = { workspace = true }
+url = { workspace = true }
+webbrowser = { workspace = true }
+uuid = { workspace = true }
+
+helios-windows-sandbox = { workspace = true }
+tokio-util = { workspace = true, features = ["time"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+cpal = { version = "0.15", optional = true }
+hound = { version = "3.5", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+which = { workspace = true }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+] }
+winsplit = "0.1"
+
+# Clipboard support via `arboard` is not available on Android/Termux.
+# Only include it for non-Android targets so the crate builds on Android.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = { workspace = true }
+
+
+[dev-dependencies]
+helios-cli = { workspace = true }
+helios-core = { workspace = true }
+helios-utils-cargo-bin = { workspace = true }
+helios-utils-pty = { workspace = true }
+assert_matches = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+insta = { workspace = true }
+pretty_assertions = { workspace = true }
+rand = { workspace = true }
+serial_test = { workspace = true }
+vt100 = { workspace = true }
+uuid = { workspace = true }

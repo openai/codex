@@ -1,0 +1,64 @@
+[package]
+name = "helios-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "helios"
+path = "src/main.rs"
+
+[lib]
+name = "helios_cli"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+clap_complete = { workspace = true }
+helios-app-server = { workspace = true }
+helios-app-server-protocol = { workspace = true }
+helios-app-server-test-client = { workspace = true }
+helios-arg0 = { workspace = true }
+helios-chatgpt = { workspace = true }
+helios-cloud-tasks = { path = "../cloud-tasks" }
+helios-utils-cli = { workspace = true }
+helios-config = { workspace = true }
+helios-core = { workspace = true }
+helios-exec = { workspace = true }
+helios-execpolicy = { workspace = true }
+helios-login = { workspace = true }
+helios-mcp-server = { workspace = true }
+helios-protocol = { workspace = true }
+helios-responses-api-proxy = { workspace = true }
+helios-rmcp-client = { workspace = true }
+helios-stdio-to-uds = { workspace = true }
+helios-tui = { workspace = true }
+libc = { workspace = true }
+owo-colors = { workspace = true }
+regex-lite = { workspace = true }
+serde_json = { workspace = true }
+supports-color = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+toml = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+helios_windows_sandbox = { package = "helios-windows-sandbox", path = "../windows-sandbox-rs" }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+assert_matches = { workspace = true }
+helios-utils-cargo-bin = { workspace = true }
+predicates = { workspace = true }
+pretty_assertions = { workspace = true }
