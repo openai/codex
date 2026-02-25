@@ -281,15 +281,15 @@ async fn http_connect_accept(
                 host: host.clone(),
                 reason: REASON_MITM_REQUIRED.to_string(),
                 client: client.clone(),
-                    method: Some("CONNECT".to_string()),
-                    mode: Some(NetworkMode::Limited),
-                    protocol: "http-connect".to_string(),
-                    attempt_id: network_attempt_id.clone(),
-                    decision: Some(details.decision.as_str().to_string()),
-                    source: Some(details.source.as_str().to_string()),
-                    port: Some(authority.port),
-                }))
-                .await;
+                method: Some("CONNECT".to_string()),
+                mode: Some(NetworkMode::Limited),
+                protocol: "http-connect".to_string(),
+                attempt_id: network_attempt_id.clone(),
+                decision: Some(details.decision.as_str().to_string()),
+                source: Some(details.source.as_str().to_string()),
+                port: Some(authority.port),
+            }))
+            .await;
         let client = client.as_deref().unwrap_or_default();
         warn!(
             "CONNECT blocked; MITM required for read-only HTTPS in limited mode (client={client}, host={host}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
@@ -681,14 +681,14 @@ async fn http_plain_proxy(
                 host: host.clone(),
                 reason: REASON_METHOD_NOT_ALLOWED.to_string(),
                 client: client.clone(),
-                    method: Some(req.method().as_str().to_string()),
-                    mode: Some(NetworkMode::Limited),
-                    protocol: "http".to_string(),
-                    attempt_id: network_attempt_id.clone(),
-                    decision: Some(details.decision.as_str().to_string()),
-                    source: Some(details.source.as_str().to_string()),
-                    port: Some(port),
-                }))
+                method: Some(req.method().as_str().to_string()),
+                mode: Some(NetworkMode::Limited),
+                protocol: "http".to_string(),
+                attempt_id: network_attempt_id.clone(),
+                decision: Some(details.decision.as_str().to_string()),
+                source: Some(details.source.as_str().to_string()),
+                port: Some(port),
+            }))
             .await;
         let client = client.as_deref().unwrap_or_default();
         let method = req.method();
