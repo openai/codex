@@ -998,7 +998,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
     mcp.send_response(
         request_id,
         serde_json::to_value(CommandExecutionRequestApprovalResponse {
-            decision: CommandExecutionApprovalDecision::Decline,
+            decision: CommandExecutionApprovalDecision::Cancel,
         })?,
     )
     .await?;

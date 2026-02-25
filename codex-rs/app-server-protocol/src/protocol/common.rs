@@ -1540,6 +1540,7 @@ mod tests {
             }),
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
+            available_decisions: None,
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&params);
         assert_eq!(

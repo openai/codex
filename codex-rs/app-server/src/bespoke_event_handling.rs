@@ -336,6 +336,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .note_permission_requested(&conversation_id.to_string())
                 .await;
             let approval_id_for_op = ev.effective_approval_id();
+            let available_decisions = ev
+                .effective_available_decisions()
+                .into_iter()
+                .map(CommandExecutionApprovalDecision::from)
+                .collect::<Vec<_>>();
             let ExecApprovalRequestEvent {
                 call_id,
                 approval_id,
@@ -432,6 +437,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         additional_permissions,
                         proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                         proposed_network_policy_amendments: proposed_network_policy_amendments_v2,
+                        available_decisions: Some(available_decisions),
                     };
                     let rx = outgoing
                         .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
@@ -2042,7 +2048,7 @@ async fn on_command_execution_request_approval_response(
                 .unwrap_or_else(|err| {
                     error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
                     CommandExecutionRequestApprovalResponse {
-                        decision: CommandExecutionApprovalDecision::Decline,
+                        decision: CommandExecutionApprovalDecision::Cancel,
                     }
                 });
 
@@ -2075,10 +2081,6 @@ async fn on_command_execution_request_approval_response(
                         completion_status,
                     )
                 }
-                CommandExecutionApprovalDecision::Decline => (
-                    ReviewDecision::Denied,
-                    Some(CommandExecutionStatus::Declined),
-                ),
                 CommandExecutionApprovalDecision::Cancel => (
                     ReviewDecision::Abort,
                     Some(CommandExecutionStatus::Declined),

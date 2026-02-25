@@ -180,7 +180,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
             ],
             None,
             Some(5000),
-            "call-zsh-fork-decline",
+            "call-zsh-fork-cancel",
         )?,
         create_final_assistant_message_sse_response("done")?,
     ];
@@ -239,13 +239,13 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req else {
         panic!("expected CommandExecutionRequestApproval request");
     };
-    assert_eq!(params.item_id, "call-zsh-fork-decline");
+    assert_eq!(params.item_id, "call-zsh-fork-cancel");
     assert_eq!(params.thread_id, thread.id);
 
     mcp.send_response(
         request_id,
         serde_json::to_value(CommandExecutionRequestApprovalResponse {
-            decision: CommandExecutionApprovalDecision::Decline,
+            decision: CommandExecutionApprovalDecision::Cancel,
         })?,
     )
     .await?;
@@ -277,7 +277,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     else {
         unreachable!("loop ensures we break on command execution items");
     };
-    assert_eq!(id, "call-zsh-fork-decline");
+    assert_eq!(id, "call-zsh-fork-cancel");
     assert_eq!(status, CommandExecutionStatus::Declined);
     assert!(exit_code.is_none());
     assert!(aggregated_output.is_none());
