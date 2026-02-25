@@ -20,6 +20,7 @@ use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+use crate::model_labels::reasoning_label_for;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
@@ -3054,24 +3055,6 @@ impl App {
         Ok(())
     }
 
-    fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
-        match reasoning_effort {
-            Some(ReasoningEffortConfig::Minimal) => "minimal",
-            Some(ReasoningEffortConfig::Low) => "low",
-            Some(ReasoningEffortConfig::Medium) => "medium",
-            Some(ReasoningEffortConfig::High) => "high",
-            Some(ReasoningEffortConfig::XHigh) => "xhigh",
-            None | Some(ReasoningEffortConfig::None) => "default",
-        }
-    }
-
-    fn reasoning_label_for(
-        model: &str,
-        reasoning_effort: Option<ReasoningEffortConfig>,
-    ) -> Option<&'static str> {
-        (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
-    }
-
     fn model_change_message(
         model: &str,
         effort: Option<ReasoningEffortConfig>,
@@ -3079,7 +3062,7 @@ impl App {
         toggle_target: Option<(String, Option<ReasoningEffortConfig>)>,
     ) -> String {
         let describe_model = |model_name: &str, model_effort: Option<ReasoningEffortConfig>| {
-            if let Some(label) = Self::reasoning_label_for(model_name, model_effort) {
+            if let Some(label) = reasoning_label_for(model_name, model_effort) {
                 format!("{model_name} {label}")
             } else {
                 model_name.to_string()

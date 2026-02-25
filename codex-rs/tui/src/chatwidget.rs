@@ -39,6 +39,7 @@ use std::time::Instant;
 
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::model_labels::model_with_reasoning_label;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
@@ -686,6 +687,8 @@ pub(crate) struct ChatWidget {
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
+    // Only shows the Ctrl+O notice once per session, on the first Ctrl+O press.
+    ctrl_o_notice_shown: bool,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -2869,6 +2872,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
             recent_model_history: VecDeque::new(),
+            ctrl_o_notice_shown: false,
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -3051,6 +3055,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
             recent_model_history: VecDeque::new(),
+            ctrl_o_notice_shown: false,
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -3214,6 +3219,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
             recent_model_history: VecDeque::new(),
+            ctrl_o_notice_shown: false,
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -7394,6 +7400,17 @@ impl ChatWidget {
             self.add_info_message("No previous model to toggle to yet.".to_string(), None);
             return;
         };
+
+        // We have a valid model, let's indicate the change to the user and update the effective
+        // model.
+        if !self.ctrl_o_notice_shown {
+            let model_name = model_with_reasoning_label(&target_model, target_effort);
+            let message = format!(
+                "Switched to {model_name} for this session. Use /model to make it default."
+            );
+            self.add_info_message(message, None);
+            self.ctrl_o_notice_shown = true;
+        }
 
         // Dispatch through AppEvent so the change flows through the same
         // pipeline as `/model` and the collaboration-mode switcher.
