@@ -274,8 +274,8 @@ client_request_definitions! {
         params: v2::RealtimeConversationStartParams,
         response: v2::RealtimeConversationStartResponse,
     },
-    #[experimental("realtimeConversation/audioAppend")]
-    RealtimeConversationAudioAppend => "realtimeConversation/audioAppend" {
+    #[experimental("realtimeConversation/appendAudio")]
+    RealtimeConversationAudioAppend => "realtimeConversation/appendAudio" {
         params: v2::RealtimeConversationAudioAppendParams,
         response: v2::RealtimeConversationAudioAppendResponse,
     },

@@ -598,13 +598,13 @@ impl McpProcess {
             .await
     }
 
-    /// Send a `realtimeConversation/audioAppend` JSON-RPC request (v2).
+    /// Send a `realtimeConversation/appendAudio` JSON-RPC request (v2).
     pub async fn send_realtime_conversation_audio_append_request(
         &mut self,
         params: RealtimeConversationAudioAppendParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
-        self.send_request("realtimeConversation/audioAppend", params)
+        self.send_request("realtimeConversation/appendAudio", params)
             .await
     }
 

@@ -136,7 +136,7 @@ Example with notification opt-out:
 - `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `realtimeConversation/start` — start a thread-scoped realtime conversation session (experimental); returns `{}` and streams `realtimeConversation/*` notifications.
-- `realtimeConversation/audioAppend` — append an input audio chunk to the active realtime conversation (experimental); returns `{}`.
+- `realtimeConversation/appendAudio` — append an input audio chunk to the active realtime conversation (experimental); returns `{}`.
 - `realtimeConversation/textAppend` — append text input to the active realtime conversation (experimental); returns `{}`.
 - `realtimeConversation/stop` — stop the active realtime conversation for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
