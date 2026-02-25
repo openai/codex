@@ -31,6 +31,8 @@ impl Session {
         // We model that with:
         // - one active turn span while walking lifecycle events
         // - one finalized metadata segment per surviving user turn
+        // - legacy `TurnContextItem` / `Compacted` entries contributing directly to that same
+        //   segment stream when no matching turn span exists
         //
         // `ThreadRolledBack` updates both:
         // - history: drop user turns from reconstructed response items
@@ -63,7 +65,6 @@ impl Session {
         }
 
         let mut history = ContextManager::new();
-        let mut saw_turn_lifecycle_event = false;
         let mut active_turn: Option<ActiveRolloutTurn> = None;
         let mut replayed_segments = Vec::new();
         let push_replayed_turn = |replayed_segments: &mut Vec<RolloutReplayMetaSegment>,
@@ -135,7 +136,6 @@ impl Session {
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
-                    saw_turn_lifecycle_event = true;
                     if let Some(active_turn) = active_turn.take() {
                         push_replayed_turn(&mut replayed_segments, active_turn);
                     }
@@ -148,7 +148,6 @@ impl Session {
                     });
                 }
                 RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
-                    saw_turn_lifecycle_event = true;
                     if active_turn
                         .as_ref()
                         .is_some_and(|turn| turn.turn_id == event.turn_id)
@@ -158,7 +157,6 @@ impl Session {
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
-                    saw_turn_lifecycle_event = true;
                     match event.turn_id.as_deref() {
                         Some(aborted_turn_id)
                             if active_turn
@@ -195,6 +193,14 @@ impl Session {
                         active_turn.previous_model = Some(ctx.model.clone());
                         active_turn.reference_context_item = Some(ctx.clone());
                         active_turn.cleared_reference_context_item = false;
+                    } else {
+                        replayed_segments.push(RolloutReplayMetaSegment::UserTurn(Box::new(
+                            ReplayedUserTurn {
+                                previous_model: Some(ctx.model.clone()),
+                                reference_context_item: Some(ctx.clone()),
+                                cleared_reference_context_item: false,
+                            },
+                        )));
                     }
                 }
                 _ => {}
@@ -205,63 +211,26 @@ impl Session {
             push_replayed_turn(&mut replayed_segments, active_turn);
         }
 
-        let (previous_model, reference_context_item) = if saw_turn_lifecycle_event {
-            let mut compaction_cleared_reference_context_item = false;
-            let mut previous_model = None;
-            let mut reference_context_item = None;
-
-            for segment in replayed_segments.iter().rev() {
-                match segment {
-                    RolloutReplayMetaSegment::ReferenceContextCleared => {
-                        compaction_cleared_reference_context_item = true;
+        let mut previous_model = None;
+        let mut reference_context_item = None;
+        for segment in replayed_segments {
+            match segment {
+                RolloutReplayMetaSegment::ReferenceContextCleared => {
+                    reference_context_item = None;
+                }
+                RolloutReplayMetaSegment::UserTurn(turn) => {
+                    if let Some(turn_previous_model) = turn.previous_model {
+                        previous_model = Some(turn_previous_model);
                     }
-                    RolloutReplayMetaSegment::UserTurn(turn) => {
-                        if let Some(turn_previous_model) = &turn.previous_model {
-                            previous_model = Some(turn_previous_model.clone());
-                            if !compaction_cleared_reference_context_item
-                                && !turn.cleared_reference_context_item
-                            {
-                                reference_context_item = turn.reference_context_item.clone();
-                            }
-                            break;
-                        }
-                        if turn.cleared_reference_context_item {
-                            compaction_cleared_reference_context_item = true;
-                        }
+                    if turn.cleared_reference_context_item {
+                        reference_context_item = None;
+                    }
+                    if let Some(turn_reference_context_item) = turn.reference_context_item {
+                        reference_context_item = Some(turn_reference_context_item);
                     }
                 }
             }
-
-            (previous_model, reference_context_item)
-        } else {
-            // Legacy/minimal fallback (no lifecycle events): use the last persisted
-            // `TurnContextItem` in rollout order and conservatively clear the baseline when a
-            // later `Compacted` item exists.
-            let mut legacy_last_turn_context_item: Option<TurnContextItem> = None;
-            let mut legacy_saw_compaction_after_last_turn_context = false;
-            for item in rollout_items.iter().rev() {
-                match item {
-                    RolloutItem::Compacted(_) => {
-                        legacy_saw_compaction_after_last_turn_context = true;
-                    }
-                    RolloutItem::TurnContext(ctx) => {
-                        legacy_last_turn_context_item = Some(ctx.clone());
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-
-            let previous_model = legacy_last_turn_context_item
-                .as_ref()
-                .map(|ctx| ctx.model.clone());
-            let reference_context_item = if legacy_saw_compaction_after_last_turn_context {
-                None
-            } else {
-                legacy_last_turn_context_item
-            };
-            (previous_model, reference_context_item)
-        };
+        }
 
         RolloutReconstruction {
             history: history.raw_items().to_vec(),
