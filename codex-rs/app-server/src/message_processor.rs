@@ -178,11 +178,11 @@ impl MessageProcessor {
             auth_manager.clone(),
             SessionSource::VSCode,
             config.model_catalog.clone(),
-            CollaborationModesConfig::new(
-                config
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
                     .features
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
-            ),
+            },
         ));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {

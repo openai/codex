@@ -63,11 +63,11 @@ impl MessageProcessor {
             auth_manager,
             SessionSource::Mcp,
             config.model_catalog.clone(),
-            CollaborationModesConfig::new(
-                config
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
                     .features
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
-            ),
+            },
         ));
         Self {
             outgoing,

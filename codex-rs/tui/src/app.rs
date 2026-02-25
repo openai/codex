@@ -1248,11 +1248,11 @@ impl App {
             auth_manager.clone(),
             SessionSource::Cli,
             config.model_catalog.clone(),
-            CollaborationModesConfig::new(
-                config
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
                     .features
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
-            ),
+            },
         ));
         let mut model = thread_manager
             .get_models_manager()
