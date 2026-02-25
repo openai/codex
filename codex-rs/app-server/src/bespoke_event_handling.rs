@@ -473,7 +473,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     status: DynamicToolCallStatus::InProgress,
                     content_items: None,
                     success: None,
-                    error: None,
                     duration_ms: None,
                 };
                 let notification = ItemStartedNotification {
@@ -544,7 +543,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                             .collect(),
                     ),
                     success: Some(response.success),
-                    error: response.error,
                     duration_ms,
                 };
                 let notification = ItemCompletedNotification {

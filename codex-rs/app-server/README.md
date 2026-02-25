@@ -709,8 +709,6 @@ The server also emits item lifecycle notifications around the request:
 3. Client response.
 4. `item/completed` with `item.type = "dynamicToolCall"`, final `status`, and the returned `contentItems`/`success`.
 
-When `thread/start` is called with `persistExtendedHistory: true`, these dynamic tool call events are persisted so `thread/read` and `thread/resume` can reconstruct the corresponding `dynamicToolCall` thread items.
-
 The client must respond with content items. Use `inputText` for text and `inputImage` for image URLs/data URLs:
 
 ```json

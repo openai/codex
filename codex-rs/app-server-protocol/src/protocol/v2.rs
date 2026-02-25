@@ -2749,7 +2749,6 @@ pub enum ThreadItem {
         status: DynamicToolCallStatus,
         content_items: Option<Vec<DynamicToolCallOutputContentItem>>,
         success: Option<bool>,
-        error: Option<String>,
         /// The duration of the dynamic tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
