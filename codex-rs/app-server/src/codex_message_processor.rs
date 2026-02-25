@@ -2238,7 +2238,7 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let (_, thread) = match self.load_thread(&thread_id).await {
+        let (thread_id, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -2246,15 +2246,52 @@ impl CodexMessageProcessor {
             }
         };
 
+        let expected_name = name.clone();
+
         if let Err(err) = thread.submit(Op::SetThreadName { name }).await {
             self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
                 .await;
             return;
         }
 
+        if let Err(err) = self
+            .wait_for_thread_name_persisted(thread_id, &expected_name)
+            .await
+        {
+            self.send_internal_error(
+                request_id,
+                format!("failed to observe persisted thread name: {err}"),
+            )
+            .await;
+            return;
+        }
+
         self.outgoing
             .send_response(request_id, ThreadSetNameResponse {})
             .await;
+    }
+
+    async fn wait_for_thread_name_persisted(
+        &self,
+        thread_id: ThreadId,
+        expected_name: &str,
+    ) -> std::io::Result<()> {
+        let codex_home = self.config.codex_home.clone();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match find_thread_name_by_id(&codex_home, &thread_id).await? {
+                    Some(name) if name == expected_name => return Ok(()),
+                    _ => tokio::time::sleep(Duration::from_millis(10)).await,
+                }
+            }
+        })
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("timed out waiting for thread name {expected_name:?}"),
+            )
+        })?
     }
 
     async fn thread_unarchive(
