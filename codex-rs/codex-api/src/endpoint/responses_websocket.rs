@@ -18,8 +18,10 @@ use http::HeaderName;
 use http::HeaderValue;
 use http::StatusCode;
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use serde_json::map::Map as JsonMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -419,6 +421,14 @@ fn map_ws_error(err: WsError, url: &Url) -> ApiError {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct WrappedWebsocketError {
+    code: Option<String>,
+    message: Option<String>,
+    #[serde(flatten)]
+    other: BTreeMap<String, Value>,
+}
+
 #[derive(Debug, Deserialize)]
 struct WrappedWebsocketErrorEvent {
     #[serde(rename = "type")]
@@ -426,7 +436,7 @@ struct WrappedWebsocketErrorEvent {
     #[serde(alias = "status_code")]
     status: Option<u16>,
     #[serde(default)]
-    error: Option<Value>,
+    error: Option<WrappedWebsocketError>,
     #[serde(default)]
     headers: Option<JsonMap<String, Value>>,
 }
@@ -447,9 +457,14 @@ fn map_wrapped_websocket_error_event(event: WrappedWebsocketErrorEvent) -> Optio
         ..
     } = event;
 
-    if websocket_error_code(error.as_ref()) == Some(WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE) {
+    if let Some(error) = error.as_ref()
+        && let Some(code) = error.code.as_deref()
+        && code == WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE
+    {
         return Some(ApiError::Retryable {
-            message: websocket_error_message(error.as_ref())
+            message: error
+                .message
+                .clone()
                 .unwrap_or_else(|| WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE.to_string()),
             delay: None,
         });
@@ -460,17 +475,9 @@ fn map_wrapped_websocket_error_event(event: WrappedWebsocketErrorEvent) -> Optio
         return None;
     }
 
-    let body = error.map(|error| {
-        serde_json::to_string_pretty(&serde_json::json!({
-            "error": error
-        }))
-        .unwrap_or_else(|_| {
-            serde_json::json!({
-                "error": error
-            })
-            .to_string()
-        })
-    });
+    let body = error
+        .as_ref()
+        .and_then(|error| serde_json::to_string(error).ok());
 
     Some(ApiError::Transport(TransportError::Http {
         status,
@@ -478,19 +485,6 @@ fn map_wrapped_websocket_error_event(event: WrappedWebsocketErrorEvent) -> Optio
         headers: headers.map(json_headers_to_http_headers),
         body,
     }))
-}
-
-fn websocket_error_code(error: Option<&Value>) -> Option<&str> {
-    error
-        .and_then(|error| error.get("code"))
-        .and_then(Value::as_str)
-}
-
-fn websocket_error_message(error: Option<&Value>) -> Option<String> {
-    error
-        .and_then(|error| error.get("message"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
 }
 
 fn json_headers_to_http_headers(headers: JsonMap<String, Value>) -> HeaderMap {
