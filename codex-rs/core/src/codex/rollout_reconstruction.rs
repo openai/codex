@@ -22,8 +22,11 @@ impl Session {
         // emit model-visible context items (during normal context updates or when
         // mid-turn compaction reinjects full initial context). That means replay only
         // needs to answer:
-        // - which surviving user turn last established a model baseline
-        // - whether any later compaction cleared that baseline before resume
+        // - which surviving user turn last established the
+        //   `reference_context_item` baseline for context diffing
+        // - which `previous_model` that same turn carried
+        // - whether any later compaction cleared that
+        //   `reference_context_item` before resume
         //
         // We model that with:
         // - one active turn span while walking lifecycle events
