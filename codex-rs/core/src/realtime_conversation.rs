@@ -218,9 +218,7 @@ pub(crate) async fn handle_start(
                 _ => None,
             };
             if let Some(text) = maybe_routed_text {
-                debug!(
-                    "[realtime-text-out] extracted realtime conversation text output"
-                );
+                debug!("[realtime-text-out] extracted realtime conversation text output");
                 let sess_for_routed_text = Arc::clone(&sess_clone);
                 sess_for_routed_text.route_realtime_text_input(text).await;
             }
@@ -283,9 +281,7 @@ pub(crate) async fn handle_text(
     sub_id: String,
     params: ConversationTextParams,
 ) {
-    debug!(
-        "[realtime-text-in] appending realtime conversation text input"
-    );
+    debug!("[realtime-text-in] appending realtime conversation text input");
 
     if let Err(err) = sess.conversation.text_in(params.text).await {
         send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
