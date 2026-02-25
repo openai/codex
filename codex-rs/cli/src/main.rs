@@ -63,7 +63,7 @@ use codex_core::terminal::TerminalName;
     // `codex-x86_64-unknown-linux-musl`, but the help output should always use
     // the generic `codex` command name that users run.
     bin_name = "codex",
-    override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
+    override_usage = "codex [OPTIONS] [PROMPT]\n       codex -P <PROMPT> [OPTIONS]\n       codex [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -71,6 +71,10 @@ struct MultitoolCli {
 
     #[clap(flatten)]
     pub feature_toggles: FeatureToggles,
+
+    /// Run a single prompt non-interactively and exit.
+    #[arg(short = 'P', long = "prompt", value_name = "PROMPT")]
+    one_shot_prompt: Option<String>,
 
     #[clap(flatten)]
     interactive: TuiCli,
@@ -554,6 +558,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
+        one_shot_prompt,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
@@ -562,14 +567,48 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
 
+    if one_shot_prompt.is_some() && subcommand.is_some() {
+        anyhow::bail!("`-P`/`--prompt` cannot be used with subcommands.");
+    }
+    if one_shot_prompt.is_some() && interactive.prompt.is_some() {
+        anyhow::bail!("Use either positional `PROMPT` or `-P`/`--prompt`, not both.");
+    }
+
     match subcommand {
         None => {
-            prepend_config_flags(
-                &mut interactive.config_overrides,
-                root_config_overrides.clone(),
-            );
-            let exit_info = run_interactive_tui(interactive, arg0_paths.clone()).await?;
-            handle_app_exit(exit_info)?;
+            if let Some(prompt) = one_shot_prompt {
+                let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
+                exec_cli.images = interactive.images;
+                exec_cli.model = interactive.model;
+                exec_cli.oss = interactive.oss;
+                exec_cli.oss_provider = interactive.oss_provider;
+                exec_cli.sandbox_mode = interactive.sandbox_mode;
+                exec_cli.config_profile = interactive.config_profile;
+                exec_cli.full_auto = interactive.full_auto;
+                exec_cli.dangerously_bypass_approvals_and_sandbox =
+                    interactive.dangerously_bypass_approvals_and_sandbox;
+                exec_cli.cwd = interactive.cwd;
+                exec_cli.add_dir = interactive.add_dir;
+                exec_cli.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
+                if interactive.web_search {
+                    exec_cli
+                        .config_overrides
+                        .raw_overrides
+                        .push("web_search=\"live\"".to_string());
+                }
+                prepend_config_flags(
+                    &mut exec_cli.config_overrides,
+                    root_config_overrides.clone(),
+                );
+                codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
+            } else {
+                prepend_config_flags(
+                    &mut interactive.config_overrides,
+                    root_config_overrides.clone(),
+                );
+                let exit_info = run_interactive_tui(interactive, arg0_paths.clone()).await?;
+                handle_app_exit(exit_info)?;
+            }
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(
@@ -1047,6 +1086,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            one_shot_prompt: _,
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {
@@ -1076,6 +1116,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            one_shot_prompt: _,
         } = cli;
 
         let Subcommand::Fork(ForkCommand {
@@ -1135,6 +1176,16 @@ mod tests {
         );
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some("re-review"));
+    }
+
+    #[test]
+    fn one_shot_prompt_flag_parses_without_subcommand() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "-P", "say hi"]).expect("parse should succeed");
+
+        assert_eq!(cli.one_shot_prompt.as_deref(), Some("say hi"));
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.prompt, None);
     }
 
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {
