@@ -13,6 +13,7 @@ use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::updates;
 use codex_core::config::Config;
+use codex_core::features::Feature;
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -32,6 +33,12 @@ pub(crate) enum UpdatePromptOutcome {
     RunUpdate(UpdateAction),
 }
 
+/// Resolves startup update state before the main TUI loop begins.
+///
+/// This either renders the interactive update prompt or returns the same
+/// `RunUpdate` outcome that the manual "Update now" selection uses. When
+/// `Feature::StartupAutoUpdate` is enabled, the interactive prompt is skipped
+/// and the existing update execution path is reused unchanged.
 pub(crate) async fn run_update_prompt_if_needed(
     tui: &mut Tui,
     config: &Config,
@@ -42,6 +49,13 @@ pub(crate) async fn run_update_prompt_if_needed(
     let Some(update_action) = crate::update_action::get_update_action() else {
         return Ok(UpdatePromptOutcome::Continue);
     };
+
+    if config.features.enabled(Feature::StartupAutoUpdate) {
+        // Reuse the exact same `RunUpdate` path as the interactive "Update now"
+        // selection so auto-update cannot drift from manual update behavior.
+        tui.terminal.clear()?;
+        return Ok(UpdatePromptOutcome::RunUpdate(update_action));
+    }
 
     let mut screen =
         UpdatePromptScreen::new(tui.frame_requester(), latest_version.clone(), update_action);

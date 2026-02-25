@@ -139,6 +139,9 @@ pub enum Feature {
     Personality,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
+    /// Automatically take the existing startup "Update now" path and run the
+    /// detected package-manager update command.
+    StartupAutoUpdate,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
@@ -641,6 +644,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::StartupAutoUpdate,
+        key: "startup_auto_update",
+        stage: Stage::Experimental {
+            name: "Auto-update on startup",
+            menu_description: "Automatically run the detected npm/bun/brew update command when a newer Codex version is already known.",
+            announcement: "NEW: Auto-update on startup can automatically run the detected npm, bun, or Homebrew update command when a new Codex version is available.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ResponsesWebsockets,
         key: "responses_websockets",
         stage: Stage::UnderDevelopment,
@@ -757,6 +770,15 @@ mod tests {
             Stage::UnderDevelopment
         );
         assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
+    }
+
+    #[test]
+    fn startup_auto_update_is_experimental_and_disabled_by_default() {
+        assert!(matches!(
+            Feature::StartupAutoUpdate.stage(),
+            Stage::Experimental { .. }
+        ));
+        assert_eq!(Feature::StartupAutoUpdate.default_enabled(), false);
     }
 
     #[test]

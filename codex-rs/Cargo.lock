@@ -1493,6 +1493,7 @@ dependencies = [
  "codex-tui",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
+ "codex-utils-pty",
  "codex-windows-sandbox",
  "libc",
  "owo-colors",

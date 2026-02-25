@@ -403,6 +403,9 @@
             "sqlite": {
               "type": "boolean"
             },
+            "startup_auto_update": {
+              "type": "boolean"
+            },
             "steer": {
               "type": "boolean"
             },
@@ -1682,6 +1685,9 @@
           "type": "boolean"
         },
         "sqlite": {
+          "type": "boolean"
+        },
+        "startup_auto_update": {
           "type": "boolean"
         },
         "steer": {
