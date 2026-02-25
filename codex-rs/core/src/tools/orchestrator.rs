@@ -113,12 +113,13 @@ impl ToolOrchestrator {
         let otel_ci = &tool_ctx.call_id;
         let otel_user = ToolDecisionSource::User;
         let otel_cfg = ToolDecisionSource::Config;
+        let effective_sandbox_policy = tool.sandbox_policy(req, turn_ctx);
 
         // 1) Approval
         let mut already_approved = false;
 
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
-            default_exec_approval_requirement(approval_policy, &turn_ctx.sandbox_policy)
+            default_exec_approval_requirement(approval_policy, effective_sandbox_policy)
         });
         match requirement {
             ExecApprovalRequirement::Skip { .. } => {
@@ -169,7 +170,7 @@ impl ToolOrchestrator {
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
             SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
             SandboxOverride::NoOverride => self.sandbox.select_initial(
-                &turn_ctx.sandbox_policy,
+                effective_sandbox_policy,
                 tool.sandbox_preference(),
                 turn_ctx.windows_sandbox_level,
                 has_managed_network_requirements,
@@ -181,7 +182,7 @@ impl ToolOrchestrator {
         let use_linux_sandbox_bwrap = turn_ctx.features.enabled(Feature::UseLinuxSandboxBwrap);
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
-            policy: &turn_ctx.sandbox_policy,
+            policy: effective_sandbox_policy,
             enforce_managed_network: has_managed_network_requirements,
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
@@ -238,7 +239,7 @@ impl ToolOrchestrator {
                             && matches!(
                                 default_exec_approval_requirement(
                                     approval_policy,
-                                    &turn_ctx.sandbox_policy
+                                    effective_sandbox_policy
                                 ),
                                 ExecApprovalRequirement::NeedsApproval { .. }
                             );
@@ -295,7 +296,7 @@ impl ToolOrchestrator {
 
                 let escalated_attempt = SandboxAttempt {
                     sandbox: crate::exec::SandboxType::None,
-                    policy: &turn_ctx.sandbox_policy,
+                    policy: effective_sandbox_policy,
                     enforce_managed_network: has_managed_network_requirements,
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,

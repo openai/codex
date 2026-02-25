@@ -87,6 +87,21 @@ pub(crate) fn detect_implicit_skill_script_invocation_for_tokens(
     detect_skill_script_run(outcome, command, workdir)
 }
 
+pub(crate) fn detect_implicit_skill_executable_invocation_for_tokens(
+    outcome: &SkillLoadOutcome,
+    command: &[String],
+) -> Option<(SkillMetadata, PathBuf)> {
+    let executable = Path::new(command.first()?);
+    if !executable.is_absolute() {
+        return None;
+    }
+
+    let executable = normalize_path(executable);
+    let parent = executable.parent()?;
+    let skill = detect_skill_for_path_under_scripts(outcome, parent)?;
+    Some((skill, executable))
+}
+
 fn tokenize_command(command: &str) -> Vec<String> {
     shlex::split(command).unwrap_or_else(|| {
         command
@@ -255,8 +270,11 @@ fn detect_skill_script_run(
         workdir.join(script_path)
     };
     let script_path = normalize_path(script_path.as_path());
+    detect_skill_for_path_under_scripts(outcome, script_path.as_path())
+}
 
-    for ancestor in script_path.ancestors() {
+fn detect_skill_for_path_under_scripts(outcome: &SkillLoadOutcome, path: &Path) -> Option<SkillMetadata> {
+    for ancestor in path.ancestors() {
         if let Some(candidate) = outcome.implicit_skills_by_scripts_dir.get(ancestor) {
             return Some(candidate.clone());
         }
@@ -317,6 +335,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 mod tests {
     use super::SkillLoadOutcome;
     use super::SkillMetadata;
+    use super::detect_implicit_skill_executable_invocation_for_tokens;
     use super::detect_implicit_skill_script_invocation_for_command;
     use super::detect_skill_doc_read;
     use super::detect_skill_script_run;
@@ -480,6 +499,46 @@ mod tests {
             "cat SKILL.md",
             Path::new("/tmp/skill-test"),
         );
+
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn direct_skill_executable_detection_matches_absolute_path() {
+        let skill_doc_path = PathBuf::from("/tmp/skill-test/SKILL.md");
+        let scripts_dir = normalize_path(Path::new("/tmp/skill-test/scripts"));
+        let skill = test_skill_metadata(skill_doc_path);
+        let outcome = SkillLoadOutcome {
+            implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(scripts_dir, skill)])),
+            implicit_skills_by_doc_path: Arc::new(HashMap::new()),
+            ..Default::default()
+        };
+        let command = vec!["/tmp/skill-test/scripts/run".to_string()];
+
+        let found = detect_implicit_skill_executable_invocation_for_tokens(&outcome, &command);
+
+        assert_eq!(
+            found.map(|(skill, path)| (skill.name, path)),
+            Some((
+                "test-skill".to_string(),
+                PathBuf::from("/tmp/skill-test/scripts/run")
+            ))
+        );
+    }
+
+    #[test]
+    fn direct_skill_executable_detection_ignores_relative_path() {
+        let skill_doc_path = PathBuf::from("/tmp/skill-test/SKILL.md");
+        let scripts_dir = normalize_path(Path::new("/tmp/skill-test/scripts"));
+        let skill = test_skill_metadata(skill_doc_path);
+        let outcome = SkillLoadOutcome {
+            implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(scripts_dir, skill)])),
+            implicit_skills_by_doc_path: Arc::new(HashMap::new()),
+            ..Default::default()
+        };
+        let command = vec!["scripts/run".to_string()];
+
+        let found = detect_implicit_skill_executable_invocation_for_tokens(&outcome, &command);
 
         assert_eq!(found, None);
     }

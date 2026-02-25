@@ -14,6 +14,7 @@ use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::shell::ShellType;
+use crate::protocol::SandboxPolicy;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_command_spec;
@@ -49,6 +50,7 @@ pub struct ShellRequest {
     pub additional_permissions: Option<PermissionProfile>,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
+    pub effective_sandbox_policy: SandboxPolicy,
 }
 
 /// Selects `ShellRuntime` behavior for different callers.
@@ -180,6 +182,14 @@ impl Approvable<ShellRequest> for ShellRuntime {
 }
 
 impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
+    fn sandbox_policy<'a>(
+        &self,
+        req: &'a ShellRequest,
+        _turn_ctx: &'a crate::codex::TurnContext,
+    ) -> &'a SandboxPolicy {
+        &req.effective_sandbox_policy
+    }
+
     fn network_approval_spec(
         &self,
         req: &ShellRequest,

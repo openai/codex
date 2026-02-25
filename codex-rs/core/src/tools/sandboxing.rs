@@ -303,6 +303,14 @@ pub(crate) enum ToolError {
 }
 
 pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
+    fn sandbox_policy<'a>(
+        &self,
+        _req: &'a Req,
+        turn_ctx: &'a TurnContext,
+    ) -> &'a SandboxPolicy {
+        turn_ctx.sandbox_policy.get()
+    }
+
     fn network_approval_spec(&self, _req: &Req, _ctx: &ToolCtx) -> Option<NetworkApprovalSpec> {
         None
     }

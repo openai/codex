@@ -14,7 +14,11 @@ use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::skills::SKILL_APPROVAL_DECLINED_MESSAGE;
+use crate::skills::SkillLoadOutcome;
+use crate::skills::SkillMetadata;
+use crate::skills::detect_implicit_skill_executable_invocation_for_tokens;
 use crate::skills::ensure_skill_approval_for_command;
 use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ToolInvocation;
@@ -31,6 +35,7 @@ use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::spec::ShellCommandBackendConfig;
 use codex_protocol::models::PermissionProfile;
@@ -46,6 +51,9 @@ enum ShellCommandBackend {
 pub struct ShellCommandHandler {
     backend: ShellCommandBackend,
 }
+
+const SKILL_SHELL_COMMAND_APPROVAL_REASON: &str =
+    "This command runs a skill script and requires approval.";
 
 struct RunExecLikeArgs {
     tool_name: String,
@@ -297,6 +305,29 @@ impl ToolHandler for ShellCommandHandler {
 }
 
 impl ShellHandler {
+    fn detect_skill_shell_command(
+        outcome: &SkillLoadOutcome,
+        shell: &Shell,
+        command: &[String],
+        shell_runtime_backend: ShellRuntimeBackend,
+        skill_shell_command_enabled: bool,
+    ) -> Option<SkillMetadata> {
+        if !skill_shell_command_enabled
+            || shell_runtime_backend != ShellRuntimeBackend::ShellCommandClassic
+            || shell.shell_type != ShellType::Zsh
+        {
+            return None;
+        }
+
+        let commands = crate::bash::parse_shell_lc_plain_commands(command)?;
+        let [inner_command] = commands.as_slice() else {
+            return None;
+        };
+        let (skill, _path) =
+            detect_implicit_skill_executable_invocation_for_tokens(outcome, inner_command)?;
+        Some(skill)
+    }
+
     async fn run_exec_like(args: RunExecLikeArgs) -> Result<ToolOutput, FunctionCallError> {
         let RunExecLikeArgs {
             tool_name,
@@ -397,17 +428,37 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 
-        let exec_approval_requirement = session
-            .services
-            .exec_policy
-            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                command: &exec_params.command,
-                approval_policy: turn.approval_policy.value(),
-                sandbox_policy: turn.sandbox_policy.get(),
-                sandbox_permissions: exec_params.sandbox_permissions,
-                prefix_rule,
-            })
-            .await;
+        let user_shell = session.user_shell();
+        let matched_skill = Self::detect_skill_shell_command(
+            turn.turn_skills.outcome.as_ref(),
+            user_shell.as_ref(),
+            &exec_params.command,
+            shell_runtime_backend,
+            turn.features.enabled(Feature::SkillShellCommandSandbox),
+        );
+        let effective_sandbox_policy = matched_skill
+            .as_ref()
+            .and_then(|skill| skill.permissions.as_ref())
+            .map(|permissions| permissions.sandbox_policy.get().clone())
+            .unwrap_or_else(|| turn.sandbox_policy.get().clone());
+        let exec_approval_requirement = if matched_skill.is_some() {
+            ExecApprovalRequirement::NeedsApproval {
+                reason: Some(SKILL_SHELL_COMMAND_APPROVAL_REASON.to_string()),
+                proposed_execpolicy_amendment: None,
+            }
+        } else {
+            session
+                .services
+                .exec_policy
+                .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                    command: &exec_params.command,
+                    approval_policy: turn.approval_policy.value(),
+                    sandbox_policy: &effective_sandbox_policy,
+                    sandbox_permissions: exec_params.sandbox_permissions,
+                    prefix_rule,
+                })
+                .await
+        };
 
         let req = ShellRequest {
             command: exec_params.command.clone(),
@@ -420,6 +471,7 @@ impl ShellHandler {
             additional_permissions: normalized_additional_permissions,
             justification: exec_params.justification.clone(),
             exec_approval_requirement,
+            effective_sandbox_policy,
         };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = {
@@ -458,13 +510,17 @@ impl ShellHandler {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
 
     use codex_protocol::models::ShellCommandToolCallParams;
+    use codex_protocol::protocol::SkillScope;
     use pretty_assertions::assert_eq;
 
     use crate::codex::make_session_and_context;
+    use crate::skills::SkillLoadOutcome;
+    use crate::skills::SkillMetadata;
     use crate::exec_env::create_env;
     use crate::is_safe_command::is_known_safe_command;
     use crate::powershell::try_find_powershell_executable_blocking;
@@ -474,7 +530,23 @@ mod tests {
     use crate::shell::ShellType;
     use crate::shell_snapshot::ShellSnapshot;
     use crate::tools::handlers::ShellCommandHandler;
+    use crate::tools::handlers::ShellHandler;
+    use crate::tools::runtimes::shell::ShellRuntimeBackend;
     use tokio::sync::watch;
+
+    fn test_skill_metadata(path_to_skills_md: PathBuf) -> SkillMetadata {
+        SkillMetadata {
+            name: "test-skill".to_string(),
+            description: "test".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            permissions: None,
+            path_to_skills_md,
+            scope: SkillScope::User,
+        }
+    }
 
     /// The logic for is_known_safe_command() has heuristics for known shells,
     /// so we must ensure the commands generated by [ShellCommandHandler] can be
@@ -637,5 +709,92 @@ mod tests {
                 .contains("login shell is disabled by config"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn detect_skill_shell_command_matches_direct_absolute_executable() {
+        let shell = Shell {
+            shell_type: ShellType::Zsh,
+            shell_path: PathBuf::from("/bin/zsh"),
+            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+        };
+        let skill = test_skill_metadata(PathBuf::from("/tmp/skill-test/SKILL.md"));
+        let outcome = SkillLoadOutcome {
+            implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(
+                PathBuf::from("/tmp/skill-test/scripts"),
+                skill,
+            )])),
+            ..Default::default()
+        };
+        let command = shell.derive_exec_args("/tmp/skill-test/scripts/run-tool", true);
+
+        let found = ShellHandler::detect_skill_shell_command(
+            &outcome,
+            &shell,
+            &command,
+            ShellRuntimeBackend::ShellCommandClassic,
+            true,
+        );
+
+        assert_eq!(found.map(|skill| skill.name), Some("test-skill".to_string()));
+    }
+
+    #[test]
+    fn detect_skill_shell_command_ignores_multi_command_shell_script() {
+        let shell = Shell {
+            shell_type: ShellType::Zsh,
+            shell_path: PathBuf::from("/bin/zsh"),
+            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+        };
+        let skill = test_skill_metadata(PathBuf::from("/tmp/skill-test/SKILL.md"));
+        let outcome = SkillLoadOutcome {
+            implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(
+                PathBuf::from("/tmp/skill-test/scripts"),
+                skill,
+            )])),
+            ..Default::default()
+        };
+        let command = shell.derive_exec_args(
+            "/tmp/skill-test/scripts/run-tool && echo done",
+            true,
+        );
+
+        let found = ShellHandler::detect_skill_shell_command(
+            &outcome,
+            &shell,
+            &command,
+            ShellRuntimeBackend::ShellCommandClassic,
+            true,
+        );
+
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn detect_skill_shell_command_requires_classic_backend() {
+        let shell = Shell {
+            shell_type: ShellType::Zsh,
+            shell_path: PathBuf::from("/bin/zsh"),
+            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+        };
+        let skill = test_skill_metadata(PathBuf::from("/tmp/skill-test/SKILL.md"));
+        let outcome = SkillLoadOutcome {
+            implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(
+                PathBuf::from("/tmp/skill-test/scripts"),
+                skill,
+            )])),
+            ..Default::default()
+        };
+        let command = shell.derive_exec_args("/tmp/skill-test/scripts/run-tool", true);
+
+        let found = ShellHandler::detect_skill_shell_command(
+            &outcome,
+            &shell,
+            &command,
+            ShellRuntimeBackend::ShellCommandZshFork,
+            true,
+        );
+
+        assert_eq!(found, None);
     }
 }

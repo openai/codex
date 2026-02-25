@@ -135,6 +135,8 @@ pub enum Feature {
     SkillEnvVarDependencyPrompt,
     /// Emit skill approval test prompts/events.
     SkillApproval,
+    /// Run matching shell_command skill executables under the skill sandbox.
+    SkillShellCommandSandbox,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Default).
@@ -626,6 +628,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SkillApproval,
         key: "skill_approval",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SkillShellCommandSandbox,
+        key: "skill_shell_command_sandbox",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
