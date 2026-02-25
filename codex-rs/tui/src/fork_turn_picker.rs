@@ -1,3 +1,14 @@
+//! Rollback-aware UI for choosing which turn `/fork` should branch from.
+//!
+//! This module turns the current rollout log into a presentation-only list of surviving turns,
+//! then renders an alternate-screen picker that mirrors the conversation as the user currently
+//! sees it. Rollback events prune the derived list so abandoned branches never appear as fork
+//! targets.
+//!
+//! The picker returns the `nth_user_message` value expected by the existing fork RPC. Selecting
+//! the latest surviving turn intentionally maps to the RPC's `usize::MAX` sentinel so "fork from
+//! the current head" keeps the same semantics as the pre-picker `/fork` flow.
+
 use std::path::Path;
 
 use crate::key_hint;
@@ -35,11 +46,27 @@ use ratatui::widgets::Wrap;
 use tokio_stream::StreamExt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Display model for one forkable turn in the current conversation.
+///
+/// Each entry pairs the surviving user request with the assistant response that still belongs to
+/// that request after replaying rollback events. The stored strings are normalized for preview
+/// rendering and are not a lossless transcript of the underlying rollout items.
 pub(crate) struct ForkTurnEntry {
+    /// Flattened preview of the user-authored request text for this turn.
     pub(crate) user_request: String,
+    /// Flattened preview of the assistant reply, if one has been recorded for this turn.
     pub(crate) model_response: Option<String>,
 }
 
+/// Loads the current conversation into rollback-aware picker entries.
+///
+/// The returned vector reflects only the turns that are still visible in the active branch of the
+/// conversation. Callers should treat an empty result as "nothing can be forked yet" and skip
+/// presenting the picker rather than rendering an empty selection screen.
+///
+/// # Errors
+///
+/// Returns an I/O error if the rollout history file cannot be read.
 pub(crate) async fn load_fork_turn_entries(path: &Path) -> std::io::Result<Vec<ForkTurnEntry>> {
     let history = RolloutRecorder::get_rollout_history(path).await?;
     Ok(fork_turn_entries_from_rollout_items(
@@ -47,6 +74,15 @@ pub(crate) async fn load_fork_turn_entries(path: &Path) -> std::io::Result<Vec<F
     ))
 }
 
+/// Runs the interactive `/fork` turn picker on the terminal's alternate screen.
+///
+/// The returned `usize`, when present, is already translated into the `nth_user_message` value
+/// expected by the fork RPC. `Ok(None)` means either there was nothing to show or the user backed
+/// out; callers should not treat cancellation as a request to fork the latest turn by default,
+/// because that would fork a thread the user explicitly declined to create.
+///
+/// The `Result` wrapper matches other picker entry points even though this implementation currently
+/// completes without emitting an error of its own.
 pub(crate) async fn run_fork_turn_picker(
     tui: &mut Tui,
     turns: Vec<ForkTurnEntry>,
@@ -85,6 +121,11 @@ pub(crate) async fn run_fork_turn_picker(
     Ok(screen.outcome())
 }
 
+/// Replays rollout items into the set of turns the picker is allowed to present.
+///
+/// User messages start new entries, assistant messages attach to the most recent entry, and
+/// rollback events drop the newest derived turns so the picker mirrors the active branch instead
+/// of the full historical event log.
 fn fork_turn_entries_from_rollout_items(items: &[RolloutItem]) -> Vec<ForkTurnEntry> {
     let mut turns: Vec<ForkTurnEntry> = Vec::new();
 
@@ -189,6 +230,11 @@ fn agent_turn_preview(content: &[AgentMessageContent]) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Maps a visible picker selection onto the `nth_user_message` contract used by `fork_thread`.
+///
+/// The final visible turn maps to `usize::MAX`, which is the existing sentinel for "fork from the
+/// current head". Returning `turn_count` instead would point one user message past the end of the
+/// surviving conversation and rely on server-side bounds handling to recover.
 fn nth_user_message_for_fork(selected_index: usize, turn_count: usize) -> usize {
     if selected_index.saturating_add(1) >= turn_count {
         usize::MAX

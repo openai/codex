@@ -1840,6 +1840,9 @@ impl App {
                         );
                         self.chat_widget
                             .add_plain_history_lines(vec!["/fork".magenta().into()]);
+                        // The picker returns the exact `nth_user_message` value expected by the
+                        // fork RPC, including the existing `usize::MAX` sentinel for "fork from
+                        // the latest surviving turn".
                         match self
                             .server
                             .fork_thread(nth_user_message, self.config.clone(), path.clone(), false)
