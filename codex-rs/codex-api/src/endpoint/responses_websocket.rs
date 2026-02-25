@@ -18,10 +18,8 @@ use http::HeaderName;
 use http::HeaderValue;
 use http::StatusCode;
 use serde::Deserialize;
-use serde::Serialize;
 use serde_json::Value;
 use serde_json::map::Map as JsonMap;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -421,12 +419,10 @@ fn map_ws_error(err: WsError, url: &Url) -> ApiError {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 struct WrappedWebsocketError {
     code: Option<String>,
     message: Option<String>,
-    #[serde(flatten)]
-    other: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -449,7 +445,10 @@ fn parse_wrapped_websocket_error_event(payload: &str) -> Option<WrappedWebsocket
     Some(event)
 }
 
-fn map_wrapped_websocket_error_event(event: WrappedWebsocketErrorEvent) -> Option<ApiError> {
+fn map_wrapped_websocket_error_event(
+    event: WrappedWebsocketErrorEvent,
+    original_payload: String,
+) -> Option<ApiError> {
     let WrappedWebsocketErrorEvent {
         status,
         error,
@@ -475,15 +474,11 @@ fn map_wrapped_websocket_error_event(event: WrappedWebsocketErrorEvent) -> Optio
         return None;
     }
 
-    let body = error
-        .as_ref()
-        .and_then(|error| serde_json::to_string(error).ok());
-
     Some(ApiError::Transport(TransportError::Http {
         status,
         url: None,
         headers: headers.map(json_headers_to_http_headers),
-        body,
+        body: Some(original_payload),
     }))
 }
 
@@ -568,7 +563,8 @@ async fn run_websocket_response_stream(
             Message::Text(text) => {
                 trace!("websocket event: {text}");
                 if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
-                    && let Some(error) = map_wrapped_websocket_error_event(wrapped_error)
+                    && let Some(error) =
+                        map_wrapped_websocket_error_event(wrapped_error, text.to_string())
                 {
                     return Err(error);
                 }
