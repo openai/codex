@@ -1165,6 +1165,80 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn http_plain_proxy_blocks_unix_socket_when_method_not_allowed() {
+        let state = Arc::new(network_proxy_state_for_policy(
+            NetworkProxySettings::default(),
+        ));
+        state
+            .set_network_mode(NetworkMode::Limited)
+            .await
+            .expect("network mode should update");
+
+        let mut req = Request::builder()
+            .method(Method::POST)
+            .uri("http://example.com")
+            .header("x-unix-socket", "/tmp/test.sock")
+            .body(Body::empty())
+            .expect("request should build");
+        req.extensions_mut().insert(state);
+
+        let response = http_plain_proxy(None, req).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.headers().get("x-proxy-error").unwrap(),
+            "blocked-by-method-policy"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn http_plain_proxy_rejects_unix_socket_when_not_allowlisted() {
+        let state = Arc::new(network_proxy_state_for_policy(
+            NetworkProxySettings::default(),
+        ));
+
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com")
+            .header("x-unix-socket", "/tmp/test.sock")
+            .body(Body::empty())
+            .expect("request should build");
+        req.extensions_mut().insert(state);
+
+        let response = http_plain_proxy(None, req).await.unwrap();
+
+        if cfg!(target_os = "macos") {
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                response.headers().get("x-proxy-error").unwrap(),
+                "blocked-by-allowlist"
+            );
+        } else {
+            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn http_plain_proxy_attempts_allowed_unix_socket_proxy() {
+        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
+            allow_unix_sockets: vec!["/tmp/test.sock".to_string()],
+            ..NetworkProxySettings::default()
+        }));
+
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com")
+            .header("x-unix-socket", "/tmp/test.sock")
+            .body(Body::empty())
+            .expect("request should build");
+        req.extensions_mut().insert(state);
+
+        let response = http_plain_proxy(None, req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
     #[tokio::test]
     async fn http_plain_proxy_rejects_absolute_uri_host_header_mismatch() {
         let state = Arc::new(network_proxy_state_for_policy(
