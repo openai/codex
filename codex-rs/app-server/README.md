@@ -231,6 +231,11 @@ To branch from a stored session, call `thread/fork` with the `thread.id`. This c
 } }
 ```
 
+The `forkAfterTurnId` value should come from `thread/read(includeTurns=true)` for that source
+thread. Anchored forks are rejected for legacy histories that only have replay-synthesized turn
+ids, for turns that are still in progress, and for turns that do not yet include both the user's
+input and the model's response.
+
 Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `persistExtendedHistory: true` to persist a richer subset of ThreadItems for non-lossy history when calling `thread/read`, `thread/resume`, and `thread/fork` later. This does not backfill events that were not persisted previously.
 
 ### Example: List threads (with pagination & filters)

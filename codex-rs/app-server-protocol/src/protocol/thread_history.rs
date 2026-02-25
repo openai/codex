@@ -1,3 +1,16 @@
+//! Reconstruct app-server turn history from persisted rollout items.
+//!
+//! This module translates the low-level rollout log into the higher-level `Turn` / `ThreadItem`
+//! structures returned by app-server APIs. The same reducer is used both for replaying stored
+//! rollouts and for incrementally rebuilding the current turn from live `EventMsg` values.
+//! Callers must feed items in recorded order; reordering lifecycle events can silently attach work
+//! to the wrong turn while still producing a superficially valid transcript.
+//!
+//! Modern rollouts persist explicit turn lifecycle events, which means replay can preserve stable
+//! turn ids. Legacy rollouts may only contain message/tool events, so replay has to synthesize
+//! turn ids while rebuilding them. Consumers that need durable turn anchors, such as turn-based
+//! `thread/fork`, should reject those synthesized ids rather than treating them as stable.
+
 use crate::protocol::v2::CollabAgentState;
 use crate::protocol::v2::CollabAgentTool;
 use crate::protocol::v2::CollabAgentToolCallStatus;
@@ -54,8 +67,14 @@ use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 #[cfg(test)]
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 
+/// The replay result produced by [`build_thread_history_from_rollout_items`].
+///
+/// `turns` contains the reconstructed app-server view of the rollout. `has_synthetic_turn_ids`
+/// tells callers whether any of those turns only have replay-generated ids, which means those ids
+/// are not stable enough to reuse as external anchors across repeated reads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThreadHistoryBuildResult {
+    /// Reconstructed turns in replay order.
     pub turns: Vec<Turn>,
     /// True when any turn id had to be synthesized during replay because the
     /// rollout history lacked explicit turn lifecycle events.
@@ -66,7 +85,9 @@ pub struct ThreadHistoryBuildResult {
 /// annotate whether any turn ids were synthesized during replay.
 ///
 /// When available, this uses `TurnContext.turn_id` as the canonical turn id so
-/// resumed/rebuilt thread history preserves the original turn identifiers.
+/// resumed/rebuilt thread history preserves the original turn identifiers. Callers that need a
+/// stable external anchor should prefer this over [`build_turns_from_rollout_items`]; otherwise it
+/// is easy to treat a replay-generated id as durable and later fail to find the same turn again.
 pub fn build_thread_history_from_rollout_items(items: &[RolloutItem]) -> ThreadHistoryBuildResult {
     let mut builder = ThreadHistoryBuilder::new();
     for item in items {
@@ -78,11 +99,20 @@ pub fn build_thread_history_from_rollout_items(items: &[RolloutItem]) -> ThreadH
 /// Convert persisted [`RolloutItem`] entries into a sequence of [`Turn`] values.
 ///
 /// When available, this uses `TurnContext.turn_id` as the canonical turn id so
-/// resumed/rebuilt thread history preserves the original turn identifiers.
+/// resumed/rebuilt thread history preserves the original turn identifiers. Use
+/// [`build_thread_history_from_rollout_items`] instead when the caller must distinguish between
+/// stable and replay-synthesized turn ids.
 pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
     build_thread_history_from_rollout_items(items).turns
 }
 
+/// Stateful reducer that groups rollout lifecycle items into app-server turns.
+///
+/// The builder owns the in-progress turn boundary while replay is in flight, then emits the
+/// finalized `Turn` list once all items have been applied. It intentionally exposes both replay
+/// metadata and an active-turn snapshot so app-server can share the same reduction rules for
+/// stored history and live notifications. Reusing a builder across unrelated transcripts without
+/// calling [`Self::reset`] can leak late events from one transcript into the next.
 pub struct ThreadHistoryBuilder {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
@@ -97,6 +127,11 @@ impl Default for ThreadHistoryBuilder {
 }
 
 impl ThreadHistoryBuilder {
+    /// Create an empty reducer with no active turn.
+    ///
+    /// The builder expects to receive the rollout from the beginning of a transcript, in order.
+    /// Starting midway through a rollout can still produce `Turn` values, but turn boundaries and
+    /// synthetic-id detection may no longer describe the actual persisted history.
     pub fn new() -> Self {
         Self {
             turns: Vec::new(),
@@ -106,14 +141,25 @@ impl ThreadHistoryBuilder {
         }
     }
 
+    /// Clear all accumulated turns and return the builder to its initial state.
     pub fn reset(&mut self) {
         *self = Self::new();
     }
 
+    /// Finalize replay and return only the reconstructed turns.
+    ///
+    /// This is the convenience API for callers that only need the `Turn` list. If a caller needs
+    /// to know whether any ids were synthesized, using this method would hide that fact and could
+    /// lead to invalid assumptions about turn-id stability.
     pub fn finish(self) -> Vec<Turn> {
         self.finish_result().turns
     }
 
+    /// Finalize replay and return both the turns and replay metadata.
+    ///
+    /// This consumes the builder, closes any active turn, and reports whether replay had to mint
+    /// any replacement ids. Consumers that derive new API contracts from turn ids, such as
+    /// turn-based forking, should use this method so they can reject legacy rollouts explicitly.
     pub fn finish_result(mut self) -> ThreadHistoryBuildResult {
         self.finish_current_turn();
         ThreadHistoryBuildResult {
@@ -122,6 +168,12 @@ impl ThreadHistoryBuilder {
         }
     }
 
+    /// Return the current turn view without consuming the builder.
+    ///
+    /// When a turn is actively streaming, this returns that in-progress turn. Otherwise it falls
+    /// back to the most recently completed turn. This is useful for live UI updates, but a caller
+    /// that treats the result as committed persisted history can accidentally display incomplete
+    /// state after a partially applied event stream.
     pub fn active_turn_snapshot(&self) -> Option<Turn> {
         self.current_turn
             .as_ref()
@@ -129,6 +181,7 @@ impl ThreadHistoryBuilder {
             .or_else(|| self.turns.last().cloned())
     }
 
+    /// Return whether replay is currently inside an unfinished turn boundary.
     pub fn has_active_turn(&self) -> bool {
         self.current_turn.is_some()
     }
@@ -195,6 +248,12 @@ impl ThreadHistoryBuilder {
         }
     }
 
+    /// Apply one persisted rollout line to the reducer.
+    ///
+    /// Unlike [`Self::handle_event`], this accepts the outer `RolloutItem` wrapper so replay can
+    /// preserve rollback markers and explicit turn boundaries exactly as they were recorded on
+    /// disk. Feed items in file order; replaying a suffix or shuffling lines can still produce
+    /// syntactically valid turns while silently attaching items to the wrong exchange.
     pub fn handle_rollout_item(&mut self, item: &RolloutItem) {
         match item {
             RolloutItem::EventMsg(event) => self.handle_event(event),
@@ -983,6 +1042,10 @@ fn render_review_output_text(output: &ReviewOutputEvent) -> String {
     }
 }
 
+/// Convert core patch-apply change records into the app-server wire format.
+///
+/// The returned list is sorted by path so repeated replays of the same patch event stay stable for
+/// clients and snapshot tests.
 pub fn convert_patch_changes(
     changes: &HashMap<std::path::PathBuf, codex_protocol::protocol::FileChange>,
 ) -> Vec<FileUpdateChange> {

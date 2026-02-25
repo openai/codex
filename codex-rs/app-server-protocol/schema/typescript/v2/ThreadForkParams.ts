@@ -21,6 +21,11 @@ export type ThreadForkParams = {threadId: string, /**
 path?: string | null, /**
  * [UNSTABLE] Fork after the specified historical turn (inclusive).
  * When omitted, the full thread history is copied.
+ *
+ * The value should come from `thread/read(includeTurns=true)` for the same source thread.
+ * Requests are rejected for legacy histories whose replayed turn ids are not stable, for
+ * in-progress turns, and for turns that do not yet contain both a user message and an agent
+ * response.
  */
 forkAfterTurnId?: string | null, /**
  * Configuration overrides for the forked thread, if any.

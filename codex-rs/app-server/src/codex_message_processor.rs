@@ -6921,6 +6921,14 @@ async fn sync_default_client_residency_requirement(
     }
 }
 
+/// Return the exact rollout prefix that should seed a turn-anchored `thread/fork`.
+///
+/// The selected turn stays in the returned history, while every later turn is removed. The helper
+/// validates that the anchor is a stable, already-materialized exchange: legacy replay-synthesized
+/// ids are rejected, the turn must not still be in progress, and the turn must include both a
+/// user message and an agent response. The cutoff uses both the next explicit `TurnStarted` event
+/// and the next user-message boundary so the fork cannot accidentally retain trailing non-user
+/// events that conceptually belong to a later turn.
 fn resolve_thread_fork_history_from_anchor(
     rollout_items: &[RolloutItem],
     fork_after_turn_id: &str,
@@ -7006,6 +7014,11 @@ fn resolve_thread_fork_history_from_anchor(
     Ok(rollout_items[..cut_idx].to_vec())
 }
 
+/// Return whether this rollout item starts a new user turn for truncation purposes.
+///
+/// Anchored forks use this as a fallback boundary when explicit turn lifecycle events are present
+/// but a later turn also emitted standalone user-message markers that should not leak into the
+/// forked prefix.
 fn is_user_turn_rollout_boundary(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::ResponseItem(ResponseItem::Message { role, .. }) => role == "user",
