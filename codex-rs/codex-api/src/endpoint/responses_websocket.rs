@@ -652,7 +652,7 @@ mod tests {
 
         let wrapped_error = parse_wrapped_websocket_error_event(&payload)
             .expect("expected websocket error payload to be parsed");
-        let api_error = map_wrapped_websocket_error_event(wrapped_error, payload.clone())
+        let api_error = map_wrapped_websocket_error_event(wrapped_error, payload)
             .expect("expected websocket error payload to map to ApiError");
 
         let ApiError::Transport(TransportError::Http {
@@ -712,7 +712,7 @@ mod tests {
 
         let wrapped_error = parse_wrapped_websocket_error_event(&payload)
             .expect("expected websocket error payload to be parsed");
-        let api_error = map_wrapped_websocket_error_event(wrapped_error, payload.clone())
+        let api_error = map_wrapped_websocket_error_event(wrapped_error, payload)
             .expect("expected websocket error payload to map to ApiError");
         let ApiError::Transport(TransportError::Http { status, body, .. }) = api_error else {
             panic!("expected ApiError::Transport(Http)");
@@ -738,7 +738,7 @@ mod tests {
 
         let wrapped_error = parse_wrapped_websocket_error_event(&payload)
             .expect("expected websocket error payload to be parsed");
-        let api_error = map_wrapped_websocket_error_event(wrapped_error, payload.clone())
+        let api_error = map_wrapped_websocket_error_event(wrapped_error, payload)
             .expect("expected websocket error payload to map to ApiError");
         let ApiError::Retryable { message, delay } = api_error else {
             panic!("expected ApiError::Retryable");
@@ -764,7 +764,7 @@ mod tests {
 
         let wrapped_error = parse_wrapped_websocket_error_event(&payload)
             .expect("expected websocket error payload to be parsed");
-        let api_error = map_wrapped_websocket_error_event(wrapped_error, payload.clone());
+        let api_error = map_wrapped_websocket_error_event(wrapped_error, payload);
         assert!(api_error.is_none());
     }
 
