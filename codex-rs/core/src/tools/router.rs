@@ -22,17 +22,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::instrument;
 
+pub use crate::tools::context::ToolCallSource;
+
 #[derive(Clone, Debug)]
 pub struct ToolCall {
     pub tool_name: String,
     pub call_id: String,
     pub payload: ToolPayload,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ToolCallSource {
-    Direct,
-    JsRepl,
 }
 
 pub struct ToolRouter {

@@ -14,6 +14,8 @@ use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
+use crate::skills::SKILL_APPROVAL_DECLINED_MESSAGE;
+use crate::skills::ensure_skill_approval_for_command;
 use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -28,23 +30,34 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
+use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
-use codex_protocol::models::AdditionalPermissions;
+use crate::tools::spec::ShellCommandBackendConfig;
+use codex_protocol::models::PermissionProfile;
 
 pub struct ShellHandler;
 
-pub struct ShellCommandHandler;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellCommandBackend {
+    Classic,
+    ZshFork,
+}
+
+pub struct ShellCommandHandler {
+    backend: ShellCommandBackend,
+}
 
 struct RunExecLikeArgs {
     tool_name: String,
     exec_params: ExecParams,
-    additional_permissions: Option<AdditionalPermissions>,
+    additional_permissions: Option<PermissionProfile>,
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::codex::Session>,
     turn: Arc<TurnContext>,
     tracker: crate::tools::context::SharedTurnDiffTracker,
     call_id: String,
     freeform: bool,
+    shell_runtime_backend: ShellRuntimeBackend,
 }
 
 impl ShellHandler {
@@ -55,6 +68,8 @@ impl ShellHandler {
     ) -> ExecParams {
         ExecParams {
             command: params.command.clone(),
+            original_command: shlex::try_join(params.command.iter().map(String::as_str))
+                .unwrap_or_else(|_| params.command.join(" ")),
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
@@ -68,6 +83,13 @@ impl ShellHandler {
 }
 
 impl ShellCommandHandler {
+    fn shell_runtime_backend(&self) -> ShellRuntimeBackend {
+        match self.backend {
+            ShellCommandBackend::Classic => ShellRuntimeBackend::ShellCommandClassic,
+            ShellCommandBackend::ZshFork => ShellRuntimeBackend::ShellCommandZshFork,
+        }
+    }
+
     fn resolve_use_login_shell(
         login: Option<bool>,
         allow_login_shell: bool,
@@ -98,6 +120,7 @@ impl ShellCommandHandler {
 
         Ok(ExecParams {
             command,
+            original_command: params.command.clone(),
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
@@ -107,6 +130,16 @@ impl ShellCommandHandler {
             justification: params.justification.clone(),
             arg0: None,
         })
+    }
+}
+
+impl From<ShellCommandBackendConfig> for ShellCommandHandler {
+    fn from(config: ShellCommandBackendConfig) -> Self {
+        let backend = match config {
+            ShellCommandBackendConfig::Classic => ShellCommandBackend::Classic,
+            ShellCommandBackendConfig::ZshFork => ShellCommandBackend::ZshFork,
+        };
+        Self { backend }
     }
 }
 
@@ -143,6 +176,7 @@ impl ToolHandler for ShellHandler {
             call_id,
             tool_name,
             payload,
+            ..
         } = invocation;
 
         match payload {
@@ -161,6 +195,7 @@ impl ToolHandler for ShellHandler {
                     tracker,
                     call_id,
                     freeform: false,
+                    shell_runtime_backend: ShellRuntimeBackend::Generic,
                 })
                 .await
             }
@@ -177,6 +212,7 @@ impl ToolHandler for ShellHandler {
                     tracker,
                     call_id,
                     freeform: false,
+                    shell_runtime_backend: ShellRuntimeBackend::Generic,
                 })
                 .await
             }
@@ -226,6 +262,7 @@ impl ToolHandler for ShellCommandHandler {
             call_id,
             tool_name,
             payload,
+            ..
         } = invocation;
 
         let ToolPayload::Function { arguments } = payload else {
@@ -235,13 +272,6 @@ impl ToolHandler for ShellCommandHandler {
         };
 
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
-        maybe_emit_implicit_skill_invocation(
-            session.as_ref(),
-            turn.as_ref(),
-            &params.command,
-            params.workdir.as_deref(),
-        )
-        .await;
         let prefix_rule = params.prefix_rule.clone();
         let exec_params = Self::to_exec_params(
             &params,
@@ -260,6 +290,7 @@ impl ToolHandler for ShellCommandHandler {
             tracker,
             call_id,
             freeform: true,
+            shell_runtime_backend: self.shell_runtime_backend(),
         })
         .await
     }
@@ -277,6 +308,7 @@ impl ShellHandler {
             tracker,
             call_id,
             freeform,
+            shell_runtime_backend,
         } = args;
 
         let mut exec_params = exec_params;
@@ -316,6 +348,28 @@ impl ShellHandler {
                 "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
         }
+        let original_command = exec_params.original_command.as_str();
+        if !ensure_skill_approval_for_command(
+            session.as_ref(),
+            turn.as_ref(),
+            &call_id,
+            original_command,
+            exec_params.cwd.as_path(),
+        )
+        .await
+        {
+            return Err(FunctionCallError::RespondToModel(
+                SKILL_APPROVAL_DECLINED_MESSAGE.to_string(),
+            ));
+        }
+        let workdir = exec_params.cwd.to_string_lossy().into_owned();
+        maybe_emit_implicit_skill_invocation(
+            session.as_ref(),
+            turn.as_ref(),
+            original_command,
+            Some(workdir.as_str()),
+        )
+        .await;
 
         // Intercept apply_patch if present.
         if let Some(output) = intercept_apply_patch(
@@ -368,7 +422,15 @@ impl ShellHandler {
             exec_approval_requirement,
         };
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = ShellRuntime::new();
+        let mut runtime = {
+            use ShellRuntimeBackend::*;
+            match shell_runtime_backend {
+                Generic => ShellRuntime::new(),
+                backend @ (ShellCommandClassic | ShellCommandZshFork) => {
+                    ShellRuntime::for_shell_command(backend)
+                }
+            }
+        };
         let tool_ctx = ToolCtx {
             session: session.clone(),
             turn: turn.clone(),

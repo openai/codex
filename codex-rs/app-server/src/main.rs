@@ -1,6 +1,7 @@
 use clap::Parser;
 use codex_app_server::AppServerTransport;
 use codex_app_server::run_main_with_transport;
+use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_core::config_loader::LoaderOverrides;
 use codex_utils_cli::CliConfigOverrides;
@@ -23,12 +24,7 @@ struct AppServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
-    arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
-        // Run wrapper mode only after arg0 dispatch so `codex-linux-sandbox`
-        // invocations don't get misclassified as zsh exec-wrapper calls.
-        if codex_core::maybe_run_zsh_exec_wrapper_mode()? {
-            return Ok(());
-        }
+    arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let args = AppServerArgs::parse();
         let managed_config_path = managed_config_path_from_debug_env();
         let loader_overrides = LoaderOverrides {
@@ -38,7 +34,7 @@ fn main() -> anyhow::Result<()> {
         let transport = args.listen;
 
         run_main_with_transport(
-            codex_linux_sandbox_exe,
+            arg0_paths,
             CliConfigOverrides::default(),
             loader_overrides,
             false,

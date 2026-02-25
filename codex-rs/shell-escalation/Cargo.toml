@@ -1,8 +1,8 @@
 [package]
-name = "codex-shell-escalation"
-version.workspace = true
 edition.workspace = true
 license.workspace = true
+name = "codex-shell-escalation"
+version.workspace = true
 
 [[bin]]
 name = "codex-execve-wrapper"
@@ -12,11 +12,10 @@ path = "src/bin/main_execve_wrapper.rs"
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-codex-execpolicy = { workspace = true }
 libc = { workspace = true }
-serde_json = { workspace = true }
 path-absolutize = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 socket2 = { workspace = true, features = ["all"] }
 tokio = { workspace = true, features = [
     "io-std",

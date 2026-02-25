@@ -431,7 +431,7 @@ fn build_authorize_url(
         ("redirect_uri".to_string(), redirect_uri.to_string()),
         (
             "scope".to_string(),
-            "openid profile email offline_access api.model.audio.request".to_string(),
+            "openid profile email offline_access".to_string(),
         ),
         (
             "code_challenge".to_string(),
