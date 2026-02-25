@@ -8,9 +8,12 @@ use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::config::types::AppToolApproval;
 use crate::connectors;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::approval::McpToolApprovalDecision;
+use crate::mcp::approval::McpToolApprovalRequest;
+use crate::mcp::approval::lookup_mcp_tool_metadata;
+use crate::mcp::approval::maybe_request_mcp_tool_approval;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
@@ -20,15 +23,6 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::InputModality;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::request_user_input::RequestUserInputArgs;
-use codex_protocol::request_user_input::RequestUserInputQuestion;
-use codex_protocol::request_user_input::RequestUserInputQuestionOption;
-use codex_protocol::request_user_input::RequestUserInputResponse;
-use rmcp::model::ToolAnnotations;
-use serde::Serialize;
 use std::sync::Arc;
 
 /// Handles the specified tool call dispatches the appropriate
@@ -102,16 +96,17 @@ pub(crate) async fn handle_mcp_tool_call(
         return ResponseInputItem::McpToolCallOutput { call_id, result };
     }
 
-    if let Some(decision) = maybe_request_mcp_tool_approval(
-        sess.as_ref(),
-        turn_context,
-        &call_id,
-        &server,
-        &tool_name,
-        metadata.as_ref(),
-        app_tool_policy.approval,
-    )
-    .await
+    let approval_request = McpToolApprovalRequest {
+        call_id: &call_id,
+        server: &server,
+        tool_name: &tool_name,
+        arguments: arguments_value.as_ref(),
+        metadata: metadata.as_ref(),
+        approval_mode: app_tool_policy.approval,
+    };
+
+    if let Some(decision) =
+        maybe_request_mcp_tool_approval(sess.as_ref(), turn_context, approval_request).await
     {
         let result = match decision {
             McpToolApprovalDecision::Accept | McpToolApprovalDecision::AcceptAndRemember => {
@@ -303,139 +298,6 @@ async fn maybe_track_codex_app_used(
     );
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum McpToolApprovalDecision {
-    Accept,
-    AcceptAndRemember,
-    Decline,
-    Cancel,
-}
-
-struct McpToolApprovalMetadata {
-    annotations: Option<ToolAnnotations>,
-    connector_id: Option<String>,
-    connector_name: Option<String>,
-    tool_title: Option<String>,
-}
-
-const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
-const MCP_TOOL_APPROVAL_ACCEPT: &str = "Approve Once";
-const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Approve this Session";
-const MCP_TOOL_APPROVAL_DECLINE: &str = "Deny";
-const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
-
-#[derive(Debug, Serialize)]
-struct McpToolApprovalKey {
-    server: String,
-    connector_id: Option<String>,
-    tool_name: String,
-}
-
-async fn maybe_request_mcp_tool_approval(
-    sess: &Session,
-    turn_context: &TurnContext,
-    call_id: &str,
-    server: &str,
-    tool_name: &str,
-    metadata: Option<&McpToolApprovalMetadata>,
-    approval_mode: AppToolApproval,
-) -> Option<McpToolApprovalDecision> {
-    if approval_mode == AppToolApproval::Approve {
-        return None;
-    }
-    let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
-    if approval_mode == AppToolApproval::Auto {
-        if is_full_access_mode(turn_context) {
-            return None;
-        }
-        if !annotations.is_some_and(requires_mcp_tool_approval) {
-            return None;
-        }
-    }
-
-    let approval_key = if approval_mode == AppToolApproval::Auto {
-        let connector_id = metadata.and_then(|metadata| metadata.connector_id.clone());
-        if server == CODEX_APPS_MCP_SERVER_NAME && connector_id.is_none() {
-            None
-        } else {
-            Some(McpToolApprovalKey {
-                server: server.to_string(),
-                connector_id,
-                tool_name: tool_name.to_string(),
-            })
-        }
-    } else {
-        None
-    };
-    if let Some(key) = approval_key.as_ref()
-        && mcp_tool_approval_is_remembered(sess, key).await
-    {
-        return Some(McpToolApprovalDecision::Accept);
-    }
-
-    let question_id = format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}");
-    let question = build_mcp_tool_approval_question(
-        question_id.clone(),
-        server,
-        tool_name,
-        metadata.and_then(|metadata| metadata.tool_title.as_deref()),
-        metadata.and_then(|metadata| metadata.connector_name.as_deref()),
-        annotations,
-        approval_key.is_some(),
-    );
-    let args = RequestUserInputArgs {
-        questions: vec![question],
-    };
-    let response = sess
-        .request_user_input(turn_context, call_id.to_string(), args)
-        .await;
-    let decision = normalize_approval_decision_for_mode(
-        parse_mcp_tool_approval_response(response, &question_id),
-        approval_mode,
-    );
-    if matches!(decision, McpToolApprovalDecision::AcceptAndRemember)
-        && let Some(key) = approval_key
-    {
-        remember_mcp_tool_approval(sess, key).await;
-    }
-    Some(decision)
-}
-
-fn is_full_access_mode(turn_context: &TurnContext) -> bool {
-    matches!(turn_context.approval_policy.value(), AskForApproval::Never)
-        && matches!(
-            turn_context.sandbox_policy.get(),
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        )
-}
-
-async fn lookup_mcp_tool_metadata(
-    sess: &Session,
-    server: &str,
-    tool_name: &str,
-) -> Option<McpToolApprovalMetadata> {
-    let tools = sess
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .list_all_tools()
-        .await;
-
-    tools.into_values().find_map(|tool_info| {
-        if tool_info.server_name == server && tool_info.tool_name == tool_name {
-            Some(McpToolApprovalMetadata {
-                annotations: tool_info.tool.annotations,
-                connector_id: tool_info.connector_id,
-                connector_name: tool_info.connector_name,
-                tool_title: tool_info.tool.title,
-            })
-        } else {
-            None
-        }
-    })
-}
-
 async fn lookup_mcp_app_usage_metadata(
     sess: &Session,
     server: &str,
@@ -459,135 +321,6 @@ async fn lookup_mcp_app_usage_metadata(
             None
         }
     })
-}
-
-fn build_mcp_tool_approval_question(
-    question_id: String,
-    server: &str,
-    tool_name: &str,
-    tool_title: Option<&str>,
-    connector_name: Option<&str>,
-    annotations: Option<&ToolAnnotations>,
-    allow_remember_option: bool,
-) -> RequestUserInputQuestion {
-    let destructive =
-        annotations.and_then(|annotations| annotations.destructive_hint) == Some(true);
-    let open_world = annotations.and_then(|annotations| annotations.open_world_hint) == Some(true);
-    let reason = match (destructive, open_world) {
-        (true, true) => "may modify data and access external systems",
-        (true, false) => "may modify or delete data",
-        (false, true) => "may access external systems",
-        (false, false) => "may have side effects",
-    };
-
-    let tool_label = tool_title.unwrap_or(tool_name);
-    let app_label = connector_name
-        .map(|name| format!("The {name} app"))
-        .unwrap_or_else(|| {
-            if server == CODEX_APPS_MCP_SERVER_NAME {
-                "This app".to_string()
-            } else {
-                format!("The {server} MCP server")
-            }
-        });
-    let question = format!(
-        "{app_label} wants to run the tool \"{tool_label}\", which {reason}. Allow this action?"
-    );
-
-    let mut options = vec![RequestUserInputQuestionOption {
-        label: MCP_TOOL_APPROVAL_ACCEPT.to_string(),
-        description: "Run the tool and continue.".to_string(),
-    }];
-    if allow_remember_option {
-        options.push(RequestUserInputQuestionOption {
-            label: MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER.to_string(),
-            description: "Run the tool and remember this choice for this session.".to_string(),
-        });
-    }
-    options.extend([
-        RequestUserInputQuestionOption {
-            label: MCP_TOOL_APPROVAL_DECLINE.to_string(),
-            description: "Decline this tool call and continue.".to_string(),
-        },
-        RequestUserInputQuestionOption {
-            label: MCP_TOOL_APPROVAL_CANCEL.to_string(),
-            description: "Cancel this tool call".to_string(),
-        },
-    ]);
-
-    RequestUserInputQuestion {
-        id: question_id,
-        header: "Approve app tool call?".to_string(),
-        question,
-        is_other: false,
-        is_secret: false,
-        options: Some(options),
-    }
-}
-
-fn parse_mcp_tool_approval_response(
-    response: Option<RequestUserInputResponse>,
-    question_id: &str,
-) -> McpToolApprovalDecision {
-    let Some(response) = response else {
-        return McpToolApprovalDecision::Cancel;
-    };
-    let answers = response
-        .answers
-        .get(question_id)
-        .map(|answer| answer.answers.as_slice());
-    let Some(answers) = answers else {
-        return McpToolApprovalDecision::Cancel;
-    };
-    if answers
-        .iter()
-        .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER)
-    {
-        McpToolApprovalDecision::AcceptAndRemember
-    } else if answers
-        .iter()
-        .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT)
-    {
-        McpToolApprovalDecision::Accept
-    } else if answers
-        .iter()
-        .any(|answer| answer == MCP_TOOL_APPROVAL_CANCEL)
-    {
-        McpToolApprovalDecision::Cancel
-    } else {
-        McpToolApprovalDecision::Decline
-    }
-}
-
-fn normalize_approval_decision_for_mode(
-    decision: McpToolApprovalDecision,
-    approval_mode: AppToolApproval,
-) -> McpToolApprovalDecision {
-    if approval_mode == AppToolApproval::Prompt
-        && decision == McpToolApprovalDecision::AcceptAndRemember
-    {
-        McpToolApprovalDecision::Accept
-    } else {
-        decision
-    }
-}
-
-async fn mcp_tool_approval_is_remembered(sess: &Session, key: &McpToolApprovalKey) -> bool {
-    let store = sess.services.tool_approvals.lock().await;
-    matches!(store.get(key), Some(ReviewDecision::ApprovedForSession))
-}
-
-async fn remember_mcp_tool_approval(sess: &Session, key: McpToolApprovalKey) {
-    let mut store = sess.services.tool_approvals.lock().await;
-    store.put(key, ReviewDecision::ApprovedForSession);
-}
-
-fn requires_mcp_tool_approval(annotations: &ToolAnnotations) -> bool {
-    if annotations.destructive_hint == Some(true) {
-        return true;
-    }
-
-    annotations.read_only_hint == Some(false) && annotations.open_world_hint == Some(true)
 }
 
 async fn notify_mcp_tool_call_skip(
@@ -617,95 +350,6 @@ async fn notify_mcp_tool_call_skip(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-
-    fn annotations(
-        read_only: Option<bool>,
-        destructive: Option<bool>,
-        open_world: Option<bool>,
-    ) -> ToolAnnotations {
-        ToolAnnotations {
-            destructive_hint: destructive,
-            idempotent_hint: None,
-            open_world_hint: open_world,
-            read_only_hint: read_only,
-            title: None,
-        }
-    }
-
-    #[test]
-    fn approval_required_when_read_only_false_and_destructive() {
-        let annotations = annotations(Some(false), Some(true), None);
-        assert_eq!(requires_mcp_tool_approval(&annotations), true);
-    }
-
-    #[test]
-    fn approval_required_when_read_only_false_and_open_world() {
-        let annotations = annotations(Some(false), None, Some(true));
-        assert_eq!(requires_mcp_tool_approval(&annotations), true);
-    }
-
-    #[test]
-    fn approval_required_when_destructive_even_if_read_only_true() {
-        let annotations = annotations(Some(true), Some(true), Some(true));
-        assert_eq!(requires_mcp_tool_approval(&annotations), true);
-    }
-
-    #[test]
-    fn prompt_mode_does_not_allow_session_remember() {
-        assert_eq!(
-            normalize_approval_decision_for_mode(
-                McpToolApprovalDecision::AcceptAndRemember,
-                AppToolApproval::Prompt,
-            ),
-            McpToolApprovalDecision::Accept
-        );
-    }
-
-    #[test]
-    fn custom_mcp_tool_question_mentions_server_name() {
-        let question = build_mcp_tool_approval_question(
-            "q".to_string(),
-            "custom_server",
-            "run_action",
-            Some("Run Action"),
-            None,
-            Some(&annotations(Some(false), Some(true), None)),
-            true,
-        );
-
-        assert_eq!(question.header, "Approve app tool call?");
-        assert_eq!(
-            question.question,
-            "The custom_server MCP server wants to run the tool \"Run Action\", which may modify or delete data. Allow this action?"
-        );
-        assert!(
-            question
-                .options
-                .expect("options")
-                .into_iter()
-                .map(|option| option.label)
-                .any(|label| label == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER)
-        );
-    }
-
-    #[test]
-    fn codex_apps_tool_question_keeps_legacy_app_label() {
-        let question = build_mcp_tool_approval_question(
-            "q".to_string(),
-            CODEX_APPS_MCP_SERVER_NAME,
-            "run_action",
-            Some("Run Action"),
-            None,
-            Some(&annotations(Some(false), Some(true), None)),
-            true,
-        );
-
-        assert!(
-            question
-                .question
-                .starts_with("This app wants to run the tool \"Run Action\"")
-        );
-    }
 
     #[test]
     fn sanitize_mcp_tool_result_for_model_rewrites_image_content() {
