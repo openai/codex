@@ -702,6 +702,13 @@ When a dynamic tool is invoked during a turn, the server sends an `item/tool/cal
 }
 ```
 
+The server also emits item lifecycle notifications around the request:
+
+1. `item/started` with `item.type = "dynamicToolCall"`, `status = "inProgress"`, plus `tool` and `arguments`.
+2. `item/tool/call` request.
+3. Client response.
+4. `item/completed` with `item.type = "dynamicToolCall"`, final `status`, and the returned `contentItems`/`success`.
+
 The client must respond with content items. Use `inputText` for text and `inputImage` for image URLs/data URLs:
 
 ```json

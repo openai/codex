@@ -27,6 +27,7 @@ use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::DynamicToolCallParams;
+use codex_app_server_protocol::DynamicToolCallStatus;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
@@ -461,18 +462,51 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::DynamicToolCallRequest(request) => {
             if matches!(api_version, ApiVersion::V2) {
                 let call_id = request.call_id;
+                let turn_id = request.turn_id;
+                let tool = request.tool;
+                let arguments = request.arguments;
+                let item = ThreadItem::DynamicToolCall {
+                    id: call_id.clone(),
+                    tool: tool.clone(),
+                    arguments: arguments.clone(),
+                    status: DynamicToolCallStatus::InProgress,
+                    content_items: None,
+                    success: None,
+                    error: None,
+                    duration_ms: None,
+                };
+                let notification = ItemStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: turn_id.clone(),
+                    item,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemStarted(notification))
+                    .await;
                 let params = DynamicToolCallParams {
                     thread_id: conversation_id.to_string(),
-                    turn_id: request.turn_id,
+                    turn_id: turn_id.clone(),
                     call_id: call_id.clone(),
-                    tool: request.tool,
-                    arguments: request.arguments,
+                    tool: tool.clone(),
+                    arguments: arguments.clone(),
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::DynamicToolCall(params))
                     .await;
+                let thread_id = conversation_id.to_string();
+                let outgoing = outgoing.clone();
                 tokio::spawn(async move {
-                    crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
+                    crate::dynamic_tools::on_call_response(
+                        call_id,
+                        turn_id,
+                        thread_id,
+                        tool,
+                        arguments,
+                        rx,
+                        conversation,
+                        outgoing,
+                    )
+                    .await;
                 });
             } else {
                 error!(
