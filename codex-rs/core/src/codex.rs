@@ -2751,8 +2751,9 @@ impl Session {
         //   `TurnContextItem` for that turn).
         // - `RolloutReplayMetaSegment` stores the finalized sequence we later
         //   rollback-adjust and reverse-scan to find the last surviving regular turn
-        //   context. `CompactionOutsideTurn` is a marker for compaction that happened
-        //   outside any matched turn span.
+        //   context. Replaced/trailing incomplete turns are finalized as ordinary
+        //   `Turn(...)` segments; `CompactionOutsideTurn` is only for compaction that
+        //   happened outside any matched turn span.
         //
         // Explicit replay rule:
         // - compaction before the first `TurnContextItem` in a turn span is treated as
@@ -2803,6 +2804,17 @@ impl Session {
         let mut saw_turn_lifecycle_event = false;
         let mut active_turn: Option<ActiveRolloutTurn> = None;
         let mut replayed_segments = Vec::new();
+        let push_replayed_turn = |replayed_segments: &mut Vec<RolloutReplayMetaSegment>,
+                                  active_turn: ActiveRolloutTurn| {
+            replayed_segments.push(RolloutReplayMetaSegment::Turn(Box::new(
+                ReplayedRolloutTurn {
+                    saw_user_message: active_turn.saw_user_message,
+                    turn_context_item: active_turn.turn_context_item,
+                    has_preturn_compaction: active_turn.has_preturn_compaction,
+                    has_midturn_compaction: active_turn.has_midturn_compaction,
+                },
+            )));
+        };
 
         for item in rollout_items {
             match item {
@@ -2864,14 +2876,10 @@ impl Session {
                 }
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
                     saw_turn_lifecycle_event = true;
-                    if let Some(active_turn) = active_turn.take()
-                        && (active_turn.has_preturn_compaction
-                            || active_turn.has_midturn_compaction)
-                    {
-                        // Incomplete prior turn replaced by a newer TurnStarted. Keep fallback
-                        // handling minimal and conservative: preserve only compaction impact so
-                        // older baseline context is invalidated on resume.
-                        replayed_segments.push(RolloutReplayMetaSegment::CompactionOutsideTurn);
+                    if let Some(active_turn) = active_turn.take() {
+                        // Treat a replaced incomplete turn as ended at the point the next turn
+                        // starts so replay preserves any `TurnContextItem` it already emitted.
+                        push_replayed_turn(&mut replayed_segments, active_turn);
                     }
                     active_turn = Some(ActiveRolloutTurn {
                         turn_id: event.turn_id.clone(),
@@ -2888,14 +2896,7 @@ impl Session {
                         .is_some_and(|turn| turn.turn_id == event.turn_id)
                         && let Some(active_turn) = active_turn.take()
                     {
-                        replayed_segments.push(RolloutReplayMetaSegment::Turn(Box::new(
-                            ReplayedRolloutTurn {
-                                saw_user_message: active_turn.saw_user_message,
-                                turn_context_item: active_turn.turn_context_item,
-                                has_preturn_compaction: active_turn.has_preturn_compaction,
-                                has_midturn_compaction: active_turn.has_midturn_compaction,
-                            },
-                        )));
+                        push_replayed_turn(&mut replayed_segments, active_turn);
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
@@ -2906,14 +2907,7 @@ impl Session {
                             .is_some_and(|turn| turn.turn_id == aborted_turn_id)
                         && let Some(active_turn) = active_turn.take()
                     {
-                        replayed_segments.push(RolloutReplayMetaSegment::Turn(Box::new(
-                            ReplayedRolloutTurn {
-                                saw_user_message: active_turn.saw_user_message,
-                                turn_context_item: active_turn.turn_context_item,
-                                has_preturn_compaction: active_turn.has_preturn_compaction,
-                                has_midturn_compaction: active_turn.has_midturn_compaction,
-                            },
-                        )));
+                        push_replayed_turn(&mut replayed_segments, active_turn);
                     } else if let Some(active_turn) = active_turn.take()
                         && (active_turn.has_preturn_compaction
                             || active_turn.has_midturn_compaction)
@@ -2944,13 +2938,10 @@ impl Session {
             }
         }
 
-        if let Some(active_turn) = active_turn.take()
-            && (active_turn.has_preturn_compaction || active_turn.has_midturn_compaction)
-        {
-            // Trailing incomplete turn (started but never completed/aborted). Keep fallback
-            // handling minimal and conservative: preserve only compaction impact so older
-            // baseline context is invalidated on resume.
-            replayed_segments.push(RolloutReplayMetaSegment::CompactionOutsideTurn);
+        if let Some(active_turn) = active_turn.take() {
+            // Treat a trailing incomplete turn as ended at EOF so replay preserves any
+            // `TurnContextItem` it already emitted before the rollout was truncated.
+            push_replayed_turn(&mut replayed_segments, active_turn);
         }
 
         let (previous_model, reference_context_item) = if saw_turn_lifecycle_event {
@@ -7937,6 +7928,54 @@ mod tests {
             Some(previous_model.to_string())
         );
         assert!(session.reference_context_item().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_resumed_trailing_incomplete_turn_preserves_turn_context_item() {
+        let (session, turn_context) = make_session_and_context().await;
+        let current_context_item = turn_context.to_turn_context_item();
+        let current_turn_id = current_context_item
+            .turn_id
+            .clone()
+            .expect("turn context should have turn_id");
+
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: current_turn_id,
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "incomplete".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::TurnContext(current_context_item.clone()),
+        ];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(
+            session.previous_model().await,
+            Some(turn_context.model_info.slug.clone())
+        );
+        assert_eq!(
+            serde_json::to_value(session.reference_context_item().await)
+                .expect("serialize seeded reference context item"),
+            serde_json::to_value(Some(current_context_item))
+                .expect("serialize expected reference context item")
+        );
     }
 
     #[tokio::test]
