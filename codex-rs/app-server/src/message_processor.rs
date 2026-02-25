@@ -87,7 +87,7 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
 
         let (request_id, rx) = self
             .outgoing
-            .send_request_with_id(ServerRequestPayload::ChatgptAuthTokensRefresh(params))
+            .send_request(ServerRequestPayload::ChatgptAuthTokensRefresh(params))
             .await;
 
         let result = match timeout(EXTERNAL_AUTH_REFRESH_TIMEOUT, rx).await {
