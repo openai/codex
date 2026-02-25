@@ -2803,8 +2803,6 @@ impl Session {
         let mut saw_turn_lifecycle_event = false;
         let mut active_turn: Option<ActiveRolloutTurn> = None;
         let mut replayed_segments = Vec::new();
-        let mut legacy_last_turn_context_item: Option<TurnContextItem> = None;
-        let mut legacy_saw_compaction_after_last_turn_context = false;
 
         for item in rollout_items {
             match item {
@@ -2834,9 +2832,6 @@ impl Session {
                         }
                     } else {
                         replayed_segments.push(RolloutReplayMetaSegment::CompactionOutsideTurn);
-                    }
-                    if legacy_last_turn_context_item.is_some() {
-                        legacy_saw_compaction_after_last_turn_context = true;
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -2924,8 +2919,6 @@ impl Session {
                         // Keep the latest `TurnContextItem` in rollout order for the turn.
                         active_turn.turn_context_item = Some(ctx.clone());
                     }
-                    legacy_last_turn_context_item = Some(ctx.clone());
-                    legacy_saw_compaction_after_last_turn_context = false;
                 }
                 _ => {}
             }
@@ -2967,6 +2960,24 @@ impl Session {
             };
             (previous_model, reference_context_item)
         } else {
+            // Legacy/minimal fallback (no lifecycle events): use the last persisted
+            // `TurnContextItem` in rollout order and conservatively null baseline when a
+            // later `Compacted` item exists.
+            let mut legacy_last_turn_context_item: Option<TurnContextItem> = None;
+            let mut legacy_saw_compaction_after_last_turn_context = false;
+            for item in rollout_items.iter().rev() {
+                match item {
+                    RolloutItem::Compacted(_) => {
+                        legacy_saw_compaction_after_last_turn_context = true;
+                    }
+                    RolloutItem::TurnContext(ctx) => {
+                        legacy_last_turn_context_item = Some(ctx.clone());
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
             let previous_model = legacy_last_turn_context_item
                 .as_ref()
                 .map(|ctx| ctx.model.clone());
