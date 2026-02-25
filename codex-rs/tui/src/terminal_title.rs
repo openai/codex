@@ -1,3 +1,12 @@
+//! Terminal-title output helpers for the TUI.
+//!
+//! This module owns the low-level OSC title write path and the sanitization
+//! that happens immediately before we emit it. It is intentionally narrow:
+//! callers decide when the title should change and whether an empty title means
+//! "leave the old title alone" or "clear the title Codex last wrote".
+//! This module does not attempt to read or restore the terminal's previous
+//! title because that is not portable across terminals.
+
 use std::fmt;
 use std::io;
 use std::io::IsTerminal;
@@ -10,10 +19,24 @@ const MAX_TERMINAL_TITLE_CHARS: usize = 240;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum SetTerminalTitleResult {
+    /// A sanitized title was written, or stdout is not a terminal so no write was needed.
     Applied,
+    /// Sanitization removed every visible character, so no title was emitted.
+    ///
+    /// This is distinct from clearing the title. Callers decide whether an
+    /// empty post-sanitization value should result in no-op behavior, clearing
+    /// the title Codex manages, or some other fallback.
     NoVisibleContent,
 }
 
+/// Writes a sanitized OSC window-title sequence to stdout.
+///
+/// The input is treated as untrusted display text: control characters,
+/// invisible formatting characters, and redundant whitespace are removed before
+/// the title is emitted. If sanitization removes all visible content, the
+/// function returns [`SetTerminalTitleResult::NoVisibleContent`] instead of
+/// clearing the title because clearing and restoring are policy decisions for
+/// higher-level callers.
 pub(crate) fn set_terminal_title(title: &str) -> io::Result<SetTerminalTitleResult> {
     if !stdout().is_terminal() {
         return Ok(SetTerminalTitleResult::Applied);
@@ -28,6 +51,10 @@ pub(crate) fn set_terminal_title(title: &str) -> io::Result<SetTerminalTitleResu
     Ok(SetTerminalTitleResult::Applied)
 }
 
+/// Clears the current terminal title by writing an empty OSC title payload.
+///
+/// This clears the visible title; it does not restore whatever title the shell
+/// or a previous program may have set before Codex started managing the title.
 pub(crate) fn clear_terminal_title() -> io::Result<()> {
     if !stdout().is_terminal() {
         return Ok(());

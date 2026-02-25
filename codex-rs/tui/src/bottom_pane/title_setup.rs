@@ -74,6 +74,10 @@ fn parse_terminal_title_items<T>(ids: impl Iterator<Item = T>) -> Option<Vec<Ter
 where
     T: AsRef<str>,
 {
+    // Treat parsing as all-or-nothing so preview/confirm callbacks never emit
+    // a partially interpreted ordering. Invalid ids are ignored when building
+    // the picker, but once the user is interacting with the picker we only want
+    // to persist or preview a fully valid selection.
     ids.map(|id| id.as_ref().parse::<TerminalTitleItem>())
         .collect::<Result<Vec<_>, _>>()
         .ok()
@@ -85,6 +89,12 @@ pub(crate) struct TerminalTitleSetupView {
 }
 
 impl TerminalTitleSetupView {
+    /// Creates the terminal-title picker, preserving the configured item order first.
+    ///
+    /// Unknown configured ids are skipped here instead of surfaced inline. The
+    /// main TUI still warns about them when rendering the actual title, but the
+    /// picker itself only exposes the selectable items it can meaningfully
+    /// preview and persist.
     pub(crate) fn new(title_items: Option<&[String]>, app_event_tx: AppEventSender) -> Self {
         let mut used_ids = HashSet::new();
         let mut items = Vec::new();
