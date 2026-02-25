@@ -111,11 +111,12 @@ impl PendingInteractiveReplayState {
     pub(super) fn note_event(&mut self, event: &Event) {
         match &event.msg {
             EventMsg::ExecApprovalRequest(ev) => {
-                self.exec_approval_call_ids.insert(ev.call_id.clone());
+                let approval_id = ev.effective_approval_id();
+                self.exec_approval_call_ids.insert(approval_id.clone());
                 self.exec_approval_call_ids_by_turn_id
                     .entry(ev.turn_id.clone())
                     .or_default()
-                    .push(ev.call_id.clone());
+                    .push(approval_id);
             }
             EventMsg::ExecCommandBegin(ev) => {
                 self.exec_approval_call_ids.remove(&ev.call_id);
@@ -173,11 +174,12 @@ impl PendingInteractiveReplayState {
     pub(super) fn note_evicted_event(&mut self, event: &Event) {
         match &event.msg {
             EventMsg::ExecApprovalRequest(ev) => {
-                self.exec_approval_call_ids.remove(&ev.call_id);
+                let approval_id = ev.effective_approval_id();
+                self.exec_approval_call_ids.remove(&approval_id);
                 Self::remove_call_id_from_turn_map_entry(
                     &mut self.exec_approval_call_ids_by_turn_id,
                     &ev.turn_id,
-                    &ev.call_id,
+                    &approval_id,
                 );
             }
             EventMsg::ApplyPatchApprovalRequest(ev) => {
@@ -218,7 +220,9 @@ impl PendingInteractiveReplayState {
 
     pub(super) fn should_replay_snapshot_event(&self, event: &Event) -> bool {
         match &event.msg {
-            EventMsg::ExecApprovalRequest(ev) => self.exec_approval_call_ids.contains(&ev.call_id),
+            EventMsg::ExecApprovalRequest(ev) => self
+                .exec_approval_call_ids
+                .contains(&ev.effective_approval_id()),
             EventMsg::ApplyPatchApprovalRequest(ev) => {
                 self.patch_approval_call_ids.contains(&ev.call_id)
             }
@@ -362,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_event_snapshot_drops_resolved_exec_approval_after_outbound_approval_call_id() {
+    fn thread_event_snapshot_drops_resolved_exec_approval_after_outbound_approval_id() {
         let mut store = ThreadEventStore::new(8);
         store.push_event(Event {
             id: "ev-1".to_string(),
@@ -384,7 +388,7 @@ mod tests {
         });
 
         store.note_outbound_op(&Op::ExecApproval {
-            id: "call-1".to_string(),
+            id: "approval-1".to_string(),
             turn_id: Some("turn-1".to_string()),
             decision: codex_protocol::protocol::ReviewDecision::Approved,
         });
