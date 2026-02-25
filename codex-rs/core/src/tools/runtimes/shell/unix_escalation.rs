@@ -242,6 +242,7 @@ impl CoreShellActionProvider {
         None
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn process_decision(
         &self,
         decision: Decision,
