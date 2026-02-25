@@ -43,6 +43,7 @@ use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
+use crate::stream_events_utils::record_completed_response_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::TurnMetadataState;
@@ -6051,7 +6052,6 @@ async fn handle_assistant_item_done_in_plan_mode(
     sess: &Session,
     turn_context: &TurnContext,
     item: &ResponseItem,
-    config: &Config,
     state: &mut PlanModeStreamState,
     previously_active_item: Option<&TurnItem>,
     last_agent_message: &mut Option<String>,
@@ -6061,7 +6061,7 @@ async fn handle_assistant_item_done_in_plan_mode(
     {
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
 
-        if let Some(turn_item) = handle_non_tool_response_item(item, true, config).await {
+        if let Some(turn_item) = handle_non_tool_response_item(item, true) {
             emit_turn_item_in_plan_mode(
                 sess,
                 turn_context,
@@ -6072,9 +6072,8 @@ async fn handle_assistant_item_done_in_plan_mode(
             .await;
         }
 
-        sess.record_conversation_items(turn_context, std::slice::from_ref(item))
-            .await;
-        if let Some(agent_message) = last_assistant_message_from_item(item, true, config).await {
+        record_completed_response_item(sess, turn_context, item).await;
+        if let Some(agent_message) = last_assistant_message_from_item(item, true) {
             *last_agent_message = Some(agent_message);
         }
         return true;
@@ -6219,7 +6218,6 @@ async fn try_run_sampling_request(
                         &sess,
                         &turn_context,
                         &item,
-                        turn_context.config.as_ref(),
                         state,
                         previously_active_item.as_ref(),
                         &mut last_agent_message,
@@ -6236,14 +6234,9 @@ async fn try_run_sampling_request(
                     cancellation_token: cancellation_token.child_token(),
                 };
 
-                let output_result = handle_output_item_done(
-                    &mut ctx,
-                    item,
-                    previously_active_item,
-                    turn_context.config.as_ref(),
-                )
-                .instrument(handle_responses)
-                .await?;
+                let output_result = handle_output_item_done(&mut ctx, item, previously_active_item)
+                    .instrument(handle_responses)
+                    .await?;
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push_back(tool_future);
                 }
@@ -6253,10 +6246,7 @@ async fn try_run_sampling_request(
                 needs_follow_up |= output_result.needs_follow_up;
             }
             ResponseEvent::OutputItemAdded(item) => {
-                if let Some(turn_item) =
-                    handle_non_tool_response_item(&item, plan_mode, turn_context.config.as_ref())
-                        .await
-                {
+                if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode) {
                     let mut turn_item = turn_item;
                     let mut seeded_parsed: Option<ParsedAssistantTextDelta> = None;
                     let mut seeded_item_id: Option<String> = None;
@@ -6454,12 +6444,9 @@ async fn try_run_sampling_request(
     outcome
 }
 
-pub(super) async fn get_last_assistant_message_from_turn(
-    responses: &[ResponseItem],
-    config: &Config,
-) -> Option<String> {
+pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
     for item in responses.iter().rev() {
-        if let Some(message) = last_assistant_message_from_item(item, false, config).await {
+        if let Some(message) = last_assistant_message_from_item(item, false) {
             return Some(message);
         }
     }
