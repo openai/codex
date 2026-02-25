@@ -9,6 +9,7 @@ use crate::features::Feature;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
+use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -164,6 +165,7 @@ struct CoreShellActionProvider {
     stopwatch: Stopwatch,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum DecisionSource {
     SkillScript {
         skill: SkillMetadata,
