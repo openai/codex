@@ -874,6 +874,11 @@ enum ReplayKind {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+/// Compact runtime states that can be rendered into the terminal title.
+///
+/// This is intentionally smaller than the full status-header vocabulary. The
+/// title needs short, stable labels, so callers map richer lifecycle events
+/// onto one of these buckets before rendering.
 enum TerminalTitleStatusKind {
     Working,
     WaitingForBackgroundTerminal,
@@ -883,6 +888,12 @@ enum TerminalTitleStatusKind {
 }
 
 #[derive(Debug)]
+/// Parsed status-surface configuration for one refresh pass.
+///
+/// The status line and terminal title share some expensive or stateful inputs
+/// (notably git branch lookup and invalid-item warnings). This snapshot lets one
+/// refresh pass compute those shared concerns once, then render both surfaces
+/// from the same selection set.
 struct StatusSurfaceSelections {
     status_line_items: Vec<StatusLineItem>,
     invalid_status_line_items: Vec<String>,
@@ -900,6 +911,11 @@ impl StatusSurfaceSelections {
 }
 
 #[derive(Clone, Debug)]
+/// Cached project-root display name keyed by the cwd used for the last lookup.
+///
+/// Terminal-title refreshes can happen very frequently, so the title path avoids
+/// repeatedly walking up the filesystem to rediscover the same project root name
+/// while the working directory is unchanged.
 struct CachedProjectRootName {
     cwd: PathBuf,
     root_name: Option<String>,
@@ -1176,6 +1192,12 @@ impl ChatWidget {
         }
     }
 
+    /// Recomputes both status surfaces from one shared config snapshot.
+    ///
+    /// This is the common refresh entrypoint for the footer status line and the
+    /// terminal title. It parses both configurations once, emits invalid-item
+    /// warnings once, synchronizes shared cached state (such as git-branch
+    /// lookup), then renders each surface from that shared snapshot.
     pub(crate) fn refresh_status_surfaces(&mut self) {
         let selections = self.status_surface_selections();
         self.warn_invalid_status_line_items_once(&selections.invalid_status_line_items);
@@ -5038,6 +5060,7 @@ impl ChatWidget {
         (items, invalid)
     }
 
+    /// Returns the configured terminal-title ids, or the default ordering when unset.
     fn configured_terminal_title_items(&self) -> Vec<String> {
         self.config.tui_terminal_title.clone().unwrap_or_else(|| {
             DEFAULT_TERMINAL_TITLE_ITEMS
@@ -5051,6 +5074,11 @@ impl ChatWidget {
         self.current_cwd.as_ref().unwrap_or(&self.config.cwd)
     }
 
+    /// Resolves the project root associated with `cwd`.
+    ///
+    /// Git repository root wins when available. Otherwise we fall back to the
+    /// nearest project config layer so non-git projects can still surface a
+    /// stable project label.
     fn status_line_project_root_for_cwd(&self, cwd: &Path) -> Option<PathBuf> {
         if let Some(repo_root) = get_git_repo_root(cwd) {
             return Some(repo_root);
@@ -5076,6 +5104,7 @@ impl ChatWidget {
         })
     }
 
+    /// Returns a cached project-root display name for the active cwd.
     fn status_line_project_root_name(&mut self) -> Option<String> {
         let cwd = self.status_line_cwd().to_path_buf();
         if let Some(cache) = &self.status_line_project_root_name_cache
@@ -5092,6 +5121,10 @@ impl ChatWidget {
         root_name
     }
 
+    /// Produces the terminal-title `project` value.
+    ///
+    /// This prefers the cached project-root name and falls back to the current
+    /// directory name when no project root can be inferred.
     fn terminal_title_project_name(&mut self) -> Option<String> {
         let project = self.status_line_project_root_name().or_else(|| {
             let cwd = self.status_line_cwd();
@@ -5209,6 +5242,10 @@ impl ChatWidget {
         }
     }
 
+    /// Resolves one configured terminal-title item into a displayable segment.
+    ///
+    /// Returning `None` means "omit this segment for now" so callers can keep
+    /// the configured order while hiding values that are not yet available.
     fn terminal_title_value_for_item(&mut self, item: &TerminalTitleItem) -> Option<String> {
         match item {
             TerminalTitleItem::Project => self.terminal_title_project_name(),
@@ -5233,6 +5270,10 @@ impl ChatWidget {
         }
     }
 
+    /// Computes the compact runtime status label used by the terminal title.
+    ///
+    /// Startup takes precedence over normal task states, and idle state renders
+    /// as `Ready` regardless of the last active status bucket.
     fn terminal_title_status_text(&self) -> String {
         if self.mcp_startup_status.is_some() {
             return "Starting...".to_string();
@@ -5250,6 +5291,7 @@ impl ChatWidget {
         }
     }
 
+    /// Formats the last `update_plan` progress snapshot for terminal-title display.
     fn terminal_title_task_progress(&self) -> Option<String> {
         let (completed, total) = self.last_plan_progress?;
         if total == 0 {
@@ -5258,6 +5300,7 @@ impl ChatWidget {
         Some(format!("Tasks {completed}/{total}"))
     }
 
+    /// Truncates a title segment by grapheme cluster and appends `...` when needed.
     fn truncate_terminal_title_part(value: String, max_chars: usize) -> String {
         if max_chars == 0 {
             return String::new();
