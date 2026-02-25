@@ -120,16 +120,6 @@ pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
-fn default_sqlite_home(sandbox_policy: &SandboxPolicy, codex_home: &Path) -> PathBuf {
-    if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-        let mut path = std::env::temp_dir();
-        path.push("codex-sqlite");
-        path
-    } else {
-        codex_home.to_path_buf()
-    }
-}
-
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
     let trimmed = raw.trim();
@@ -1146,8 +1136,7 @@ pub struct ConfigToml {
     pub history: Option<History>,
 
     /// Directory where Codex stores the SQLite state DB.
-    /// Defaults to `$CODEX_SQLITE_HOME` when set. Otherwise uses a temp dir
-    /// under WorkspaceWrite sandboxing and `$CODEX_HOME` for other modes.
+    /// Defaults to `$CODEX_SQLITE_HOME` when set. Otherwise uses `$CODEX_HOME`.
     pub sqlite_home: Option<AbsolutePathBuf>,
 
     /// Directory where Codex writes log files, for example `codex-tui.log`.
@@ -2007,7 +1996,7 @@ impl Config {
             .as_ref()
             .map(AbsolutePathBuf::to_path_buf)
             .or_else(|| resolve_sqlite_home_env(&resolved_cwd))
-            .unwrap_or_else(|| default_sqlite_home(&sandbox_policy, &codex_home));
+            .unwrap_or_else(|| codex_home.to_path_buf());
 
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
@@ -2953,6 +2942,23 @@ trust_level = "trusted"
                 other => panic!("expected workspace-write policy, got {other:?}"),
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides {
+                sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.sqlite_home, codex_home.path().to_path_buf());
 
         Ok(())
     }
