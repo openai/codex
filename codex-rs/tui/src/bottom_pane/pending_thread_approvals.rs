@@ -47,11 +47,7 @@ impl PendingThreadApprovals {
             let wrapped = adaptive_wrap_lines(
                 std::iter::once(Line::from(format!("Approval needed in {thread}"))),
                 RtOptions::new(width as usize)
-                    .initial_indent(Line::from(vec![
-                        "  ".into(),
-                        "!".yellow().bold(),
-                        " ".into(),
-                    ]))
+                    .initial_indent(Line::from(vec!["  ".into(), "!".red().bold(), " ".into()]))
                     .subsequent_indent(Line::from("    ")),
             );
             lines.extend(wrapped);
