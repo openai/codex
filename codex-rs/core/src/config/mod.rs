@@ -2447,6 +2447,7 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth_resource: None,
         }
     }
 
@@ -2466,6 +2467,7 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+            oauth_resource: None,
         }
     }
 
@@ -3483,6 +3485,7 @@ profile = "project"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
 
@@ -3640,6 +3643,7 @@ bearer_token = "secret"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -3711,6 +3715,7 @@ ZIG_VAR = "3"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -3762,6 +3767,7 @@ ZIG_VAR = "3"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -3811,6 +3817,7 @@ ZIG_VAR = "3"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -3876,6 +3883,7 @@ startup_timeout_sec = 2.0
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
         apply_blocking(
@@ -3953,6 +3961,7 @@ X-Auth = "DOCS_AUTH"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -3983,6 +3992,7 @@ X-Auth = "DOCS_AUTH"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
         apply_blocking(
@@ -4051,6 +4061,7 @@ url = "https://example.com/mcp"
                     enabled_tools: None,
                     disabled_tools: None,
                     scopes: None,
+                    oauth_resource: None,
                 },
             ),
             (
@@ -4071,6 +4082,7 @@ url = "https://example.com/mcp"
                     enabled_tools: None,
                     disabled_tools: None,
                     scopes: None,
+                    oauth_resource: None,
                 },
             ),
         ]);
@@ -4154,6 +4166,7 @@ url = "https://example.com/mcp"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -4199,6 +4212,7 @@ url = "https://example.com/mcp"
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 
@@ -4244,6 +4258,7 @@ url = "https://example.com/mcp"
                 enabled_tools: Some(vec!["allowed".to_string()]),
                 disabled_tools: Some(vec!["blocked".to_string()]),
                 scopes: None,
+                oauth_resource: None,
             },
         )]);
 

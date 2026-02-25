@@ -47,6 +47,7 @@ pub async fn perform_oauth_login(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
+    oauth_resource: Option<&str>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
 ) -> Result<()> {
@@ -60,6 +61,7 @@ pub async fn perform_oauth_login(
         store_mode,
         headers,
         scopes,
+        oauth_resource,
         true,
         callback_port,
         callback_url,
@@ -78,6 +80,7 @@ pub async fn perform_oauth_login_return_url(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
+    oauth_resource: Option<&str>,
     timeout_secs: Option<i64>,
     callback_port: Option<u16>,
     callback_url: Option<&str>,
@@ -92,6 +95,7 @@ pub async fn perform_oauth_login_return_url(
         store_mode,
         headers,
         scopes,
+        oauth_resource,
         false,
         callback_port,
         callback_url,
@@ -303,6 +307,7 @@ impl OauthLoginFlow {
         store_mode: OAuthCredentialsStoreMode,
         headers: OauthHeaders,
         scopes: &[String],
+        oauth_resource: Option<&str>,
         launch_browser: bool,
         callback_port: Option<u16>,
         callback_url: Option<&str>,
@@ -341,6 +346,7 @@ impl OauthLoginFlow {
             .start_authorization(&scope_refs, &redirect_uri, Some("Codex"))
             .await?;
         let auth_url = oauth_state.get_authorization_url().await?;
+        let auth_url = append_query_param(&auth_url, "resource", oauth_resource);
         let timeout_secs = timeout_secs.unwrap_or(DEFAULT_OAUTH_TIMEOUT_SECS).max(1);
         let timeout = Duration::from_secs(timeout_secs as u64);
 
@@ -429,6 +435,23 @@ impl OauthLoginFlow {
 
         rx
     }
+}
+
+fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
+    let Some(value) = value else {
+        return url.to_string();
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return url.to_string();
+    }
+    if let Ok(mut parsed) = Url::parse(url) {
+        parsed.query_pairs_mut().append_pair(key, value);
+        return parsed.to_string();
+    }
+    let encoded = urlencoding::encode(value);
+    let separator = if url.contains('?') { "&" } else { "?" };
+    format!("{url}{separator}{key}={encoded}")
 }
 
 #[cfg(test)]

@@ -98,6 +98,11 @@ pub struct McpServerConfig {
     /// Optional OAuth scopes to request during MCP login.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<String>>,
+    oauth_resource: None,
+
+    /// Optional OAuth resource parameter to include during MCP login (RFC 8707).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_resource: Option<String>,
 }
 
 // Raw MCP config shape used for deserialization and JSON Schema generation.
@@ -142,6 +147,9 @@ pub(crate) struct RawMcpServerConfig {
     pub disabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub scopes: Option<Vec<String>>,
+    oauth_resource: None,
+    #[serde(default)]
+    pub oauth_resource: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for McpServerConfig {
@@ -165,6 +173,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         let enabled_tools = raw.enabled_tools.clone();
         let disabled_tools = raw.disabled_tools.clone();
         let scopes = raw.scopes.clone();
+        let oauth_resource = raw.oauth_resource.clone();
 
         fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
         where
@@ -188,6 +197,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             throw_if_set("stdio", "bearer_token", raw.bearer_token.as_ref())?;
             throw_if_set("stdio", "http_headers", raw.http_headers.as_ref())?;
             throw_if_set("stdio", "env_http_headers", raw.env_http_headers.as_ref())?;
+            throw_if_set("stdio", "oauth_resource", raw.oauth_resource.as_ref())?;
             McpServerTransportConfig::Stdio {
                 command,
                 args: raw.args.clone().unwrap_or_default(),
@@ -221,6 +231,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             enabled_tools,
             disabled_tools,
             scopes,
+            oauth_resource,
         })
     }
 }
