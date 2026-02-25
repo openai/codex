@@ -1187,6 +1187,8 @@ async fn streamable_http_with_oauth_refresh_adopts_rotated_credentials_impl() ->
     assert_eq!(tools_a.tools[0].name.as_ref(), "echo");
     assert_stored_oauth_tokens(
         temp_home.path(),
+        server_name,
+        &server_url,
         rotated_access_token,
         rotated_refresh_token,
     )?;
@@ -1198,6 +1200,8 @@ async fn streamable_http_with_oauth_refresh_adopts_rotated_credentials_impl() ->
     assert_eq!(tools_b.tools[0].name.as_ref(), "echo");
     assert_stored_oauth_tokens(
         temp_home.path(),
+        server_name,
+        &server_url,
         rotated_access_token,
         rotated_refresh_token,
     )?;
@@ -1261,22 +1265,28 @@ fn noop_send_elicitation() -> codex_rmcp_client::SendElicitation {
 
 fn assert_stored_oauth_tokens(
     home: &Path,
+    server_name: &str,
+    server_url: &str,
     expected_access_token: &str,
     expected_refresh_token: &str,
 ) -> anyhow::Result<()> {
     let file_path = home.join(".credentials.json");
     let stored: Value = serde_json::from_slice(&fs::read(&file_path)?)?;
-    let entry = stored
-        .get("stub")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow::anyhow!("expected fallback OAuth credentials entry"))?;
-    assert_eq!(
-        entry.get("access_token").and_then(Value::as_str),
-        Some(expected_access_token)
-    );
-    assert_eq!(
-        entry.get("refresh_token").and_then(Value::as_str),
-        Some(expected_refresh_token)
+    let entries = stored
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("expected fallback OAuth credential map"))?;
+    let has_expected_tokens = entries.values().any(|entry| {
+        entry.as_object().is_some_and(|entry| {
+            entry.get("server_name").and_then(Value::as_str) == Some(server_name)
+                && entry.get("server_url").and_then(Value::as_str) == Some(server_url)
+                && entry.get("access_token").and_then(Value::as_str) == Some(expected_access_token)
+                && entry.get("refresh_token").and_then(Value::as_str)
+                    == Some(expected_refresh_token)
+        })
+    });
+    assert!(
+        has_expected_tokens,
+        "expected stored OAuth credentials for {server_name} at {server_url} to include access_token={expected_access_token} refresh_token={expected_refresh_token}, got {stored}",
     );
     Ok(())
 }

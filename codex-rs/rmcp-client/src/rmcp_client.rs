@@ -361,6 +361,12 @@ impl RmcpClient {
             }
         };
 
+        if let Some(runtime) = &oauth_persistor
+            && let Err(error) = runtime.refresh_if_needed().await
+        {
+            warn!("failed to refresh OAuth tokens before initialize: {error}");
+        }
+
         let service = match timeout {
             Some(duration) => time::timeout(duration, transport)
                 .await

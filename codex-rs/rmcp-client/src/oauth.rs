@@ -290,6 +290,12 @@ enum GuardedRefreshOutcome {
     ReloadFailed,
 }
 
+#[derive(Debug, PartialEq)]
+enum GuardedRefreshPersistedCredentials {
+    Loaded(Option<StoredOAuthTokens>),
+    ReloadFailed,
+}
+
 impl OAuthPersistor {
     pub(crate) fn new(
         server_name: String,
@@ -418,15 +424,16 @@ impl OAuthPersistor {
             return GuardedRefreshOutcome::NoAction;
         }
 
-        guarded_refresh_outcome_from_load_result(
-            cached_credentials,
-            load_oauth_tokens(
-                &self.inner.server_name,
-                &self.inner.url,
-                self.inner.store_mode,
-            ),
+        match load_oauth_tokens_for_guarded_refresh(
             &self.inner.server_name,
-        )
+            &self.inner.url,
+            self.inner.store_mode,
+        ) {
+            GuardedRefreshPersistedCredentials::Loaded(persisted_credentials) => {
+                determine_guarded_refresh_outcome(cached_credentials, persisted_credentials)
+            }
+            GuardedRefreshPersistedCredentials::ReloadFailed => GuardedRefreshOutcome::ReloadFailed,
+        }
     }
 
     async fn apply_runtime_credentials(
@@ -467,20 +474,92 @@ impl OAuthPersistor {
     }
 }
 
+fn load_oauth_tokens_for_guarded_refresh(
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+) -> GuardedRefreshPersistedCredentials {
+    let keyring_store = DefaultKeyringStore;
+    match store_mode {
+        OAuthCredentialsStoreMode::Auto => {
+            load_oauth_tokens_for_guarded_refresh_with_keyring_fallback(
+                &keyring_store,
+                server_name,
+                url,
+            )
+        }
+        OAuthCredentialsStoreMode::File => guarded_refresh_persisted_credentials_from_load_result(
+            load_oauth_tokens_from_file(server_name, url),
+            server_name,
+        ),
+        OAuthCredentialsStoreMode::Keyring => {
+            guarded_refresh_persisted_credentials_from_load_result(
+                load_oauth_tokens_from_keyring(&keyring_store, server_name, url)
+                    .with_context(|| "failed to read OAuth tokens from keyring".to_string()),
+                server_name,
+            )
+        }
+    }
+}
+
+fn load_oauth_tokens_for_guarded_refresh_with_keyring_fallback<K: KeyringStore>(
+    keyring_store: &K,
+    server_name: &str,
+    url: &str,
+) -> GuardedRefreshPersistedCredentials {
+    match load_oauth_tokens_from_keyring(keyring_store, server_name, url) {
+        Ok(Some(tokens)) => GuardedRefreshPersistedCredentials::Loaded(Some(tokens)),
+        Ok(None) => guarded_refresh_persisted_credentials_from_load_result(
+            load_oauth_tokens_from_file(server_name, url),
+            server_name,
+        ),
+        Err(error) => {
+            warn!("failed to read OAuth tokens from keyring: {error}");
+            match load_oauth_tokens_from_file(server_name, url) {
+                Ok(Some(tokens)) => GuardedRefreshPersistedCredentials::Loaded(Some(tokens)),
+                Ok(None) => {
+                    warn!(
+                        "failed to reload OAuth tokens for server {server_name}: keyring read failed and no fallback file credentials were available"
+                    );
+                    GuardedRefreshPersistedCredentials::ReloadFailed
+                }
+                Err(file_error) => {
+                    warn!(
+                        "failed to reload OAuth tokens for server {server_name}: keyring read failed ({error}) and fallback file reload failed: {file_error}"
+                    );
+                    GuardedRefreshPersistedCredentials::ReloadFailed
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 fn guarded_refresh_outcome_from_load_result(
     cached_credentials: &StoredOAuthTokens,
     persisted_credentials: Result<Option<StoredOAuthTokens>>,
     server_name: &str,
 ) -> GuardedRefreshOutcome {
-    let persisted_credentials = match persisted_credentials {
-        Ok(credentials) => credentials,
+    match guarded_refresh_persisted_credentials_from_load_result(persisted_credentials, server_name)
+    {
+        GuardedRefreshPersistedCredentials::Loaded(persisted_credentials) => {
+            determine_guarded_refresh_outcome(cached_credentials, persisted_credentials)
+        }
+        GuardedRefreshPersistedCredentials::ReloadFailed => GuardedRefreshOutcome::ReloadFailed,
+    }
+}
+
+fn guarded_refresh_persisted_credentials_from_load_result(
+    persisted_credentials: Result<Option<StoredOAuthTokens>>,
+    server_name: &str,
+) -> GuardedRefreshPersistedCredentials {
+    match persisted_credentials {
+        Ok(credentials) => GuardedRefreshPersistedCredentials::Loaded(credentials),
         Err(error) => {
             warn!("failed to reload OAuth tokens for server {server_name}: {error}");
-            return GuardedRefreshOutcome::ReloadFailed;
+            GuardedRefreshPersistedCredentials::ReloadFailed
         }
-    };
-
-    determine_guarded_refresh_outcome(cached_credentials, persisted_credentials)
+    }
 }
 
 const FALLBACK_FILENAME: &str = ".credentials.json";
@@ -1072,6 +1151,25 @@ mod tests {
                 "test-server",
             ),
             super::GuardedRefreshOutcome::ReloadFailed,
+        );
+    }
+
+    #[test]
+    fn guarded_refresh_auto_load_keeps_state_recoverable_when_keyring_fails_without_file() {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)
+            .expect("store key should compute");
+        store.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
+
+        assert_eq!(
+            super::load_oauth_tokens_for_guarded_refresh_with_keyring_fallback(
+                &store,
+                &tokens.server_name,
+                &tokens.url,
+            ),
+            super::GuardedRefreshPersistedCredentials::ReloadFailed,
         );
     }
 
