@@ -150,6 +150,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
             with_cached_approval(&session.services, "shell", keys, move || async move {
+                let available_decisions = None;
                 session
                     .request_command_approval(
                         turn,
@@ -163,6 +164,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                             .proposed_execpolicy_amendment()
                             .cloned(),
                         req.additional_permissions.clone(),
+                        available_decisions,
                     )
                     .await
             })
