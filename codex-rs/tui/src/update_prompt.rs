@@ -1,4 +1,9 @@
 #![cfg(not(debug_assertions))]
+//! Renders the startup update prompt and reports which startup path to take.
+//!
+//! This module owns the selection layer for update prompts. It decides whether
+//! startup should continue normally or hand control back to the CLI to run an
+//! updater command, but it does not execute the updater itself.
 
 use crate::history_cell::padded_emoji;
 use crate::key_hint;
@@ -28,8 +33,15 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 use tokio_stream::StreamExt;
 
+/// Describes what startup should do after resolving update prompt state.
+///
+/// The TUI returns this instead of spawning updater processes directly so the
+/// CLI remains the single owner of command execution, exit behavior, and
+/// update status messaging.
 pub(crate) enum UpdatePromptOutcome {
+    /// Proceed into the normal TUI startup path.
     Continue,
+    /// Exit startup and run the detected updater command through the CLI.
     RunUpdate(UpdateAction),
 }
 

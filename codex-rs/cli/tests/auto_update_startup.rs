@@ -1,3 +1,10 @@
+//! End-to-end PTY coverage for the startup auto-update handoff.
+//!
+//! This test seeds cached update state and a fake `npm` on `PATH`, then runs
+//! the real `codex` binary. Its job is to document and enforce the contract
+//! that startup reuses the existing updater path and preserves the updater
+//! working directory and argv.
+
 use std::collections::HashMap;
 use std::time::Duration;
 
