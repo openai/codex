@@ -171,6 +171,9 @@ enum CliCommand {
     },
     /// Send a user message through the app-server V2 thread/turn APIs.
     SendMessageV2 {
+        /// Opt into experimental app-server methods and fields.
+        #[arg(long)]
+        experimental_api: bool,
         /// User message to send to Codex.
         user_message: String,
     },
@@ -260,9 +263,18 @@ pub fn run() -> Result<()> {
             let endpoint = resolve_endpoint(codex_bin, url)?;
             send_message(&endpoint, &config_overrides, user_message)
         }
-        CliCommand::SendMessageV2 { user_message } => {
+        CliCommand::SendMessageV2 {
+            experimental_api,
+            user_message,
+        } => {
             let endpoint = resolve_endpoint(codex_bin, url)?;
-            send_message_v2_endpoint(&endpoint, &config_overrides, user_message, &dynamic_tools)
+            send_message_v2_endpoint(
+                &endpoint,
+                &config_overrides,
+                user_message,
+                experimental_api,
+                &dynamic_tools,
+            )
         }
         CliCommand::ResumeMessageV2 {
             thread_id,
@@ -508,19 +520,31 @@ pub fn send_message_v2(
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
     let endpoint = Endpoint::SpawnCodex(codex_bin.to_path_buf());
-    send_message_v2_endpoint(&endpoint, config_overrides, user_message, dynamic_tools)
+    send_message_v2_endpoint(
+        &endpoint,
+        config_overrides,
+        user_message,
+        true,
+        dynamic_tools,
+    )
 }
 
 fn send_message_v2_endpoint(
     endpoint: &Endpoint,
     config_overrides: &[String],
     user_message: String,
+    experimental_api: bool,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
+    if dynamic_tools.is_some() && !experimental_api {
+        bail!("--dynamic-tools requires --experimental-api for send-message-v2");
+    }
+
     send_message_v2_with_policies(
         endpoint,
         config_overrides,
         user_message,
+        experimental_api,
         None,
         None,
         dynamic_tools,
@@ -690,6 +714,7 @@ fn trigger_cmd_approval(
         endpoint,
         config_overrides,
         message,
+        true,
         Some(AskForApproval::OnRequest),
         Some(SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::FullAccess,
@@ -711,6 +736,7 @@ fn trigger_patch_approval(
         endpoint,
         config_overrides,
         message,
+        true,
         Some(AskForApproval::OnRequest),
         Some(SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::FullAccess,
@@ -729,6 +755,7 @@ fn no_trigger_cmd_approval(
         endpoint,
         config_overrides,
         prompt.to_string(),
+        true,
         None,
         None,
         dynamic_tools,
@@ -739,13 +766,14 @@ fn send_message_v2_with_policies(
     endpoint: &Endpoint,
     config_overrides: &[String],
     user_message: String,
+    experimental_api: bool,
     approval_policy: Option<AskForApproval>,
     sandbox_policy: Option<SandboxPolicy>,
     dynamic_tools: &Option<Vec<DynamicToolSpec>>,
 ) -> Result<()> {
     let mut client = CodexClient::connect(endpoint, config_overrides)?;
 
-    let initialize = client.initialize()?;
+    let initialize = client.initialize_with_experimental_api(experimental_api)?;
     println!("< initialize response: {initialize:?}");
 
     let thread_response = client.thread_start(ThreadStartParams {
@@ -1032,6 +1060,13 @@ impl CodexClient {
     }
 
     fn initialize(&mut self) -> Result<InitializeResponse> {
+        self.initialize_with_experimental_api(true)
+    }
+
+    fn initialize_with_experimental_api(
+        &mut self,
+        experimental_api: bool,
+    ) -> Result<InitializeResponse> {
         let request_id = self.request_id();
         let request = ClientRequest::Initialize {
             request_id: request_id.clone(),
@@ -1042,7 +1077,7 @@ impl CodexClient {
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
                 capabilities: Some(InitializeCapabilities {
-                    experimental_api: true,
+                    experimental_api,
                     opt_out_notification_methods: Some(
                         NOTIFICATIONS_TO_OPT_OUT
                             .iter()
@@ -1501,6 +1536,7 @@ impl CodexClient {
             command,
             cwd,
             command_actions,
+            additional_permissions,
             proposed_execpolicy_amendment,
         } = params;
 
@@ -1526,6 +1562,9 @@ impl CodexClient {
             && !command_actions.is_empty()
         {
             println!("< command actions: {command_actions:?}");
+        }
+        if let Some(additional_permissions) = additional_permissions.as_ref() {
+            println!("< additional permissions: {additional_permissions:?}");
         }
         if let Some(execpolicy_amendment) = proposed_execpolicy_amendment.as_ref() {
             println!("< proposed execpolicy amendment: {execpolicy_amendment:?}");

@@ -614,7 +614,9 @@ fn filter_outgoing_message_for_connection(
     connection_state: &OutboundConnectionState,
     message: OutgoingMessage,
 ) -> OutgoingMessage {
-    let experimental_api_enabled = connection_state.experimental_api_enabled.load(Ordering::Acquire);
+    let experimental_api_enabled = connection_state
+        .experimental_api_enabled
+        .load(Ordering::Acquire);
     match message {
         OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
             request_id,
@@ -958,35 +960,33 @@ mod tests {
             &mut connections,
             OutgoingEnvelope::ToConnection {
                 connection_id,
-                message: OutgoingMessage::Request(
-                    ServerRequest::CommandExecutionRequestApproval {
-                        request_id: codex_app_server_protocol::RequestId::Integer(1),
-                        params: codex_app_server_protocol::CommandExecutionRequestApprovalParams {
-                            thread_id: "thr_123".to_string(),
-                            turn_id: "turn_123".to_string(),
-                            item_id: "call_123".to_string(),
-                            approval_id: None,
-                            reason: Some("Need extra read access".to_string()),
-                            network_approval_context: None,
-                            command: Some("cat file".to_string()),
-                            cwd: Some(PathBuf::from("/tmp")),
-                            command_actions: None,
-                            additional_permissions: Some(
-                                codex_app_server_protocol::AdditionalPermissionProfile {
-                                    network: None,
-                                    file_system: Some(
-                                        codex_app_server_protocol::AdditionalFileSystemPermissions {
-                                            read: Some(vec![PathBuf::from("/tmp/allowed")]),
-                                            write: None,
-                                        },
-                                    ),
-                                    macos: None,
-                                },
-                            ),
-                            proposed_execpolicy_amendment: None,
-                        },
+                message: OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
+                    request_id: codex_app_server_protocol::RequestId::Integer(1),
+                    params: codex_app_server_protocol::CommandExecutionRequestApprovalParams {
+                        thread_id: "thr_123".to_string(),
+                        turn_id: "turn_123".to_string(),
+                        item_id: "call_123".to_string(),
+                        approval_id: None,
+                        reason: Some("Need extra read access".to_string()),
+                        network_approval_context: None,
+                        command: Some("cat file".to_string()),
+                        cwd: Some(PathBuf::from("/tmp")),
+                        command_actions: None,
+                        additional_permissions: Some(
+                            codex_app_server_protocol::AdditionalPermissionProfile {
+                                network: None,
+                                file_system: Some(
+                                    codex_app_server_protocol::AdditionalFileSystemPermissions {
+                                        read: Some(vec![PathBuf::from("/tmp/allowed")]),
+                                        write: None,
+                                    },
+                                ),
+                                macos: None,
+                            },
+                        ),
+                        proposed_execpolicy_amendment: None,
                     },
-                ),
+                }),
             },
         )
         .await;
@@ -1020,35 +1020,33 @@ mod tests {
             &mut connections,
             OutgoingEnvelope::ToConnection {
                 connection_id,
-                message: OutgoingMessage::Request(
-                    ServerRequest::CommandExecutionRequestApproval {
-                        request_id: codex_app_server_protocol::RequestId::Integer(1),
-                        params: codex_app_server_protocol::CommandExecutionRequestApprovalParams {
-                            thread_id: "thr_123".to_string(),
-                            turn_id: "turn_123".to_string(),
-                            item_id: "call_123".to_string(),
-                            approval_id: None,
-                            reason: Some("Need extra read access".to_string()),
-                            network_approval_context: None,
-                            command: Some("cat file".to_string()),
-                            cwd: Some(PathBuf::from("/tmp")),
-                            command_actions: None,
-                            additional_permissions: Some(
-                                codex_app_server_protocol::AdditionalPermissionProfile {
-                                    network: None,
-                                    file_system: Some(
-                                        codex_app_server_protocol::AdditionalFileSystemPermissions {
-                                            read: Some(vec![PathBuf::from("/tmp/allowed")]),
-                                            write: None,
-                                        },
-                                    ),
-                                    macos: None,
-                                },
-                            ),
-                            proposed_execpolicy_amendment: None,
-                        },
+                message: OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
+                    request_id: codex_app_server_protocol::RequestId::Integer(1),
+                    params: codex_app_server_protocol::CommandExecutionRequestApprovalParams {
+                        thread_id: "thr_123".to_string(),
+                        turn_id: "turn_123".to_string(),
+                        item_id: "call_123".to_string(),
+                        approval_id: None,
+                        reason: Some("Need extra read access".to_string()),
+                        network_approval_context: None,
+                        command: Some("cat file".to_string()),
+                        cwd: Some(PathBuf::from("/tmp")),
+                        command_actions: None,
+                        additional_permissions: Some(
+                            codex_app_server_protocol::AdditionalPermissionProfile {
+                                network: None,
+                                file_system: Some(
+                                    codex_app_server_protocol::AdditionalFileSystemPermissions {
+                                        read: Some(vec![PathBuf::from("/tmp/allowed")]),
+                                        write: None,
+                                    },
+                                ),
+                                macos: None,
+                            },
+                        ),
+                        proposed_execpolicy_amendment: None,
                     },
-                ),
+                }),
             },
         )
         .await;
@@ -1061,9 +1059,12 @@ mod tests {
         assert_eq!(
             json["params"]["additionalPermissions"],
             json!({
+                "network": null,
                 "fileSystem": {
                     "read": ["/tmp/allowed"],
+                    "write": null,
                 },
+                "macos": null,
             })
         );
     }

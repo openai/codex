@@ -722,9 +722,7 @@ impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalFileSystemPermissions {
-    #[ts(optional = nullable)]
     pub read: Option<Vec<PathBuf>>,
-    #[ts(optional = nullable)]
     pub write: Option<Vec<PathBuf>>,
 }
 
@@ -741,13 +739,9 @@ impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalMacOsPermissions {
-    #[ts(optional = nullable)]
     pub preferences: Option<CoreMacOsPreferencesValue>,
-    #[ts(optional = nullable)]
     pub automations: Option<CoreMacOsAutomationValue>,
-    #[ts(optional = nullable)]
     pub accessibility: Option<bool>,
-    #[ts(optional = nullable)]
     pub calendar: Option<bool>,
 }
 
@@ -766,11 +760,8 @@ impl From<CoreMacOsPermissions> for AdditionalMacOsPermissions {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalPermissionProfile {
-    #[ts(optional = nullable)]
     pub network: Option<bool>,
-    #[ts(optional = nullable)]
     pub file_system: Option<AdditionalFileSystemPermissions>,
-    #[ts(optional = nullable)]
     pub macos: Option<AdditionalMacOsPermissions>,
 }
 
@@ -3480,6 +3471,9 @@ pub struct CommandExecutionRequestApprovalParams {
 
 impl CommandExecutionRequestApprovalParams {
     pub fn strip_experimental_fields(&mut self) {
+        // TODO: Avoid hardcoding individual experimental fields here.
+        // We need a generic outbound compatibility design for stripping or
+        // otherwise handling experimental server->client payloads.
         self.additional_permissions = None;
     }
 }

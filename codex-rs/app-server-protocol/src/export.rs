@@ -2092,11 +2092,8 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
         let thread_start_json =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.json"))?;
         assert_eq!(thread_start_json.contains("mockExperimentalField"), false);
-        let command_execution_request_approval_json = fs::read_to_string(
-            output_dir
-                .join("v2")
-                .join("CommandExecutionRequestApprovalParams.json"),
-        )?;
+        let command_execution_request_approval_json =
+            fs::read_to_string(output_dir.join("CommandExecutionRequestApprovalParams.json"))?;
         assert_eq!(
             command_execution_request_approval_json.contains("additionalPermissions"),
             false
