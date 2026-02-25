@@ -16,6 +16,12 @@ use tokio::sync::Mutex;
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolCallSource {
+    Direct,
+    JsRepl,
+}
+
 #[derive(Clone)]
 pub struct ToolInvocation {
     pub session: Arc<Session>,
@@ -24,6 +30,7 @@ pub struct ToolInvocation {
     pub call_id: String,
     pub tool_name: String,
     pub payload: ToolPayload,
+    pub source: ToolCallSource,
 }
 
 #[derive(Clone, Debug)]

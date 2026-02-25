@@ -12,19 +12,17 @@
 //! requests during that turn. It caches a Responses WebSocket connection (opened lazily) and stores
 //! per-turn state such as the `x-codex-turn-state` token used for sticky routing.
 //!
-//! Prewarm is intentionally handshake-only: it may warm a socket and capture sticky-routing
-//! state, but the first `response.create` payload is still sent only when a turn starts.
+//! WebSocket prewarm is a v2-only `response.create` with `generate=false`; it waits for completion
+//! so the next request can reuse the same connection and `previous_response_id`.
 //!
-//! Startup prewarm is owned by turn-scoped callers (for example, a pre-created regular task). When
-//! a warmed [`ModelClientSession`] is available, turn execution can reuse it; otherwise the turn
-//! lazily opens a websocket on first stream call.
+//! Turn execution performs prewarm as a best-effort step before the first stream request so the
+//! subsequent request can reuse the same connection.
 //!
 //! ## Retry-Budget Tradeoff
 //!
-//! Startup prewarm is treated as the first websocket connection attempt for the first turn. If
-//! it fails, the stream attempt fails and the retry/fallback loop decides whether to retry or fall
-//! back. This avoids duplicate handshakes but means a failed prewarm can consume one retry
-//! budget slot before any turn payload is sent.
+//! V2 request prewarm is treated as the first websocket connection attempt for a turn. If it
+//! fails, normal stream retry/fallback logic handles recovery on the same turn. V1 prewarm
+//! remains connection-only.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -146,7 +144,7 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     disable_websockets: AtomicBool,
-    cached_websocket_connection: StdMutex<Option<ApiWebSocketConnection>>,
+    cached_websocket_session: StdMutex<WebsocketSession>,
 }
 
 /// Resolved API client setup for a single request attempt.
@@ -191,9 +189,7 @@ pub struct ModelClient {
 /// contract and can cause routing bugs.
 pub struct ModelClientSession {
     client: ModelClient,
-    connection: Option<ApiWebSocketConnection>,
-    websocket_last_request: Option<ResponsesApiRequest>,
-    websocket_last_response_rx: Option<oneshot::Receiver<LastResponse>>,
+    websocket_session: WebsocketSession,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -212,6 +208,13 @@ struct LastResponse {
     response_id: String,
     items_added: Vec<ResponseItem>,
     can_append: bool,
+}
+
+#[derive(Debug, Default)]
+struct WebsocketSession {
+    connection: Option<ApiWebSocketConnection>,
+    last_request: Option<ResponsesApiRequest>,
+    last_response_rx: Option<oneshot::Receiver<LastResponse>>,
 }
 
 enum WebsocketStreamOutcome {
@@ -248,7 +251,7 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 disable_websockets: AtomicBool::new(false),
-                cached_websocket_connection: StdMutex::new(None),
+                cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
         }
     }
@@ -260,27 +263,26 @@ impl ModelClient {
     pub fn new_session(&self) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),
-            connection: self.take_cached_websocket_connection(),
-            websocket_last_request: None,
-            websocket_last_response_rx: None,
+            websocket_session: self.take_cached_websocket_session(),
             turn_state: Arc::new(OnceLock::new()),
         }
     }
 
-    fn take_cached_websocket_connection(&self) -> Option<ApiWebSocketConnection> {
-        self.state
-            .cached_websocket_connection
+    fn take_cached_websocket_session(&self) -> WebsocketSession {
+        let mut cached_websocket_session = self
+            .state
+            .cached_websocket_session
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut *cached_websocket_session)
     }
 
-    fn store_cached_websocket_connection(&self, connection: ApiWebSocketConnection) {
+    fn store_cached_websocket_session(&self, websocket_session: WebsocketSession) {
         *self
             .state
-            .cached_websocket_connection
+            .cached_websocket_session
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(connection);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = websocket_session;
     }
 
     /// Compacts the current conversation history using the Compact endpoint.
@@ -492,9 +494,9 @@ impl ModelClient {
 
 impl Drop for ModelClientSession {
     fn drop(&mut self) {
-        if let Some(connection) = self.connection.take() {
-            self.client.store_cached_websocket_connection(connection);
-        }
+        let websocket_session = std::mem::take(&mut self.websocket_session);
+        self.client
+            .store_cached_websocket_session(websocket_session);
     }
 }
 
@@ -600,12 +602,13 @@ impl ModelClientSession {
         &self,
         request: &ResponsesApiRequest,
         last_response: Option<&LastResponse>,
+        allow_empty_delta: bool,
     ) -> Option<Vec<ResponseItem>> {
         // Checks whether the current request is an incremental append to the previous request.
         // We only append when non-input request fields are unchanged and `input` is a strict
         // extension of the previous known input. Server-returned output items are treated as part
         // of the baseline so we do not resend them.
-        let previous_request = self.websocket_last_request.as_ref()?;
+        let previous_request = self.websocket_session.last_request.as_ref()?;
         let mut previous_without_input = previous_request.clone();
         previous_without_input.input.clear();
         let mut request_without_input = request.clone();
@@ -623,9 +626,8 @@ impl ModelClientSession {
         }
 
         let baseline_len = baseline.len();
-        if baseline_len > 0
-            && request.input.starts_with(&baseline)
-            && baseline_len < request.input.len()
+        if request.input.starts_with(&baseline)
+            && (allow_empty_delta || baseline_len < request.input.len())
         {
             Some(request.input[baseline_len..].to_vec())
         } else {
@@ -635,7 +637,8 @@ impl ModelClientSession {
     }
 
     fn get_last_response(&mut self) -> Option<LastResponse> {
-        self.websocket_last_response_rx
+        self.websocket_session
+            .last_response_rx
             .take()
             .and_then(|mut receiver| match receiver.try_recv() {
                 Ok(last_response) => Some(last_response),
@@ -652,7 +655,10 @@ impl ModelClientSession {
         let Some(last_response) = self.get_last_response() else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
-        let Some(append_items) = self.get_incremental_items(request, Some(&last_response)) else {
+        let allow_empty_delta = matches!(ws_version, ResponsesWebsocketVersion::V2);
+        let Some(append_items) =
+            self.get_incremental_items(request, Some(&last_response), allow_empty_delta)
+        else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
 
@@ -682,10 +688,10 @@ impl ModelClientSession {
         }
     }
 
-    /// Opportunistically warms a websocket for this turn-scoped client session.
+    /// Opportunistically preconnects a websocket for this turn-scoped client session.
     ///
     /// This performs only connection setup; it never sends prompt payloads.
-    pub async fn prewarm_websocket(
+    pub async fn preconnect_websocket(
         &mut self,
         otel_manager: &OtelManager,
         model_info: &ModelInfo,
@@ -693,7 +699,7 @@ impl ModelClientSession {
         let Some(ws_version) = self.client.active_ws_version(model_info) else {
             return Ok(());
         };
-        if self.connection.is_some() {
+        if self.websocket_session.connection.is_some() {
             return Ok(());
         }
 
@@ -714,10 +720,9 @@ impl ModelClientSession {
                 None,
             )
             .await?;
-        self.connection = Some(connection);
+        self.websocket_session.connection = Some(connection);
         Ok(())
     }
-
     /// Returns a websocket connection for this turn.
     async fn websocket_connection(
         &mut self,
@@ -728,14 +733,14 @@ impl ModelClientSession {
         turn_metadata_header: Option<&str>,
         options: &ApiResponsesOptions,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
-        let needs_new = match self.connection.as_ref() {
+        let needs_new = match self.websocket_session.connection.as_ref() {
             Some(conn) => conn.is_closed().await,
             None => true,
         };
 
         if needs_new {
-            self.websocket_last_request = None;
-            self.websocket_last_response_rx = None;
+            self.websocket_session.last_request = None;
+            self.websocket_session.last_response_rx = None;
             let turn_state = options
                 .turn_state
                 .clone()
@@ -751,12 +756,15 @@ impl ModelClientSession {
                     turn_metadata_header,
                 )
                 .await?;
-            self.connection = Some(new_conn);
+            self.websocket_session.connection = Some(new_conn);
         }
 
-        self.connection.as_ref().ok_or(ApiError::Stream(
-            "websocket connection is unavailable".to_string(),
-        ))
+        self.websocket_session
+            .connection
+            .as_ref()
+            .ok_or(ApiError::Stream(
+                "websocket connection is unavailable".to_string(),
+            ))
     }
 
     fn responses_request_compression(&self, auth: Option<&crate::auth::CodexAuth>) -> Compression {
@@ -848,6 +856,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         turn_metadata_header: Option<&str>,
+        warmup: bool,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.auth_manager.clone();
 
@@ -866,10 +875,13 @@ impl ModelClientSession {
                 effort,
                 summary,
             )?;
-            let ws_payload = ResponseCreateWsRequest {
+            let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: build_ws_client_metadata(turn_metadata_header),
                 ..ResponseCreateWsRequest::from(&request)
             };
+            if warmup {
+                ws_payload.generate = Some(false);
+            }
 
             match self
                 .websocket_connection(
@@ -898,8 +910,9 @@ impl ModelClientSession {
             }
 
             let ws_request = self.prepare_websocket_request(ws_payload, &request, ws_version);
-
+            self.websocket_session.last_request = Some(request);
             let stream_result = self
+                .websocket_session
                 .connection
                 .as_ref()
                 .ok_or_else(|| {
@@ -910,11 +923,9 @@ impl ModelClientSession {
                 .stream_request(ws_request)
                 .await
                 .map_err(map_api_error)?;
-            self.websocket_last_request = Some(request);
             let (stream, last_request_rx) =
                 map_response_stream(stream_result, otel_manager.clone());
-            self.websocket_last_response_rx = Some(last_request_rx);
-
+            self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
         }
     }
@@ -934,6 +945,62 @@ impl ModelClientSession {
         let telemetry = Arc::new(ApiTelemetry::new(otel_manager.clone()));
         let websocket_telemetry: Arc<dyn WebsocketTelemetry> = telemetry;
         websocket_telemetry
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prewarm_websocket(
+        &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        otel_manager: &OtelManager,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        turn_metadata_header: Option<&str>,
+    ) -> Result<()> {
+        let Some(ws_version) = self.client.active_ws_version(model_info) else {
+            return Ok(());
+        };
+        if self.websocket_session.last_request.is_some() {
+            return Ok(());
+        }
+
+        if matches!(ws_version, ResponsesWebsocketVersion::V1) {
+            self.preconnect_websocket(otel_manager, model_info)
+                .await
+                .map_err(map_api_error)?;
+            return Ok(());
+        }
+
+        match self
+            .stream_responses_websocket(
+                prompt,
+                model_info,
+                ws_version,
+                otel_manager,
+                effort,
+                summary,
+                turn_metadata_header,
+                true,
+            )
+            .await
+        {
+            Ok(WebsocketStreamOutcome::Stream(mut stream)) => {
+                // Wait for the v2 warmup request to complete before sending the first turn request.
+                while let Some(event) = stream.next().await {
+                    match event {
+                        Ok(ResponseEvent::Completed { .. }) => break,
+                        Err(err) => return Err(err),
+                        _ => {}
+                    }
+                }
+                Ok(())
+            }
+            Ok(WebsocketStreamOutcome::FallbackToHttp) => {
+                self.try_switch_fallback_transport(otel_manager, model_info);
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -965,6 +1032,7 @@ impl ModelClientSession {
                             effort,
                             summary,
                             turn_metadata_header,
+                            false,
                         )
                         .await?
                     {
@@ -1009,9 +1077,9 @@ impl ModelClientSession {
                 &[("from_wire_api", "responses_websocket")],
             );
 
-            self.connection = None;
-            self.websocket_last_request = None;
-            self.websocket_last_response_rx = None;
+            self.websocket_session.connection = None;
+            self.websocket_session.last_request = None;
+            self.websocket_session.last_response_rx = None;
         }
         activated
     }
