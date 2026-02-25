@@ -31,7 +31,6 @@ impl Session {
         // We model that with:
         // - one active turn span while walking lifecycle events
         // - one finalized metadata segment per surviving user turn
-        // - conservative `Compaction` markers for standalone compaction outside user turns
         //
         // `ThreadRolledBack` updates both:
         // - history: drop user turns from reconstructed response items
