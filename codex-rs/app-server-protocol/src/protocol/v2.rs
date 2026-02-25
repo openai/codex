@@ -12,6 +12,7 @@ use codex_protocol::approvals::NetworkPolicyRuleAction as CoreNetworkPolicyRuleA
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
@@ -1407,11 +1408,34 @@ pub struct ModelListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct CollaborationModeListParams {
-    /// Optional loaded thread id. When provided, built-in instructions are
-    /// derived from that thread's effective feature overrides.
-    #[ts(optional = nullable)]
-    pub thread_id: Option<String>,
+pub struct CollaborationModeListParams {}
+
+/// EXPERIMENTAL - collaboration mode preset metadata for clients.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CollaborationModePreset {
+    pub name: String,
+    pub mode: Option<ModeKind>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<Option<ReasoningEffort>>,
+    #[deprecated(
+        note = "Always null in collaborationMode/list. Clients should pass settings.developer_instructions: null when setting a mode to use built-in instructions, or provide their own instructions explicitly."
+    )]
+    pub developer_instructions: Option<Option<String>>,
+}
+
+impl From<CollaborationModeMask> for CollaborationModePreset {
+    #[allow(deprecated)]
+    fn from(value: CollaborationModeMask) -> Self {
+        Self {
+            name: value.name,
+            mode: value.mode,
+            model: value.model,
+            reasoning_effort: value.reasoning_effort,
+            developer_instructions: None,
+        }
+    }
 }
 
 /// EXPERIMENTAL - collaboration mode presets response.
@@ -1419,7 +1443,7 @@ pub struct CollaborationModeListParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CollaborationModeListResponse {
-    pub data: Vec<CollaborationModeMask>,
+    pub data: Vec<CollaborationModePreset>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]

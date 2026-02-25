@@ -44,7 +44,6 @@ export type { CollabResumeEndEvent } from "./CollabResumeEndEvent";
 export type { CollabWaitingBeginEvent } from "./CollabWaitingBeginEvent";
 export type { CollabWaitingEndEvent } from "./CollabWaitingEndEvent";
 export type { CollaborationMode } from "./CollaborationMode";
-export type { CollaborationModeMask } from "./CollaborationModeMask";
 export type { ContentItem } from "./ContentItem";
 export type { ContextCompactedEvent } from "./ContextCompactedEvent";
 export type { ContextCompactionItem } from "./ContextCompactionItem";

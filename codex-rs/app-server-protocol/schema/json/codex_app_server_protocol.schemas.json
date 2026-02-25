@@ -8149,10 +8149,11 @@
         ],
         "type": "object"
       },
-      "CollaborationModeMask": {
-        "description": "A mask for collaboration mode settings, allowing partial updates. All fields except `name` are optional, enabling selective updates.",
+      "CollaborationModePreset": {
+        "description": "EXPERIMENTAL - collaboration mode preset metadata for clients.",
         "properties": {
-          "developer_instructions": {
+          "developerInstructions": {
+            "deprecated": true,
             "type": [
               "string",
               "null"
@@ -8177,7 +8178,7 @@
           "name": {
             "type": "string"
           },
-          "reasoning_effort": {
+          "reasoningEffort": {
             "anyOf": [
               {
                 "anyOf": [
