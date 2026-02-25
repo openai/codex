@@ -433,6 +433,7 @@ mod tests {
             interface: None,
             dependencies: Some(SkillDependencies { tools }),
             policy: None,
+            permission_profile: None,
             permissions: None,
             path_to_skills_md: PathBuf::from("skill"),
             scope: SkillScope::User,

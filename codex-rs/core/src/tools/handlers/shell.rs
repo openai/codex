@@ -426,7 +426,7 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 
-        let (effective_sandbox_policy, exec_approval_requirement) =
+        let (effective_sandbox_policy, exec_approval_requirement, additional_permissions) =
             if turn.features.enabled(Feature::SkillShellCommandSandbox) {
                 let user_shell = session.user_shell();
                 let matched_skill = Self::detect_skill_shell_command(
@@ -435,6 +435,9 @@ impl ShellHandler {
                     &exec_params.command,
                     shell_runtime_backend,
                 );
+                let additional_permissions = matched_skill
+                    .as_ref()
+                    .and_then(|skill| skill.permission_profile.clone());
                 let effective_sandbox_policy = matched_skill
                     .as_ref()
                     .and_then(|skill| skill.permissions.as_ref())
@@ -458,7 +461,11 @@ impl ShellHandler {
                         })
                         .await
                 };
-                (effective_sandbox_policy, exec_approval_requirement)
+                (
+                    effective_sandbox_policy,
+                    exec_approval_requirement,
+                    additional_permissions,
+                )
             } else {
                 let effective_sandbox_policy = turn.sandbox_policy.get().clone();
                 let exec_approval_requirement = session
@@ -472,7 +479,11 @@ impl ShellHandler {
                         prefix_rule,
                     })
                     .await;
-                (effective_sandbox_policy, exec_approval_requirement)
+                (
+                    effective_sandbox_policy,
+                    exec_approval_requirement,
+                    normalized_additional_permissions,
+                )
             };
 
         let req = ShellRequest {
@@ -483,7 +494,7 @@ impl ShellHandler {
             explicit_env_overrides,
             network: exec_params.network.clone(),
             sandbox_permissions: exec_params.sandbox_permissions,
-            additional_permissions: normalized_additional_permissions,
+            additional_permissions,
             justification: exec_params.justification.clone(),
             exec_approval_requirement,
             effective_sandbox_policy,
@@ -557,6 +568,7 @@ mod tests {
             interface: None,
             dependencies: None,
             policy: None,
+            permission_profile: None,
             permissions: None,
             path_to_skills_md,
             scope: SkillScope::User,

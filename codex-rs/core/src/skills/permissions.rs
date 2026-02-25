@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 use codex_protocol::models::MacOsAutomationValue;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsPermissions;
 #[cfg(target_os = "macos")]
 use codex_protocol::models::MacOsPreferencesValue;
@@ -25,10 +26,53 @@ use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
 #[cfg(not(target_os = "macos"))]
 type MacOsSeatbeltProfileExtensions = ();
 
+pub(crate) fn normalize_permission_profile(
+    skill_dir: &Path,
+    permissions: Option<PermissionProfile>,
+) -> Option<PermissionProfile> {
+    let PermissionProfile {
+        network,
+        file_system,
+        macos,
+    } = permissions?;
+    let file_system = file_system.unwrap_or_default();
+    let read = normalize_permission_paths(
+        skill_dir,
+        file_system.read.as_deref().unwrap_or_default(),
+        "permissions.file_system.read",
+    )
+    .into_iter()
+    .map(|path| path.as_path().to_path_buf())
+    .collect::<Vec<PathBuf>>();
+    let write = normalize_permission_paths(
+        skill_dir,
+        file_system.write.as_deref().unwrap_or_default(),
+        "permissions.file_system.write",
+    )
+    .into_iter()
+    .map(|path| path.as_path().to_path_buf())
+    .collect::<Vec<PathBuf>>();
+    let file_system = if read.is_empty() && write.is_empty() {
+        None
+    } else {
+        Some(FileSystemPermissions {
+            read: (!read.is_empty()).then_some(read),
+            write: (!write.is_empty()).then_some(write),
+        })
+    };
+
+    Some(PermissionProfile {
+        network,
+        file_system,
+        macos,
+    })
+}
+
 pub(crate) fn compile_permission_profile(
     skill_dir: &Path,
     permissions: Option<PermissionProfile>,
 ) -> Option<Permissions> {
+    let permissions = normalize_permission_profile(skill_dir, permissions);
     let PermissionProfile {
         network,
         file_system,

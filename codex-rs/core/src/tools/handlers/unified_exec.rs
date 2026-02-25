@@ -248,12 +248,15 @@ impl ToolHandler for UnifiedExecHandler {
                     return Ok(output);
                 }
 
-                let (effective_sandbox_policy, exec_approval_requirement) =
+                let (effective_sandbox_policy, exec_approval_requirement, additional_permissions) =
                     if turn.features.enabled(Feature::SkillShellCommandSandbox) {
                         let matched_skill = Self::detect_skill_exec_command(
                             turn.turn_skills.outcome.as_ref(),
                             &command,
                         );
+                        let additional_permissions = matched_skill
+                            .as_ref()
+                            .and_then(|skill| skill.permission_profile.clone());
                         let effective_sandbox_policy = matched_skill
                             .as_ref()
                             .and_then(|skill| skill.permissions.as_ref())
@@ -277,7 +280,11 @@ impl ToolHandler for UnifiedExecHandler {
                                 })
                                 .await
                         };
-                        (effective_sandbox_policy, exec_approval_requirement)
+                        (
+                            effective_sandbox_policy,
+                            exec_approval_requirement,
+                            additional_permissions,
+                        )
                     } else {
                         let effective_sandbox_policy = turn.sandbox_policy.get().clone();
                         let exec_approval_requirement = session
@@ -291,7 +298,11 @@ impl ToolHandler for UnifiedExecHandler {
                                 prefix_rule: prefix_rule.clone(),
                             })
                             .await;
-                        (effective_sandbox_policy, exec_approval_requirement)
+                        (
+                            effective_sandbox_policy,
+                            exec_approval_requirement,
+                            normalized_additional_permissions,
+                        )
                     };
 
                 tracing::debug!(
@@ -311,7 +322,7 @@ impl ToolHandler for UnifiedExecHandler {
                             network: context.turn.network.clone(),
                             tty,
                             sandbox_permissions,
-                            additional_permissions: normalized_additional_permissions,
+                            additional_permissions,
                             justification,
                             effective_sandbox_policy,
                             exec_approval_requirement,
@@ -436,6 +447,7 @@ mod tests {
             interface: None,
             dependencies: None,
             policy: None,
+            permission_profile: None,
             permissions: None,
             path_to_skills_md,
             scope: codex_protocol::protocol::SkillScope::Repo,
