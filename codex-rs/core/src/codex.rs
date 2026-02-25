@@ -2761,6 +2761,8 @@ impl Session {
         // - compaction after the first `TurnContextItem` in the same turn span is
         //   treated as mid-turn compaction and does not invalidate that turn's own
         //   `reference_context_item`
+        // - compaction outside any matched turn span is treated conservatively as
+        //   preturn-equivalent for baseline hydration (invalidate older baseline)
         //
         // `ThreadRolledBack` updates both:
         // - history: drop user turns from reconstructed response items
