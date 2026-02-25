@@ -152,8 +152,8 @@ async fn handle_escalate_session_with_policy(
         workdir,
         env,
     } = socket.receive::<EscalateRequest>().await?;
-    let file = PathBuf::from(&file).absolutize()?.into_owned();
     let workdir = PathBuf::from(&workdir).absolutize()?.into_owned();
+    let file = file.absolutize_from(&workdir)?.into_owned();
     let action = policy
         .determine_action(file.as_path(), &argv, &workdir)
         .await
@@ -257,6 +257,25 @@ mod tests {
         }
     }
 
+    struct AssertingEscalationPolicy {
+        expected_file: PathBuf,
+        expected_workdir: PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl EscalationPolicy for AssertingEscalationPolicy {
+        async fn determine_action(
+            &self,
+            file: &Path,
+            _argv: &[String],
+            workdir: &Path,
+        ) -> anyhow::Result<EscalateAction> {
+            assert_eq!(file, self.expected_file.as_path());
+            assert_eq!(workdir, self.expected_workdir.as_path());
+            Ok(EscalateAction::Run)
+        }
+    }
+
     #[tokio::test]
     async fn handle_escalate_session_respects_run_in_sandbox_decision() -> anyhow::Result<()> {
         let (server, client) = AsyncSocket::pair()?;
@@ -279,6 +298,41 @@ mod tests {
                 argv: vec!["echo".to_string()],
                 workdir: PathBuf::from("/tmp"),
                 env,
+            })
+            .await?;
+
+        let response = client.receive::<EscalateResponse>().await?;
+        assert_eq!(
+            EscalateResponse {
+                action: EscalateAction::Run,
+            },
+            response
+        );
+        server_task.await?
+    }
+
+    #[tokio::test]
+    async fn handle_escalate_session_resolves_relative_file_against_request_workdir()
+    -> anyhow::Result<()> {
+        let (server, client) = AsyncSocket::pair()?;
+        let tmp = tempfile::TempDir::new()?;
+        let workdir = tmp.path().join("workspace");
+        std::fs::create_dir(&workdir)?;
+        let expected_file = workdir.join("bin/tool");
+        let server_task = tokio::spawn(handle_escalate_session_with_policy(
+            server,
+            Arc::new(AssertingEscalationPolicy {
+                expected_file,
+                expected_workdir: workdir.clone(),
+            }),
+        ));
+
+        client
+            .send(EscalateRequest {
+                file: PathBuf::from("./bin/tool"),
+                argv: vec!["./bin/tool".to_string()],
+                workdir,
+                env: HashMap::new(),
             })
             .await?;
 
