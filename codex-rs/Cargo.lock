@@ -1379,6 +1379,7 @@ dependencies = [
  "codex-protocol",
  "codex-rmcp-client",
  "codex-shell-command",
+ "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",

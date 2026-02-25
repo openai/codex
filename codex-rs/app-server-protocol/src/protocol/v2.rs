@@ -640,6 +640,64 @@ pub struct ConfigRequirementsReadResponse {
     pub requirements: Option<ConfigRequirements>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum ExternalAgentConfigMigrationItemType {
+    #[serde(rename = "AGENTS_MD")]
+    #[ts(rename = "AGENTS_MD")]
+    AgentsMd,
+    #[serde(rename = "CONFIG")]
+    #[ts(rename = "CONFIG")]
+    Config,
+    #[serde(rename = "SKILLS")]
+    #[ts(rename = "SKILLS")]
+    Skills,
+    #[serde(rename = "MCP_SERVER_CONFIG")]
+    #[ts(rename = "MCP_SERVER_CONFIG")]
+    McpServerConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigMigrationItem {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub description: String,
+    /// Null or empty means home-scoped migration; non-empty means repo-scoped migration.
+    pub cwd: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigDetectResponse {
+    pub items: Vec<ExternalAgentConfigMigrationItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigDetectParams {
+    /// If true, include detection under the user's home (~/.claude, ~/.codex, etc.).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_home: bool,
+    /// Zero or more working directories to include for repo-scoped detection.
+    #[ts(optional = nullable)]
+    pub cwds: Option<Vec<PathBuf>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportParams {
+    pub migration_items: Vec<ExternalAgentConfigMigrationItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportResponse {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1661,6 +1719,8 @@ pub struct ThreadStartParams {
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
+    pub service_name: Option<String>,
+    #[ts(optional = nullable)]
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
@@ -1961,6 +2021,9 @@ pub struct ThreadListParams {
     /// matches this path are returned.
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
+    /// Optional substring filter for the extracted thread title.
+    #[ts(optional = nullable)]
+    pub search_term: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
