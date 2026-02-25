@@ -12,10 +12,10 @@ use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
 use crate::skills::model::SkillPolicy;
 use crate::skills::model::SkillToolDependency;
-use crate::skills::permissions::SkillManifestPermissions;
 use crate::skills::permissions::compile_permission_profile;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SkillScope;
 use dirs::home_dir;
 use dunce::canonicalize as canonicalize_path;
@@ -54,7 +54,7 @@ struct SkillMetadataFile {
     #[serde(default)]
     policy: Option<Policy>,
     #[serde(default)]
-    permissions: Option<SkillManifestPermissions>,
+    permissions: Option<PermissionProfile>,
 }
 
 #[derive(Debug, Default, Deserialize)]

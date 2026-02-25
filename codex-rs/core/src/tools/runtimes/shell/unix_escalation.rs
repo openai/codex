@@ -8,6 +8,7 @@ use crate::exec::is_likely_sandbox_denied;
 use crate::features::Feature;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::skills::SkillMetadata;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
@@ -174,11 +175,12 @@ impl CoreShellActionProvider {
 
     async fn prompt(
         &self,
-        command: &[String],
+        program: &Path,
+        argv: &[String],
         workdir: &Path,
         stopwatch: &Stopwatch,
     ) -> anyhow::Result<ReviewDecision> {
-        let command = command.to_vec();
+        let command = join_program_and_argv(program, argv);
         let workdir = workdir.to_path_buf();
         let session = self.session.clone();
         let turn = self.turn.clone();
@@ -202,49 +204,41 @@ impl CoreShellActionProvider {
             })
             .await)
     }
-}
 
-#[async_trait::async_trait]
-impl EscalationPolicy for CoreShellActionProvider {
-    async fn determine_action(
+    /// Because we should be intercepting execve(2) calls, `program` should be
+    /// an absolute path. The idea is that we check to see whether it matches
+    /// any skills.
+    async fn find_skill(&self, program: &Path) -> Option<SkillMetadata> {
+        let force_reload = false;
+        let skills_outcome = self
+            .session
+            .services
+            .skills_manager
+            .skills_for_cwd(&self.turn.cwd, force_reload)
+            .await;
+
+        for skill in skills_outcome.skills {
+            // We intentionally ignore "enabled" status here for now.
+            let Some(skill_root) = skill.path_to_skills_md.parent() else {
+                continue;
+            };
+            if program.starts_with(skill_root.join("scripts")) {
+                return Some(skill);
+            }
+        }
+
+        None
+    }
+
+    async fn process_decision(
         &self,
-        file: &Path,
+        decision: Decision,
+        needs_escalation: bool,
+        program: &Path,
         argv: &[String],
         workdir: &Path,
     ) -> anyhow::Result<EscalateAction> {
-        let command = std::iter::once(file.to_string_lossy().to_string())
-            .chain(argv.iter().cloned())
-            .collect::<Vec<_>>();
-        let (commands, used_complex_parsing) =
-            if let Some(commands) = parse_shell_lc_plain_commands(&command) {
-                (commands, false)
-            } else if let Some(single_command) = parse_shell_lc_single_command_prefix(&command) {
-                (vec![single_command], true)
-            } else {
-                (vec![command.clone()], false)
-            };
-
-        let fallback = |cmd: &[String]| {
-            crate::exec_policy::render_decision_for_unmatched_command(
-                self.approval_policy,
-                &self.sandbox_policy,
-                cmd,
-                self.sandbox_permissions,
-                used_complex_parsing,
-            )
-        };
-        let evaluation = {
-            let policy = self.policy.read().await;
-            policy.check_multiple(commands.iter(), &fallback)
-        };
-        // When true, means the Evaluation was due to *.rules, not the
-        // fallback function.
-        let decision_driven_by_policy =
-            Self::decision_driven_by_policy(&evaluation.matched_rules, evaluation.decision);
-        let needs_escalation =
-            self.sandbox_permissions.requires_escalated_permissions() || decision_driven_by_policy;
-
-        Ok(match evaluation.decision {
+        let action = match decision {
             Decision::Forbidden => EscalateAction::Deny {
                 reason: Some("Execution forbidden by policy".to_string()),
             },
@@ -258,7 +252,7 @@ impl EscalationPolicy for CoreShellActionProvider {
                         reason: Some("Execution forbidden by policy".to_string()),
                     }
                 } else {
-                    match self.prompt(&command, workdir, &self.stopwatch).await? {
+                    match self.prompt(program, argv, workdir, &self.stopwatch).await? {
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                         | ReviewDecision::ApprovedForSession => {
@@ -291,8 +285,88 @@ impl EscalationPolicy for CoreShellActionProvider {
                     }
                 }
             }
-            Decision::Allow => EscalateAction::Escalate,
-        })
+            Decision::Allow => {
+                if needs_escalation {
+                    EscalateAction::Escalate
+                } else {
+                    EscalateAction::Run
+                }
+            }
+        };
+        tracing::info!(
+            "Policy decision for command {program:?} is {decision:?}, leading to escalation action {action:?}",
+        );
+        Ok(action)
+    }
+}
+
+#[async_trait::async_trait]
+impl EscalationPolicy for CoreShellActionProvider {
+    async fn determine_action(
+        &self,
+        program: &Path,
+        argv: &[String],
+        workdir: &Path,
+    ) -> anyhow::Result<EscalateAction> {
+        tracing::info!(
+            "Determining escalation action for command {program:?} with args {argv:?} in {workdir:?}"
+        );
+
+        // In the usual case, the execve wrapper reports the command being
+        // executed in `program`, so a direct skill lookup is sufficient.
+        if let Some(skill) = self.find_skill(program).await {
+            // For now, we always prompt for scripts that look like they belong
+            // to skills, which means we ignore exec policy rules for those
+            // scripts.
+            tracing::info!("Matched {program:?} to skill {skill:?}, prompting for approval");
+            // TODO(mbolin): We should read the permissions associated with the
+            // skill and use those specific permissions in the
+            // EscalateAction::Run case, rather than always escalating when a
+            // skill matches.
+            let needs_escalation = true;
+            return self
+                .process_decision(Decision::Prompt, needs_escalation, program, argv, workdir)
+                .await;
+        }
+
+        let command = join_program_and_argv(program, argv);
+        let (commands, used_complex_parsing) =
+            if let Some(commands) = parse_shell_lc_plain_commands(&command) {
+                (commands, false)
+            } else if let Some(single_command) = parse_shell_lc_single_command_prefix(&command) {
+                (vec![single_command], true)
+            } else {
+                (vec![command.clone()], false)
+            };
+
+        let fallback = |cmd: &[String]| {
+            crate::exec_policy::render_decision_for_unmatched_command(
+                self.approval_policy,
+                &self.sandbox_policy,
+                cmd,
+                self.sandbox_permissions,
+                used_complex_parsing,
+            )
+        };
+        let evaluation = {
+            let policy = self.policy.read().await;
+            policy.check_multiple(commands.iter(), &fallback)
+        };
+        // When true, means the Evaluation was due to *.rules, not the
+        // fallback function.
+        let decision_driven_by_policy =
+            Self::decision_driven_by_policy(&evaluation.matched_rules, evaluation.decision);
+        let needs_escalation =
+            self.sandbox_permissions.requires_escalated_permissions() || decision_driven_by_policy;
+
+        self.process_decision(
+            evaluation.decision,
+            needs_escalation,
+            program,
+            argv,
+            workdir,
+        )
+        .await
     }
 }
 
@@ -401,6 +475,13 @@ fn map_exec_result(
     }
 
     Ok(output)
+}
+
+/// Some functions need the full command as a Vec<String>.
+fn join_program_and_argv(program: &Path, argv: &[String]) -> Vec<String> {
+    std::iter::once(program.to_string_lossy().to_string())
+        .chain(argv.iter().cloned())
+        .collect::<Vec<_>>()
 }
 
 #[cfg(test)]

@@ -36,28 +36,37 @@ use image::GenericImageView;
 use image::ImageBuffer;
 use image::Rgba;
 use image::load_from_memory;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tokio::time::Duration;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
 
-fn find_image_message(body: &Value) -> Option<&Value> {
+fn image_messages(body: &Value) -> Vec<&Value> {
     body.get("input")
         .and_then(Value::as_array)
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item.get("type").and_then(Value::as_str) == Some("message")
-                    && item
-                        .get("content")
-                        .and_then(Value::as_array)
-                        .map(|content| {
-                            content.iter().any(|span| {
-                                span.get("type").and_then(Value::as_str) == Some("input_image")
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("message")
+                        && item
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .map(|content| {
+                                content.iter().any(|span| {
+                                    span.get("type").and_then(Value::as_str) == Some("input_image")
+                                })
                             })
-                        })
-                        .unwrap_or(false)
-            })
+                            .unwrap_or(false)
+                })
+                .collect()
         })
+        .unwrap_or_default()
+}
+
+fn find_image_message(body: &Value) -> Option<&Value> {
+    image_messages(body).into_iter().next()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -366,8 +375,16 @@ console.log(out.output?.body?.text ?? "");
     );
 
     let body = req.body_json();
-    let image_message =
-        find_image_message(&body).expect("pending input image message not included in request");
+    let image_messages = image_messages(&body);
+    assert_eq!(
+        image_messages.len(),
+        1,
+        "js_repl view_image should inject exactly one pending input image message"
+    );
+    let image_message = image_messages
+        .into_iter()
+        .next()
+        .expect("pending input image message not included in request");
     let image_url = image_message
         .get("content")
         .and_then(Value::as_array)

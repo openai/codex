@@ -11,6 +11,7 @@ use crate::thread_state::TurnSummary;
 use crate::thread_status::ThreadWatchActiveGuard;
 use crate::thread_status::ThreadWatchManager;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
+use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
@@ -267,6 +268,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 reason,
                 network_approval_context,
                 proposed_execpolicy_amendment,
+                additional_permissions,
                 parsed_cmd,
                 ..
             } = ev;
@@ -329,6 +331,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                         };
                     let proposed_execpolicy_amendment_v2 =
                         proposed_execpolicy_amendment.map(V2ExecPolicyAmendment::from);
+                    let additional_permissions =
+                        additional_permissions.map(V2AdditionalPermissionProfile::from);
 
                     let params = CommandExecutionRequestApprovalParams {
                         thread_id: conversation_id.to_string(),
@@ -340,6 +344,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         command,
                         cwd,
                         command_actions,
+                        additional_permissions,
                         proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                     };
                     let rx = outgoing

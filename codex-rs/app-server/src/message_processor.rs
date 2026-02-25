@@ -133,7 +133,7 @@ pub(crate) struct MessageProcessor {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ConnectionSessionState {
     pub(crate) initialized: bool,
-    experimental_api_enabled: bool,
+    pub(crate) experimental_api_enabled: bool,
     pub(crate) opted_out_notification_methods: HashSet<String>,
 }
 

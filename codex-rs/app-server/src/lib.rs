@@ -94,6 +94,7 @@ enum OutboundControlEvent {
         writer: mpsc::Sender<crate::outgoing_message::OutgoingMessage>,
         disconnect_sender: Option<CancellationToken>,
         initialized: Arc<AtomicBool>,
+        experimental_api_enabled: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     },
     /// Remove state for a closed/disconnected connection.
@@ -503,6 +504,7 @@ pub async fn run_main_with_transport(
                                 writer,
                                 disconnect_sender,
                                 initialized,
+                                experimental_api_enabled,
                                 opted_out_notification_methods,
                             } => {
                                 outbound_connections.insert(
@@ -510,6 +512,7 @@ pub async fn run_main_with_transport(
                                     OutboundConnectionState::new(
                                         writer,
                                         initialized,
+                                        experimental_api_enabled,
                                         opted_out_notification_methods,
                                         disconnect_sender,
                                     ),
@@ -609,6 +612,8 @@ pub async fn run_main_with_transport(
                                 disconnect_sender,
                             } => {
                                 let outbound_initialized = Arc::new(AtomicBool::new(false));
+                                let outbound_experimental_api_enabled =
+                                    Arc::new(AtomicBool::new(false));
                                 let outbound_opted_out_notification_methods =
                                     Arc::new(RwLock::new(HashSet::new()));
                                 if outbound_control_tx
@@ -617,6 +622,9 @@ pub async fn run_main_with_transport(
                                         writer,
                                         disconnect_sender,
                                         initialized: Arc::clone(&outbound_initialized),
+                                        experimental_api_enabled: Arc::clone(
+                                            &outbound_experimental_api_enabled,
+                                        ),
                                         opted_out_notification_methods: Arc::clone(
                                             &outbound_opted_out_notification_methods,
                                         ),
@@ -630,6 +638,7 @@ pub async fn run_main_with_transport(
                                     connection_id,
                                     ConnectionState::new(
                                         outbound_initialized,
+                                        outbound_experimental_api_enabled,
                                         outbound_opted_out_notification_methods,
                                     ),
                                 );
@@ -679,6 +688,12 @@ pub async fn run_main_with_transport(
                                                 "failed to update outbound opted-out notifications"
                                             );
                                         }
+                                        connection_state
+                                            .outbound_experimental_api_enabled
+                                            .store(
+                                                connection_state.session.experimental_api_enabled,
+                                                std::sync::atomic::Ordering::Release,
+                                            );
                                         if !was_initialized && connection_state.session.initialized {
                                             processor.send_initialize_notifications().await;
                                         }
