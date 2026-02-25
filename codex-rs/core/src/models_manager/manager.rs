@@ -91,6 +91,7 @@ impl ModelsManager {
         Self {
             remote_models: RwLock::new(remote_models),
             catalog_mode,
+            catalog_mode,
             collaboration_modes_config,
             auth_manager,
             etag: RwLock::new(None),
@@ -388,7 +389,11 @@ impl ModelsManager {
                 Self::load_remote_models_from_file()
                     .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}")),
             ),
+<<<<<<< HEAD
             catalog_mode: CatalogMode::Default,
+=======
+            has_custom_model_catalog: false,
+>>>>>>> ec21465e1 (Refactor collaboration mode preset availability config)
             collaboration_modes_config: CollaborationModesConfig::default(),
             auth_manager,
             etag: RwLock::new(None),
@@ -516,8 +521,12 @@ mod tests {
             .expect("load default test config");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager =
-            ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None, false);
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            None,
+            CollaborationModesConfig::default(),
+        );
         let known_slug = manager
             .get_remote_models()
             .await
@@ -554,7 +563,7 @@ mod tests {
             Some(ModelsResponse {
                 models: vec![remote_model("gpt-overlay", "Overlay", 0)],
             }),
-            false,
+            CollaborationModesConfig::default(),
         );
 
         let model_info = manager
@@ -578,8 +587,12 @@ mod tests {
             .expect("load default test config");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager =
-            ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None, false);
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            None,
+            CollaborationModesConfig::default(),
+        );
         let known_slug = manager
             .get_remote_models()
             .await
@@ -605,8 +618,12 @@ mod tests {
             .expect("load default test config");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager =
-            ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None, false);
+        let manager = ModelsManager::new(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            None,
+            CollaborationModesConfig::default(),
+        );
         let known_slug = manager
             .get_remote_models()
             .await

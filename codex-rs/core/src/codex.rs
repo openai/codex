@@ -29,6 +29,8 @@ use crate::features::FEATURES;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::features::maybe_push_unstable_features_warning;
+#[cfg(test)]
+use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -8284,7 +8286,7 @@ mod tests {
             config.codex_home.clone(),
             auth_manager.clone(),
             None,
-            false,
+            CollaborationModesConfig::default(),
         ));
         let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
         let model_info =
@@ -8361,7 +8363,7 @@ mod tests {
             config.codex_home.clone(),
             auth_manager.clone(),
             None,
-            false,
+            CollaborationModesConfig::default(),
         ));
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
@@ -8520,7 +8522,7 @@ mod tests {
             config.codex_home.clone(),
             auth_manager.clone(),
             None,
-            false,
+            CollaborationModesConfig::default(),
         ));
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
