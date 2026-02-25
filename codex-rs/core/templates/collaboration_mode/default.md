@@ -8,4 +8,4 @@ Your active mode changes only when new developer instructions with a different `
 
 {{REQUEST_USER_INPUT_AVAILABILITY}}
 
-{{QUESTION_STRATEGY}}
+{{ASKING_QUESTIONS_GUIDANCE}}
