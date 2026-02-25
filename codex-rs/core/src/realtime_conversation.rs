@@ -36,7 +36,6 @@ use tracing::warn;
 const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
 const TEXT_IN_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
-const REALTIME_TEXT_LOG_TARGET: &str = "codex.realtime.text";
 
 pub(crate) struct RealtimeConversationManager {
     state: Mutex<Option<ConversationState>>,
@@ -220,7 +219,6 @@ pub(crate) async fn handle_start(
             };
             if let Some(text) = maybe_routed_text {
                 debug!(
-                    target: REALTIME_TEXT_LOG_TARGET,
                     "[realtime-text-out] extracted realtime conversation text output"
                 );
                 let sess_for_routed_text = Arc::clone(&sess_clone);
@@ -286,11 +284,6 @@ pub(crate) async fn handle_text(
     params: ConversationTextParams,
 ) {
     debug!(
-        target: REALTIME_TEXT_LOG_TARGET,
-        direction = "in",
-        thread_id = %sess.conversation_id,
-        sub_id = %sub_id,
-        text_len = params.text.len(),
         "[realtime-text-in] appending realtime conversation text input"
     );
 
