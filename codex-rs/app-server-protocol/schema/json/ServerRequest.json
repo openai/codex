@@ -722,21 +722,6 @@
         }
       ]
     },
-    "SkillRequestApprovalParams": {
-      "properties": {
-        "itemId": {
-          "type": "string"
-        },
-        "skillName": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "itemId",
-        "skillName"
-      ],
-      "type": "object"
-    },
     "ThreadId": {
       "type": "string"
     },
@@ -896,30 +881,6 @@
         "params"
       ],
       "title": "Item/tool/requestUserInputRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "skill/requestApproval"
-          ],
-          "title": "Skill/requestApprovalRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/SkillRequestApprovalParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Skill/requestApprovalRequest",
       "type": "object"
     },
     {

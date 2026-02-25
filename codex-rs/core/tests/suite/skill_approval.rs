@@ -64,17 +64,6 @@ async fn submit_turn_with_policies(
     Ok(())
 }
 
-async fn wait_for_turn_complete_without_skill_approval(test: &TestCodex) {
-    wait_for_event_match(test.codex.as_ref(), |event| match event {
-        EventMsg::SkillRequestApproval(request) => {
-            panic!("unexpected skill approval request: {request:?}");
-        }
-        EventMsg::TurnComplete(_) => Some(()),
-        _ => None,
-    })
-    .await;
-}
-
 fn write_skill_with_shell_script(home: &Path, name: &str, script_name: &str) -> Result<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
 

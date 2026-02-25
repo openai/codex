@@ -715,11 +715,6 @@ server_request_definitions! {
         response: v2::ToolRequestUserInputResponse,
     },
 
-    SkillRequestApproval => "skill/requestApproval" {
-        params: v2::SkillRequestApprovalParams,
-        response: v2::SkillRequestApprovalResponse,
-    },
-
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,

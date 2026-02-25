@@ -58,9 +58,6 @@ use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
-use codex_app_server_protocol::SkillApprovalDecision as V2SkillApprovalDecision;
-use codex_app_server_protocol::SkillRequestApprovalParams;
-use codex_app_server_protocol::SkillRequestApprovalResponse;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
@@ -111,7 +108,6 @@ use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
-use codex_protocol::skill_approval::SkillApprovalResponse as CoreSkillApprovalResponse;
 use codex_shell_command::parse_command::shlex_join;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -516,37 +512,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 {
                     error!("failed to submit UserInputAnswer: {err}");
                 }
-            }
-        }
-        EventMsg::SkillRequestApproval(request) => {
-            if matches!(api_version, ApiVersion::V2) {
-                let item_id = request.item_id;
-                let skill_name = request.skill_name;
-                let params = SkillRequestApprovalParams {
-                    item_id: item_id.clone(),
-                    skill_name,
-                };
-                let rx = outgoing
-                    .send_request(ServerRequestPayload::SkillRequestApproval(params))
-                    .await;
-                tokio::spawn(async move {
-                    let approved = match rx.await {
-                        Ok(Ok(value)) => {
-                            serde_json::from_value::<SkillRequestApprovalResponse>(value)
-                                .map(|response| {
-                                    matches!(response.decision, V2SkillApprovalDecision::Approve)
-                                })
-                                .unwrap_or(false)
-                        }
-                        _ => false,
-                    };
-                    let _ = conversation
-                        .submit(Op::SkillApproval {
-                            id: item_id,
-                            response: CoreSkillApprovalResponse { approved },
-                        })
-                        .await;
-                });
             }
         }
         EventMsg::DynamicToolCallRequest(request) => {

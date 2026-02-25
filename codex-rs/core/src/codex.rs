@@ -92,7 +92,6 @@ use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_protocol::skill_approval::SkillApprovalResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_utils_stream_parser::AssistantTextChunk;
@@ -2722,40 +2721,6 @@ impl Session {
         rx_response.await.ok()
     }
 
-    pub async fn request_skill_approval(
-        &self,
-        turn_context: &TurnContext,
-        item_id: String,
-        skill_name: String,
-    ) -> Option<SkillApprovalResponse> {
-        let (tx_response, rx_response) = oneshot::channel();
-        let prev_entry = {
-            let mut active = self.active_turn.lock().await;
-            match active.as_mut() {
-                Some(at) => {
-                    let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_skill_approval(item_id.clone(), tx_response)
-                }
-                None => None,
-            }
-        };
-        if prev_entry.is_some() {
-            warn!("Overwriting existing pending skill approval for item_id: {item_id}");
-        }
-
-        self.send_event(
-            turn_context,
-            EventMsg::SkillRequestApproval(
-                codex_protocol::skill_approval::SkillRequestApprovalEvent {
-                    item_id,
-                    skill_name,
-                },
-            ),
-        )
-        .await;
-        rx_response.await.ok()
-    }
-
     pub async fn notify_user_input_response(
         &self,
         sub_id: &str,
@@ -2798,31 +2763,6 @@ impl Session {
             }
             None => {
                 warn!("No pending dynamic tool call found for call_id: {call_id}");
-            }
-        }
-    }
-
-    pub async fn notify_skill_approval_response(
-        &self,
-        item_id: &str,
-        response: SkillApprovalResponse,
-    ) {
-        let entry = {
-            let mut active = self.active_turn.lock().await;
-            match active.as_mut() {
-                Some(at) => {
-                    let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_skill_approval(item_id)
-                }
-                None => None,
-            }
-        };
-        match entry {
-            Some(tx_response) => {
-                tx_response.send(response).ok();
-            }
-            None => {
-                warn!("No pending skill approval found for item_id: {item_id}");
             }
         }
     }
@@ -3730,9 +3670,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::DynamicToolResponse { id, response } => {
                 handlers::dynamic_tool_response(&sess, id, response).await;
             }
-            Op::SkillApproval { id, response } => {
-                handlers::skill_approval_response(&sess, id, response).await;
-            }
             Op::AddToHistory { text } => {
                 handlers::add_to_history(&sess, &config, text).await;
             }
@@ -3856,7 +3793,6 @@ mod handlers {
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
     use codex_protocol::request_user_input::RequestUserInputResponse;
-    use codex_protocol::skill_approval::SkillApprovalResponse;
 
     use crate::context_manager::is_user_turn_boundary;
     use codex_protocol::config_types::CollaborationMode;
@@ -4095,14 +4031,6 @@ mod handlers {
         response: DynamicToolResponse,
     ) {
         sess.notify_dynamic_tool_response(&id, response).await;
-    }
-
-    pub async fn skill_approval_response(
-        sess: &Arc<Session>,
-        id: String,
-        response: SkillApprovalResponse,
-    ) {
-        sess.notify_skill_approval_response(&id, response).await;
     }
 
     pub async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) {
@@ -4818,15 +4746,6 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
-    if turn_context.config.features.enabled(Feature::SkillApproval) {
-        let _ = sess
-            .request_skill_approval(
-                turn_context.as_ref(),
-                turn_context.sub_id.clone(),
-                "test-skill".to_string(),
-            )
-            .await;
-    }
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively

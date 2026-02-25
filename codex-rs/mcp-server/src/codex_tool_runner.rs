@@ -364,7 +364,6 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::RequestUserInput(_)
                     | EventMsg::DynamicToolCallRequest(_)
                     | EventMsg::DynamicToolCallResponse(_)
-                    | EventMsg::SkillRequestApproval(_)
                     | EventMsg::ContextCompacted(_)
                     | EventMsg::ModelReroute(_)
                     | EventMsg::ThreadRolledBack(_)
