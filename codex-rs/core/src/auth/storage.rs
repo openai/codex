@@ -29,10 +29,10 @@ use once_cell::sync::Lazy;
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthCredentialsStoreMode {
-    #[default]
     /// Persist credentials in CODEX_HOME/auth.json.
     File,
     /// Persist credentials in the keyring. Fail if unavailable.
+    #[default]
     Keyring,
     /// Use keyring when available; otherwise, fall back to a file in CODEX_HOME.
     Auto,
