@@ -16,7 +16,8 @@ pub struct SkillMetadata {
     pub policy: Option<SkillPolicy>,
     // This is an experimental field.
     pub permissions: Option<Permissions>,
-    pub path: PathBuf,
+    /// Path to the SKILLS.md file that declares this skill.
+    pub path_to_skills_md: PathBuf,
     pub scope: SkillScope,
 }
 
@@ -76,7 +77,7 @@ pub struct SkillLoadOutcome {
 
 impl SkillLoadOutcome {
     pub fn is_skill_enabled(&self, skill: &SkillMetadata) -> bool {
-        !self.disabled_paths.contains(&skill.path)
+        !self.disabled_paths.contains(&skill.path_to_skills_md)
     }
 
     pub fn is_skill_allowed_for_implicit_invocation(&self, skill: &SkillMetadata) -> bool {

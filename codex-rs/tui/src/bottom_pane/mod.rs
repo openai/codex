@@ -1495,7 +1495,7 @@ mod tests {
                 dependencies: None,
                 policy: None,
                 permissions: None,
-                path: PathBuf::from("test-skill"),
+                path_to_skills_md: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),
         });
