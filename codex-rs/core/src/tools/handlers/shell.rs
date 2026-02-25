@@ -310,10 +310,8 @@ impl ShellHandler {
         shell: &Shell,
         command: &[String],
         shell_runtime_backend: ShellRuntimeBackend,
-        skill_shell_command_enabled: bool,
     ) -> Option<SkillMetadata> {
-        if !skill_shell_command_enabled
-            || shell_runtime_backend != ShellRuntimeBackend::ShellCommandClassic
+        if shell_runtime_backend != ShellRuntimeBackend::ShellCommandClassic
             || shell.shell_type != ShellType::Zsh
         {
             return None;
@@ -428,37 +426,54 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 
-        let user_shell = session.user_shell();
-        let matched_skill = Self::detect_skill_shell_command(
-            turn.turn_skills.outcome.as_ref(),
-            user_shell.as_ref(),
-            &exec_params.command,
-            shell_runtime_backend,
-            turn.features.enabled(Feature::SkillShellCommandSandbox),
-        );
-        let effective_sandbox_policy = matched_skill
-            .as_ref()
-            .and_then(|skill| skill.permissions.as_ref())
-            .map(|permissions| permissions.sandbox_policy.get().clone())
-            .unwrap_or_else(|| turn.sandbox_policy.get().clone());
-        let exec_approval_requirement = if matched_skill.is_some() {
-            ExecApprovalRequirement::NeedsApproval {
-                reason: Some(SKILL_SHELL_COMMAND_APPROVAL_REASON.to_string()),
-                proposed_execpolicy_amendment: None,
-            }
-        } else {
-            session
-                .services
-                .exec_policy
-                .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                    command: &exec_params.command,
-                    approval_policy: turn.approval_policy.value(),
-                    sandbox_policy: &effective_sandbox_policy,
-                    sandbox_permissions: exec_params.sandbox_permissions,
-                    prefix_rule,
-                })
-                .await
-        };
+        let (effective_sandbox_policy, exec_approval_requirement) =
+            if turn.features.enabled(Feature::SkillShellCommandSandbox) {
+                let user_shell = session.user_shell();
+                let matched_skill = Self::detect_skill_shell_command(
+                    turn.turn_skills.outcome.as_ref(),
+                    user_shell.as_ref(),
+                    &exec_params.command,
+                    shell_runtime_backend,
+                );
+                let effective_sandbox_policy = matched_skill
+                    .as_ref()
+                    .and_then(|skill| skill.permissions.as_ref())
+                    .map(|permissions| permissions.sandbox_policy.get().clone())
+                    .unwrap_or_else(|| turn.sandbox_policy.get().clone());
+                let exec_approval_requirement = if matched_skill.is_some() {
+                    ExecApprovalRequirement::NeedsApproval {
+                        reason: Some(SKILL_SHELL_COMMAND_APPROVAL_REASON.to_string()),
+                        proposed_execpolicy_amendment: None,
+                    }
+                } else {
+                    session
+                        .services
+                        .exec_policy
+                        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                            command: &exec_params.command,
+                            approval_policy: turn.approval_policy.value(),
+                            sandbox_policy: &effective_sandbox_policy,
+                            sandbox_permissions: exec_params.sandbox_permissions,
+                            prefix_rule,
+                        })
+                        .await
+                };
+                (effective_sandbox_policy, exec_approval_requirement)
+            } else {
+                let effective_sandbox_policy = turn.sandbox_policy.get().clone();
+                let exec_approval_requirement = session
+                    .services
+                    .exec_policy
+                    .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                        command: &exec_params.command,
+                        approval_policy: turn.approval_policy.value(),
+                        sandbox_policy: &effective_sandbox_policy,
+                        sandbox_permissions: exec_params.sandbox_permissions,
+                        prefix_rule,
+                    })
+                    .await;
+                (effective_sandbox_policy, exec_approval_requirement)
+            };
 
         let req = ShellRequest {
             command: exec_params.command.clone(),
@@ -519,8 +534,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::codex::make_session_and_context;
-    use crate::skills::SkillLoadOutcome;
-    use crate::skills::SkillMetadata;
     use crate::exec_env::create_env;
     use crate::is_safe_command::is_known_safe_command;
     use crate::powershell::try_find_powershell_executable_blocking;
@@ -529,6 +542,8 @@ mod tests {
     use crate::shell::Shell;
     use crate::shell::ShellType;
     use crate::shell_snapshot::ShellSnapshot;
+    use crate::skills::SkillLoadOutcome;
+    use crate::skills::SkillMetadata;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::runtimes::shell::ShellRuntimeBackend;
@@ -733,10 +748,12 @@ mod tests {
             &shell,
             &command,
             ShellRuntimeBackend::ShellCommandClassic,
-            true,
         );
 
-        assert_eq!(found.map(|skill| skill.name), Some("test-skill".to_string()));
+        assert_eq!(
+            found.map(|skill| skill.name),
+            Some("test-skill".to_string())
+        );
     }
 
     #[test]
@@ -754,17 +771,13 @@ mod tests {
             )])),
             ..Default::default()
         };
-        let command = shell.derive_exec_args(
-            "/tmp/skill-test/scripts/run-tool && echo done",
-            true,
-        );
+        let command = shell.derive_exec_args("/tmp/skill-test/scripts/run-tool && echo done", true);
 
         let found = ShellHandler::detect_skill_shell_command(
             &outcome,
             &shell,
             &command,
             ShellRuntimeBackend::ShellCommandClassic,
-            true,
         );
 
         assert_eq!(found, None);
@@ -792,7 +805,6 @@ mod tests {
             &shell,
             &command,
             ShellRuntimeBackend::ShellCommandZshFork,
-            true,
         );
 
         assert_eq!(found, None);

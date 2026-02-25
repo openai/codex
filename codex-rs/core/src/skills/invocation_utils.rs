@@ -273,7 +273,10 @@ fn detect_skill_script_run(
     detect_skill_for_path_under_scripts(outcome, script_path.as_path())
 }
 
-fn detect_skill_for_path_under_scripts(outcome: &SkillLoadOutcome, path: &Path) -> Option<SkillMetadata> {
+fn detect_skill_for_path_under_scripts(
+    outcome: &SkillLoadOutcome,
+    path: &Path,
+) -> Option<SkillMetadata> {
     for ancestor in path.ancestors() {
         if let Some(candidate) = outcome.implicit_skills_by_scripts_dir.get(ancestor) {
             return Some(candidate.clone());
