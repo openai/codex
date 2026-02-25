@@ -1,35 +1,22 @@
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallResponse;
-use codex_app_server_protocol::DynamicToolCallStatus;
-use codex_app_server_protocol::ItemCompletedNotification;
-use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ThreadItem;
 use codex_core::CodexThread;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::protocol::Op;
-use serde_json::Value as JsonValue;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::oneshot;
 use tracing::error;
 
 use crate::outgoing_message::ClientRequestResult;
-use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 
 pub(crate) async fn on_call_response(
     call_id: String,
-    turn_id: String,
-    thread_id: String,
-    tool: String,
-    arguments: JsonValue,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
-    outgoing: ThreadScopedOutgoingMessageSender,
 ) {
-    let started_at = Instant::now();
     let response = receiver.await;
-    let (response, error) = match response {
+    let (response, _error) = match response {
         Ok(Ok(value)) => decode_response(value),
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
@@ -61,31 +48,6 @@ pub(crate) async fn on_call_response(
     {
         error!("failed to submit DynamicToolResponse: {err}");
     }
-
-    let duration_ms = i64::try_from(started_at.elapsed().as_millis()).ok();
-    let status = if response.success {
-        DynamicToolCallStatus::Completed
-    } else {
-        DynamicToolCallStatus::Failed
-    };
-    let item = ThreadItem::DynamicToolCall {
-        id: call_id,
-        tool,
-        arguments,
-        status,
-        content_items: Some(response.content_items),
-        success: Some(response.success),
-        error,
-        duration_ms,
-    };
-    let notification = ItemCompletedNotification {
-        thread_id,
-        turn_id,
-        item,
-    };
-    outgoing
-        .send_server_notification(ServerNotification::ItemCompleted(notification))
-        .await;
 }
 
 fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option<String>) {

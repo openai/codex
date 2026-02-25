@@ -538,8 +538,10 @@ async fn wait_for_dynamic_tool_started(
             mcp.read_stream_until_notification_message("item/started"),
         )
         .await??;
-        let started: ItemStartedNotification =
-            serde_json::from_value(notification.params.expect("item/started params"))?;
+        let Some(params) = notification.params else {
+            continue;
+        };
+        let started: ItemStartedNotification = serde_json::from_value(params)?;
         if matches!(&started.item, ThreadItem::DynamicToolCall { id, .. } if id == call_id) {
             return Ok(started);
         }
@@ -556,8 +558,10 @@ async fn wait_for_dynamic_tool_completed(
             mcp.read_stream_until_notification_message("item/completed"),
         )
         .await??;
-        let completed: ItemCompletedNotification =
-            serde_json::from_value(notification.params.expect("item/completed params"))?;
+        let Some(params) = notification.params else {
+            continue;
+        };
+        let completed: ItemCompletedNotification = serde_json::from_value(params)?;
         if matches!(&completed.item, ThreadItem::DynamicToolCall { id, .. } if id == call_id) {
             return Ok(completed);
         }
