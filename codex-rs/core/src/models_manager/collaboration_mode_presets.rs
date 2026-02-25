@@ -8,7 +8,7 @@ const COLLABORATION_MODE_DEFAULT: &str =
     include_str!("../../templates/collaboration_mode/default.md");
 const KNOWN_MODE_NAMES_PLACEHOLDER: &str = "{{KNOWN_MODE_NAMES}}";
 const REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER: &str = "{{REQUEST_USER_INPUT_AVAILABILITY}}";
-const QUESTION_STRATEGY_PLACEHOLDER: &str = "{{QUESTION_STRATEGY}}";
+const ASKING_QUESTIONS_GUIDANCE_PLACEHOLDER: &str = "{{ASKING_QUESTIONS_GUIDANCE}}";
 
 /// Stores feature flags that control collaboration-mode behavior.
 ///
@@ -61,15 +61,19 @@ fn default_mode_instructions(collaboration_modes_config: CollaborationModesConfi
         ModeKind::Default,
         collaboration_modes_config.default_mode_request_user_input,
     );
-    let question_strategy =
-        question_strategy_message(collaboration_modes_config.default_mode_request_user_input);
+    let asking_questions_guidance = asking_questions_guidance_message(
+        collaboration_modes_config.default_mode_request_user_input,
+    );
     COLLABORATION_MODE_DEFAULT
         .replace(KNOWN_MODE_NAMES_PLACEHOLDER, &known_mode_names)
         .replace(
             REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER,
             &request_user_input_availability,
         )
-        .replace(QUESTION_STRATEGY_PLACEHOLDER, &question_strategy)
+        .replace(
+            ASKING_QUESTIONS_GUIDANCE_PLACEHOLDER,
+            &asking_questions_guidance,
+        )
 }
 
 fn format_mode_names(modes: &[ModeKind]) -> String {
@@ -98,7 +102,7 @@ fn request_user_input_availability_message(
     }
 }
 
-fn question_strategy_message(default_mode_request_user_input: bool) -> String {
+fn asking_questions_guidance_message(default_mode_request_user_input: bool) -> String {
     if default_mode_request_user_input {
         "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, prefer using the `request_user_input` tool rather than writing a multiple choice question as a textual assistant message. Never write a multiple choice question as a textual assistant message.".to_string()
     } else {
@@ -133,7 +137,7 @@ mod tests {
 
         assert!(!default_instructions.contains(KNOWN_MODE_NAMES_PLACEHOLDER));
         assert!(!default_instructions.contains(REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER));
-        assert!(!default_instructions.contains(QUESTION_STRATEGY_PLACEHOLDER));
+        assert!(!default_instructions.contains(ASKING_QUESTIONS_GUIDANCE_PLACEHOLDER));
 
         let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
         let expected_snippet = format!("Known mode names are {known_mode_names}.");
