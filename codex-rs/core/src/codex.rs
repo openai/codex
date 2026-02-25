@@ -5844,6 +5844,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::ExecApprovalRequest(_)
         | EventMsg::RequestUserInput(_)
         | EventMsg::DynamicToolCallRequest(_)
+        | EventMsg::DynamicToolCallResponse(_)
         | EventMsg::SkillRequestApproval(_)
         | EventMsg::ElicitationRequest(_)
         | EventMsg::ApplyPatchApprovalRequest(_)
