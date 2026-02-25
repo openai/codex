@@ -853,6 +853,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::RealtimeConversationStarted(_)
             | EventMsg::RealtimeConversationRealtime(_)
             | EventMsg::RealtimeConversationClosed(_)
+            | EventMsg::JsReplToolCallResponse(_)
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::DynamicToolCallResponse(_) => {}
         }
@@ -924,6 +925,7 @@ impl EventProcessorWithHumanOutput {
                 | EventMsg::UndoStarted(_)
                 | EventMsg::ThreadRolledBack(_)
                 | EventMsg::RequestUserInput(_)
+                | EventMsg::JsReplToolCallResponse(_)
                 | EventMsg::DynamicToolCallRequest(_)
                 | EventMsg::DynamicToolCallResponse(_)
         )

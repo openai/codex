@@ -105,6 +105,9 @@ export type { InterruptConversationParams } from "./InterruptConversationParams"
 export type { InterruptConversationResponse } from "./InterruptConversationResponse";
 export type { ItemCompletedEvent } from "./ItemCompletedEvent";
 export type { ItemStartedEvent } from "./ItemStartedEvent";
+export type { JsReplToolCallPayloadKind } from "./JsReplToolCallPayloadKind";
+export type { JsReplToolCallResponseEvent } from "./JsReplToolCallResponseEvent";
+export type { JsReplToolCallResponseSummary } from "./JsReplToolCallResponseSummary";
 export type { ListConversationsParams } from "./ListConversationsParams";
 export type { ListConversationsResponse } from "./ListConversationsResponse";
 export type { ListCustomPromptsResponseEvent } from "./ListCustomPromptsResponseEvent";
