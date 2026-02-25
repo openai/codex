@@ -164,6 +164,8 @@ const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const X_MODELS_ETAG_HEADER: &str = "x-models-etag";
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
+const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE: &str = "websocket_connection_limit_reached";
+const WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE: &str = "Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue.";
 
 pub struct ResponsesWebsocketConnection {
     stream: Arc<Mutex<Option<WsStream>>>,
@@ -445,6 +447,14 @@ fn map_wrapped_websocket_error_event(event: WrappedWebsocketErrorEvent) -> Optio
         ..
     } = event;
 
+    if websocket_error_code(error.as_ref()) == Some(WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE) {
+        return Some(ApiError::Retryable {
+            message: websocket_error_message(error.as_ref())
+                .unwrap_or_else(|| WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE.to_string()),
+            delay: None,
+        });
+    }
+
     let status = StatusCode::from_u16(status?).ok()?;
     if status.is_success() {
         return None;
@@ -468,6 +478,19 @@ fn map_wrapped_websocket_error_event(event: WrappedWebsocketErrorEvent) -> Optio
         headers: headers.map(json_headers_to_http_headers),
         body,
     }))
+}
+
+fn websocket_error_code(error: Option<&Value>) -> Option<&str> {
+    error
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_str)
+}
+
+fn websocket_error_message(error: Option<&Value>) -> Option<String> {
+    error
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn json_headers_to_http_headers(headers: JsonMap<String, Value>) -> HeaderMap {
@@ -708,6 +731,30 @@ mod tests {
         let body = body.expect("expected body");
         assert!(body.contains("invalid_request_error"));
         assert!(body.contains("Model does not support image inputs"));
+    }
+
+    #[test]
+    fn parse_wrapped_websocket_error_event_with_connection_limit_maps_retryable() {
+        let payload = json!({
+            "type": "error",
+            "status": 400,
+            "error": {
+                "type": "invalid_request_error",
+                "code": "websocket_connection_limit_reached",
+                "message": "Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue."
+            }
+        })
+        .to_string();
+
+        let wrapped_error = parse_wrapped_websocket_error_event(&payload)
+            .expect("expected websocket error payload to be parsed");
+        let api_error = map_wrapped_websocket_error_event(wrapped_error)
+            .expect("expected websocket error payload to map to ApiError");
+        let ApiError::Retryable { message, delay } = api_error else {
+            panic!("expected ApiError::Retryable");
+        };
+        assert_eq!(message, WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE);
+        assert_eq!(delay, None);
     }
 
     #[test]
