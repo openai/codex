@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use path_absolutize::Absolutize as _;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
@@ -114,8 +114,9 @@ impl EscalateServer {
             },
             params.command,
         ];
+        let workdir = AbsolutePathBuf::try_from(params.workdir)?;
         let result = command_executor
-            .run(command, PathBuf::from(&params.workdir), env, cancel_rx)
+            .run(command, workdir.to_path_buf(), env, cancel_rx)
             .await?;
         escalate_task.abort();
         Ok(result)
@@ -152,10 +153,9 @@ async fn handle_escalate_session_with_policy(
         workdir,
         env,
     } = socket.receive::<EscalateRequest>().await?;
-    let file = PathBuf::from(&file).absolutize()?.into_owned();
-    let workdir = PathBuf::from(&workdir).absolutize()?.into_owned();
+    let file = AbsolutePathBuf::resolve_path_against_base(file, workdir.as_path())?;
     let action = policy
-        .determine_action(file.as_path(), &argv, &workdir)
+        .determine_action(file.as_path(), &argv, workdir.as_path())
         .await
         .context("failed to determine escalation action")?;
 
@@ -197,7 +197,7 @@ async fn handle_escalate_session_with_policy(
                 ));
             }
 
-            let mut command = Command::new(file);
+            let mut command = Command::new(file.as_path());
             command
                 .args(&argv[1..])
                 .arg0(argv[0].clone())
@@ -236,6 +236,7 @@ async fn handle_escalate_session_with_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::path::Path;
@@ -254,6 +255,25 @@ mod tests {
             _workdir: &Path,
         ) -> anyhow::Result<EscalateAction> {
             Ok(self.action.clone())
+        }
+    }
+
+    struct AssertingEscalationPolicy {
+        expected_file: AbsolutePathBuf,
+        expected_workdir: AbsolutePathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl EscalationPolicy for AssertingEscalationPolicy {
+        async fn determine_action(
+            &self,
+            file: &Path,
+            _argv: &[String],
+            workdir: &Path,
+        ) -> anyhow::Result<EscalateAction> {
+            assert_eq!(file, self.expected_file.as_path());
+            assert_eq!(workdir, self.expected_workdir.as_path());
+            Ok(EscalateAction::Run)
         }
     }
 
@@ -277,8 +297,44 @@ mod tests {
             .send(EscalateRequest {
                 file: PathBuf::from("/bin/echo"),
                 argv: vec!["echo".to_string()],
-                workdir: PathBuf::from("/tmp"),
+                workdir: AbsolutePathBuf::try_from(PathBuf::from("/tmp"))?,
                 env,
+            })
+            .await?;
+
+        let response = client.receive::<EscalateResponse>().await?;
+        assert_eq!(
+            EscalateResponse {
+                action: EscalateAction::Run,
+            },
+            response
+        );
+        server_task.await?
+    }
+
+    #[tokio::test]
+    async fn handle_escalate_session_resolves_relative_file_against_request_workdir()
+    -> anyhow::Result<()> {
+        let (server, client) = AsyncSocket::pair()?;
+        let tmp = tempfile::TempDir::new()?;
+        let workdir = tmp.path().join("workspace");
+        std::fs::create_dir(&workdir)?;
+        let workdir = AbsolutePathBuf::try_from(workdir)?;
+        let expected_file = workdir.join("bin/tool")?;
+        let server_task = tokio::spawn(handle_escalate_session_with_policy(
+            server,
+            Arc::new(AssertingEscalationPolicy {
+                expected_file,
+                expected_workdir: workdir.clone(),
+            }),
+        ));
+
+        client
+            .send(EscalateRequest {
+                file: PathBuf::from("./bin/tool"),
+                argv: vec!["./bin/tool".to_string()],
+                workdir,
+                env: HashMap::new(),
             })
             .await?;
 
@@ -310,7 +366,7 @@ mod tests {
                     "-c".to_string(),
                     r#"if [ "$KEY" = VALUE ]; then exit 42; else exit 1; fi"#.to_string(),
                 ],
-                workdir: std::env::current_dir()?,
+                workdir: AbsolutePathBuf::current_dir()?,
                 env: HashMap::from([("KEY".to_string(), "VALUE".to_string())]),
             })
             .await?;
