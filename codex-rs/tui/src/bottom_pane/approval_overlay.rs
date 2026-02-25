@@ -18,7 +18,7 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use codex_core::features::Features;
 use codex_protocol::mcp::RequestId;
-use codex_protocol::models::AdditionalPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ElicitationAction;
 use codex_protocol::protocol::ExecPolicyAmendment;
 use codex_protocol::protocol::FileChange;
@@ -46,7 +46,7 @@ pub(crate) enum ApprovalRequest {
         reason: Option<String>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
-        additional_permissions: Option<AdditionalPermissions>,
+        additional_permissions: Option<PermissionProfile>,
     },
     ApplyPatch {
         id: String,
@@ -450,7 +450,7 @@ enum ApprovalVariant {
         command: Vec<String>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
-        additional_permissions: Option<AdditionalPermissions>,
+        additional_permissions: Option<PermissionProfile>,
     },
     ApplyPatch {
         id: String,
@@ -486,7 +486,7 @@ impl ApprovalOption {
 fn exec_options(
     proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     network_approval_context: Option<&NetworkApprovalContext>,
-    additional_permissions: Option<&AdditionalPermissions>,
+    additional_permissions: Option<&PermissionProfile>,
 ) -> Vec<ApprovalOption> {
     if network_approval_context.is_some() {
         return vec![
@@ -562,26 +562,26 @@ fn exec_options(
 }
 
 fn format_additional_permissions_rule(
-    additional_permissions: &AdditionalPermissions,
+    additional_permissions: &PermissionProfile,
 ) -> Option<String> {
     let mut parts = Vec::new();
-    if !additional_permissions.fs_read.is_empty() {
-        let reads = additional_permissions
-            .fs_read
-            .iter()
-            .map(|path| format!("`{}`", path.display()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        parts.push(format!("read {reads}"));
-    }
-    if !additional_permissions.fs_write.is_empty() {
-        let writes = additional_permissions
-            .fs_write
-            .iter()
-            .map(|path| format!("`{}`", path.display()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        parts.push(format!("write {writes}"));
+    if let Some(file_system) = additional_permissions.file_system.as_ref() {
+        if let Some(read) = file_system.read.as_ref() {
+            let reads = read
+                .iter()
+                .map(|path| format!("`{}`", path.display()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!("read {reads}"));
+        }
+        if let Some(write) = file_system.write.as_ref() {
+            let writes = write
+                .iter()
+                .map(|path| format!("`{}`", path.display()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!("write {writes}"));
+        }
     }
 
     if parts.is_empty() {
@@ -641,6 +641,7 @@ fn elicitation_options() -> Vec<ApprovalOption> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::protocol::NetworkApprovalProtocol;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -800,9 +801,12 @@ mod tests {
 
     #[test]
     fn additional_permissions_exec_options_hide_execpolicy_amendment() {
-        let additional_permissions = AdditionalPermissions {
-            fs_read: vec![PathBuf::from("/tmp/readme.txt")],
-            fs_write: vec![PathBuf::from("/tmp/out.txt")],
+        let additional_permissions = PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![PathBuf::from("/tmp/readme.txt")]),
+                write: Some(vec![PathBuf::from("/tmp/out.txt")]),
+            }),
+            ..Default::default()
         };
         let options = exec_options(None, None, Some(&additional_permissions));
 
@@ -826,9 +830,12 @@ mod tests {
             reason: None,
             network_approval_context: None,
             proposed_execpolicy_amendment: None,
-            additional_permissions: Some(AdditionalPermissions {
-                fs_read: vec![PathBuf::from("/tmp/readme.txt")],
-                fs_write: vec![PathBuf::from("/tmp/out.txt")],
+            additional_permissions: Some(PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![PathBuf::from("/tmp/readme.txt")]),
+                    write: Some(vec![PathBuf::from("/tmp/out.txt")]),
+                }),
+                ..Default::default()
             }),
         };
 
@@ -862,9 +869,12 @@ mod tests {
             reason: Some("need filesystem access".into()),
             network_approval_context: None,
             proposed_execpolicy_amendment: None,
-            additional_permissions: Some(AdditionalPermissions {
-                fs_read: vec![PathBuf::from("/tmp/readme.txt")],
-                fs_write: vec![PathBuf::from("/tmp/out.txt")],
+            additional_permissions: Some(PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![PathBuf::from("/tmp/readme.txt")]),
+                    write: Some(vec![PathBuf::from("/tmp/out.txt")]),
+                }),
+                ..Default::default()
             }),
         };
 

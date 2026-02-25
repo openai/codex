@@ -53,16 +53,77 @@ impl SandboxPermissions {
 }
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
-pub struct AdditionalPermissions {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fs_read: Vec<PathBuf>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fs_write: Vec<PathBuf>,
+pub struct FileSystemPermissions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<Vec<PathBuf>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write: Option<Vec<PathBuf>>,
 }
 
-impl AdditionalPermissions {
+impl FileSystemPermissions {
     pub fn is_empty(&self) -> bool {
-        self.fs_read.is_empty() && self.fs_write.is_empty()
+        self.read.is_none() && self.write.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct MacOsPermissions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferences: Option<MacOsPreferencesValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automations: Option<MacOsAutomationValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accessibility: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<bool>,
+}
+
+impl MacOsPermissions {
+    pub fn is_empty(&self) -> bool {
+        self.preferences.is_none()
+            && self.automations.is_none()
+            && self.accessibility.is_none()
+            && self.calendar.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum MacOsPreferencesValue {
+    Bool(bool),
+    Mode(String),
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum MacOsAutomationValue {
+    Bool(bool),
+    BundleIds(Vec<String>),
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct PermissionProfile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_system: Option<FileSystemPermissions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos: Option<MacOsPermissions>,
+}
+
+impl PermissionProfile {
+    pub fn is_empty(&self) -> bool {
+        self.network.is_none()
+            && self
+                .file_system
+                .as_ref()
+                .map(FileSystemPermissions::is_empty)
+                .unwrap_or(true)
+            && self
+                .macos
+                .as_ref()
+                .map(MacOsPermissions::is_empty)
+                .unwrap_or(true)
     }
 }
 
@@ -800,7 +861,7 @@ pub struct ShellToolCallParams {
     pub prefix_rule: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub additional_permissions: Option<AdditionalPermissions>,
+    pub additional_permissions: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -826,7 +887,7 @@ pub struct ShellCommandToolCallParams {
     pub prefix_rule: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub additional_permissions: Option<AdditionalPermissions>,
+    pub additional_permissions: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }

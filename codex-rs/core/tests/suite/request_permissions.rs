@@ -5,7 +5,8 @@ use codex_core::config::Constrained;
 use codex_core::features::Feature;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::models::AdditionalPermissions;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -79,7 +80,7 @@ fn parse_result(item: &Value) -> CommandResult {
 fn shell_event_with_request_permissions(
     call_id: &str,
     command: &str,
-    additional_permissions: &AdditionalPermissions,
+    additional_permissions: &PermissionProfile,
 ) -> Result<Value> {
     let args = json!({
         "command": command,
@@ -184,9 +185,12 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
     let _ = fs::remove_file(&requested_write);
     let call_id = "request_permissions_skip_approval";
     let command = "touch requested-but-unused.txt";
-    let requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![requested_write.clone()],
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![requested_write.clone()]),
+        }),
+        ..Default::default()
     };
     let event = shell_event_with_request_permissions(call_id, command, &requested_permissions)?;
 
@@ -266,9 +270,12 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write()
         "printf {:?} > {:?} && cat {:?}",
         "cwd-widened", unrequested_write, unrequested_write
     );
-    let requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![requested_write.clone()],
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![requested_write.clone()]),
+        }),
+        ..Default::default()
     };
     let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
@@ -354,9 +361,12 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write()
         "printf {:?} > {:?} && cat {:?}",
         "tmp-widened", tmp_write, tmp_write
     );
-    let requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![requested_write.clone()],
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![requested_write.clone()]),
+        }),
+        ..Default::default()
     };
     let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
@@ -442,13 +452,19 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
         "printf {:?} > {:?} && cat {:?}",
         "outside-cwd-ok", outside_write, outside_write
     );
-    let requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![outside_dir.path().to_path_buf()],
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![outside_dir.path().to_path_buf()]),
+        }),
+        ..Default::default()
     };
-    let normalized_requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![outside_dir.path().canonicalize()?],
+    let normalized_requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![outside_dir.path().canonicalize()?]),
+        }),
+        ..Default::default()
     };
     let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
@@ -530,13 +546,19 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
         "printf {:?} > {:?} && cat {:?}",
         "should-not-write", outside_write, outside_write
     );
-    let requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![outside_dir.path().to_path_buf()],
+    let requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![outside_dir.path().to_path_buf()]),
+        }),
+        ..Default::default()
     };
-    let normalized_requested_permissions = AdditionalPermissions {
-        fs_read: vec![],
-        fs_write: vec![outside_dir.path().canonicalize()?],
+    let normalized_requested_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![outside_dir.path().canonicalize()?]),
+        }),
+        ..Default::default()
     };
     let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
