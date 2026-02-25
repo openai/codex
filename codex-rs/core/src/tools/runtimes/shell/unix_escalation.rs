@@ -255,8 +255,20 @@ impl CoreShellActionProvider {
                 } else {
                     match self.prompt(program, argv, workdir, &self.stopwatch).await? {
                         ReviewDecision::Approved
-                        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                        | ReviewDecision::ApprovedForSession => {
+                        | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+                            if needs_escalation {
+                                EscalateAction::Escalate
+                            } else {
+                                EscalateAction::Run
+                            }
+                        }
+                        ReviewDecision::ApprovedForSession => {
+                            self.session
+                                .services
+                                .execve_session_approvals
+                                .write()
+                                .await
+                                .insert(program.clone());
                             if needs_escalation {
                                 EscalateAction::Escalate
                             } else {
@@ -325,8 +337,20 @@ impl EscalationPolicy for CoreShellActionProvider {
             // EscalateAction::Run case, rather than always escalating when a
             // skill matches.
             let needs_escalation = true;
+            let is_approved_for_session = self
+                .session
+                .services
+                .execve_session_approvals
+                .read()
+                .await
+                .contains(program);
+            let decision = if is_approved_for_session {
+                Decision::Allow
+            } else {
+                Decision::Prompt
+            };
             return self
-                .process_decision(Decision::Prompt, needs_escalation, program, argv, workdir)
+                .process_decision(decision, needs_escalation, program, argv, workdir)
                 .await;
         }
 
