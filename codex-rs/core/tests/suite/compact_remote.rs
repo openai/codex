@@ -244,7 +244,10 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     assert!(message);
     assert_eq!(compact_mock.requests().len(), 1);
     assert_eq!(
-        compact_mock.single_request().header("session_id").as_deref(),
+        compact_mock
+            .single_request()
+            .header("session_id")
+            .as_deref(),
         Some(session_id.as_str())
     );
     let follow_up_request = responses_mock.single_request();
