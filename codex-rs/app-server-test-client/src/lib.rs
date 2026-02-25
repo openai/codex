@@ -916,6 +916,7 @@ fn thread_list(endpoint: &Endpoint, config_overrides: &[String], limit: u32) -> 
         source_kinds: None,
         archived: None,
         cwd: None,
+        search_term: None,
     })?;
     println!("< thread/list response: {response:?}");
 

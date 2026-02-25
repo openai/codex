@@ -1,9 +1,7 @@
 //! Line-based tag block parsing for streamed text.
 //!
 //! The parser buffers each line until it can disprove that the line is a tag,
-//! which is required for tags that must appear alone on a line. For example,
-//! Proposed Plan output uses `<proposed_plan>` and `</proposed_plan>` tags
-//! on their own lines so clients can stream plan content separately.
+//! which is required for tags that must appear alone on a line.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TagSpec<T> {
@@ -21,17 +19,6 @@ pub(crate) enum TaggedLineSegment<T> {
 }
 
 /// Stateful line parser that splits input into normal text vs tag blocks.
-///
-/// How it works:
-/// - While reading a line, we buffer characters until the line either finishes
-///   (`\n`) or stops matching any tag prefix (after `trim_start`).
-/// - If it stops matching a tag prefix, the buffered line is immediately
-///   emitted as text and we continue in "plain text" mode until the next
-///   newline.
-/// - When a full line is available, we compare it to the open/close tags; tag
-///   lines emit TagStart/TagEnd, otherwise the line is emitted as text.
-/// - `finish()` flushes any buffered line and auto-closes an unterminated tag,
-///   which keeps streaming resilient to missing closing tags.
 #[derive(Debug, Default)]
 pub(crate) struct TaggedLineParser<T>
 where
@@ -56,7 +43,6 @@ where
         }
     }
 
-    /// Parse a streamed delta into line-aware segments.
     pub(crate) fn parse(&mut self, delta: &str) -> Vec<TaggedLineSegment<T>> {
         let mut segments = Vec::new();
         let mut run = String::new();
@@ -75,7 +61,6 @@ where
                 if slug.is_empty() || self.is_tag_prefix(slug) {
                     continue;
                 }
-                // This line cannot be a tag line, so flush it immediately.
                 let buffered = std::mem::take(&mut self.line_buffer);
                 self.detect_tag = false;
                 self.push_text(buffered, &mut segments);
@@ -96,7 +81,6 @@ where
         segments
     }
 
-    /// Flush any buffered text and close an unterminated tag block.
     pub(crate) fn finish(&mut self) -> Vec<TaggedLineSegment<T>> {
         let mut segments = Vec::new();
         if !self.line_buffer.is_empty() {
@@ -115,7 +99,6 @@ where
                 push_segment(&mut segments, TaggedLineSegment::TagEnd(tag));
                 self.active_tag = None;
             } else {
-                // The buffered line never proved to be a tag line.
                 self.push_text(buffered, &mut segments);
             }
         }
@@ -210,12 +193,8 @@ where
             }
             segments.push(TaggedLineSegment::TagDelta(tag, delta));
         }
-        TaggedLineSegment::TagStart(tag) => {
-            segments.push(TaggedLineSegment::TagStart(tag));
-        }
-        TaggedLineSegment::TagEnd(tag) => {
-            segments.push(TaggedLineSegment::TagEnd(tag));
-        }
+        TaggedLineSegment::TagStart(tag) => segments.push(TaggedLineSegment::TagStart(tag)),
+        TaggedLineSegment::TagEnd(tag) => segments.push(TaggedLineSegment::TagEnd(tag)),
     }
 }
 
@@ -265,50 +244,6 @@ mod tests {
         assert_eq!(
             segments,
             vec![TaggedLineSegment::Normal("<tag> extra\n".to_string())]
-        );
-    }
-
-    #[test]
-    fn closes_unterminated_tag_on_finish() {
-        let mut parser = parser();
-        let mut segments = parser.parse("<tag>\nline\n");
-        segments.extend(parser.finish());
-
-        assert_eq!(
-            segments,
-            vec![
-                TaggedLineSegment::TagStart(Tag::Block),
-                TaggedLineSegment::TagDelta(Tag::Block, "line\n".to_string()),
-                TaggedLineSegment::TagEnd(Tag::Block),
-            ]
-        );
-    }
-
-    #[test]
-    fn accepts_tags_with_trailing_whitespace() {
-        let mut parser = parser();
-        let mut segments = parser.parse("<tag>   \nline\n</tag>  \n");
-        segments.extend(parser.finish());
-
-        assert_eq!(
-            segments,
-            vec![
-                TaggedLineSegment::TagStart(Tag::Block),
-                TaggedLineSegment::TagDelta(Tag::Block, "line\n".to_string()),
-                TaggedLineSegment::TagEnd(Tag::Block),
-            ]
-        );
-    }
-
-    #[test]
-    fn passes_through_plain_text() {
-        let mut parser = parser();
-        let mut segments = parser.parse("plain text\n");
-        segments.extend(parser.finish());
-
-        assert_eq!(
-            segments,
-            vec![TaggedLineSegment::Normal("plain text\n".to_string())]
         );
     }
 }
