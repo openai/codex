@@ -20,7 +20,12 @@ use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
+use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+use codex_protocol::models::MacOsAutomationValue as CoreMacOsAutomationValue;
+use codex_protocol::models::MacOsPermissions as CoreMacOsPermissions;
+use codex_protocol::models::MacOsPreferencesValue as CoreMacOsPreferencesValue;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -709,6 +714,72 @@ impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
         Self {
             host: value.host,
             protocol: value.protocol.into(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AdditionalFileSystemPermissions {
+    #[ts(optional = nullable)]
+    pub read: Option<Vec<PathBuf>>,
+    #[ts(optional = nullable)]
+    pub write: Option<Vec<PathBuf>>,
+}
+
+impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
+    fn from(value: CoreFileSystemPermissions) -> Self {
+        Self {
+            read: value.read,
+            write: value.write,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AdditionalMacOsPermissions {
+    #[ts(optional = nullable)]
+    pub preferences: Option<CoreMacOsPreferencesValue>,
+    #[ts(optional = nullable)]
+    pub automations: Option<CoreMacOsAutomationValue>,
+    #[ts(optional = nullable)]
+    pub accessibility: Option<bool>,
+    #[ts(optional = nullable)]
+    pub calendar: Option<bool>,
+}
+
+impl From<CoreMacOsPermissions> for AdditionalMacOsPermissions {
+    fn from(value: CoreMacOsPermissions) -> Self {
+        Self {
+            preferences: value.preferences,
+            automations: value.automations,
+            accessibility: value.accessibility,
+            calendar: value.calendar,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AdditionalPermissionProfile {
+    #[ts(optional = nullable)]
+    pub network: Option<bool>,
+    #[ts(optional = nullable)]
+    pub file_system: Option<AdditionalFileSystemPermissions>,
+    #[ts(optional = nullable)]
+    pub macos: Option<AdditionalMacOsPermissions>,
+}
+
+impl From<CorePermissionProfile> for AdditionalPermissionProfile {
+    fn from(value: CorePermissionProfile) -> Self {
+        Self {
+            network: value.network,
+            file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
+            macos: value.macos.map(AdditionalMacOsPermissions::from),
         }
     }
 }
@@ -3359,7 +3430,7 @@ pub struct ContextCompactedNotification {
     pub turn_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CommandExecutionRequestApprovalParams {
@@ -3396,10 +3467,21 @@ pub struct CommandExecutionRequestApprovalParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub command_actions: Option<Vec<CommandAction>>,
+    /// Optional additional permissions requested for this command.
+    #[experimental("item/commandExecution/requestApproval.additionalPermissions")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub additional_permissions: Option<AdditionalPermissionProfile>,
     /// Optional proposed execpolicy amendment to allow similar commands without prompting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+}
+
+impl CommandExecutionRequestApprovalParams {
+    pub fn strip_experimental_fields(&mut self) {
+        self.additional_permissions = None;
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
