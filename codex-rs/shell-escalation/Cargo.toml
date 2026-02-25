@@ -12,8 +12,8 @@ path = "src/bin/main_execve_wrapper.rs"
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+codex-utils-absolute-path = { workspace = true }
 libc = { workspace = true }
-path-absolutize = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 socket2 = { workspace = true, features = ["all"] }
