@@ -417,6 +417,10 @@ impl PickerState {
                     if let Some(thread_id) = thread_id {
                         return Ok(Some(self.action.selection(path, thread_id)));
                     }
+                    return Err(color_eyre::eyre::eyre!(
+                        "Failed to read session metadata from {}",
+                        path.display()
+                    ));
                 }
             }
             KeyCode::Up => {
@@ -2114,6 +2118,40 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(state.selected, 5);
+    }
+
+    #[tokio::test]
+    async fn enter_on_row_without_resolvable_thread_id_returns_error() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+
+        let row = Row {
+            path: PathBuf::from("/tmp/missing.jsonl"),
+            preview: String::from("missing metadata"),
+            thread_id: None,
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        };
+        state.all_rows = vec![row.clone()];
+        state.filtered_rows = vec![row];
+
+        let err = state
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect_err("enter should fail when thread id cannot be resolved");
+
+        assert!(err.to_string().contains("/tmp/missing.jsonl"));
     }
 
     #[tokio::test]
