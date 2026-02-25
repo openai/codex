@@ -57,6 +57,15 @@ struct SkillMetadataFile {
     permissions: Option<PermissionProfile>,
 }
 
+#[derive(Default)]
+struct LoadedSkillMetadata {
+    interface: Option<SkillInterface>,
+    dependencies: Option<SkillDependencies>,
+    policy: Option<SkillPolicy>,
+    permission_profile: Option<PermissionProfile>,
+    permissions: Option<Permissions>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct Interface {
     display_name: Option<String>,
@@ -506,8 +515,13 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         .as_deref()
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty());
-    let (interface, dependencies, policy, permission_profile, permissions) =
-        load_skill_metadata(path);
+    let LoadedSkillMetadata {
+        interface,
+        dependencies,
+        policy,
+        permission_profile,
+        permissions,
+    } = load_skill_metadata(path);
 
     validate_len(&name, MAX_NAME_LEN, "name")?;
     validate_len(&description, MAX_DESCRIPTION_LEN, "description")?;
@@ -535,24 +549,16 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
     })
 }
 
-fn load_skill_metadata(
-    skill_path: &Path,
-) -> (
-    Option<SkillInterface>,
-    Option<SkillDependencies>,
-    Option<SkillPolicy>,
-    Option<PermissionProfile>,
-    Option<Permissions>,
-) {
+fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
     // Fail open: optional metadata should not block loading SKILL.md.
     let Some(skill_dir) = skill_path.parent() else {
-        return (None, None, None, None, None);
+        return LoadedSkillMetadata::default();
     };
     let metadata_path = skill_dir
         .join(SKILLS_METADATA_DIR)
         .join(SKILLS_METADATA_FILENAME);
     if !metadata_path.exists() {
-        return (None, None, None, None, None);
+        return LoadedSkillMetadata::default();
     }
 
     let contents = match fs::read_to_string(&metadata_path) {
@@ -563,7 +569,7 @@ fn load_skill_metadata(
                 path = metadata_path.display(),
                 label = SKILLS_METADATA_FILENAME
             );
-            return (None, None, None, None, None);
+            return LoadedSkillMetadata::default();
         }
     };
 
@@ -575,7 +581,7 @@ fn load_skill_metadata(
                 path = metadata_path.display(),
                 label = SKILLS_METADATA_FILENAME
             );
-            return (None, None, None, None, None);
+            return LoadedSkillMetadata::default();
         }
     };
 
@@ -585,15 +591,15 @@ fn load_skill_metadata(
         policy,
         permissions,
     } = parsed;
-    let permission_profile = permissions.filter(|profile| !profile.is_empty());
+    let permission_profile = permissions.clone().filter(|profile| !profile.is_empty());
 
-    (
-        resolve_interface(interface, skill_dir),
-        resolve_dependencies(dependencies),
-        resolve_policy(policy),
-        permission_profile.clone(),
-        compile_permission_profile(skill_dir, permission_profile),
-    )
+    LoadedSkillMetadata {
+        interface: resolve_interface(interface, skill_dir),
+        dependencies: resolve_dependencies(dependencies),
+        policy: resolve_policy(policy),
+        permission_profile,
+        permissions: compile_permission_profile(skill_dir, permissions),
+    }
 }
 
 fn resolve_interface(interface: Option<Interface>, skill_dir: &Path) -> Option<SkillInterface> {
@@ -1350,7 +1356,6 @@ permissions:
   network: true
   file_system:
     read:
-      - "./data"
       - "./data"
     write:
       - "./output"

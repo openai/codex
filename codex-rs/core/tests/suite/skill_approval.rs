@@ -2,7 +2,9 @@
 
 use anyhow::Result;
 use codex_core::features::Feature;
+#[cfg(unix)]
 use codex_protocol::models::FileSystemPermissions;
+#[cfg(unix)]
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -47,6 +49,7 @@ description: {name} skill
     Ok(script_path)
 }
 
+#[cfg(unix)]
 fn write_skill_metadata(home: &Path, name: &str, contents: &str) -> Result<()> {
     let metadata_dir = home.join("skills").join(name).join("agents");
     fs::create_dir_all(&metadata_dir)?;
