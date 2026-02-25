@@ -2788,6 +2788,12 @@ impl Session {
         #[derive(Debug)]
         enum RolloutReplayMetaSegment {
             Turn(Box<ReplayedRolloutTurn>),
+            // Unexpected for modern rollouts, where compaction should occur inside
+            // a matched turn span (`TurnStarted` ... `TurnComplete`/`TurnAborted`).
+            //
+            // We keep this as a minimal fallback for legacy/incomplete lifecycle
+            // data: treat as "compaction happened after older baseline" and prefer
+            // conservative baseline invalidation over complex reconstruction.
             CompactionOutsideTurn,
         }
 
@@ -2895,10 +2901,9 @@ impl Session {
                         && (active_turn.has_preturn_compaction
                             || active_turn.has_midturn_compaction)
                     {
-                        // Older lifecycle events may omit `turn_id` on abort. Match the prior
-                        // reverse-scan behavior by dropping the active turn span (so we do not
-                        // attribute its `TurnContextItem`) but preserving any compaction as a
-                        // surviving compaction outside a matched turn.
+                        // Legacy/incomplete lifecycle events may omit `turn_id` on abort.
+                        // Keep fallback handling minimal: drop this ambiguous turn span and
+                        // preserve only a conservative "outside-turn compaction" marker.
                         replayed_segments.push(RolloutReplayMetaSegment::CompactionOutsideTurn);
                     }
                 }
