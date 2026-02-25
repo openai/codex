@@ -345,7 +345,6 @@ impl BottomPane {
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // Do not globally intercept space; only composer handles hold-to-talk.
         // While recording, route all keys to the composer so it can stop on release or next key.
-        #[cfg(not(target_os = "linux"))]
         if self.composer.is_recording() {
             let (_ir, needs_redraw) = self.composer.handle_key_event(key_event);
             if needs_redraw {
@@ -479,7 +478,6 @@ impl BottomPane {
     // Space hold timeout is handled inside ChatComposer via an internal timer.
     pub(crate) fn pre_draw_tick(&mut self) {
         // Allow composer to process any time-based transitions before drawing
-        #[cfg(not(target_os = "linux"))]
         self.composer.process_space_hold_trigger();
         self.composer.sync_popups();
     }
@@ -1033,7 +1031,6 @@ impl BottomPane {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
 impl BottomPane {
     pub(crate) fn insert_transcription_placeholder(&mut self, text: &str) -> String {
         let id = self.composer.insert_transcription_placeholder(text);

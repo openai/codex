@@ -2834,15 +2834,23 @@ impl App {
                     ));
                 }
             },
-            #[cfg(not(target_os = "linux"))]
             AppEvent::TranscriptionComplete { id, text } => {
                 self.chat_widget.replace_transcription(&id, &text);
             }
-            #[cfg(not(target_os = "linux"))]
-            AppEvent::TranscriptionFailed { id, error: _ } => {
+            AppEvent::TranscriptionFailed { id, error } => {
                 self.chat_widget.remove_transcription_placeholder(&id);
+                let message = if error.contains("403 Forbidden")
+                    || error.contains("Just a moment...")
+                    || error.contains("Enable JavaScript and cookies to continue")
+                {
+                    "Voice transcription failed (HTTP 403 challenge). Open chatgpt.com in your browser, make sure your session is active, and try again.".to_string()
+                } else {
+                    // Keep this concise so large HTML/network payloads don't flood the transcript.
+                    let head = error.lines().next().unwrap_or("unknown error");
+                    format!("Voice transcription failed: {head}")
+                };
+                self.chat_widget.add_error_message(message);
             }
-            #[cfg(not(target_os = "linux"))]
             AppEvent::UpdateRecordingMeter { id, text } => {
                 // Update in place to preserve the element id for subsequent frames.
                 let updated = self.chat_widget.update_transcription_in_place(&id, &text);

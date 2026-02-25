@@ -7701,7 +7701,6 @@ impl ChatWidget {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
 impl ChatWidget {
     pub(crate) fn replace_transcription(&mut self, id: &str, text: &str) {
         self.bottom_pane.replace_transcription(id, text);
