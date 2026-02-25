@@ -5,7 +5,6 @@ Commands are run outside the sandbox if they are approved by the user, or match 
 - Pipes: |
 - Logical operators: &&, ||
 - Command separators: ;
-- Subshell boundaries: (...), $(...)
 
 Each resulting segment is evaluated independently for sandbox restrictions and approval requirements.
 
@@ -18,6 +17,8 @@ This is treated as two command segments:
 ["git", "pull"]
 
 ["tee", "output.txt"]
+
+Commands that use more advanced shell features like redirection (>, >>, <), substitutions ($(...), ...), environment variables (FOO=bar), or wildcard patterns (*, ?) will not be evaluated against rules, to limit the scope of what an approved rule allows.
 
 ## How to request escalation
 
