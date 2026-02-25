@@ -2752,8 +2752,7 @@ impl Session {
         // - `RolloutReplayMetaSegment` stores the finalized sequence we later
         //   rollback-adjust and reverse-scan to find the last surviving regular turn
         //   context. Replaced/trailing incomplete turns are finalized as ordinary
-        //   `Turn(...)` segments; `CompactionOutsideTurn` is only for compaction that
-        //   happened outside any matched turn span.
+        //   `Turn(...)` segments.
         //
         // Explicit replay rule:
         // - compaction before the first `TurnContextItem` in a turn span is treated as
