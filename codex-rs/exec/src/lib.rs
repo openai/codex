@@ -399,11 +399,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         auth_manager.clone(),
         SessionSource::Exec,
         config.model_catalog.clone(),
-        CollaborationModesConfig::new(
-            config
+        CollaborationModesConfig {
+            default_mode_request_user_input: config
                 .features
                 .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
-        ),
+        },
     ));
     let default_model = thread_manager
         .get_models_manager()

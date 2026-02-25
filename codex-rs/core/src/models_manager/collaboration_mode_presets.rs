@@ -21,14 +21,6 @@ pub struct CollaborationModesConfig {
     pub default_mode_request_user_input: bool,
 }
 
-impl CollaborationModesConfig {
-    pub const fn new(default_mode_request_user_input: bool) -> Self {
-        Self {
-            default_mode_request_user_input,
-        }
-    }
-}
-
 pub(crate) fn builtin_collaboration_mode_presets(
     collaboration_modes_config: CollaborationModesConfig,
 ) -> Vec<CollaborationModeMask> {
@@ -130,10 +122,12 @@ mod tests {
 
     #[test]
     fn default_mode_instructions_replace_mode_names_placeholder() {
-        let default_instructions = default_preset(CollaborationModesConfig::new(true))
-            .developer_instructions
-            .expect("default preset should include instructions")
-            .expect("default instructions should be set");
+        let default_instructions = default_preset(CollaborationModesConfig {
+            default_mode_request_user_input: true,
+        })
+        .developer_instructions
+        .expect("default preset should include instructions")
+        .expect("default instructions should be set");
 
         assert!(!default_instructions.contains(KNOWN_MODE_NAMES_PLACEHOLDER));
         assert!(!default_instructions.contains(REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER));
