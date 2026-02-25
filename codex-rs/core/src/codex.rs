@@ -2925,24 +2925,24 @@ impl Session {
         }
 
         let (previous_model, reference_context_item) = if saw_turn_lifecycle_event {
-            let mut crossed_compaction_after_turn = false;
+            let mut compaction_cleared_reference_context_item = false;
             let mut previous_regular_turn_context_item = None;
 
             for segment in replayed_segments.iter().rev() {
                 match segment {
                     RolloutReplayMetaSegment::CompactionOutsideTurn => {
-                        crossed_compaction_after_turn = true;
+                        compaction_cleared_reference_context_item = true;
                     }
                     RolloutReplayMetaSegment::Turn(turn) => {
                         if let Some(turn_context_item) = &turn.turn_context_item {
                             if turn.has_preturn_compaction {
-                                crossed_compaction_after_turn = true;
+                                compaction_cleared_reference_context_item = true;
                             }
                             previous_regular_turn_context_item = Some(turn_context_item.clone());
                             break;
                         }
                         if turn.has_preturn_compaction || turn.has_midturn_compaction {
-                            crossed_compaction_after_turn = true;
+                            compaction_cleared_reference_context_item = true;
                         }
                     }
                 }
@@ -2951,7 +2951,7 @@ impl Session {
             let previous_model = previous_regular_turn_context_item
                 .as_ref()
                 .map(|ctx| ctx.model.clone());
-            let reference_context_item = if crossed_compaction_after_turn {
+            let reference_context_item = if compaction_cleared_reference_context_item {
                 // Keep the baseline empty when compaction may have stripped the referenced
                 // context diffs so the first resumed regular turn fully reinjects context.
                 None
