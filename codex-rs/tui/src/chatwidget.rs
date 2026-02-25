@@ -610,7 +610,18 @@ pub(crate) struct ChatWidget {
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
     /// `BottomPane` so the hint text matches the actual shortcut.
     queued_message_edit_binding: KeyBinding,
-    /// Session-local history of the last two distinct models with their latest effort.
+    /// Session-local MRU ring of the last two distinct model+effort pairs, used by
+    /// Ctrl+O to flip between the current model and the previously active one.
+    ///
+    /// The front entry (`[0]`) is always the most recently activated model. When
+    /// `set_model` is called with a *different* model string the old model is pushed
+    /// to position `[1]` and the new one takes `[0]`. Effort changes on the current
+    /// model update `[0]` in-place so a toggle round-trip restores the exact effort
+    /// the user had active for the other model.
+    ///
+    /// The ring is capped at two entries. It is populated lazily: empty until the
+    /// first `set_model` call or the first Ctrl+O press (which seeds it from the
+    /// session's initial model).
     recent_model_history: VecDeque<ModelHistoryEntry>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
@@ -714,6 +725,11 @@ pub(crate) struct UserMessage {
     mention_bindings: Vec<MentionBinding>,
 }
 
+/// A snapshot of a model selection and its associated reasoning effort at the
+/// time the user last had that model active.
+///
+/// Stored in `ChatWidget::recent_model_history` so Ctrl+O can restore both the
+/// model *and* the effort level the user was using before they switched away.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ModelHistoryEntry {
     model: String,
@@ -6675,6 +6691,8 @@ impl ChatWidget {
         self.refresh_model_display();
     }
 
+    /// Lazily populate the history ring with the session's current model so that
+    /// the first Ctrl+O toggle has something to compare against.
     fn seed_model_history_if_empty(&mut self) {
         if self.recent_model_history.is_empty() {
             self.record_model_history_selection(
@@ -6684,6 +6702,12 @@ impl ChatWidget {
         }
     }
 
+    /// Insert or promote `model` to the front of the two-entry MRU ring,
+    /// evicting the oldest entry if the ring is already full.
+    ///
+    /// If `model` is already present it is moved to the front (with its effort
+    /// updated) rather than duplicated. Empty model strings are silently ignored
+    /// because the ring must only contain usable model identifiers.
     fn record_model_history_selection(
         &mut self,
         model: String,
@@ -6693,6 +6717,8 @@ impl ChatWidget {
             return;
         }
 
+        // Deduplicate: if this model already occupies a slot, remove it so the
+        // push_front below moves it to the MRU position.
         if let Some(existing_idx) = self
             .recent_model_history
             .iter()
@@ -6708,6 +6734,10 @@ impl ChatWidget {
         }
     }
 
+    /// Keep the history ring's effort value in sync when the user changes
+    /// reasoning effort without changing models (e.g. via `/effort` or the
+    /// mode switcher). This ensures a subsequent Ctrl+O round-trip restores
+    /// the effort the user actually last used with each model.
     fn update_current_model_history_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.seed_model_history_if_empty();
         let current_model = self.current_model().to_string();
@@ -6723,11 +6753,16 @@ impl ChatWidget {
         self.record_model_history_selection(current_model, effort);
     }
 
-    fn other_recent_model_entry(&self, current_model: &str) -> Option<ModelHistoryEntry> {
+    /// Return the alternate history entry details for the model that is *not*
+    /// `current_model`, or `None` if the ring has fewer than two distinct entries.
+    pub(crate) fn other_recent_model_entry_details(
+        &self,
+        current_model: &str,
+    ) -> Option<(String, Option<ReasoningEffortConfig>)> {
         self.recent_model_history
             .iter()
             .find(|entry| entry.model != current_model)
-            .cloned()
+            .map(|entry| (entry.model.clone(), entry.effort))
     }
 
     pub(crate) fn current_model(&self) -> &str {
@@ -7318,6 +7353,18 @@ impl ChatWidget {
         true
     }
 
+    /// Handle Ctrl+O: swap the active model with the other entry in the MRU ring.
+    ///
+    /// Guard rails (in order):
+    /// 1. Session must be fully configured (server handshake done).
+    /// 2. No modal/popup may be open (model picker, command palette, etc.).
+    /// 3. No agent turn may be in flight — mid-turn model changes would be
+    ///    confusing and are not supported by the protocol.
+    ///
+    /// If the ring has only one entry (user never switched models) an info
+    /// message is shown instead. The toggle dispatches `AppEvent`s rather than
+    /// mutating state directly so the change flows through the same path as
+    /// `/model` and the mode switcher.
     fn on_ctrl_o(&mut self) {
         if !self.is_session_configured() {
             self.add_info_message(
@@ -7341,18 +7388,22 @@ impl ChatWidget {
 
         self.seed_model_history_if_empty();
         let current_model = self.current_model().to_string();
-        let Some(target) = self.other_recent_model_entry(&current_model) else {
+        let Some((target_model, target_effort)) =
+            self.other_recent_model_entry_details(&current_model)
+        else {
             self.add_info_message("No previous model to toggle to yet.".to_string(), None);
             return;
         };
 
-        self.app_event_tx.send(AppEvent::UpdateModel(target.model));
+        // Dispatch through AppEvent so the change flows through the same
+        // pipeline as `/model` and the collaboration-mode switcher.
+        self.app_event_tx.send(AppEvent::UpdateModel(target_model));
         if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan {
             self.app_event_tx
-                .send(AppEvent::UpdatePlanModeReasoningEffort(target.effort));
+                .send(AppEvent::UpdatePlanModeReasoningEffort(target_effort));
         } else {
             self.app_event_tx
-                .send(AppEvent::UpdateReasoningEffort(target.effort));
+                .send(AppEvent::UpdateReasoningEffort(target_effort));
         }
     }
 
