@@ -13,7 +13,6 @@ use crate::error::Result;
 use crate::function_tool::FunctionCallError;
 use crate::memories::citations::get_thread_id_from_citations;
 use crate::parse_turn_item;
-use crate::state_db;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -58,13 +57,10 @@ pub(crate) async fn record_completed_response_item(
 ) {
     sess.record_conversation_items(turn_context, std::slice::from_ref(item))
         .await;
-    record_stage1_output_usage_for_completed_item(turn_context, item).await;
+    record_stage1_output_usage_for_completed_item(sess, item).await;
 }
 
-async fn record_stage1_output_usage_for_completed_item(
-    turn_context: &TurnContext,
-    item: &ResponseItem,
-) {
+async fn record_stage1_output_usage_for_completed_item(sess: &Session, item: &ResponseItem) {
     let Some(raw_text) = raw_assistant_output_text_from_item(item) else {
         return;
     };
@@ -75,7 +71,7 @@ async fn record_stage1_output_usage_for_completed_item(
         return;
     }
 
-    if let Some(db) = state_db::get_state_db(turn_context.config.as_ref(), None).await {
+    if let Some(db) = sess.services.state_db.as_deref() {
         let _ = db.record_stage1_output_usage(&thread_ids).await;
     }
 }
