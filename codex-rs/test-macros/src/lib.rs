@@ -47,7 +47,7 @@ fn expand_large_stack_test(mut item: ItemFn) -> TokenStream2 {
         quote! { #body }
     };
 
-    item.block = Box::new(parse_quote!({
+    *item.block = parse_quote!({
         let handle = ::std::thread::Builder::new()
             .name(::std::string::String::from(::std::stringify!(#name)))
             .stack_size(#LARGE_STACK_TEST_STACK_SIZE_BYTES)
@@ -60,7 +60,7 @@ fn expand_large_stack_test(mut item: ItemFn) -> TokenStream2 {
             Ok(result) => result,
             Err(payload) => ::std::panic::resume_unwind(payload),
         }
-    }));
+    });
 
     quote! { #item }
 }
