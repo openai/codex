@@ -37,6 +37,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecParams;
+use codex_app_server_protocol::CommandExecutionApprovalResolvedNotification;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
@@ -47,6 +48,8 @@ use codex_app_server_protocol::ExperimentalFeatureListResponse;
 use codex_app_server_protocol::ExperimentalFeatureStage as ApiExperimentalFeatureStage;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
+use codex_app_server_protocol::FileChangeApprovalResolvedNotification;
+use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::ForkConversationParams;
 use codex_app_server_protocol::ForkConversationResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
@@ -71,6 +74,7 @@ use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::HazelnutScope as ApiHazelnutScope;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
@@ -95,9 +99,11 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::ProductSurface as ApiProductSurface;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
 use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
@@ -110,6 +116,8 @@ use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
@@ -164,6 +172,7 @@ use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
+use codex_app_server_protocol::ToolRequestUserInputResolvedNotification;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
@@ -296,8 +305,10 @@ use uuid::Uuid;
 
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
+use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
+use crate::thread_state::server_request_id;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -6367,21 +6378,15 @@ impl CodexMessageProcessor {
                         let Some(listener_command) = listener_command else {
                             break;
                         };
-                        match listener_command {
-                            crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
-                                resume_request,
-                            ) => {
-                                handle_pending_thread_resume_request(
-                                    conversation_id,
-                                    codex_home.as_path(),
-                                    &thread_state,
-                                    &thread_watch_manager,
-                                    &outgoing_for_task,
-                                    resume_request,
-                                )
-                                .await;
-                            }
-                        }
+                        handle_thread_listener_command(
+                            conversation_id,
+                            codex_home.as_path(),
+                            &thread_state,
+                            &thread_watch_manager,
+                            &outgoing_for_task,
+                            listener_command,
+                        )
+                        .await;
                     }
                 }
             }
@@ -6690,6 +6695,183 @@ impl CodexMessageProcessor {
     }
 }
 
+fn pending_client_request_resolved_notification(
+    conversation_id: ThreadId,
+    request: &ServerRequest,
+) -> Option<ServerNotification> {
+    let thread_id = conversation_id.to_string();
+    let request_id = server_request_id(request).clone();
+    match request {
+        ServerRequest::CommandExecutionRequestApproval { .. } => {
+            Some(ServerNotification::CommandExecutionApprovalResolved(
+                CommandExecutionApprovalResolvedNotification {
+                    thread_id,
+                    request_id,
+                },
+            ))
+        }
+        ServerRequest::FileChangeRequestApproval { .. } => {
+            Some(ServerNotification::FileChangeApprovalResolved(
+                FileChangeApprovalResolvedNotification {
+                    thread_id,
+                    request_id,
+                },
+            ))
+        }
+        ServerRequest::ToolRequestUserInput { .. } => {
+            Some(ServerNotification::ToolRequestUserInputResolved(
+                ToolRequestUserInputResolvedNotification {
+                    thread_id,
+                    request_id,
+                },
+            ))
+        }
+        ServerRequest::DynamicToolCall { .. }
+        | ServerRequest::ChatgptAuthTokensRefresh { .. }
+        | ServerRequest::ApplyPatchApproval { .. }
+        | ServerRequest::ExecCommandApproval { .. } => None,
+    }
+}
+
+fn pending_client_request_resume_notifications(
+    file_change_started: &HashMap<String, Vec<FileUpdateChange>>,
+    request: &ServerRequest,
+) -> Vec<ServerNotification> {
+    match request {
+        ServerRequest::FileChangeRequestApproval { params, .. } => file_change_started
+            .get(&params.item_id)
+            .map(|changes| {
+                vec![ServerNotification::ItemStarted(ItemStartedNotification {
+                    thread_id: params.thread_id.clone(),
+                    turn_id: params.turn_id.clone(),
+                    item: ThreadItem::FileChange {
+                        id: params.item_id.clone(),
+                        changes: changes.clone(),
+                        status: PatchApplyStatus::InProgress,
+                    },
+                })]
+            })
+            .unwrap_or_default(),
+        ServerRequest::CommandExecutionRequestApproval { .. }
+        | ServerRequest::ToolRequestUserInput { .. }
+        | ServerRequest::DynamicToolCall { .. }
+        | ServerRequest::ChatgptAuthTokensRefresh { .. }
+        | ServerRequest::ApplyPatchApproval { .. }
+        | ServerRequest::ExecCommandApproval { .. } => Vec::new(),
+    }
+}
+
+async fn emit_pending_client_request_resolved_notifications(
+    conversation_id: ThreadId,
+    requests: Vec<ServerRequest>,
+    outgoing: ThreadScopedOutgoingMessageSender,
+) {
+    for request in requests {
+        if let Some(notification) =
+            pending_client_request_resolved_notification(conversation_id, &request)
+        {
+            outgoing.send_server_notification(notification).await;
+        }
+    }
+}
+
+pub(crate) async fn send_tracked_client_request(
+    thread_state: &Arc<Mutex<ThreadState>>,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+    request: ServerRequestPayload,
+) -> (
+    RequestId,
+    oneshot::Receiver<crate::outgoing_message::ClientRequestResult>,
+) {
+    let (request, receiver) = outgoing.send_request_with_server_request(request).await;
+    let request_id = server_request_id(&request).clone();
+    thread_state
+        .lock()
+        .await
+        .add_pending_client_request(request);
+    (request_id, receiver)
+}
+
+async fn remove_pending_client_request(
+    conversation_id: ThreadId,
+    thread_state: &Arc<Mutex<ThreadState>>,
+    outgoing: &Arc<OutgoingMessageSender>,
+    request_id: RequestId,
+) {
+    let (request, subscribed_connection_ids) = {
+        let mut state = thread_state.lock().await;
+        (
+            state.remove_pending_client_request(&request_id),
+            state.subscribed_connection_ids(),
+        )
+    };
+    let Some(request) = request else {
+        return;
+    };
+
+    let outgoing = ThreadScopedOutgoingMessageSender::new(
+        outgoing.clone(),
+        subscribed_connection_ids,
+        conversation_id,
+    );
+    emit_pending_client_request_resolved_notifications(conversation_id, vec![request], outgoing)
+        .await;
+}
+
+pub(crate) async fn abort_pending_client_requests(
+    conversation_id: ThreadId,
+    thread_state: &Arc<Mutex<ThreadState>>,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+) {
+    let requests = { thread_state.lock().await.take_pending_client_requests() };
+    if requests.is_empty() {
+        return;
+    }
+
+    for request in &requests {
+        outgoing
+            .resolve_request_with_error(
+                server_request_id(request).clone(),
+                crate::bespoke_event_handling::tracked_client_request_turn_aborted_error(),
+            )
+            .await;
+    }
+
+    emit_pending_client_request_resolved_notifications(conversation_id, requests, outgoing.clone())
+        .await;
+}
+
+async fn handle_thread_listener_command(
+    conversation_id: ThreadId,
+    codex_home: &Path,
+    thread_state: &Arc<Mutex<ThreadState>>,
+    thread_watch_manager: &ThreadWatchManager,
+    outgoing: &Arc<OutgoingMessageSender>,
+    listener_command: ThreadListenerCommand,
+) {
+    match listener_command {
+        ThreadListenerCommand::SendThreadResumeResponse(resume_request) => {
+            handle_pending_thread_resume_request(
+                conversation_id,
+                codex_home,
+                thread_state,
+                thread_watch_manager,
+                outgoing,
+                resume_request,
+            )
+            .await;
+        }
+        ThreadListenerCommand::RemoveRequest {
+            request_id,
+            completion_tx,
+        } => {
+            remove_pending_client_request(conversation_id, thread_state, outgoing, request_id)
+                .await;
+            let _ = completion_tx.send(());
+        }
+    }
+}
+
 async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
     codex_home: &Path,
@@ -6778,7 +6960,28 @@ async fn handle_pending_thread_resume_request(
         reasoning_effort,
     };
     outgoing.send_response(request_id, response).await;
-    thread_state.lock().await.add_connection(connection_id);
+    let (pending_requests, file_change_started) = {
+        let mut state = thread_state.lock().await;
+        state.add_connection(connection_id);
+        (
+            state.pending_client_requests(),
+            state.turn_summary.file_change_started.clone(),
+        )
+    };
+    for request in pending_requests {
+        let notifications_before_request =
+            pending_client_request_resume_notifications(&file_change_started, &request);
+        if !outgoing
+            .replay_request_to_connections_if_pending(
+                &[connection_id],
+                request,
+                notifications_before_request.as_slice(),
+            )
+            .await
+        {
+            continue;
+        }
+    }
 }
 
 async fn load_thread_for_running_resume_response(
@@ -7528,7 +7731,13 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outgoing_message::OutgoingEnvelope;
+    use crate::outgoing_message::OutgoingMessage;
     use anyhow::Result;
+    use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ServerRequestPayload;
+    use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_app_server_protocol::ToolRequestUserInputResolvedNotification;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
     use pretty_assertions::assert_eq;
@@ -7719,6 +7928,88 @@ mod tests {
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aborting_tracked_request_resolves_it_immediately() -> Result<()> {
+        let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let thread_state = Arc::new(Mutex::new(ThreadState::default()));
+        let connection_id = ConnectionId(7);
+        thread_state.lock().await.add_connection(connection_id);
+
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+        let thread_outgoing =
+            ThreadScopedOutgoingMessageSender::new(outgoing, vec![connection_id], thread_id);
+
+        let (request_id, client_request_rx) = send_tracked_client_request(
+            &thread_state,
+            &thread_outgoing,
+            ServerRequestPayload::ToolRequestUserInput(ToolRequestUserInputParams {
+                thread_id: thread_id.to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "call-1".to_string(),
+                questions: vec![],
+            }),
+        )
+        .await;
+        abort_pending_client_requests(thread_id, &thread_state, &thread_outgoing).await;
+
+        let request_message = outgoing_rx.recv().await.expect("request should be sent");
+        let OutgoingEnvelope::ToConnection {
+            connection_id: request_connection_id,
+            message:
+                OutgoingMessage::Request(ServerRequest::ToolRequestUserInput {
+                    request_id: sent_request_id,
+                    ..
+                }),
+        } = request_message
+        else {
+            panic!("expected tool request to be sent to the subscribed connection");
+        };
+        assert_eq!(request_connection_id, connection_id);
+        assert_eq!(sent_request_id, request_id);
+
+        let response = client_request_rx
+            .await
+            .expect("callback should be resolved");
+        let error = response.expect_err("request should be aborted during cleanup");
+        assert_eq!(
+            error.message,
+            "tracked client request resolved because the turn was aborted"
+        );
+        assert_eq!(error.data, Some(json!({ "reason": "turnAborted" })));
+        assert!(
+            thread_state
+                .lock()
+                .await
+                .pending_client_requests()
+                .is_empty()
+        );
+
+        let resolved_message = outgoing_rx
+            .recv()
+            .await
+            .expect("approvalResolved notification should be sent");
+        let OutgoingEnvelope::ToConnection {
+            connection_id: resolved_connection_id,
+            message:
+                OutgoingMessage::AppServerNotification(
+                    ServerNotification::ToolRequestUserInputResolved(
+                        ToolRequestUserInputResolvedNotification {
+                            thread_id: resolved_thread_id,
+                            request_id: resolved_request_id,
+                        },
+                    ),
+                ),
+        } = resolved_message
+        else {
+            panic!("expected requestUserInputResolved notification");
+        };
+        assert_eq!(resolved_connection_id, connection_id);
+        assert_eq!(resolved_thread_id, thread_id.to_string());
+        assert_eq!(resolved_request_id, request_id);
         Ok(())
     }
 

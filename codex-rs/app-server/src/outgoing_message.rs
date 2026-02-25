@@ -64,6 +64,18 @@ struct PendingCallbackEntry {
     thread_id: Option<ThreadId>,
 }
 
+fn server_request_id(request: &ServerRequest) -> &RequestId {
+    match request {
+        ServerRequest::CommandExecutionRequestApproval { request_id, .. }
+        | ServerRequest::FileChangeRequestApproval { request_id, .. }
+        | ServerRequest::ToolRequestUserInput { request_id, .. }
+        | ServerRequest::DynamicToolCall { request_id, .. }
+        | ServerRequest::ChatgptAuthTokensRefresh { request_id, .. }
+        | ServerRequest::ApplyPatchApproval { request_id, .. }
+        | ServerRequest::ExecCommandApproval { request_id, .. } => request_id,
+    }
+}
+
 impl ThreadScopedOutgoingMessageSender {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
@@ -90,6 +102,22 @@ impl ThreadScopedOutgoingMessageSender {
             .await
     }
 
+    pub(crate) async fn send_request_with_server_request(
+        &self,
+        payload: ServerRequestPayload,
+    ) -> (ServerRequest, oneshot::Receiver<ClientRequestResult>) {
+        let payload_clone = payload.clone();
+        let (request_id, rx) = self
+            .outgoing
+            .send_request_with_id_to_connections(
+                Some(self.connection_ids.as_slice()),
+                payload,
+                Some(self.thread_id),
+            )
+            .await;
+        (payload_clone.request_with_id(request_id), rx)
+    }
+
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
         if self.connection_ids.is_empty() {
             return;
@@ -114,6 +142,16 @@ impl ThreadScopedOutgoingMessageSender {
     ) {
         self.outgoing.send_error(request_id, error).await;
     }
+
+    pub(crate) async fn resolve_request_with_error(
+        &self,
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+    ) -> bool {
+        self.outgoing
+            .resolve_request_with_error(request_id, error)
+            .await
+    }
 }
 
 impl OutgoingMessageSender {
@@ -129,7 +167,7 @@ impl OutgoingMessageSender {
         &self,
         request: ServerRequestPayload,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
-        self.send_request_with_id_to_connections(&[], request, None)
+        self.send_request_with_id_to_connections(None, request, None)
             .await
     }
 
@@ -144,7 +182,7 @@ impl OutgoingMessageSender {
             return rx;
         }
         let (_request_id, receiver) = self
-            .send_request_with_id_to_connections(connection_ids, request, Some(thread_id))
+            .send_request_with_id_to_connections(Some(connection_ids), request, Some(thread_id))
             .await;
         receiver
     }
@@ -155,7 +193,7 @@ impl OutgoingMessageSender {
 
     async fn send_request_with_id_to_connections(
         &self,
-        connection_ids: &[ConnectionId],
+        connection_ids: Option<&[ConnectionId]>,
         request: ServerRequestPayload,
         thread_id: Option<ThreadId>,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
@@ -175,30 +213,33 @@ impl OutgoingMessageSender {
 
         let outgoing_message =
             OutgoingMessage::Request(request.request_with_id(outgoing_message_id.clone()));
-        let send_result = if connection_ids.is_empty() {
-            self.sender
-                .send(OutgoingEnvelope::Broadcast {
-                    message: outgoing_message,
-                })
-                .await
-        } else {
-            let mut send_error = None;
-            for connection_id in connection_ids {
-                if let Err(err) = self
-                    .sender
-                    .send(OutgoingEnvelope::ToConnection {
-                        connection_id: *connection_id,
-                        message: outgoing_message.clone(),
+        let send_result = match connection_ids {
+            None => {
+                self.sender
+                    .send(OutgoingEnvelope::Broadcast {
+                        message: outgoing_message,
                     })
                     .await
-                {
-                    send_error = Some(err);
-                    break;
-                }
             }
-            match send_error {
-                Some(err) => Err(err),
-                None => Ok(()),
+            Some(connection_ids) => {
+                let mut send_error = None;
+                for connection_id in connection_ids {
+                    if let Err(err) = self
+                        .sender
+                        .send(OutgoingEnvelope::ToConnection {
+                            connection_id: *connection_id,
+                            message: outgoing_message.clone(),
+                        })
+                        .await
+                    {
+                        send_error = Some(err);
+                        break;
+                    }
+                }
+                match send_error {
+                    Some(err) => Err(err),
+                    None => Ok(()),
+                }
             }
         };
 
@@ -210,11 +251,77 @@ impl OutgoingMessageSender {
         (outgoing_message_id, rx_approve)
     }
 
+    pub(crate) async fn replay_request_to_connections_if_pending(
+        &self,
+        connection_ids: &[ConnectionId],
+        request: ServerRequest,
+        notifications_before_request: &[ServerNotification],
+    ) -> bool {
+        // Hold the callback map lock until the replay is queued so an already-resolved
+        // request cannot be replayed to a resumed client.
+        let request_id_to_callback = self.request_id_to_callback.lock().await;
+        if !request_id_to_callback.contains_key(server_request_id(&request)) {
+            return false;
+        }
+
+        for notification in notifications_before_request {
+            let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
+            if connection_ids.is_empty() {
+                if let Err(err) = self
+                    .sender
+                    .send(OutgoingEnvelope::Broadcast {
+                        message: outgoing_message,
+                    })
+                    .await
+                {
+                    warn!("failed to resend notification to client: {err:?}");
+                }
+                continue;
+            }
+            for connection_id in connection_ids {
+                if let Err(err) = self
+                    .sender
+                    .send(OutgoingEnvelope::ToConnection {
+                        connection_id: *connection_id,
+                        message: outgoing_message.clone(),
+                    })
+                    .await
+                {
+                    warn!("failed to resend notification to client: {err:?}");
+                }
+            }
+        }
+
+        let outgoing_message = OutgoingMessage::Request(request);
+        if connection_ids.is_empty() {
+            if let Err(err) = self
+                .sender
+                .send(OutgoingEnvelope::Broadcast {
+                    message: outgoing_message,
+                })
+                .await
+            {
+                warn!("failed to resend request to client: {err:?}");
+            }
+            return true;
+        }
+        for connection_id in connection_ids {
+            if let Err(err) = self
+                .sender
+                .send(OutgoingEnvelope::ToConnection {
+                    connection_id: *connection_id,
+                    message: outgoing_message.clone(),
+                })
+                .await
+            {
+                warn!("failed to resend request to client: {err:?}");
+            }
+        }
+        true
+    }
+
     pub(crate) async fn notify_client_response(&self, id: RequestId, result: Result) {
-        let entry = {
-            let mut request_id_to_callback = self.request_id_to_callback.lock().await;
-            request_id_to_callback.remove_entry(&id)
-        };
+        let entry = self.take_request_callback(&id).await;
 
         match entry {
             Some((id, entry)) => {
@@ -229,10 +336,7 @@ impl OutgoingMessageSender {
     }
 
     pub(crate) async fn notify_client_error(&self, id: RequestId, error: JSONRPCErrorError) {
-        let entry = {
-            let mut request_id_to_callback = self.request_id_to_callback.lock().await;
-            request_id_to_callback.remove_entry(&id)
-        };
+        let entry = self.take_request_callback(&id).await;
 
         match entry {
             Some((id, entry)) => {
@@ -247,12 +351,30 @@ impl OutgoingMessageSender {
         }
     }
 
-    pub(crate) async fn cancel_request(&self, id: &RequestId) -> bool {
-        let entry = {
-            let mut request_id_to_callback = self.request_id_to_callback.lock().await;
-            request_id_to_callback.remove_entry(id)
+    pub(crate) async fn resolve_request_with_error(
+        &self,
+        id: RequestId,
+        error: JSONRPCErrorError,
+    ) -> bool {
+        let Some((id, entry)) = self.take_request_callback(&id).await else {
+            return false;
         };
-        entry.is_some()
+        if let Err(err) = entry.callback.send(Err(error)) {
+            warn!("could not notify callback for {id:?} due to: {err:?}");
+        }
+        true
+    }
+
+    pub(crate) async fn cancel_request(&self, id: &RequestId) -> bool {
+        self.take_request_callback(id).await.is_some()
+    }
+
+    async fn take_request_callback(
+        &self,
+        id: &RequestId,
+    ) -> Option<(RequestId, PendingCallbackEntry)> {
+        let mut request_id_to_callback = self.request_id_to_callback.lock().await;
+        request_id_to_callback.remove_entry(id)
     }
 
     pub(crate) async fn cancel_requests_for_thread(&self, thread_id: ThreadId) {

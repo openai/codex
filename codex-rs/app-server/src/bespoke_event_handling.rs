@@ -1,11 +1,14 @@
 use crate::codex_message_processor::ApiVersion;
+use crate::codex_message_processor::abort_pending_client_requests;
 use crate::codex_message_processor::read_rollout_items_from_rollout;
 use crate::codex_message_processor::read_summary_from_rollout;
+use crate::codex_message_processor::send_tracked_client_request;
 use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
+use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
 use crate::thread_status::ThreadWatchActiveGuard;
@@ -56,6 +59,7 @@ use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::TerminalInteractionNotification;
@@ -132,6 +136,59 @@ struct CommandExecutionCompletionItem {
     command_actions: Vec<V2ParsedCommand>,
 }
 
+const TURN_ABORTED_PENDING_REQUEST_ERROR_REASON: &str = "turnAborted";
+
+pub(crate) fn tracked_client_request_turn_aborted_error() -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: INVALID_REQUEST_ERROR_CODE,
+        message: "tracked client request resolved because the turn was aborted".to_string(),
+        data: Some(serde_json::json!({
+            "reason": TURN_ABORTED_PENDING_REQUEST_ERROR_REASON,
+        })),
+    }
+}
+
+fn is_tracked_client_request_turn_aborted_error(error: &JSONRPCErrorError) -> bool {
+    error
+        .data
+        .as_ref()
+        .and_then(|data| data.get("reason"))
+        .and_then(serde_json::Value::as_str)
+        == Some(TURN_ABORTED_PENDING_REQUEST_ERROR_REASON)
+}
+
+async fn queue_tracked_client_request_removal(
+    thread_state: &Arc<Mutex<ThreadState>>,
+    request_id: RequestId,
+) {
+    let (completion_tx, completion_rx) = oneshot::channel();
+    let listener_command_tx = {
+        let state = thread_state.lock().await;
+        state.listener_command_tx()
+    };
+    let Some(listener_command_tx) = listener_command_tx else {
+        error!("failed to remove tracked client request: thread listener is not running");
+        return;
+    };
+
+    if listener_command_tx
+        .send(ThreadListenerCommand::RemoveRequest {
+            request_id,
+            completion_tx,
+        })
+        .is_err()
+    {
+        error!(
+            "failed to remove tracked client request: thread listener command channel is closed"
+        );
+        return;
+    }
+
+    if let Err(err) = completion_rx.await {
+        error!("failed to remove tracked client request: {err}");
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
@@ -151,11 +208,13 @@ pub(crate) async fn apply_bespoke_event_handling(
     } = event;
     match msg {
         EventMsg::TurnStarted(_) => {
+            abort_pending_client_requests(conversation_id, &thread_state, &outgoing).await;
             thread_watch_manager
                 .note_turn_started(&conversation_id.to_string())
                 .await;
         }
         EventMsg::TurnComplete(_ev) => {
+            abort_pending_client_requests(conversation_id, &thread_state, &outgoing).await;
             let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
@@ -282,7 +341,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                         state
                             .turn_summary
                             .file_change_started
-                            .insert(item_id.clone())
+                            .insert(item_id.clone(), patch_changes.clone())
+                            .is_none()
                     };
                     if first_start {
                         let item = ThreadItem::FileChange {
@@ -307,15 +367,19 @@ pub(crate) async fn apply_bespoke_event_handling(
                         reason,
                         grant_root,
                     };
-                    let rx = outgoing
-                        .send_request(ServerRequestPayload::FileChangeRequestApproval(params))
-                        .await;
+                    let (pending_request_id, rx) = send_tracked_client_request(
+                        &thread_state,
+                        &outgoing,
+                        ServerRequestPayload::FileChangeRequestApproval(params),
+                    )
+                    .await;
                     tokio::spawn(async move {
                         on_file_change_request_approval_response(
                             event_turn_id,
                             conversation_id,
                             item_id,
                             patch_changes,
+                            pending_request_id,
                             rx,
                             conversation,
                             outgoing,
@@ -435,11 +499,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                         proposed_network_policy_amendments: proposed_network_policy_amendments_v2,
                         available_decisions: Some(available_decisions),
                     };
-                    let rx = outgoing
-                        .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
-                            params,
-                        ))
-                        .await;
+                    let (pending_request_id, rx) = send_tracked_client_request(
+                        &thread_state,
+                        &outgoing,
+                        ServerRequestPayload::CommandExecutionRequestApproval(params),
+                    )
+                    .await;
                     tokio::spawn(async move {
                         on_command_execution_request_approval_response(
                             event_turn_id,
@@ -447,6 +512,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             approval_id,
                             call_id,
                             completion_item,
+                            pending_request_id,
                             rx,
                             conversation,
                             outgoing,
@@ -489,14 +555,19 @@ pub(crate) async fn apply_bespoke_event_handling(
                     item_id: request.call_id,
                     questions,
                 };
-                let rx = outgoing
-                    .send_request(ServerRequestPayload::ToolRequestUserInput(params))
-                    .await;
+                let (pending_request_id, rx) = send_tracked_client_request(
+                    &thread_state,
+                    &outgoing,
+                    ServerRequestPayload::ToolRequestUserInput(params),
+                )
+                .await;
                 tokio::spawn(async move {
                     on_request_user_input_response(
                         event_turn_id,
+                        pending_request_id,
                         rx,
                         conversation,
+                        thread_state,
                         user_input_guard,
                     )
                     .await;
@@ -1136,18 +1207,20 @@ pub(crate) async fn apply_bespoke_event_handling(
             // Until we migrate the core to be aware of a first class FileChangeItem
             // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
             let item_id = patch_begin_event.call_id.clone();
+            let changes = convert_patch_changes(&patch_begin_event.changes);
 
             let first_start = {
                 let mut state = thread_state.lock().await;
                 state
                     .turn_summary
                     .file_change_started
-                    .insert(item_id.clone())
+                    .insert(item_id.clone(), changes.clone())
+                    .is_none()
             };
             if first_start {
                 let item = ThreadItem::FileChange {
                     id: item_id.clone(),
-                    changes: convert_patch_changes(&patch_begin_event.changes),
+                    changes,
                     status: PatchApplyStatus::InProgress,
                 };
                 let notification = ItemStartedNotification {
@@ -1228,7 +1301,10 @@ pub(crate) async fn apply_bespoke_event_handling(
             // We already have state tracking FileChange items on item/started, so let's use that.
             let is_file_change = {
                 let state = thread_state.lock().await;
-                state.turn_summary.file_change_started.contains(&item_id)
+                state
+                    .turn_summary
+                    .file_change_started
+                    .contains_key(&item_id)
             };
             if is_file_change {
                 let notification = FileChangeOutputDeltaNotification {
@@ -1329,6 +1405,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
+            abort_pending_client_requests(conversation_id, &thread_state, &outgoing).await;
             let pending = {
                 let mut state = thread_state.lock().await;
                 std::mem::take(&mut state.pending_interrupts)
@@ -1816,15 +1893,21 @@ async fn on_exec_approval_response(
 
 async fn on_request_user_input_response(
     event_turn_id: String,
+    pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
+    thread_state: Arc<Mutex<ThreadState>>,
     user_input_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
+    queue_tracked_client_request_removal(&thread_state, pending_request_id).await;
     drop(user_input_guard);
     let value = match response {
         Ok(Ok(value)) => value,
         Ok(Err(err)) => {
+            if is_tracked_client_request_turn_aborted_error(&err) {
+                return;
+            }
             error!("request failed with client error: {err:?}");
             let empty = CoreRequestUserInputResponse {
                 answers: HashMap::new(),
@@ -1934,6 +2017,7 @@ async fn on_file_change_request_approval_response(
     conversation_id: ThreadId,
     item_id: String,
     changes: Vec<FileUpdateChange>,
+    pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     codex: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
@@ -1941,6 +2025,7 @@ async fn on_file_change_request_approval_response(
     permission_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
+    queue_tracked_client_request_removal(&thread_state, pending_request_id).await;
     drop(permission_guard);
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {
@@ -1959,6 +2044,9 @@ async fn on_file_change_request_approval_response(
             (decision, completion_status)
         }
         Ok(Err(err)) => {
+            if is_tracked_client_request_turn_aborted_error(&err) {
+                return;
+            }
             error!("request failed with client error: {err:?}");
             (ReviewDecision::Denied, Some(PatchApplyStatus::Failed))
         }
@@ -1999,6 +2087,7 @@ async fn on_command_execution_request_approval_response(
     approval_id: Option<String>,
     item_id: String,
     completion_item: Option<CommandExecutionCompletionItem>,
+    pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
@@ -2006,6 +2095,7 @@ async fn on_command_execution_request_approval_response(
     permission_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
+    queue_tracked_client_request_removal(&thread_state, pending_request_id).await;
     drop(permission_guard);
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {
@@ -2058,6 +2148,9 @@ async fn on_command_execution_request_approval_response(
             (decision, completion_status)
         }
         Ok(Err(err)) => {
+            if is_tracked_client_request_turn_aborted_error(&err) {
+                return;
+            }
             error!("request failed with client error: {err:?}");
             (ReviewDecision::Denied, Some(CommandExecutionStatus::Failed))
         }

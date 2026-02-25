@@ -4,11 +4,13 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_request_user_input_sse_response;
 use app_test_support::to_response;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ToolRequestUserInputResolvedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -86,6 +88,7 @@ async fn request_user_input_round_trip() -> Result<()> {
     assert_eq!(params.turn_id, turn.id);
     assert_eq!(params.item_id, "call1");
     assert_eq!(params.questions.len(), 1);
+    let resolved_request_id = request_id.clone();
 
     mcp.send_response(
         request_id,
@@ -96,17 +99,46 @@ async fn request_user_input_round_trip() -> Result<()> {
         }),
     )
     .await?;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
+    let mut saw_resolved = false;
+    let mut saw_task_complete = false;
+    loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        match notification.method.as_str() {
+            "item/tool/requestUserInputResolved" => {
+                let resolved: ToolRequestUserInputResolvedNotification = serde_json::from_value(
+                    notification
+                        .params
+                        .clone()
+                        .expect("item/tool/requestUserInputResolved params"),
+                )?;
+                assert_eq!(resolved.thread_id, thread.id);
+                assert_eq!(resolved.request_id, resolved_request_id);
+                saw_resolved = true;
+            }
+            "codex/event/task_complete" => {
+                assert!(
+                    saw_resolved,
+                    "item/tool/requestUserInputResolved should arrive first"
+                );
+                saw_task_complete = true;
+            }
+            "turn/completed" => {
+                assert!(
+                    saw_resolved,
+                    "item/tool/requestUserInputResolved should arrive first"
+                );
+                assert!(
+                    saw_task_complete,
+                    "task_complete should arrive before turn/completed"
+                );
+                break;
+            }
+            _ => {}
+        }
+    }
 
     Ok(())
 }

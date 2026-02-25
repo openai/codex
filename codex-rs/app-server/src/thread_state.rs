@@ -1,5 +1,8 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
+use codex_app_server_protocol::FileUpdateChange;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
@@ -30,12 +33,16 @@ pub(crate) struct PendingThreadResumeRequest {
 
 pub(crate) enum ThreadListenerCommand {
     SendThreadResumeResponse(PendingThreadResumeRequest),
+    RemoveRequest {
+        request_id: RequestId,
+        completion_tx: oneshot::Sender<()>,
+    },
 }
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
-    pub(crate) file_change_started: HashSet<String>,
+    pub(crate) file_change_started: HashMap<String, Vec<FileUpdateChange>>,
     pub(crate) command_execution_started: HashSet<String>,
     pub(crate) last_error: Option<TurnError>,
 }
@@ -44,6 +51,7 @@ pub(crate) struct TurnSummary {
 pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
+    pending_client_requests: Vec<ServerRequest>,
     pub(crate) turn_summary: TurnSummary,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
@@ -55,6 +63,28 @@ pub(crate) struct ThreadState {
 }
 
 impl ThreadState {
+    pub(crate) fn add_pending_client_request(&mut self, request: ServerRequest) {
+        self.pending_client_requests.push(request);
+    }
+
+    pub(crate) fn remove_pending_client_request(
+        &mut self,
+        request_id: &RequestId,
+    ) -> Option<ServerRequest> {
+        self.pending_client_requests
+            .iter()
+            .position(|request| server_request_id(request) == request_id)
+            .map(|index| self.pending_client_requests.remove(index))
+    }
+
+    pub(crate) fn pending_client_requests(&self) -> Vec<ServerRequest> {
+        self.pending_client_requests.clone()
+    }
+
+    pub(crate) fn take_pending_client_requests(&mut self) -> Vec<ServerRequest> {
+        std::mem::take(&mut self.pending_client_requests)
+    }
+
     pub(crate) fn listener_matches(&self, conversation: &Arc<CodexThread>) -> bool {
         self.listener_thread
             .as_ref()
@@ -117,6 +147,18 @@ impl ThreadState {
         if !self.current_turn_history.has_active_turn() {
             self.current_turn_history.reset();
         }
+    }
+}
+
+pub(crate) fn server_request_id(request: &ServerRequest) -> &RequestId {
+    match request {
+        ServerRequest::CommandExecutionRequestApproval { request_id, .. }
+        | ServerRequest::FileChangeRequestApproval { request_id, .. }
+        | ServerRequest::ToolRequestUserInput { request_id, .. }
+        | ServerRequest::DynamicToolCall { request_id, .. }
+        | ServerRequest::ChatgptAuthTokensRefresh { request_id, .. }
+        | ServerRequest::ApplyPatchApproval { request_id, .. }
+        | ServerRequest::ExecCommandApproval { request_id, .. } => request_id,
     }
 }
 

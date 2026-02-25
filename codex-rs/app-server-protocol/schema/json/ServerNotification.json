@@ -653,6 +653,21 @@
         }
       ]
     },
+    "CommandExecutionApprovalResolvedNotification": {
+      "properties": {
+        "requestId": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "CommandExecutionOutputDeltaNotification": {
       "properties": {
         "delta": {
@@ -850,6 +865,21 @@
         "threadId",
         "turnId",
         "willRetry"
+      ],
+      "type": "object"
+    },
+    "FileChangeApprovalResolvedNotification": {
+      "properties": {
+        "requestId": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "threadId"
       ],
       "type": "object"
     },
@@ -1421,6 +1451,17 @@
         "turnId"
       ],
       "type": "object"
+    },
+    "RequestId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        }
+      ]
     },
     "SessionSource": {
       "oneOf": [
@@ -2592,6 +2633,21 @@
       ],
       "type": "object"
     },
+    "ToolRequestUserInputResolvedNotification": {
+      "properties": {
+        "requestId": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "Turn": {
       "properties": {
         "error": {
@@ -3406,6 +3462,26 @@
       "properties": {
         "method": {
           "enum": [
+            "item/commandExecution/approvalResolved"
+          ],
+          "title": "Item/commandExecution/approvalResolvedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CommandExecutionApprovalResolvedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/commandExecution/approvalResolvedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "item/fileChange/outputDelta"
           ],
           "title": "Item/fileChange/outputDeltaNotificationMethod",
@@ -3420,6 +3496,46 @@
         "params"
       ],
       "title": "Item/fileChange/outputDeltaNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "item/fileChange/approvalResolved"
+          ],
+          "title": "Item/fileChange/approvalResolvedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FileChangeApprovalResolvedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/fileChange/approvalResolvedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "item/tool/requestUserInputResolved"
+          ],
+          "title": "Item/tool/requestUserInputResolvedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ToolRequestUserInputResolvedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/tool/requestUserInputResolvedNotification",
       "type": "object"
     },
     {
