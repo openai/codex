@@ -9,6 +9,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ResponseInputItem;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -1038,36 +1041,78 @@ impl JsReplManager {
                 }
             };
 
+        let tool_name = req.tool_name.clone();
         let call = crate::tools::router::ToolCall {
-            tool_name: req.tool_name,
+            tool_name: tool_name.clone(),
             call_id: req.id.clone(),
             payload,
         };
 
+        let session = Arc::clone(&exec.session);
+        let turn = Arc::clone(&exec.turn);
+        let tracker = Arc::clone(&exec.tracker);
+
         match router
             .dispatch_tool_call(
-                exec.session,
-                exec.turn,
-                exec.tracker,
+                session.clone(),
+                turn,
+                tracker,
                 call,
                 crate::tools::router::ToolCallSource::JsRepl,
             )
             .await
         {
-            Ok(response) => match serde_json::to_value(response) {
-                Ok(value) => RunToolResult {
-                    id: req.id,
-                    ok: true,
-                    response: Some(value),
-                    error: None,
-                },
-                Err(err) => RunToolResult {
-                    id: req.id,
-                    ok: false,
-                    response: None,
-                    error: Some(format!("failed to serialize tool output: {err}")),
-                },
-            },
+            Ok(response) => {
+                if let ResponseInputItem::FunctionCallOutput { output, .. } = &response
+                    && let Some(items) = output.content_items()
+                {
+                    let mut has_image = false;
+                    let mut content = Vec::with_capacity(items.len());
+                    for item in items {
+                        match item {
+                            FunctionCallOutputContentItem::InputText { text } => {
+                                content.push(ContentItem::InputText { text: text.clone() });
+                            }
+                            FunctionCallOutputContentItem::InputImage { image_url } => {
+                                has_image = true;
+                                content.push(ContentItem::InputImage {
+                                    image_url: image_url.clone(),
+                                });
+                            }
+                        }
+                    }
+
+                    if has_image
+                        && session
+                            .inject_response_items(vec![ResponseInputItem::Message {
+                                role: "user".to_string(),
+                                content,
+                            }])
+                            .await
+                            .is_err()
+                    {
+                        warn!(
+                            tool_name = %tool_name,
+                            "js_repl tool call returned image content but there was no active turn to attach it to"
+                        );
+                    }
+                }
+
+                match serde_json::to_value(response) {
+                    Ok(value) => RunToolResult {
+                        id: req.id,
+                        ok: true,
+                        response: Some(value),
+                        error: None,
+                    },
+                    Err(err) => RunToolResult {
+                        id: req.id,
+                        ok: false,
+                        response: None,
+                        error: Some(format!("failed to serialize tool output: {err}")),
+                    },
+                }
+            }
             Err(err) => RunToolResult {
                 id: req.id,
                 ok: false,
