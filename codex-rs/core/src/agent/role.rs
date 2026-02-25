@@ -87,6 +87,7 @@ pub(crate) async fn apply_role_to_config(
         ConfigOverrides {
             cwd: Some(config.cwd.clone()),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
             js_repl_node_path: config.js_repl_node_path.clone(),
             ..Default::default()
         },
@@ -340,6 +341,8 @@ mod tests {
             TomlValue::String("base-model".to_string()),
         )])
         .await;
+        config.codex_linux_sandbox_exe = Some(PathBuf::from("/tmp/codex-linux-sandbox"));
+        config.main_execve_wrapper_exe = Some(PathBuf::from("/tmp/codex-execve-wrapper"));
         let role_path = write_role_config(
             &home,
             "effort-only.toml",
@@ -360,6 +363,14 @@ mod tests {
 
         assert_eq!(config.model.as_deref(), Some("base-model"));
         assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            config.codex_linux_sandbox_exe,
+            Some(PathBuf::from("/tmp/codex-linux-sandbox"))
+        );
+        assert_eq!(
+            config.main_execve_wrapper_exe,
+            Some(PathBuf::from("/tmp/codex-execve-wrapper"))
+        );
     }
 
     #[tokio::test]

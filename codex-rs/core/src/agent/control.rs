@@ -83,7 +83,7 @@ impl AgentControl {
         let new_thread = match session_source {
             Some(session_source) => {
                 state
-                    .spawn_new_thread_with_source(config, self.clone(), session_source, false)
+                    .spawn_new_thread_with_source(config, self.clone(), session_source, false, None)
                     .await?
             }
             None => state.spawn_new_thread(config, self.clone()).await?,

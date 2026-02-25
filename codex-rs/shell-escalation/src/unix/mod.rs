@@ -53,7 +53,6 @@
 //!   |      |
 //!   o<-----x
 //!
-pub mod core_shell_escalation;
 pub mod escalate_client;
 pub mod escalate_protocol;
 pub mod escalate_server;
@@ -62,15 +61,12 @@ pub mod execve_wrapper;
 pub mod socket;
 pub mod stopwatch;
 
-pub use self::core_shell_escalation::ShellActionProvider;
-pub use self::core_shell_escalation::ShellPolicyFactory;
 pub use self::escalate_client::run_shell_escalation_execve_wrapper;
 pub use self::escalate_protocol::EscalateAction;
-pub use self::escalate_server::EscalationPolicyFactory;
+pub use self::escalate_server::EscalateServer;
 pub use self::escalate_server::ExecParams;
 pub use self::escalate_server::ExecResult;
 pub use self::escalate_server::ShellCommandExecutor;
-pub use self::escalate_server::run_escalate_server;
 pub use self::escalation_policy::EscalationPolicy;
 pub use self::execve_wrapper::main_execve_wrapper;
 pub use self::stopwatch::Stopwatch;

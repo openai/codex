@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::config::Permissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SkillScope;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -14,9 +15,11 @@ pub struct SkillMetadata {
     pub interface: Option<SkillInterface>,
     pub dependencies: Option<SkillDependencies>,
     pub policy: Option<SkillPolicy>,
+    pub permission_profile: Option<PermissionProfile>,
     // This is an experimental field.
     pub permissions: Option<Permissions>,
-    pub path: PathBuf,
+    /// Path to the SKILLS.md file that declares this skill.
+    pub path_to_skills_md: PathBuf,
     pub scope: SkillScope,
 }
 
@@ -76,7 +79,7 @@ pub struct SkillLoadOutcome {
 
 impl SkillLoadOutcome {
     pub fn is_skill_enabled(&self, skill: &SkillMetadata) -> bool {
-        !self.disabled_paths.contains(&skill.path)
+        !self.disabled_paths.contains(&skill.path_to_skills_md)
     }
 
     pub fn is_skill_allowed_for_implicit_invocation(&self, skill: &SkillMetadata) -> bool {

@@ -1,19 +1,93 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "AdditionalPermissions": {
+    "AdditionalFileSystemPermissions": {
       "properties": {
-        "fs_read": {
+        "read": {
           "items": {
             "type": "string"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
-        "fs_write": {
+        "write": {
           "items": {
             "type": "string"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AdditionalMacOsPermissions": {
+      "properties": {
+        "accessibility": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "automations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsAutomationValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calendar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "preferences": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsPreferencesValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AdditionalPermissionProfile": {
+      "properties": {
+        "fileSystem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "macos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalMacOsPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -1102,6 +1176,54 @@
             },
             "method": {
               "enum": [
+                "externalAgentConfig/detect"
+              ],
+              "title": "ExternalAgentConfig/detectRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigDetectParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ExternalAgentConfig/detectRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "externalAgentConfig/import"
+              ],
+              "title": "ExternalAgentConfig/importRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ExternalAgentConfig/importRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "config/value/write"
               ],
               "title": "Config/value/writeRequestMethod",
@@ -1328,6 +1450,28 @@
           "type": "object"
         },
         {
+          "additionalProperties": false,
+          "description": "User chose a persistent network policy rule (allow/deny) for this host.",
+          "properties": {
+            "applyNetworkPolicyAmendment": {
+              "properties": {
+                "network_policy_amendment": {
+                  "$ref": "#/definitions/NetworkPolicyAmendment"
+                }
+              },
+              "required": [
+                "network_policy_amendment"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "applyNetworkPolicyAmendment"
+          ],
+          "title": "ApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision",
+          "type": "object"
+        },
+        {
           "description": "User denied the command. The agent will continue the turn.",
           "enum": [
             "decline"
@@ -1389,12 +1533,22 @@
               "type": "null"
             }
           ],
-          "description": "Optional context for managed-network approval prompts."
+          "description": "Optional context for a managed-network approval prompt."
         },
         "proposedExecpolicyAmendment": {
           "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
           "items": {
             "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "proposedNetworkPolicyAmendments": {
+          "description": "Optional proposed network policy amendments (allow/deny host) for future requests.",
+          "items": {
+            "$ref": "#/definitions/NetworkPolicyAmendment"
           },
           "type": [
             "array",
@@ -2694,7 +2848,7 @@
             "additional_permissions": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/AdditionalPermissions"
+                  "$ref": "#/definitions/PermissionProfile"
                 },
                 {
                   "type": "null"
@@ -4534,6 +4688,29 @@
       "title": "FileChangeRequestApprovalResponse",
       "type": "object"
     },
+    "FileSystemPermissions": {
+      "properties": {
+        "read": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "write": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "FuzzyFileSearchParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -4834,6 +5011,66 @@
       "title": "JSONRPCResponse",
       "type": "object"
     },
+    "MacOsAutomationValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "MacOsPermissions": {
+      "properties": {
+        "accessibility": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "automations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsAutomationValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calendar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "preferences": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsPreferencesValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MacOsPreferencesValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
     "McpInvocation": {
       "properties": {
         "arguments": {
@@ -5092,6 +5329,37 @@
           "type": "object"
         }
       ]
+    },
+    "PermissionProfile": {
+      "properties": {
+        "file_system": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "macos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "PlanItemArg": {
       "additionalProperties": false,
@@ -8905,6 +9173,95 @@
           }
         ]
       },
+      "ExternalAgentConfigDetectParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cwds": {
+            "description": "Zero or more working directories to include for repo-scoped detection.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "includeHome": {
+            "description": "If true, include detection under the user's home (~/.claude, ~/.codex, etc.).",
+            "type": "boolean"
+          }
+        },
+        "title": "ExternalAgentConfigDetectParams",
+        "type": "object"
+      },
+      "ExternalAgentConfigDetectResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ExternalAgentConfigDetectResponse",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "migrationItems": {
+            "items": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "migrationItems"
+        ],
+        "title": "ExternalAgentConfigImportParams",
+        "type": "object"
+      },
+      "ExternalAgentConfigImportResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ExternalAgentConfigImportResponse",
+        "type": "object"
+      },
+      "ExternalAgentConfigMigrationItem": {
+        "properties": {
+          "cwd": {
+            "description": "Null or empty means home-scoped migration; non-empty means repo-scoped migration.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "itemType": {
+            "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
+          }
+        },
+        "required": [
+          "description",
+          "itemType"
+        ],
+        "type": "object"
+      },
+      "ExternalAgentConfigMigrationItemType": {
+        "enum": [
+          "AGENTS_MD",
+          "CONFIG",
+          "SKILLS",
+          "MCP_SERVER_CONFIG"
+        ],
+        "type": "string"
+      },
       "FeedbackUploadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12676,6 +13033,13 @@
               "null"
             ]
           },
+          "searchTerm": {
+            "description": "Optional substring filter for the extracted thread title.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "sortKey": {
             "anyOf": [
               {
@@ -13102,6 +13466,12 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "serviceName": {
+            "type": [
+              "string",
+              "null"
             ]
           }
         },
