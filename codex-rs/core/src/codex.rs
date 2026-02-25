@@ -2838,6 +2838,17 @@ impl Session {
                     history.drop_last_n_user_turns(rollback.num_turns);
                     let mut turns_to_drop =
                         usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                    if turns_to_drop > 0
+                        && active_turn
+                            .as_ref()
+                            .is_some_and(|turn| turn.saw_user_message)
+                    {
+                        // Match `drop_last_n_user_turns`: an unfinished active turn that has
+                        // already emitted a user message is the newest user turn and should be
+                        // dropped before we trim older finalized turn spans.
+                        active_turn = None;
+                        turns_to_drop -= 1;
+                    }
                     if turns_to_drop > 0 {
                         let mut idx = replayed_segments.len();
                         while idx > 0 && turns_to_drop > 0 {
@@ -7550,6 +7561,84 @@ mod tests {
 
         assert_eq!(session.previous_model().await, None);
         assert!(session.reference_context_item().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_compaction_metadata()
+     {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_context_item = turn_context.to_turn_context_item();
+        let previous_turn_id = previous_context_item
+            .turn_id
+            .clone()
+            .expect("turn context should have turn_id");
+        let incomplete_turn_id = "incomplete-compacted-user-turn".to_string();
+
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: previous_turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "seed".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::TurnContext(previous_context_item.clone()),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: previous_turn_id,
+                    last_agent_message: None,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: incomplete_turn_id,
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "rolled back".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::Compacted(CompactedItem {
+                message: String::new(),
+                replacement_history: Some(Vec::new()),
+            }),
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+                codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+            )),
+        ];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(
+            session.previous_model().await,
+            Some(turn_context.model_info.slug.clone())
+        );
+        assert_eq!(
+            serde_json::to_value(session.reference_context_item().await)
+                .expect("serialize seeded reference context item"),
+            serde_json::to_value(Some(previous_context_item))
+                .expect("serialize expected reference context item")
+        );
     }
 
     #[tokio::test]
