@@ -29,12 +29,13 @@ use tracing::instrument;
 async fn strip_hidden_assistant_markup(text: &str, plan_mode: bool, config: &Config) -> String {
     let (without_citations, citations) = strip_citations(text);
     if !citations.is_empty()
-        && let Some(db) = get_state_db(config, None).await {
-            let thread_ids = get_thread_id_from_citations(citations);
-            if !thread_ids.is_empty() {
-                let _ = db.record_stage1_output_usage(&thread_ids).await;
-            }
+        && let Some(db) = get_state_db(config, None).await
+    {
+        let thread_ids = get_thread_id_from_citations(citations);
+        if !thread_ids.is_empty() {
+            let _ = db.record_stage1_output_usage(&thread_ids).await;
         }
+    }
 
     if plan_mode {
         strip_proposed_plan_blocks(&without_citations)
