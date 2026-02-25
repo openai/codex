@@ -4,7 +4,6 @@ use crate::agent::max_thread_spawn_depth;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
-use crate::config::Constrained;
 use crate::error::CodexErr;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
@@ -18,7 +17,6 @@ use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
@@ -937,6 +935,13 @@ fn apply_spawn_agent_runtime_overrides(
     config: &mut Config,
     turn: &TurnContext,
 ) -> Result<(), FunctionCallError> {
+    config
+        .permissions
+        .approval_policy
+        .set(turn.approval_policy.value())
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("approval_policy is invalid: {err}"))
+        })?;
     config.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     config.cwd = turn.cwd.clone();
@@ -951,7 +956,6 @@ fn apply_spawn_agent_runtime_overrides(
 }
 
 fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
-    config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     let max_depth = max_thread_spawn_depth(config.agent_max_spawn_depth);
     if exceeds_thread_spawn_depth_limit(child_depth + 1, max_depth) {
         config.features.disable(Feature::Collab);
@@ -1104,8 +1108,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "No role requiring it for now"]
-    async fn spawn_agent_uses_explorer_role_and_sets_never_approval_policy() {
+    async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
         #[derive(Debug, Deserialize)]
         struct SpawnAgentResult {
             agent_id: String,
@@ -1119,6 +1122,9 @@ mod tests {
         config
             .permissions
             .approval_policy
+            .set(AskForApproval::OnRequest)
+            .expect("approval policy should be set");
+        turn.approval_policy
             .set(AskForApproval::OnRequest)
             .expect("approval policy should be set");
         turn.config = Arc::new(config);
@@ -1158,8 +1164,7 @@ mod tests {
             .expect("spawned agent thread should exist")
             .config_snapshot()
             .await;
-        assert_eq!(snapshot.model, "gpt-5.1-codex-mini");
-        assert_eq!(snapshot.approval_policy, AskForApproval::Never);
+        assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
     }
 
     #[tokio::test]
@@ -1210,6 +1215,9 @@ mod tests {
             &turn.config.permissions.sandbox_policy,
             turn.config.permissions.sandbox_policy.get().clone(),
         );
+        turn.approval_policy
+            .set(AskForApproval::OnRequest)
+            .expect("approval policy should be set");
         turn.sandbox_policy
             .set(expected_sandbox.clone())
             .expect("sandbox policy should be set");
@@ -1256,7 +1264,7 @@ mod tests {
             .config_snapshot()
             .await;
         assert_eq!(snapshot.sandbox_policy, expected_sandbox);
-        assert_eq!(snapshot.approval_policy, AskForApproval::Never);
+        assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
     }
 
     #[tokio::test]
@@ -2039,6 +2047,9 @@ mod tests {
         turn.sandbox_policy
             .set(sandbox_policy)
             .expect("sandbox policy set");
+        turn.approval_policy
+            .set(AskForApproval::OnRequest)
+            .expect("approval policy set");
 
         let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
         let mut expected = (*turn.config).clone();
@@ -2055,7 +2066,7 @@ mod tests {
         expected
             .permissions
             .approval_policy
-            .set(AskForApproval::Never)
+            .set(AskForApproval::OnRequest)
             .expect("approval policy set");
         expected
             .permissions
@@ -2087,6 +2098,9 @@ mod tests {
         let mut base_config = (*turn.config).clone();
         base_config.base_instructions = Some("caller-base".to_string());
         turn.config = Arc::new(base_config);
+        turn.approval_policy
+            .set(AskForApproval::OnRequest)
+            .expect("approval policy set");
 
         let config = build_agent_resume_config(&turn, 0).expect("resume config");
 
@@ -2104,7 +2118,7 @@ mod tests {
         expected
             .permissions
             .approval_policy
-            .set(AskForApproval::Never)
+            .set(AskForApproval::OnRequest)
             .expect("approval policy set");
         expected
             .permissions
