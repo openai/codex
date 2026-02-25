@@ -1538,6 +1538,7 @@ impl CodexClient {
             command_actions,
             additional_permissions,
             proposed_execpolicy_amendment,
+            proposed_network_policy_amendments,
         } = params;
 
         println!(
@@ -1568,6 +1569,9 @@ impl CodexClient {
         }
         if let Some(execpolicy_amendment) = proposed_execpolicy_amendment.as_ref() {
             println!("< proposed execpolicy amendment: {execpolicy_amendment:?}");
+        }
+        if let Some(network_policy_amendments) = proposed_network_policy_amendments.as_ref() {
+            println!("< proposed network policy amendments: {network_policy_amendments:?}");
         }
 
         let decision = match self.command_approval_behavior {

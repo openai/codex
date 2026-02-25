@@ -501,6 +501,7 @@ macro_rules! server_request_definitions {
     ) => {
         /// Request initiated from the server and sent to the client.
         #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+        #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ServerRequest {
             $(
@@ -515,6 +516,7 @@ macro_rules! server_request_definitions {
         }
 
         #[derive(Debug, Clone, PartialEq, JsonSchema)]
+        #[allow(clippy::large_enum_variant)]
         pub enum ServerRequestPayload {
             $( $variant($params), )*
         }
@@ -1393,6 +1395,7 @@ mod tests {
                 macos: None,
             }),
             proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&params);
         assert_eq!(

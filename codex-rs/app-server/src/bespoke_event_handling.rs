@@ -46,6 +46,8 @@ use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
+use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
+use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAction;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
@@ -268,6 +270,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 reason,
                 network_approval_context,
                 proposed_execpolicy_amendment,
+                proposed_network_policy_amendments,
                 additional_permissions,
                 parsed_cmd,
                 ..
@@ -331,6 +334,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                         };
                     let proposed_execpolicy_amendment_v2 =
                         proposed_execpolicy_amendment.map(V2ExecPolicyAmendment::from);
+                    let proposed_network_policy_amendments_v2 = proposed_network_policy_amendments
+                        .map(|amendments| {
+                            amendments
+                                .into_iter()
+                                .map(V2NetworkPolicyAmendment::from)
+                                .collect()
+                        });
                     let additional_permissions =
                         additional_permissions.map(V2AdditionalPermissionProfile::from);
 
@@ -346,6 +356,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         command_actions,
                         additional_permissions,
                         proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
+                        proposed_network_policy_amendments: proposed_network_policy_amendments_v2,
                     };
                     let rx = outgoing
                         .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
@@ -1915,6 +1926,20 @@ async fn on_command_execution_request_approval_response(
                     },
                     None,
                 ),
+                CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+                    network_policy_amendment,
+                } => {
+                    let completion_status = match network_policy_amendment.action {
+                        V2NetworkPolicyRuleAction::Allow => None,
+                        V2NetworkPolicyRuleAction::Deny => Some(CommandExecutionStatus::Declined),
+                    };
+                    (
+                        ReviewDecision::NetworkPolicyAmendment {
+                            network_policy_amendment: network_policy_amendment.into_core(),
+                        },
+                        completion_status,
+                    )
+                }
                 CommandExecutionApprovalDecision::Decline => (
                     ReviewDecision::Denied,
                     Some(CommandExecutionStatus::Declined),

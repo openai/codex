@@ -1096,6 +1096,7 @@ mod tests {
             reason: None,
             network_approval_context: None,
             proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
             additional_permissions: None,
         }
     }

@@ -2574,6 +2574,7 @@ impl ChatWidget {
             reason: ev.reason,
             network_approval_context: ev.network_approval_context,
             proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
+            proposed_network_policy_amendments: ev.proposed_network_policy_amendments,
             additional_permissions: ev.additional_permissions,
         };
         self.bottom_pane
