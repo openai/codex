@@ -1348,6 +1348,7 @@ impl Session {
             otel_manager,
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            execve_session_approvals: RwLock::new(HashSet::new()),
             skills_manager,
             file_watcher,
             agent_control,
