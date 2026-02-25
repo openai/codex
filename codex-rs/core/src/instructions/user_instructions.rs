@@ -24,14 +24,10 @@ impl UserInstructions {
         )
     }
 
-    pub(crate) fn is_user_instructions_text(text: &str) -> bool {
-        text.starts_with(USER_INSTRUCTIONS_PREFIX)
-            || text.starts_with(USER_INSTRUCTIONS_OPEN_TAG_LEGACY)
-    }
-
-    pub fn is_user_instructions(message: &[ContentItem]) -> bool {
-        if let [ContentItem::InputText { text }] = message {
-            Self::is_user_instructions_text(text)
+    pub(crate) fn is_user_instructions(content_item: &ContentItem) -> bool {
+        if let ContentItem::InputText { text } = content_item {
+            text.starts_with(USER_INSTRUCTIONS_PREFIX)
+                || text.starts_with(USER_INSTRUCTIONS_OPEN_TAG_LEGACY)
         } else {
             false
         }
@@ -61,13 +57,9 @@ pub(crate) struct SkillInstructions {
 }
 
 impl SkillInstructions {
-    pub(crate) fn is_skill_instructions_text(text: &str) -> bool {
-        text.starts_with(SKILL_INSTRUCTIONS_PREFIX)
-    }
-
-    pub fn is_skill_instructions(message: &[ContentItem]) -> bool {
-        if let [ContentItem::InputText { text }] = message {
-            Self::is_skill_instructions_text(text)
+    pub(crate) fn is_skill_instructions(content_item: &ContentItem) -> bool {
+        if let ContentItem::InputText { text } = content_item {
+            text.starts_with(SKILL_INSTRUCTIONS_PREFIX)
         } else {
             false
         }
@@ -123,20 +115,20 @@ mod tests {
     #[test]
     fn test_is_user_instructions() {
         assert!(UserInstructions::is_user_instructions(
-            &[ContentItem::InputText {
+            &ContentItem::InputText {
                 text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
-            }]
+            }
         ));
-        assert!(UserInstructions::is_user_instructions(&[
-            ContentItem::InputText {
+        assert!(UserInstructions::is_user_instructions(
+            &ContentItem::InputText {
                 text: "<user_instructions>test_text</user_instructions>".to_string(),
             }
-        ]));
-        assert!(!UserInstructions::is_user_instructions(&[
-            ContentItem::InputText {
+        ));
+        assert!(!UserInstructions::is_user_instructions(
+            &ContentItem::InputText {
                 text: "test_text".to_string(),
             }
-        ]));
+        ));
     }
 
     #[test]
@@ -166,16 +158,16 @@ mod tests {
 
     #[test]
     fn test_is_skill_instructions() {
-        assert!(SkillInstructions::is_skill_instructions(&[
-            ContentItem::InputText {
+        assert!(SkillInstructions::is_skill_instructions(
+            &ContentItem::InputText {
                 text: "<skill>\n<name>demo-skill</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
                     .to_string(),
             }
-        ]));
-        assert!(!SkillInstructions::is_skill_instructions(&[
-            ContentItem::InputText {
+        ));
+        assert!(!SkillInstructions::is_skill_instructions(
+            &ContentItem::InputText {
                 text: "regular text".to_string(),
             }
-        ]));
+        ));
     }
 }

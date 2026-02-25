@@ -25,8 +25,9 @@ use crate::user_shell_command::is_user_shell_command_text;
 use crate::web_search::web_search_action_detail;
 
 pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {
-    if UserInstructions::is_user_instructions(message)
-        || SkillInstructions::is_skill_instructions(message)
+    if let [content_item] = message
+        && (UserInstructions::is_user_instructions(content_item)
+            || SkillInstructions::is_skill_instructions(content_item))
     {
         return true;
     }
@@ -35,8 +36,8 @@ pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> boo
         ContentItem::InputText { text } => {
             is_session_prefix(text)
                 || is_user_shell_command_text(text)
-                || UserInstructions::is_user_instructions_text(text)
-                || SkillInstructions::is_skill_instructions_text(text)
+                || UserInstructions::is_user_instructions(content_item)
+                || SkillInstructions::is_skill_instructions(content_item)
         }
         ContentItem::OutputText { .. } => false,
         ContentItem::InputImage { .. } => false,
