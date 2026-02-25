@@ -161,20 +161,24 @@ impl ExternalAgentConfigService {
             });
         }
 
-        if let Some(repo_root) = repo_root {
-            let source_agents_md = repo_root.join("CLAUDE.md");
-            let target_agents_md = repo_root.join("AGENTS.md");
-            if source_agents_md.is_file() && is_missing_or_empty_text_file(&target_agents_md)? {
-                items.push(ExternalAgentConfigMigrationItem {
-                    item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
-                    description: format!(
-                        "Import {} to {}.",
-                        source_agents_md.display(),
-                        target_agents_md.display()
-                    ),
-                    cwd,
-                });
-            }
+        let source_agents_md = repo_root.map_or_else(
+            || self.claude_home.join("CLAUDE.md"),
+            |repo_root| repo_root.join("CLAUDE.md"),
+        );
+        let target_agents_md = repo_root.map_or_else(
+            || self.codex_home.join("AGENTS.md"),
+            |repo_root| repo_root.join("AGENTS.md"),
+        );
+        if source_agents_md.is_file() && is_missing_or_empty_text_file(&target_agents_md)? {
+            items.push(ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
+                description: format!(
+                    "Import {} to {}.",
+                    source_agents_md.display(),
+                    target_agents_md.display()
+                ),
+                cwd,
+            });
         }
 
         Ok(())
@@ -278,14 +282,24 @@ impl ExternalAgentConfigService {
     }
 
     fn import_agents_md(&self, cwd: Option<&Path>) -> io::Result<()> {
-        let Some(repo_root) = find_repo_root(cwd)? else {
+        let (source_agents_md, target_agents_md) = if let Some(repo_root) = find_repo_root(cwd)? {
+            (repo_root.join("CLAUDE.md"), repo_root.join("AGENTS.md"))
+        } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
             return Ok(());
+        } else {
+            (
+                self.claude_home.join("CLAUDE.md"),
+                self.codex_home.join("AGENTS.md"),
+            )
         };
-        let source_agents_md = repo_root.join("CLAUDE.md");
-        let target_agents_md = repo_root.join("AGENTS.md");
         if !source_agents_md.is_file() || !is_missing_or_empty_text_file(&target_agents_md)? {
             return Ok(());
         }
+
+        let Some(target_parent) = target_agents_md.parent() else {
+            return Err(invalid_data_error("AGENTS.md target path has no parent"));
+        };
+        fs::create_dir_all(target_parent)?;
 
         rewrite_and_copy_text_file(&source_agents_md, &target_agents_md)
     }
@@ -599,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn detect_home_lists_config_and_skills_only() {
+    fn detect_home_lists_config_skills_and_agents_md() {
         let (_root, claude_home, codex_home) = fixture_paths();
         let agents_skills = codex_home
             .parent()
@@ -636,6 +650,15 @@ mod tests {
                     "Copy skill folders from {} to {}.",
                     claude_home.join("skills").display(),
                     agents_skills.display()
+                ),
+                cwd: None,
+            },
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
+                description: format!(
+                    "Import {} to {}.",
+                    claude_home.join("CLAUDE.md").display(),
+                    codex_home.join("AGENTS.md").display()
                 ),
                 cwd: None,
             },
@@ -685,7 +708,7 @@ mod tests {
     }
 
     #[test]
-    fn import_home_migrates_supported_config_fields_and_skills() {
+    fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
         let (_root, claude_home, codex_home) = fixture_paths();
         let agents_skills = codex_home
             .parent()
@@ -702,6 +725,7 @@ mod tests {
             "Use Claude Code and CLAUDE utilities.",
         )
         .expect("write skill");
+        fs::write(claude_home.join("CLAUDE.md"), "Claude code guidance").expect("write agents");
 
         service_for_paths(claude_home, codex_home.clone())
             .import(vec![
@@ -723,7 +747,10 @@ mod tests {
             ])
             .expect("import");
 
-        assert!(!codex_home.join("AGENTS.md").exists());
+        assert_eq!(
+            fs::read_to_string(codex_home.join("AGENTS.md")).expect("read agents"),
+            "Codex guidance"
+        );
 
         let parsed_config: TomlValue = toml::from_str(
             &fs::read_to_string(codex_home.join("config.toml")).expect("read config"),
