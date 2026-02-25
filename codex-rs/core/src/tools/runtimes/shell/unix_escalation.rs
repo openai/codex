@@ -188,6 +188,7 @@ impl CoreShellActionProvider {
         workdir: &AbsolutePathBuf,
         stopwatch: &Stopwatch,
         additional_permissions: Option<PermissionProfile>,
+        available_decisions: Option<Vec<ReviewDecision>>,
     ) -> anyhow::Result<ReviewDecision> {
         let command = join_program_and_argv(program, argv);
         let workdir = workdir.to_path_buf();
@@ -198,7 +199,7 @@ impl CoreShellActionProvider {
         Ok(stopwatch
             .pause_for(async move {
                 session
-                    .request_command_approval(
+                    .request_command_approval_with_options(
                         &turn,
                         call_id,
                         approval_id,
@@ -208,6 +209,7 @@ impl CoreShellActionProvider {
                         None,
                         None,
                         additional_permissions,
+                        available_decisions,
                     )
                     .await
             })
@@ -265,6 +267,14 @@ impl CoreShellActionProvider {
                         reason: Some("Execution forbidden by policy".to_string()),
                     }
                 } else {
+                    let available_decisions =
+                        matches!(decision_source, DecisionSource::SkillScript).then(|| {
+                            vec![
+                                ReviewDecision::Approved,
+                                ReviewDecision::ApprovedForSession,
+                                ReviewDecision::Abort,
+                            ]
+                        });
                     match self
                         .prompt(
                             program,
@@ -272,6 +282,7 @@ impl CoreShellActionProvider {
                             workdir,
                             &self.stopwatch,
                             additional_permissions,
+                            available_decisions,
                         )
                         .await?
                     {
