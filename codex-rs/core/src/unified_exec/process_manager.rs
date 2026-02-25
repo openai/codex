@@ -13,7 +13,6 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::exec_env::create_env;
-use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
 use crate::tools::events::ToolEmitter;
@@ -570,18 +569,6 @@ impl UnifiedExecProcessManager {
         ));
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
-        let exec_approval_requirement = context
-            .session
-            .services
-            .exec_policy
-            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                command: &request.command,
-                approval_policy: context.turn.approval_policy.value(),
-                sandbox_policy: context.turn.sandbox_policy.get(),
-                sandbox_permissions: request.sandbox_permissions,
-                prefix_rule: request.prefix_rule.clone(),
-            })
-            .await;
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             cwd,
@@ -592,7 +579,8 @@ impl UnifiedExecProcessManager {
             sandbox_permissions: request.sandbox_permissions,
             additional_permissions: request.additional_permissions.clone(),
             justification: request.justification.clone(),
-            exec_approval_requirement,
+            effective_sandbox_policy: request.effective_sandbox_policy.clone(),
+            exec_approval_requirement: request.exec_approval_requirement.clone(),
         };
         let tool_ctx = ToolCtx {
             session: context.session.clone(),

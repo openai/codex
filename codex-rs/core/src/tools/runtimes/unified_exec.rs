@@ -10,6 +10,7 @@ use crate::error::SandboxErr;
 use crate::exec::ExecExpiration;
 use crate::features::Feature;
 use crate::powershell::prefix_powershell_script_with_utf8;
+use crate::protocol::SandboxPolicy;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -49,6 +50,7 @@ pub struct UnifiedExecRequest {
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
     pub justification: Option<String>,
+    pub effective_sandbox_policy: SandboxPolicy,
     pub exec_approval_requirement: ExecApprovalRequirement,
 }
 
@@ -144,6 +146,14 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
 }
 
 impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
+    fn sandbox_policy<'b>(
+        &self,
+        req: &'b UnifiedExecRequest,
+        _turn_ctx: &'b crate::codex::TurnContext,
+    ) -> &'b SandboxPolicy {
+        &req.effective_sandbox_policy
+    }
+
     fn network_approval_spec(
         &self,
         req: &UnifiedExecRequest,

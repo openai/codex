@@ -1,3 +1,4 @@
+use crate::exec_policy::ExecApprovalRequest;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
@@ -6,6 +7,9 @@ use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
+use crate::skills::SkillLoadOutcome;
+use crate::skills::SkillMetadata;
+use crate::skills::detect_implicit_skill_executable_invocation_for_tokens;
 use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -15,6 +19,7 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
@@ -28,6 +33,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub struct UnifiedExecHandler;
+
+const SKILL_EXEC_COMMAND_APPROVAL_REASON: &str =
+    "This command runs a skill script and requires approval.";
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecCommandArgs {
@@ -76,6 +84,31 @@ fn default_write_stdin_yield_time_ms() -> u64 {
 
 fn default_tty() -> bool {
     false
+}
+
+impl UnifiedExecHandler {
+    fn detect_skill_exec_command(
+        outcome: &SkillLoadOutcome,
+        command: &[String],
+    ) -> Option<SkillMetadata> {
+        let [shell, ..] = command else {
+            return None;
+        };
+        if !matches!(
+            crate::shell_detect::detect_shell_type(&PathBuf::from(shell)),
+            Some(crate::shell::ShellType::Zsh)
+        ) {
+            return None;
+        }
+
+        let commands = crate::bash::parse_shell_lc_plain_commands(command)?;
+        let [inner_command] = commands.as_slice() else {
+            return None;
+        };
+        let (skill, _path) =
+            detect_implicit_skill_executable_invocation_for_tokens(outcome, inner_command)?;
+        Some(skill)
+    }
 }
 
 #[async_trait]
@@ -215,6 +248,58 @@ impl ToolHandler for UnifiedExecHandler {
                     return Ok(output);
                 }
 
+                let (effective_sandbox_policy, exec_approval_requirement) =
+                    if turn.features.enabled(Feature::SkillShellCommandSandbox) {
+                        let matched_skill = Self::detect_skill_exec_command(
+                            turn.turn_skills.outcome.as_ref(),
+                            &command,
+                        );
+                        let effective_sandbox_policy = matched_skill
+                            .as_ref()
+                            .and_then(|skill| skill.permissions.as_ref())
+                            .map(|permissions| permissions.sandbox_policy.get().clone())
+                            .unwrap_or_else(|| turn.sandbox_policy.get().clone());
+                        let exec_approval_requirement = if matched_skill.is_some() {
+                            ExecApprovalRequirement::NeedsApproval {
+                                reason: Some(SKILL_EXEC_COMMAND_APPROVAL_REASON.to_string()),
+                                proposed_execpolicy_amendment: None,
+                            }
+                        } else {
+                            session
+                                .services
+                                .exec_policy
+                                .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                                    command: &command,
+                                    approval_policy: turn.approval_policy.value(),
+                                    sandbox_policy: &effective_sandbox_policy,
+                                    sandbox_permissions,
+                                    prefix_rule: prefix_rule.clone(),
+                                })
+                                .await
+                        };
+                        (effective_sandbox_policy, exec_approval_requirement)
+                    } else {
+                        let effective_sandbox_policy = turn.sandbox_policy.get().clone();
+                        let exec_approval_requirement = session
+                            .services
+                            .exec_policy
+                            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                                command: &command,
+                                approval_policy: turn.approval_policy.value(),
+                                sandbox_policy: &effective_sandbox_policy,
+                                sandbox_permissions,
+                                prefix_rule: prefix_rule.clone(),
+                            })
+                            .await;
+                        (effective_sandbox_policy, exec_approval_requirement)
+                    };
+
+                tracing::debug!(
+                    ?effective_sandbox_policy,
+                    ?exec_approval_requirement,
+                    "resolved exec command sandbox policy and approval requirement"
+                );
+
                 manager
                     .exec_command(
                         ExecCommandRequest {
@@ -228,7 +313,8 @@ impl ToolHandler for UnifiedExecHandler {
                             sandbox_permissions,
                             additional_permissions: normalized_additional_permissions,
                             justification,
-                            prefix_rule,
+                            effective_sandbox_policy,
+                            exec_approval_requirement,
                         },
                         &context,
                     )
@@ -335,9 +421,26 @@ fn format_response(response: &UnifiedExecResponse) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell::ShellType;
     use crate::shell::default_user_shell;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::Arc;
+
+    fn test_skill_metadata(path_to_skills_md: PathBuf) -> SkillMetadata {
+        SkillMetadata {
+            name: "test-skill".to_string(),
+            description: "test".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            permissions: None,
+            path_to_skills_md,
+            scope: codex_protocol::protocol::SkillScope::Repo,
+        }
+    }
 
     #[test]
     fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
@@ -419,5 +522,100 @@ mod tests {
             "unexpected error: {err}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn detect_skill_exec_command_matches_direct_absolute_executable() {
+        let shell = Shell {
+            shell_type: ShellType::Zsh,
+            shell_path: PathBuf::from("/bin/zsh"),
+            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+        };
+        let skill = test_skill_metadata(PathBuf::from("/tmp/skill-test/SKILL.md"));
+        let outcome = SkillLoadOutcome {
+            implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(
+                PathBuf::from("/tmp/skill-test/scripts"),
+                skill,
+            )])),
+            ..Default::default()
+        };
+        let command = shell.derive_exec_args("/tmp/skill-test/scripts/run-tool", true);
+
+        let found = UnifiedExecHandler::detect_skill_exec_command(&outcome, &command);
+
+        assert_eq!(
+            found.map(|skill| skill.name),
+            Some("test-skill".to_string())
+        );
+    }
+
+    #[test]
+    fn detect_skill_exec_command_ignores_multi_command_shell_script() {
+        let shell = Shell {
+            shell_type: ShellType::Zsh,
+            shell_path: PathBuf::from("/bin/zsh"),
+            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+        };
+        let skill = test_skill_metadata(PathBuf::from("/tmp/skill-test/SKILL.md"));
+        let outcome = SkillLoadOutcome {
+            implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(
+                PathBuf::from("/tmp/skill-test/scripts"),
+                skill,
+            )])),
+            ..Default::default()
+        };
+        let command = shell.derive_exec_args("/tmp/skill-test/scripts/run-tool && echo done", true);
+
+        let found = UnifiedExecHandler::detect_skill_exec_command(&outcome, &command);
+
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn detect_skill_exec_command_requires_absolute_executable() {
+        let shell = Shell {
+            shell_type: ShellType::Zsh,
+            shell_path: PathBuf::from("/bin/zsh"),
+            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+        };
+        let skill = test_skill_metadata(PathBuf::from("/tmp/skill-test/SKILL.md"));
+        let outcome = SkillLoadOutcome {
+            implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(
+                PathBuf::from("/tmp/skill-test/scripts"),
+                skill,
+            )])),
+            ..Default::default()
+        };
+        let command = shell.derive_exec_args("scripts/run-tool", true);
+
+        let found = UnifiedExecHandler::detect_skill_exec_command(&outcome, &command);
+
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn detect_skill_exec_command_requires_zsh_shell() {
+        let skill = test_skill_metadata(PathBuf::from("/tmp/skill-test/SKILL.md"));
+        let outcome = SkillLoadOutcome {
+            implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(
+                PathBuf::from("/tmp/skill-test/scripts"),
+                skill,
+            )])),
+            ..Default::default()
+        };
+
+        for (shell_type, shell_path) in [(ShellType::Bash, "/bin/bash"), (ShellType::Sh, "/bin/sh")]
+        {
+            let shell = Shell {
+                shell_type,
+                shell_path: PathBuf::from(shell_path),
+                shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+            };
+            let command = shell.derive_exec_args("/tmp/skill-test/scripts/run-tool", true);
+
+            let found = UnifiedExecHandler::detect_skill_exec_command(&outcome, &command);
+
+            assert_eq!(found, None);
+        }
     }
 }
