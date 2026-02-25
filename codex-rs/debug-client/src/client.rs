@@ -336,7 +336,7 @@ fn handle_server_request(
             ..
         } => {
             let response = codex_app_server_protocol::CommandExecutionRequestApprovalResponse {
-                decision: CommandExecutionApprovalDecision::Decline,
+                decision: CommandExecutionApprovalDecision::Cancel,
             };
             send_jsonrpc_response(stdin, request_id, response)
         }
