@@ -173,8 +173,6 @@ pub(crate) fn build_settings_update_items(
     .collect();
 
     let mut items = Vec::with_capacity(2);
-    // Keep developer updates first so `<model_switch>` guidance can precede contextual
-    // user updates like environment diffs.
     if let Some(developer_message) = build_developer_update_item(developer_update_sections) {
         items.push(developer_message);
     }
