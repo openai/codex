@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/compact.rs
-assertion_line: 2646
 expression: "format_labeled_requests_snapshot(\"True mid-turn continuation compaction after tool output: compact request includes tool artifacts, and the continuation request includes the summary in the same turn.\",\n&[(\"Local Compaction Request\", &auto_compact_mock.single_request()),\n(\"Local Post-Compaction History Layout\",\n&post_auto_compact_mock.single_request()),])"
 ---
 Scenario: True mid-turn continuation compaction after tool output: compact request includes tool artifacts, and the continuation request includes the summary in the same turn.

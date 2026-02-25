@@ -3070,10 +3070,15 @@ impl Session {
                 .into(),
             );
         }
-        items.push(ResponseItem::from(EnvironmentContext::from_turn_context(
-            turn_context,
-            shell.as_ref(),
-        )));
+        let subagents = self
+            .services
+            .agent_control
+            .format_environment_context_subagents(self.conversation_id)
+            .await;
+        items.push(ResponseItem::from(
+            EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
+                .with_subagents(subagents),
+        ));
         items
     }
 

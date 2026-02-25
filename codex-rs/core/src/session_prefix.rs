@@ -33,6 +33,13 @@ pub(crate) fn format_subagent_notification_message(agent_id: &str, status: &Agen
     format!("{SUBAGENT_NOTIFICATION_OPEN_TAG}\n{payload_json}\n{SUBAGENT_NOTIFICATION_CLOSE_TAG}")
 }
 
+pub(crate) fn format_subagent_context_line(agent_id: &str, agent_nickname: Option<&str>) -> String {
+    match agent_nickname.filter(|nickname| !nickname.is_empty()) {
+        Some(agent_nickname) => format!("- {agent_id}: {agent_nickname}"),
+        None => format!("- {agent_id}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

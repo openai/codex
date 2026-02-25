@@ -4,6 +4,7 @@ use crate::agent::status::is_final;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_thread_path_by_id_str;
+use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
@@ -253,6 +254,40 @@ impl AgentControl {
             return None;
         };
         thread.total_token_usage().await
+    }
+
+    pub(crate) async fn format_environment_context_subagents(
+        &self,
+        parent_thread_id: ThreadId,
+    ) -> String {
+        let Ok(state) = self.upgrade() else {
+            return String::new();
+        };
+
+        let mut agents = Vec::new();
+        for thread_id in state.list_thread_ids().await {
+            let Ok(thread) = state.get_thread(thread_id).await else {
+                continue;
+            };
+            let snapshot = thread.config_snapshot().await;
+            let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: agent_parent_thread_id,
+                agent_nickname,
+                ..
+            }) = snapshot.session_source
+            else {
+                continue;
+            };
+            if agent_parent_thread_id != parent_thread_id {
+                continue;
+            }
+            agents.push(format_subagent_context_line(
+                &thread_id.to_string(),
+                agent_nickname.as_deref(),
+            ));
+        }
+        agents.sort();
+        agents.join("\n")
     }
 
     /// Starts a detached watcher for sub-agents spawned from another thread.
