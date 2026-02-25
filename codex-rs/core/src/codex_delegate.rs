@@ -321,10 +321,11 @@ async fn handle_exec_approval(
         network_approval_context,
         proposed_execpolicy_amendment,
         additional_permissions,
+        available_decisions,
         ..
     } = event;
     // Race approval with cancellation and timeout to avoid hangs.
-    let approval_fut = parent_session.request_command_approval(
+    let approval_fut = parent_session.request_command_approval_with_options(
         parent_ctx,
         call_id,
         approval_id,
@@ -334,6 +335,7 @@ async fn handle_exec_approval(
         network_approval_context,
         proposed_execpolicy_amendment,
         additional_permissions,
+        available_decisions,
     );
     let decision = await_approval_with_cancel(
         approval_fut,
