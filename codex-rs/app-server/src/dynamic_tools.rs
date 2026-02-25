@@ -1,3 +1,4 @@
+use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_core::CodexThread;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
@@ -15,65 +16,23 @@ pub(crate) async fn on_call_response(
     conversation: Arc<CodexThread>,
 ) {
     let response = receiver.await;
-    let value = match response {
-        Ok(Ok(value)) => value,
+    let (response, _error) = match response {
+        Ok(Ok(value)) => decode_response(value),
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
-            let fallback = CoreDynamicToolResponse {
-                content_items: vec![CoreDynamicToolCallOutputContentItem::InputText {
-                    text: "dynamic tool request failed".to_string(),
-                }],
-                success: false,
-            };
-            if let Err(err) = conversation
-                .submit(Op::DynamicToolResponse {
-                    id: call_id.clone(),
-                    response: fallback,
-                })
-                .await
-            {
-                error!("failed to submit DynamicToolResponse: {err}");
-            }
-            return;
+            fallback_response("dynamic tool request failed")
         }
         Err(err) => {
             error!("request failed: {err:?}");
-            let fallback = CoreDynamicToolResponse {
-                content_items: vec![CoreDynamicToolCallOutputContentItem::InputText {
-                    text: "dynamic tool request failed".to_string(),
-                }],
-                success: false,
-            };
-            if let Err(err) = conversation
-                .submit(Op::DynamicToolResponse {
-                    id: call_id.clone(),
-                    response: fallback,
-                })
-                .await
-            {
-                error!("failed to submit DynamicToolResponse: {err}");
-            }
-            return;
+            fallback_response("dynamic tool request failed")
         }
     };
-
-    let response = serde_json::from_value::<DynamicToolCallResponse>(value).unwrap_or_else(|err| {
-        error!("failed to deserialize DynamicToolCallResponse: {err}");
-        DynamicToolCallResponse {
-            content_items: vec![
-                codex_app_server_protocol::DynamicToolCallOutputContentItem::InputText {
-                    text: "dynamic tool response was invalid".to_string(),
-                },
-            ],
-            success: false,
-        }
-    });
 
     let DynamicToolCallResponse {
         content_items,
         success,
-    } = response;
-    let response = CoreDynamicToolResponse {
+    } = response.clone();
+    let core_response = CoreDynamicToolResponse {
         content_items: content_items
             .into_iter()
             .map(CoreDynamicToolCallOutputContentItem::from)
@@ -82,11 +41,33 @@ pub(crate) async fn on_call_response(
     };
     if let Err(err) = conversation
         .submit(Op::DynamicToolResponse {
-            id: call_id,
-            response,
+            id: call_id.clone(),
+            response: core_response,
         })
         .await
     {
         error!("failed to submit DynamicToolResponse: {err}");
     }
+}
+
+fn decode_response(value: serde_json::Value) -> (DynamicToolCallResponse, Option<String>) {
+    match serde_json::from_value::<DynamicToolCallResponse>(value) {
+        Ok(response) => (response, None),
+        Err(err) => {
+            error!("failed to deserialize DynamicToolCallResponse: {err}");
+            fallback_response("dynamic tool response was invalid")
+        }
+    }
+}
+
+fn fallback_response(message: &str) -> (DynamicToolCallResponse, Option<String>) {
+    (
+        DynamicToolCallResponse {
+            content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                text: message.to_string(),
+            }],
+            success: false,
+        },
+        Some(message.to_string()),
+    )
 }

@@ -72,14 +72,9 @@ pub(super) async fn try_run_zsh_fork(
     let sandbox_exec_request = attempt
         .env_for(spec, req.network.as_ref())
         .map_err(|err| ToolError::Codex(err.into()))?;
-    // Keep env/network/sandbox metadata from `attempt.env_for()`, but build the
-    // script from the original shell argv. `attempt.env_for()` may wrap the
-    // command with `sandbox-exec` on macOS, and passing those wrapper flags
-    // (`-p`, `-D...`) through zsh breaks the zsh-fork path before subcommand
-    // approval runs.
     let crate::sandboxing::ExecRequest {
-        command: _sandbox_command,
-        cwd: _sandbox_cwd,
+        command,
+        cwd: sandbox_cwd,
         env: sandbox_env,
         network: sandbox_network,
         expiration: _sandbox_expiration,
@@ -90,7 +85,7 @@ pub(super) async fn try_run_zsh_fork(
         justification,
         arg0,
     } = sandbox_exec_request;
-    let ParsedShellCommand { script, login } = extract_shell_script(command)?;
+    let ParsedShellCommand { script, login } = extract_shell_script(&command)?;
     let effective_timeout = Duration::from_millis(
         req.timeout_ms
             .unwrap_or(crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
@@ -99,6 +94,8 @@ pub(super) async fn try_run_zsh_fork(
         ctx.session.services.exec_policy.current().as_ref().clone(),
     ));
     let command_executor = CoreShellCommandExecutor {
+        command,
+        cwd: sandbox_cwd,
         sandbox_policy,
         sandbox,
         env: sandbox_env,
@@ -438,6 +435,8 @@ impl EscalationPolicy for CoreShellActionProvider {
 }
 
 struct CoreShellCommandExecutor {
+    command: Vec<String>,
+    cwd: PathBuf,
     sandbox_policy: SandboxPolicy,
     sandbox: SandboxType,
     env: HashMap<String, String>,
@@ -452,8 +451,8 @@ struct CoreShellCommandExecutor {
 impl ShellCommandExecutor for CoreShellCommandExecutor {
     async fn run(
         &self,
-        command: Vec<String>,
-        cwd: PathBuf,
+        _command: Vec<String>,
+        _cwd: PathBuf,
         env: HashMap<String, String>,
         cancel_rx: CancellationToken,
     ) -> anyhow::Result<ExecResult> {
@@ -466,8 +465,8 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
 
         let result = crate::sandboxing::execute_env(
             crate::sandboxing::ExecRequest {
-                command,
-                cwd,
+                command: self.command.clone(),
+                cwd: self.cwd.clone(),
                 env: exec_env,
                 network: self.network.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
@@ -500,19 +499,20 @@ struct ParsedShellCommand {
 }
 
 fn extract_shell_script(command: &[String]) -> Result<ParsedShellCommand, ToolError> {
-    match command {
-        [_, flag, script, ..] if flag == "-c" => Ok(ParsedShellCommand {
-            script: script.clone(),
-            login: false,
-        }),
-        [_, flag, script, ..] if flag == "-lc" => Ok(ParsedShellCommand {
-            script: script.clone(),
-            login: true,
-        }),
-        _ => Err(ToolError::Rejected(
-            "unexpected shell command format for zsh-fork execution".to_string(),
-        )),
+    // Commands reaching zsh-fork can be wrapped by environment/sandbox helpers, so
+    // we search for the first `-c`/`-lc` triple anywhere in the argv rather
+    // than assuming it is the first positional form.
+    if let Some((script, login)) = command.windows(3).find_map(|parts| match parts {
+        [_, flag, script] if flag == "-c" => Some((script.to_owned(), false)),
+        [_, flag, script] if flag == "-lc" => Some((script.to_owned(), true)),
+        _ => None,
+    }) {
+        return Ok(ParsedShellCommand { script, login });
     }
+
+    Err(ToolError::Rejected(
+        "unexpected shell command format for zsh-fork execution".to_string(),
+    ))
 }
 
 fn map_exec_result(
@@ -583,6 +583,58 @@ mod tests {
                 script: "echo hi".to_string(),
                 login: false,
             }
+        );
+    }
+
+    #[test]
+    fn extract_shell_script_supports_wrapped_command_prefixes() {
+        assert_eq!(
+            extract_shell_script(&[
+                "/usr/bin/env".into(),
+                "CODEX_EXECVE_WRAPPER=1".into(),
+                "/bin/zsh".into(),
+                "-lc".into(),
+                "echo hello".into()
+            ])
+            .unwrap(),
+            ParsedShellCommand {
+                script: "echo hello".to_string(),
+                login: true,
+            }
+        );
+
+        assert_eq!(
+            extract_shell_script(&[
+                "sandbox-exec".into(),
+                "-p".into(),
+                "sandbox_policy".into(),
+                "/bin/zsh".into(),
+                "-c".into(),
+                "pwd".into(),
+            ])
+            .unwrap(),
+            ParsedShellCommand {
+                script: "pwd".to_string(),
+                login: false,
+            }
+        );
+    }
+
+    #[test]
+    fn extract_shell_script_rejects_unsupported_shell_invocation() {
+        let err = extract_shell_script(&[
+            "sandbox-exec".into(),
+            "-fc".into(),
+            "echo not supported".into(),
+        ])
+        .unwrap_err();
+        assert!(matches!(err, super::ToolError::Rejected(_)));
+        assert_eq!(
+            match err {
+                super::ToolError::Rejected(reason) => reason,
+                _ => "".to_string(),
+            },
+            "unexpected shell command format for zsh-fork execution"
         );
     }
 

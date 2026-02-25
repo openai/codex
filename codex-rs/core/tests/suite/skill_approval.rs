@@ -558,3 +558,91 @@ permissions:
 
     Ok(())
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_zsh_fork_still_enforces_workspace_write_sandbox() -> Result<()> {
+    use codex_config::Constrained;
+    use codex_protocol::protocol::AskForApproval;
+
+    skip_if_no_network!(Ok(()));
+
+    let Some(zsh_path) = find_test_zsh_path()? else {
+        return Ok(());
+    };
+    if !supports_exec_wrapper_intercept(&zsh_path) {
+        eprintln!(
+            "skipping zsh-fork sandbox test: zsh does not support EXEC_WRAPPER intercepts ({})",
+            zsh_path.display()
+        );
+        return Ok(());
+    }
+    let Ok(main_execve_wrapper_exe) = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")
+    else {
+        eprintln!(
+            "skipping zsh-fork sandbox test: unable to resolve `codex-execve-wrapper` binary"
+        );
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let tool_call_id = "zsh-fork-workspace-write-deny";
+    let outside_path = "/tmp/codex-zsh-fork-workspace-write-deny.txt";
+    let workspace_write_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: Vec::new(),
+        read_only_access: Default::default(),
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let policy_for_config = workspace_write_policy.clone();
+    let _ = fs::remove_file(outside_path);
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |_| {
+            let _ = fs::remove_file(outside_path);
+        })
+        .with_config(move |config| {
+            config.features.enable(Feature::ShellTool);
+            config.features.enable(Feature::ShellZshFork);
+            config.zsh_path = Some(zsh_path.clone());
+            config.main_execve_wrapper_exe = Some(main_execve_wrapper_exe);
+            config.permissions.allow_login_shell = false;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            config.permissions.sandbox_policy = Constrained::allow_any(policy_for_config);
+        });
+    let test = builder.build(&server).await?;
+
+    let command = format!("touch {outside_path}");
+    let arguments = shell_command_arguments(&command)?;
+    let mocks =
+        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
+            .await;
+
+    submit_turn_with_policies(
+        &test,
+        "write outside workspace with zsh fork",
+        AskForApproval::Never,
+        workspace_write_policy,
+    )
+    .await?;
+
+    wait_for_turn_complete_without_skill_approval(&test).await;
+
+    let call_output = mocks
+        .completion
+        .single_request()
+        .function_call_output(tool_call_id);
+    let output = call_output["output"].as_str().unwrap_or_default();
+    assert!(
+        output.contains("Permission denied")
+            || output.contains("Operation not permitted")
+            || output.contains("Read-only file system"),
+        "expected sandbox denial, got output: {output:?}"
+    );
+    assert!(
+        !Path::new(outside_path).exists(),
+        "command should not write outside workspace under WorkspaceWrite policy"
+    );
+
+    Ok(())
+}

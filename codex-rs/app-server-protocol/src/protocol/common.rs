@@ -7,6 +7,7 @@ use crate::export::GeneratedSchema;
 use crate::export::write_json_schema;
 use crate::protocol::v1;
 use crate::protocol::v2;
+use codex_experimental_api_macros::ExperimentalApi;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -267,6 +268,26 @@ client_request_definitions! {
     TurnInterrupt => "turn/interrupt" {
         params: v2::TurnInterruptParams,
         response: v2::TurnInterruptResponse,
+    },
+    #[experimental("thread/realtime/start")]
+    ThreadRealtimeStart => "thread/realtime/start" {
+        params: v2::ThreadRealtimeStartParams,
+        response: v2::ThreadRealtimeStartResponse,
+    },
+    #[experimental("thread/realtime/appendAudio")]
+    ThreadRealtimeAppendAudio => "thread/realtime/appendAudio" {
+        params: v2::ThreadRealtimeAppendAudioParams,
+        response: v2::ThreadRealtimeAppendAudioResponse,
+    },
+    #[experimental("thread/realtime/appendText")]
+    ThreadRealtimeAppendText => "thread/realtime/appendText" {
+        params: v2::ThreadRealtimeAppendTextParams,
+        response: v2::ThreadRealtimeAppendTextResponse,
+    },
+    #[experimental("thread/realtime/stop")]
+    ThreadRealtimeStop => "thread/realtime/stop" {
+        params: v2::ThreadRealtimeStopParams,
+        response: v2::ThreadRealtimeStopResponse,
     },
     ReviewStart => "review/start" {
         params: v2::ReviewStartParams,
@@ -586,7 +607,16 @@ macro_rules! server_notification_definitions {
         ),* $(,)?
     ) => {
         /// Notification sent from the server to the client.
-        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
+        #[derive(
+            Serialize,
+            Deserialize,
+            Debug,
+            Clone,
+            JsonSchema,
+            TS,
+            Display,
+            ExperimentalApi,
+        )]
         #[serde(tag = "method", content = "params", rename_all = "camelCase")]
         #[strum(serialize_all = "camelCase")]
         pub enum ServerNotification {
@@ -823,6 +853,16 @@ server_notification_definitions! {
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
     FuzzyFileSearchSessionCompleted => "fuzzyFileSearch/sessionCompleted" (FuzzyFileSearchSessionCompletedNotification),
+    #[experimental("thread/realtime/started")]
+    ThreadRealtimeStarted => "thread/realtime/started" (v2::ThreadRealtimeStartedNotification),
+    #[experimental("thread/realtime/itemAdded")]
+    ThreadRealtimeItemAdded => "thread/realtime/itemAdded" (v2::ThreadRealtimeItemAddedNotification),
+    #[experimental("thread/realtime/outputAudio/delta")]
+    ThreadRealtimeOutputAudioDelta => "thread/realtime/outputAudio/delta" (v2::ThreadRealtimeOutputAudioDeltaNotification),
+    #[experimental("thread/realtime/error")]
+    ThreadRealtimeError => "thread/realtime/error" (v2::ThreadRealtimeErrorNotification),
+    #[experimental("thread/realtime/closed")]
+    ThreadRealtimeClosed => "thread/realtime/closed" (v2::ThreadRealtimeClosedNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
@@ -1351,6 +1391,31 @@ mod tests {
     }
 
     #[test]
+    fn serialize_thread_realtime_start() -> Result<()> {
+        let request = ClientRequest::ThreadRealtimeStart {
+            request_id: RequestId::Integer(9),
+            params: v2::ThreadRealtimeStartParams {
+                thread_id: "thr_123".to_string(),
+                prompt: "You are on a call".to_string(),
+                session_id: Some("sess_456".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/start",
+                "id": 9,
+                "params": {
+                    "threadId": "thr_123",
+                    "prompt": "You are on a call",
+                    "sessionId": "sess_456"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_thread_status_changed_notification() -> Result<()> {
         let notification =
             ServerNotification::ThreadStatusChanged(v2::ThreadStatusChangedNotification {
@@ -1373,6 +1438,37 @@ mod tests {
     }
 
     #[test]
+    fn serialize_thread_realtime_output_audio_delta_notification() -> Result<()> {
+        let notification = ServerNotification::ThreadRealtimeOutputAudioDelta(
+            v2::ThreadRealtimeOutputAudioDeltaNotification {
+                thread_id: "thr_123".to_string(),
+                audio: v2::ThreadRealtimeAudioChunk {
+                    data: "AQID".to_string(),
+                    sample_rate: 24_000,
+                    num_channels: 1,
+                    samples_per_channel: Some(512),
+                },
+            },
+        );
+        assert_eq!(
+            json!({
+                "method": "thread/realtime/outputAudio/delta",
+                "params": {
+                    "threadId": "thr_123",
+                    "audio": {
+                        "data": "AQID",
+                        "sampleRate": 24000,
+                        "numChannels": 1,
+                        "samplesPerChannel": 512
+                    }
+                }
+            }),
+            serde_json::to_value(&notification)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn mock_experimental_method_is_marked_experimental() {
         let request = ClientRequest::MockExperimentalMethod {
             request_id: RequestId::Integer(1),
@@ -1380,6 +1476,46 @@ mod tests {
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("mock/experimentalMethod"));
+    }
+    #[test]
+    fn thread_realtime_start_is_marked_experimental() {
+        let request = ClientRequest::ThreadRealtimeStart {
+            request_id: RequestId::Integer(1),
+            params: v2::ThreadRealtimeStartParams {
+                thread_id: "thr_123".to_string(),
+                prompt: "You are on a call".to_string(),
+                session_id: None,
+            },
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
+        assert_eq!(reason, Some("thread/realtime/start"));
+    }
+    #[test]
+    fn thread_realtime_started_notification_is_marked_experimental() {
+        let notification =
+            ServerNotification::ThreadRealtimeStarted(v2::ThreadRealtimeStartedNotification {
+                thread_id: "thr_123".to_string(),
+                session_id: Some("sess_456".to_string()),
+            });
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);
+        assert_eq!(reason, Some("thread/realtime/started"));
+    }
+
+    #[test]
+    fn thread_realtime_output_audio_delta_notification_is_marked_experimental() {
+        let notification = ServerNotification::ThreadRealtimeOutputAudioDelta(
+            v2::ThreadRealtimeOutputAudioDeltaNotification {
+                thread_id: "thr_123".to_string(),
+                audio: v2::ThreadRealtimeAudioChunk {
+                    data: "AQID".to_string(),
+                    sample_rate: 24_000,
+                    num_channels: 1,
+                    samples_per_channel: Some(512),
+                },
+            },
+        );
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);
+        assert_eq!(reason, Some("thread/realtime/outputAudio/delta"));
     }
 
     #[test]

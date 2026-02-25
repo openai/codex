@@ -4464,6 +4464,7 @@ impl ChatWidget {
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
+            | EventMsg::DynamicToolCallResponse(_)
             | EventMsg::SkillRequestApproval(_) => {}
             EventMsg::RealtimeConversationStarted(ev) => {
                 if !from_replay {

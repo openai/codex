@@ -57,6 +57,10 @@ use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
+use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
+use codex_app_server_protocol::ThreadRealtimeStartParams;
+use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSetNameParams;
@@ -582,6 +586,44 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("turn/interrupt", params).await
+    }
+
+    /// Send a `thread/realtime/start` JSON-RPC request (v2).
+    pub async fn send_thread_realtime_start_request(
+        &mut self,
+        params: ThreadRealtimeStartParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/realtime/start", params).await
+    }
+
+    /// Send a `thread/realtime/appendAudio` JSON-RPC request (v2).
+    pub async fn send_thread_realtime_append_audio_request(
+        &mut self,
+        params: ThreadRealtimeAppendAudioParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/realtime/appendAudio", params)
+            .await
+    }
+
+    /// Send a `thread/realtime/appendText` JSON-RPC request (v2).
+    pub async fn send_thread_realtime_append_text_request(
+        &mut self,
+        params: ThreadRealtimeAppendTextParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/realtime/appendText", params)
+            .await
+    }
+
+    /// Send a `thread/realtime/stop` JSON-RPC request (v2).
+    pub async fn send_thread_realtime_stop_request(
+        &mut self,
+        params: ThreadRealtimeStopParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/realtime/stop", params).await
     }
 
     /// Deterministically clean up an intentionally in-flight turn.
