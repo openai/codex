@@ -21,8 +21,8 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
-use codex_protocol::models::AdditionalPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::PermissionProfile;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,7 +47,7 @@ pub(crate) struct ExecCommandArgs {
     #[serde(default)]
     sandbox_permissions: SandboxPermissions,
     #[serde(default)]
-    additional_permissions: Option<AdditionalPermissions>,
+    additional_permissions: Option<PermissionProfile>,
     #[serde(default)]
     justification: Option<String>,
     #[serde(default)]

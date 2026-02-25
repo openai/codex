@@ -302,6 +302,7 @@ ORDER BY position ASC
     }
 
     /// List threads using the underlying database.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_threads(
         &self,
         page_size: usize,
@@ -310,6 +311,7 @@ ORDER BY position ASC
         allowed_sources: &[String],
         model_providers: Option<&[String]>,
         archived_only: bool,
+        search_term: Option<&str>,
     ) -> anyhow::Result<crate::ThreadsPage> {
         let limit = page_size.saturating_add(1);
 
@@ -345,6 +347,7 @@ FROM threads
             model_providers,
             anchor,
             sort_key,
+            search_term,
         );
         push_thread_order_and_limit(&mut builder, sort_key, limit);
 
@@ -682,6 +685,7 @@ WHERE id IN (
             model_providers,
             anchor,
             sort_key,
+            None,
         );
         push_thread_order_and_limit(&mut builder, sort_key, limit);
 
@@ -1654,6 +1658,7 @@ fn push_thread_filters<'a>(
     model_providers: Option<&'a [String]>,
     anchor: Option<&crate::Anchor>,
     sort_key: SortKey,
+    search_term: Option<&'a str>,
 ) {
     builder.push(" WHERE 1 = 1");
     if archived_only {
@@ -1679,6 +1684,11 @@ fn push_thread_filters<'a>(
             separated.push_bind(provider);
         }
         separated.push_unseparated(")");
+    }
+    if let Some(search_term) = search_term {
+        builder.push(" AND instr(title, ");
+        builder.push_bind(search_term);
+        builder.push(") > 0");
     }
     if let Some(anchor) = anchor {
         let anchor_ts = datetime_to_epoch_seconds(anchor.ts);
@@ -3110,6 +3120,105 @@ VALUES (?, ?, ?, ?, ?)
         assert_eq!(outputs[0].thread_id, thread_id_non_empty);
         assert_eq!(outputs[0].rollout_summary, "summary");
         assert_eq!(outputs[0].cwd, codex_home.join("workspace-non-empty"));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn record_stage1_output_usage_updates_usage_metadata() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
+        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
+        let missing = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("missing id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_a,
+                codex_home.join("workspace-a"),
+            ))
+            .await
+            .expect("upsert thread a");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_b,
+                codex_home.join("workspace-b"),
+            ))
+            .await
+            .expect("upsert thread b");
+
+        let claim_a = runtime
+            .try_claim_stage1_job(thread_a, owner, 100, 3600, 64)
+            .await
+            .expect("claim stage1 a");
+        let token_a = match claim_a {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome for a: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(thread_a, token_a.as_str(), 100, "raw a", "sum a", None)
+                .await
+                .expect("mark stage1 succeeded a")
+        );
+
+        let claim_b = runtime
+            .try_claim_stage1_job(thread_b, owner, 101, 3600, 64)
+            .await
+            .expect("claim stage1 b");
+        let token_b = match claim_b {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome for b: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(thread_b, token_b.as_str(), 101, "raw b", "sum b", None)
+                .await
+                .expect("mark stage1 succeeded b")
+        );
+
+        let updated_rows = runtime
+            .record_stage1_output_usage(&[thread_a, thread_a, thread_b, missing])
+            .await
+            .expect("record stage1 output usage");
+        assert_eq!(updated_rows, 3);
+
+        let row_a =
+            sqlx::query("SELECT usage_count, last_usage FROM stage1_outputs WHERE thread_id = ?")
+                .bind(thread_a.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("load stage1 usage row a");
+        let row_b =
+            sqlx::query("SELECT usage_count, last_usage FROM stage1_outputs WHERE thread_id = ?")
+                .bind(thread_b.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("load stage1 usage row b");
+
+        assert_eq!(
+            row_a
+                .try_get::<i64, _>("usage_count")
+                .expect("usage_count a"),
+            2
+        );
+        assert_eq!(
+            row_b
+                .try_get::<i64, _>("usage_count")
+                .expect("usage_count b"),
+            1
+        );
+
+        let last_usage_a = row_a.try_get::<i64, _>("last_usage").expect("last_usage a");
+        let last_usage_b = row_b.try_get::<i64, _>("last_usage").expect("last_usage b");
+        assert_eq!(last_usage_a, last_usage_b);
+        assert!(last_usage_a > 0);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

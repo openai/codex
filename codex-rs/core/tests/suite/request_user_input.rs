@@ -86,8 +86,10 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
         session_configured,
         ..
     } = builder
-        .with_config(|config| {
-            config.features.enable(Feature::CollaborationModes);
+        .with_config(move |config| {
+            if mode == ModeKind::Default {
+                config.features.enable(Feature::DefaultModeRequestUserInput);
+            }
         })
         .build(&server)
         .await?;
@@ -198,18 +200,13 @@ where
 
     let server = start_mock_server().await;
 
-    let builder = test_codex();
+    let mut builder = test_codex();
     let TestCodex {
         codex,
         cwd,
         session_configured,
         ..
-    } = builder
-        .with_config(|config| {
-            config.features.enable(Feature::CollaborationModes);
-        })
-        .build(&server)
-        .await?;
+    } = builder.build(&server).await?;
 
     let mode_slug = mode_name.to_lowercase().replace(' ', "-");
     let call_id = format!("user-input-{mode_slug}-call");
@@ -290,7 +287,7 @@ async fn request_user_input_rejected_in_execute_mode_alias() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_user_input_rejected_in_default_mode() -> anyhow::Result<()> {
+async fn request_user_input_rejected_in_default_mode_by_default() -> anyhow::Result<()> {
     assert_request_user_input_rejected("Default", |model| CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
@@ -300,6 +297,11 @@ async fn request_user_input_rejected_in_default_mode() -> anyhow::Result<()> {
         },
     })
     .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_round_trip_in_default_mode_with_feature() -> anyhow::Result<()> {
+    request_user_input_round_trip_for_mode(ModeKind::Default).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

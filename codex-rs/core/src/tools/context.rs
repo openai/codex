@@ -30,7 +30,6 @@ pub struct ToolInvocation {
     pub call_id: String,
     pub tool_name: String,
     pub payload: ToolPayload,
-    pub source: ToolCallSource,
 }
 
 #[derive(Clone, Debug)]

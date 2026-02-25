@@ -58,10 +58,12 @@ members = [
     "utils/approval-presets",
     "utils/oss",
     "utils/fuzzy-match",
+    "utils/stream-parser",
     "codex-client",
     "codex-api",
     "state",
     "codex-experimental-api-macros",
+    "test-macros",
 ]
 resolver = "2"
 
@@ -116,6 +118,7 @@ codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
+codex-test-macros = { path = "test-macros" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
@@ -135,6 +138,7 @@ codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-string = { path = "utils/string" }
+codex-utils-stream-parser = { path = "utils/stream-parser" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }
@@ -145,6 +149,7 @@ allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
+askama = "0.15.4"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
@@ -174,6 +179,7 @@ env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 globset = "0.4"
+gethostname = "1.1.0"
 http = "1.3.1"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"

@@ -278,6 +278,11 @@ fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
         .assert()
         .success();
 
+    // `resume --last` sorts by `updated_at`, which is second-granularity. Sleep so
+    // the upcoming `resume --last --all` write lands in a later second and becomes
+    // deterministically newest (instead of tying and falling back to UUID order).
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
     let marker_b2 = format!("resume-cwd-b-2-{}", Uuid::new_v4());
     let prompt_b2 = format!("echo {marker_b2}");
     test.cmd()

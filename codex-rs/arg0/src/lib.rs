@@ -17,18 +17,30 @@ const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
 const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Arg0DispatchPaths {
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub main_execve_wrapper_exe: Option<PathBuf>,
+}
+
 /// Keeps the per-session PATH entry alive and locked for the process lifetime.
 pub struct Arg0PathEntryGuard {
     _temp_dir: TempDir,
     _lock_file: File,
+    paths: Arg0DispatchPaths,
 }
 
 impl Arg0PathEntryGuard {
-    fn new(temp_dir: TempDir, lock_file: File) -> Self {
+    fn new(temp_dir: TempDir, lock_file: File, paths: Arg0DispatchPaths) -> Self {
         Self {
             _temp_dir: temp_dir,
             _lock_file: lock_file,
+            paths,
         }
+    }
+
+    pub fn paths(&self) -> &Arg0DispatchPaths {
+        &self.paths
     }
 }
 
@@ -124,33 +136,43 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 /// 3.  Derive the path to the current executable (so children can re-invoke the
 ///     sandbox) when running on Linux.
 /// 4.  Execute the provided async `main_fn` inside that runtime, forwarding any
-///     error. Note that `main_fn` receives `codex_linux_sandbox_exe:
-///     Option<PathBuf>`, as an argument, which is generally needed as part of
-///     constructing [`codex_core::config::Config`].
+///     error. Note that `main_fn` receives [`Arg0DispatchPaths`], which
+///     contains the helper executable paths needed to construct
+///     [`codex_core::config::Config`].
 ///
 /// This function should be used to wrap any `main()` function in binary crates
 /// in this workspace that depends on these helper CLIs.
 pub fn arg0_dispatch_or_else<F, Fut>(main_fn: F) -> anyhow::Result<()>
 where
-    F: FnOnce(Option<PathBuf>) -> Fut,
+    F: FnOnce(Arg0DispatchPaths) -> Fut,
     Fut: Future<Output = anyhow::Result<()>>,
 {
     // Retain the TempDir so it exists for the lifetime of the invocation of
     // this executable. Admittedly, we could invoke `keep()` on it, but it
     // would be nice to avoid leaving temporary directories behind, if possible.
-    let _path_entry = arg0_dispatch();
+    let path_entry = arg0_dispatch();
 
     // Regular invocation – create a Tokio runtime and execute the provided
     // async entry-point.
     let runtime = build_runtime()?;
     runtime.block_on(async move {
-        let codex_linux_sandbox_exe: Option<PathBuf> = if cfg!(target_os = "linux") {
-            std::env::current_exe().ok()
-        } else {
-            None
+        let current_exe = std::env::current_exe().ok();
+        let paths = Arg0DispatchPaths {
+            codex_linux_sandbox_exe: if cfg!(target_os = "linux") {
+                current_exe.or_else(|| {
+                    path_entry
+                        .as_ref()
+                        .and_then(|path_entry| path_entry.paths().codex_linux_sandbox_exe.clone())
+                })
+            } else {
+                None
+            },
+            main_execve_wrapper_exe: path_entry
+                .as_ref()
+                .and_then(|path_entry| path_entry.paths().main_execve_wrapper_exe.clone()),
         };
 
-        main_fn(codex_linux_sandbox_exe).await
+        main_fn(paths).await
     })
 }
 
@@ -301,7 +323,30 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         std::env::set_var("PATH", updated_path_env_var);
     }
 
-    Ok(Arg0PathEntryGuard::new(temp_dir, lock_file))
+    let paths = Arg0DispatchPaths {
+        codex_linux_sandbox_exe: {
+            #[cfg(target_os = "linux")]
+            {
+                Some(path.join(LINUX_SANDBOX_ARG0))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                None
+            }
+        },
+        main_execve_wrapper_exe: {
+            #[cfg(unix)]
+            {
+                Some(path.join(EXECVE_WRAPPER_ARG0))
+            }
+            #[cfg(not(unix))]
+            {
+                None
+            }
+        },
+    };
+
+    Ok(Arg0PathEntryGuard::new(temp_dir, lock_file, paths))
 }
 
 fn janitor_cleanup(temp_root: &Path) -> std::io::Result<()> {
