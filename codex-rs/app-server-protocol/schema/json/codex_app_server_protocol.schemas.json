@@ -482,6 +482,30 @@
             },
             "method": {
               "enum": [
+                "thread/unsubscribe"
+              ],
+              "title": "Thread/unsubscribeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadUnsubscribeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/unsubscribeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/name/set"
               ],
               "title": "Thread/name/setRequestMethod",
@@ -5904,6 +5928,26 @@
             "params"
           ],
           "title": "Thread/unarchivedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/closed"
+              ],
+              "title": "Thread/closedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadClosedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/closedNotification",
           "type": "object"
         },
         {
@@ -12546,6 +12590,19 @@
         "title": "ThreadArchivedNotification",
         "type": "object"
       },
+      "ThreadClosedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadClosedNotification",
+        "type": "object"
+      },
       "ThreadCompactStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -14059,6 +14116,40 @@
         ],
         "title": "ThreadUnarchivedNotification",
         "type": "object"
+      },
+      "ThreadUnsubscribeParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadUnsubscribeParams",
+        "type": "object"
+      },
+      "ThreadUnsubscribeResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/ThreadUnsubscribeStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ThreadUnsubscribeResponse",
+        "type": "object"
+      },
+      "ThreadUnsubscribeStatus": {
+        "enum": [
+          "notLoaded",
+          "notSubscribed",
+          "unsubscribed"
+        ],
+        "type": "string"
       },
       "TokenUsageBreakdown": {
         "properties": {
