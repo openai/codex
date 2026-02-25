@@ -6,6 +6,7 @@ import type { NetworkApprovalContext } from "./NetworkApprovalContext";
 import type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
 import type { ParsedCommand } from "./ParsedCommand";
 import type { PermissionProfile } from "./PermissionProfile";
+import type { ReviewDecision } from "./ReviewDecision";
 
 export type ExecApprovalRequestEvent = { 
 /**
@@ -51,4 +52,11 @@ proposed_network_policy_amendments?: Array<NetworkPolicyAmendment>,
 /**
  * Optional additional filesystem permissions requested for this command.
  */
-additional_permissions?: PermissionProfile, parsed_cmd: Array<ParsedCommand>, };
+additional_permissions?: PermissionProfile, 
+/**
+ * Ordered list of decisions the client may present for this prompt.
+ *
+ * When absent, clients should derive the legacy default set from the
+ * other fields on this request.
+ */
+available_decisions?: Array<ReviewDecision>, parsed_cmd: Array<ParsedCommand>, };
