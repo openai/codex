@@ -2270,7 +2270,7 @@ impl Session {
         reference_context_item: Option<&TurnContextItem>,
         previous_user_turn_model: Option<&str>,
         current_context: &TurnContext,
-    ) -> crate::context_manager::updates::SettingsUpdateEnvelope {
+    ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
         // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
         // context (shell, exec policy, feature gates, previous-model bridge) should be persisted
@@ -3059,15 +3059,18 @@ impl Session {
             EnvironmentContext::from_turn_context(turn_context, shell.as_ref()).serialize_to_xml(),
         );
 
-        crate::context_manager::updates::SettingsUpdateEnvelope {
-            developer_message: crate::context_manager::updates::build_developer_update_item(
-                developer_sections,
-            ),
-            contextual_user_message: crate::context_manager::updates::build_contextual_user_message(
-                contextual_user_sections,
-            ),
+        let mut items = Vec::with_capacity(2);
+        if let Some(developer_message) =
+            crate::context_manager::updates::build_developer_update_item(developer_sections)
+        {
+            items.push(developer_message);
         }
-        .into_items()
+        if let Some(contextual_user_message) =
+            crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
+        {
+            items.push(contextual_user_message);
+        }
+        items
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
@@ -3134,7 +3137,6 @@ impl Session {
                 previous_user_turn_model,
                 turn_context,
             )
-            .into_items()
         };
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
@@ -8578,9 +8580,8 @@ mod tests {
         );
 
         let environment_update = update_items
-            .contextual_user_message
-            .as_ref()
-            .and_then(|item| match item {
+            .iter()
+            .find_map(|item| match item {
                 ResponseItem::Message { role, content, .. } if role == "user" => {
                     let [ContentItem::InputText { text }] = content.as_slice() else {
                         return None;

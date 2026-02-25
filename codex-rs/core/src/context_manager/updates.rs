@@ -10,27 +10,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TurnContextItem;
 
-#[derive(Debug)]
-pub(crate) struct SettingsUpdateEnvelope {
-    pub(crate) developer_message: Option<ResponseItem>,
-    pub(crate) contextual_user_message: Option<ResponseItem>,
-}
-
-impl SettingsUpdateEnvelope {
-    pub(crate) fn into_items(self) -> Vec<ResponseItem> {
-        let mut items = Vec::with_capacity(2);
-        // Keep developer updates first so `<model_switch>` guidance can precede contextual
-        // user updates like environment diffs.
-        if let Some(developer_message) = self.developer_message {
-            items.push(developer_message);
-        }
-        if let Some(contextual_user_message) = self.contextual_user_message {
-            items.push(contextual_user_message);
-        }
-        items
-    }
-}
-
 fn build_environment_update_item(
     previous: Option<&TurnContextItem>,
     next: &TurnContext,
@@ -179,7 +158,7 @@ pub(crate) fn build_settings_update_items(
     shell: &Shell,
     exec_policy: &Policy,
     personality_feature_enabled: bool,
-) -> SettingsUpdateEnvelope {
+) -> Vec<ResponseItem> {
     let contextual_user_message = build_environment_update_item(previous, next, shell);
     let developer_update_sections = [
         // Keep model-switch instructions first so model-specific guidance is read before
@@ -193,8 +172,14 @@ pub(crate) fn build_settings_update_items(
     .flatten()
     .collect();
 
-    SettingsUpdateEnvelope {
-        developer_message: build_developer_update_item(developer_update_sections),
-        contextual_user_message,
+    let mut items = Vec::with_capacity(2);
+    // Keep developer updates first so `<model_switch>` guidance can precede contextual
+    // user updates like environment diffs.
+    if let Some(developer_message) = build_developer_update_item(developer_update_sections) {
+        items.push(developer_message);
     }
+    if let Some(contextual_user_message) = contextual_user_message {
+        items.push(contextual_user_message);
+    }
+    items
 }
