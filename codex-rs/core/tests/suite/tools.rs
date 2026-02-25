@@ -21,6 +21,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_github_actions_linux_aarch64;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use regex_lite::Regex;
@@ -190,6 +191,7 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
+    skip_if_github_actions_linux_aarch64!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;

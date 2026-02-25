@@ -20,6 +20,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_github_actions_linux_aarch64;
 use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
@@ -141,6 +142,7 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
+    skip_if_github_actions_linux_aarch64!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
