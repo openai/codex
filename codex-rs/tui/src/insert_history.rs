@@ -181,6 +181,79 @@ where
     Ok(())
 }
 
+/// re-insert scrollback after a resize
+/// writes lines from row 0 using LF scrolling instead of DECSTBM,
+/// so content flows into scrollback as the screen fills up
+pub fn rewrite_scrollback_after_clear<B>(
+    terminal: &mut crate::custom_terminal::Terminal<B>,
+    lines: Vec<Line>,
+    viewport_height: u16,
+) -> io::Result<()>
+where
+    B: Backend + Write,
+{
+    if lines.is_empty() {
+        return Ok(());
+    }
+
+    let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
+    let wrap_width = screen_size.width.max(1) as usize;
+
+    let mut wrapped = Vec::new();
+    for line in &lines {
+        let line_wrapped =
+            if line_contains_url_like(line) && !line_has_mixed_url_and_non_url_tokens(line) {
+                vec![line.clone()]
+            } else {
+                adaptive_wrap_line(line, RtOptions::new(wrap_width))
+            };
+        wrapped.extend(line_wrapped);
+    }
+
+    if wrapped.is_empty() {
+        return Ok(());
+    }
+
+    let writer = terminal.backend_mut();
+    queue!(writer, MoveTo(0, 0))?;
+
+    for (i, line) in wrapped.iter().enumerate() {
+        if i > 0 {
+            queue!(writer, Print("\r\n"))?;
+        }
+        queue!(
+            writer,
+            SetColors(Colors::new(
+                line.style.fg.map(Into::into).unwrap_or(CColor::Reset),
+                line.style.bg.map(Into::into).unwrap_or(CColor::Reset)
+            ))
+        )?;
+        queue!(writer, Clear(ClearType::UntilNewLine))?;
+        let merged_spans: Vec<Span> = line
+            .spans
+            .iter()
+            .map(|s| Span {
+                style: s.style.patch(line.style),
+                content: s.content.clone(),
+            })
+            .collect();
+        write_spans(writer, merged_spans.iter())?;
+    }
+
+    // push content up to make room for the viewport at the bottom.
+    for _ in 0..viewport_height {
+        queue!(writer, Print("\r\n"))?;
+    }
+
+    Write::flush(writer)?;
+
+    let viewport_y = screen_size.height.saturating_sub(viewport_height);
+    let area = ratatui::layout::Rect::new(0, viewport_y, screen_size.width, viewport_height);
+    terminal.set_viewport_area(area);
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetScrollRegion(pub std::ops::Range<u16>);
 

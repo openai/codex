@@ -827,6 +827,11 @@ async fn run_ratatui_app(
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
+    tui.set_scrollback_preserve(
+        config
+            .features
+            .enabled(codex_core::features::Feature::ScrollbackPreserve),
+    );
 
     let app_result = App::run(
         &mut tui,

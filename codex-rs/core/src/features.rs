@@ -152,6 +152,8 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
     ResponsesWebsocketsV2,
+    /// Preserve scrollback history across terminal resizes in inline mode.
+    ScrollbackPreserve,
 }
 
 impl Feature {
@@ -691,6 +693,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ScrollbackPreserve,
+        key: "scrollback_preserve",
+        stage: Stage::Experimental {
+            name: "Scrollback preserve",
+            menu_description: "Preserve conversation scrollback across terminal resizes in inline (non-alt-screen) mode. Clears pre-session history on resize.",
+            announcement: "NEW: Scrollback preserve fixes ghost lines on terminal resize. Enable in /experimental.",
+        },
         default_enabled: false,
     },
 ];

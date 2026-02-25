@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
+use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
@@ -22,6 +23,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
+use crossterm::queue;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::supports_keyboard_enhancement;
@@ -244,6 +246,9 @@ pub struct Tui {
     event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<Line<'static>>,
+    /// all the lines ever committed to scrollback, kept for reinsertion
+    /// after a resize of terminal clears the scrollback buffer.
+    scrollback_history: Vec<Line<'static>>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
@@ -255,6 +260,8 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+    // When true, clear and rewrite scrollback on resize to remove duplicated lines
+    scrollback_preserve: bool,
 }
 
 impl Tui {
@@ -275,6 +282,7 @@ impl Tui {
             event_broker: Arc::new(EventBroker::new()),
             terminal,
             pending_history_lines: vec![],
+            scrollback_history: vec![],
             alt_saved_viewport: None,
             #[cfg(unix)]
             suspend_context: SuspendContext::new(),
@@ -283,12 +291,17 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             alt_screen_enabled: true,
+            scrollback_preserve: false,
         }
     }
 
     /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
     pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
         self.alt_screen_enabled = enabled;
+    }
+
+    pub fn set_scrollback_preserve(&mut self, enabled: bool) {
+        self.scrollback_preserve = enabled;
     }
 
     pub fn set_notification_method(&mut self, method: NotificationMethod) {
@@ -461,9 +474,17 @@ impl Tui {
             .suspend_context
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
-        // Precompute any viewport updates that need a cursor-position query before entering
-        // the synchronized update, to avoid racing with the event reader.
-        let mut pending_viewport_area = self.pending_viewport_area()?;
+        // scrollback_preserve uses clear+rewrite,
+        // default uses cursor-position heuristic
+        let pending_viewport_area = if self.scrollback_preserve {
+            // Only need to know if size changed, clear and rewrite handles the rest
+            None
+        } else {
+            // Precompute any viewport updates that need a cursor-position query before entering
+            // the synchronized update, to avoid racing with the event reader.
+            self.pending_viewport_area()?
+        };
+        let resized = self.detect_resize()?;
 
         stdout().sync_update(|_| {
             #[cfg(unix)]
@@ -472,7 +493,33 @@ impl Tui {
             }
 
             let terminal = &mut self.terminal;
-            if let Some(new_area) = pending_viewport_area.take() {
+
+            // when scrollback_preserve is enabled, clear screen and scrollback
+            // on resize, then reinsert conversation using direct LF writes (no
+            // DECSTBM) to avoid duplicate lines in scrollback
+            if resized && self.scrollback_preserve {
+                use std::io::Write;
+                let writer = terminal.backend_mut();
+                queue!(writer, MoveTo(0, 0))?;
+                queue!(
+                    writer,
+                    crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+                )?;
+                // ESC[3J clears the scrollback buffer.
+                writer.write_all(b"\x1b[3J")?;
+                Write::flush(writer)?;
+
+                if !self.scrollback_history.is_empty() {
+                    let vh = terminal.viewport_area.height;
+                    crate::insert_history::rewrite_scrollback_after_clear(
+                        terminal,
+                        self.scrollback_history.clone(),
+                        vh,
+                    )?;
+                }
+                terminal.clear()?;
+            } else if let Some(new_area) = pending_viewport_area {
+                // Default resize path: adjust viewport based on cursor movement heuristic.
                 terminal.set_viewport_area(new_area);
                 terminal.clear()?;
             }
@@ -496,6 +543,10 @@ impl Tui {
             }
 
             if !self.pending_history_lines.is_empty() {
+                if self.scrollback_preserve {
+                    self.scrollback_history
+                        .extend(self.pending_history_lines.iter().cloned());
+                }
                 crate::insert_history::insert_history_lines(
                     terminal,
                     self.pending_history_lines.clone(),
@@ -542,5 +593,11 @@ impl Tui {
             }
         }
         Ok(None)
+    }
+
+    fn detect_resize(&mut self) -> Result<bool> {
+        let screen_size = self.terminal.size()?;
+        let changed = screen_size != self.terminal.last_known_screen_size;
+        Ok(changed)
     }
 }
