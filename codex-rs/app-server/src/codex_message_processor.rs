@@ -3913,8 +3913,44 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: CollaborationModeListParams,
     ) {
-        let CollaborationModeListParams {} = params;
-        let items = thread_manager.list_collaboration_modes();
+        let CollaborationModeListParams { thread_id } = params;
+        let items = if let Some(thread_id) = thread_id {
+            let thread_id = match ThreadId::from_string(thread_id.as_str()) {
+                Ok(thread_id) => thread_id,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread id: {err}"),
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+            let thread = match thread_manager.get_thread(thread_id).await {
+                Ok(thread) => thread,
+                Err(_) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("thread not found: {thread_id}"),
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+            let collaboration_modes_config = CollaborationModesConfig {
+                default_mode_request_user_input: thread
+                    .enabled(Feature::DefaultModeRequestUserInput),
+            };
+            thread_manager
+                .get_models_manager()
+                .list_collaboration_modes_for_config(collaboration_modes_config)
+        } else {
+            thread_manager.list_collaboration_modes()
+        };
         let response = CollaborationModeListResponse { data: items };
         outgoing.send_response(request_id, response).await;
     }

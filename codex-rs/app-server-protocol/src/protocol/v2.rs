@@ -1407,7 +1407,12 @@ pub struct ModelListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct CollaborationModeListParams {}
+pub struct CollaborationModeListParams {
+    /// Optional loaded thread id. When provided, built-in instructions are
+    /// derived from that thread's effective feature overrides.
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
+}
 
 /// EXPERIMENTAL - collaboration mode presets response.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
