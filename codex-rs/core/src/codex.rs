@@ -6166,6 +6166,7 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
+    let mut synthetic_agent_messages: HashMap<String, String> = HashMap::new();
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
@@ -6330,6 +6331,51 @@ async fn try_run_sampling_request(
                 token_usage,
                 can_append: _,
             } => {
+                if !synthetic_agent_messages.is_empty() {
+                    let synthetic_ids: Vec<String> =
+                        synthetic_agent_messages.keys().cloned().collect();
+                    for item_id in synthetic_ids {
+                        let parsed = assistant_message_stream_parsers.finish_item(&item_id);
+                        if !parsed.is_empty() {
+                            emit_streamed_assistant_text_delta(
+                                &sess,
+                                &turn_context,
+                                plan_mode_state.as_mut(),
+                                &item_id,
+                                parsed.clone(),
+                            )
+                            .await;
+                        }
+                        if let Some(text) = synthetic_agent_messages.get_mut(&item_id) {
+                            text.push_str(&parsed.visible_text);
+                        }
+                        let text = synthetic_agent_messages
+                            .remove(&item_id)
+                            .unwrap_or_default();
+                        let agent_message = codex_protocol::items::AgentMessageItem {
+                            id: item_id.clone(),
+                            content: vec![codex_protocol::items::AgentMessageContent::Text {
+                                text,
+                            }],
+                            phase: None,
+                        };
+                        if let Some(state) = plan_mode_state.as_mut() {
+                            emit_agent_message_in_plan_mode(
+                                &sess,
+                                &turn_context,
+                                agent_message,
+                                state,
+                            )
+                            .await;
+                        } else {
+                            sess.emit_turn_item_completed(
+                                &turn_context,
+                                TurnItem::AgentMessage(agent_message),
+                            )
+                            .await;
+                        }
+                    }
+                }
                 flush_assistant_text_segments_all(
                     &sess,
                     &turn_context,
@@ -6351,10 +6397,34 @@ async fn try_run_sampling_request(
             ResponseEvent::OutputTextDelta(delta) => {
                 // In review child threads, suppress assistant text deltas; the
                 // UI will show a selection popup from the final ReviewOutput.
+                if active_item.is_none() {
+                    let item_id = Uuid::new_v4().to_string();
+                    let turn_item =
+                        TurnItem::AgentMessage(codex_protocol::items::AgentMessageItem {
+                            id: item_id.clone(),
+                            content: Vec::new(),
+                            phase: None,
+                        });
+                    if let Some(state) = plan_mode_state.as_mut() {
+                        state
+                            .pending_agent_message_items
+                            .insert(item_id.clone(), turn_item.clone());
+                    } else {
+                        sess.emit_turn_item_started(&turn_context, &turn_item).await;
+                    }
+                    synthetic_agent_messages.insert(item_id, String::new());
+                    active_item = Some(turn_item);
+                    warn!(
+                        "Synthesized agent message for OutputTextDelta without output_item.added"
+                    );
+                }
                 if let Some(active) = active_item.as_ref() {
                     let item_id = active.id();
                     if matches!(active, TurnItem::AgentMessage(_)) {
                         let parsed = assistant_message_stream_parsers.parse_delta(&item_id, &delta);
+                        if let Some(text) = synthetic_agent_messages.get_mut(&item_id) {
+                            text.push_str(&parsed.visible_text);
+                        }
                         emit_streamed_assistant_text_delta(
                             &sess,
                             &turn_context,

@@ -116,6 +116,8 @@ struct ResponseCompleted {
     id: String,
     #[serde(default)]
     usage: Option<ResponseCompletedUsage>,
+    #[serde(default)]
+    output: Vec<ResponseItem>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -392,6 +394,8 @@ pub async fn process_sse(
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
+    let mut saw_output_items = false;
+    let mut saw_output_text_deltas = false;
 
     loop {
         let start = Instant::now();
@@ -444,9 +448,48 @@ pub async fn process_sse(
             last_server_model = Some(model);
         }
 
+        let is_output_item_event = matches!(
+            event.kind.as_str(),
+            "response.output_item.added" | "response.output_item.done"
+        );
+        if is_output_item_event {
+            saw_output_items = true;
+        }
+        if event.kind == "response.output_text.delta" {
+            saw_output_text_deltas = true;
+        }
+
+        let mut synthesized_output_items = Vec::new();
+        let mut should_synthesize_output_items = false;
+        if !saw_output_items
+            && matches!(event.kind.as_str(), "response.completed" | "response.done")
+            && let Some(resp_val) = event.response.as_ref()
+            && let Ok(resp) = serde_json::from_value::<ResponseCompleted>(resp_val.clone())
+            && !resp.output.is_empty()
+        {
+            synthesized_output_items = resp.output;
+            should_synthesize_output_items = true;
+        }
+
         match process_responses_event(event) {
             Ok(Some(event)) => {
                 let is_completed = matches!(event, ResponseEvent::Completed { .. });
+                if is_completed && should_synthesize_output_items {
+                    for item in synthesized_output_items {
+                        let should_emit = !saw_output_text_deltas
+                            || !matches!(item, ResponseItem::Message { .. });
+                        if !should_emit {
+                            continue;
+                        }
+                        if tx_event
+                            .send(Ok(ResponseEvent::OutputItemDone(item)))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
                 if tx_event.send(Ok(event)).await.is_err() {
                     return;
                 }
@@ -778,6 +821,71 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn completed_emits_output_items_when_missing_output_item_events() {
+        let completed = json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp1",
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello"}]
+                }]
+            }
+        })
+        .to_string();
+
+        let sse1 = format!("event: response.completed\ndata: {completed}\n\n");
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 2);
+        assert_matches!(
+            &events[0],
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }))
+                if role == "assistant"
+        );
+        assert_matches!(events[1], Ok(ResponseEvent::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn completed_emits_tool_calls_even_with_text_deltas() {
+        let delta = json!({
+            "type": "response.output_text.delta",
+            "item_id": "resp1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hello"
+        })
+        .to_string();
+        let completed = json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp1",
+                "output": [{
+                    "type": "function_call",
+                    "name": "echo_tool",
+                    "arguments": "{\"message\":\"hello\"}",
+                    "call_id": "call_1"
+                }]
+            }
+        })
+        .to_string();
+
+        let sse1 = format!("event: response.output_text.delta\ndata: {delta}\n\n");
+        let sse2 = format!("event: response.completed\ndata: {completed}\n\n");
+        let events = collect_events(&[sse1.as_bytes(), sse2.as_bytes()]).await;
+
+        assert_eq!(events.len(), 3);
+        assert_matches!(events[0], Ok(ResponseEvent::OutputTextDelta(_)));
+        assert_matches!(
+            &events[1],
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { name, .. }))
+                if name == "echo_tool"
+        );
+        assert_matches!(events[2], Ok(ResponseEvent::Completed { .. }));
     }
 
     #[tokio::test]
