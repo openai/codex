@@ -29,7 +29,7 @@ _bwrap() {
 
 	# Please keep sorted in LC_ALL=C order
 	local options_with_args="
-		$boolean_optons
+		$boolean_options
 		--add-seccomp-fd
 		--args
 		--argv0

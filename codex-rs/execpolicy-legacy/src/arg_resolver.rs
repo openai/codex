@@ -32,7 +32,7 @@ pub fn resolve_observed_args_with_patterns(
     //
     // After associating positional args with `vararg_pattern`, we match the
     // `suffix_patterns` with the remaining args.
-    let ParitionedArgs {
+    let PartitionedArgs {
         num_prefix_args,
         num_suffix_args,
         prefix_patterns,
@@ -145,7 +145,7 @@ pub fn resolve_observed_args_with_patterns(
 }
 
 #[derive(Default)]
-struct ParitionedArgs {
+struct PartitionedArgs {
     num_prefix_args: usize,
     num_suffix_args: usize,
     prefix_patterns: Vec<ArgMatcher>,
@@ -153,9 +153,9 @@ struct ParitionedArgs {
     vararg_pattern: Option<ArgMatcher>,
 }
 
-fn partition_args(program: &str, arg_patterns: &Vec<ArgMatcher>) -> Result<ParitionedArgs> {
+fn partition_args(program: &str, arg_patterns: &Vec<ArgMatcher>) -> Result<PartitionedArgs> {
     let mut in_prefix = true;
-    let mut partitioned_args = ParitionedArgs::default();
+    let mut partitioned_args = PartitionedArgs::default();
 
     for pattern in arg_patterns {
         match pattern.cardinality().is_exact() {

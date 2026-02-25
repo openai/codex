@@ -500,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn finds_poweshell() {
+    fn finds_powershell() {
         if !cfg!(windows) {
             return;
         }

@@ -45,7 +45,7 @@ pub(crate) use user_shell::UserShellCommandMode;
 pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
-const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
+const GRACEFUL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes were terminated. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
@@ -265,8 +265,8 @@ impl Session {
         select! {
             _ = task.done.notified() => {
             },
-            _ = tokio::time::sleep(Duration::from_millis(GRACEFULL_INTERRUPTION_TIMEOUT_MS)) => {
-                warn!("task {sub_id} didn't complete gracefully after {}ms", GRACEFULL_INTERRUPTION_TIMEOUT_MS);
+            _ = tokio::time::sleep(Duration::from_millis(GRACEFUL_INTERRUPTION_TIMEOUT_MS)) => {
+                warn!("task {sub_id} didn't complete gracefully after {}ms", GRACEFUL_INTERRUPTION_TIMEOUT_MS);
             }
         }
 

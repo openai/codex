@@ -771,7 +771,7 @@ async fn find_project_root(
 
 /// Return the appropriate list of layers (each with
 /// [ConfigLayerSource::Project] as the source) between `cwd` and
-/// `project_root`, inclusive. The list is ordered in _increasing_ precdence,
+/// `project_root`, inclusive. The list is ordered in _increasing_ precedence,
 /// starting from folders closest to `project_root` (which is the lowest
 /// precedence) to those closest to `cwd` (which is the highest precedence).
 async fn load_project_layers(
