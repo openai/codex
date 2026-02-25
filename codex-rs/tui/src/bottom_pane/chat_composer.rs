@@ -5485,7 +5485,6 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
-        composer.set_steer_enabled(true);
 
         let input = "npx -y @kaeawc/auto-mobile@latest";
         composer.textarea.insert_str(input);
