@@ -6521,7 +6521,7 @@ fn skills_to_info(
     skills
         .iter()
         .map(|skill| {
-            let enabled = !disabled_paths.contains(&skill.path);
+            let enabled = !disabled_paths.contains(&skill.path_to_skills_md);
             codex_app_server_protocol::SkillMetadata {
                 name: skill.name.clone(),
                 description: skill.description.clone(),
@@ -6552,7 +6552,7 @@ fn skills_to_info(
                             .collect(),
                     }
                 }),
-                path: skill.path.clone(),
+                path: skill.path_to_skills_md.clone(),
                 scope: skill.scope.into(),
                 enabled,
             }

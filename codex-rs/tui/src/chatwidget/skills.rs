@@ -78,7 +78,7 @@ impl ChatWidget {
                 let display_name = skill_display_name(&core_skill).to_string();
                 let description = skill_description(&core_skill).to_string();
                 let name = core_skill.name.clone();
-                let path = core_skill.path;
+                let path = core_skill.path_to_skills_md;
                 SkillsToggleItem {
                     name: display_name,
                     skill_name: name,
@@ -191,7 +191,7 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
             }),
         policy: None,
         permissions: None,
-        path: skill.path.clone(),
+        path_to_skills_md: skill.path.clone(),
         scope: skill.scope,
     }
 }
@@ -229,23 +229,23 @@ pub(crate) fn find_skill_mentions_with_tool_mentions(
     let mut matches: Vec<SkillMetadata> = Vec::new();
 
     for skill in skills {
-        if seen_paths.contains(&skill.path) {
+        if seen_paths.contains(&skill.path_to_skills_md) {
             continue;
         }
-        let path_str = skill.path.to_string_lossy();
+        let path_str = skill.path_to_skills_md.to_string_lossy();
         if mention_skill_paths.contains(path_str.as_ref()) {
-            seen_paths.insert(skill.path.clone());
+            seen_paths.insert(skill.path_to_skills_md.clone());
             seen_names.insert(skill.name.clone());
             matches.push(skill.clone());
         }
     }
 
     for skill in skills {
-        if seen_paths.contains(&skill.path) {
+        if seen_paths.contains(&skill.path_to_skills_md) {
             continue;
         }
         if mentions.names.contains(&skill.name) && seen_names.insert(skill.name.clone()) {
-            seen_paths.insert(skill.path.clone());
+            seen_paths.insert(skill.path_to_skills_md.clone());
             matches.push(skill.clone());
         }
     }

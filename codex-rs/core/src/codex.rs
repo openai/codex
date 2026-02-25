@@ -4734,9 +4734,9 @@ fn skills_to_info(
                         .collect(),
                 }
             }),
-            path: skill.path.clone(),
+            path: skill.path_to_skills_md.clone(),
             scope: skill.scope,
-            enabled: !disabled_paths.contains(&skill.path),
+            enabled: !disabled_paths.contains(&skill.path_to_skills_md),
         })
         .collect()
 }
