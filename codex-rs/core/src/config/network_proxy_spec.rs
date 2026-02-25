@@ -186,7 +186,18 @@ impl NetworkProxySpec {
                 Some(dangerously_allow_all_unix_sockets);
         }
         if let Some(allowed_domains) = requirements.allowed_domains.clone() {
-            config.network.allowed_domains = allowed_domains.clone();
+            // Requirements define the managed baseline; user config may add
+            // narrower entries that still fit within that managed boundary.
+            let mut effective_allowed_domains = allowed_domains.clone();
+            for entry in &config.network.allowed_domains {
+                if !effective_allowed_domains
+                    .iter()
+                    .any(|managed_entry| managed_entry.eq_ignore_ascii_case(entry))
+                {
+                    effective_allowed_domains.push(entry.clone());
+                }
+            }
+            config.network.allowed_domains = effective_allowed_domains;
             constraints.allowed_domains = Some(allowed_domains);
         }
         if let Some(denied_domains) = requirements.denied_domains.clone() {
@@ -203,5 +214,53 @@ impl NetworkProxySpec {
         }
 
         (config, constraints)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn requirements_allowed_domains_are_a_baseline_for_user_allowlist() {
+        let mut config = NetworkProxyConfig::default();
+        config.network.allowed_domains = vec!["api.example.com".to_string()];
+        let requirements = NetworkConstraints {
+            allowed_domains: Some(vec!["*.example.com".to_string()]),
+            ..Default::default()
+        };
+
+        let spec = NetworkProxySpec::from_config_and_constraints(config, Some(requirements))
+            .expect("config should stay within the managed allowlist");
+
+        assert_eq!(
+            spec.config.network.allowed_domains,
+            vec!["*.example.com".to_string(), "api.example.com".to_string()]
+        );
+        assert_eq!(
+            spec.constraints.allowed_domains,
+            Some(vec!["*.example.com".to_string()])
+        );
+    }
+
+    #[test]
+    fn requirements_allowed_domains_reject_user_widening() {
+        let mut config = NetworkProxyConfig::default();
+        config.network.allowed_domains = vec!["evil.com".to_string()];
+        let requirements = NetworkConstraints {
+            allowed_domains: Some(vec!["*.example.com".to_string()]),
+            ..Default::default()
+        };
+
+        let err = NetworkProxySpec::from_config_and_constraints(config, Some(requirements))
+            .expect_err("config outside the managed allowlist should be rejected");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            err.to_string()
+                .contains("subset of managed allowed_domains"),
+            "unexpected error: {err}"
+        );
     }
 }
