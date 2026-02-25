@@ -6,6 +6,7 @@ use crate::config::AgentRoleConfig;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
+use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
@@ -873,7 +874,9 @@ fn create_wait_tool() -> ToolSpec {
     })
 }
 
-fn create_request_user_input_tool(default_mode_request_user_input: bool) -> ToolSpec {
+fn create_request_user_input_tool(
+    collaboration_modes_config: CollaborationModesConfig,
+) -> ToolSpec {
     let mut option_props = BTreeMap::new();
     option_props.insert(
         "label".to_string(),
@@ -944,7 +947,9 @@ fn create_request_user_input_tool(default_mode_request_user_input: bool) -> Tool
 
     ToolSpec::Function(ResponsesApiTool {
         name: "request_user_input".to_string(),
-        description: request_user_input_tool_description(default_mode_request_user_input),
+        description: request_user_input_tool_description(
+            collaboration_modes_config.default_mode_request_user_input,
+        ),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1730,9 +1735,9 @@ pub(crate) fn build_specs(
         builder.register_handler("js_repl_reset", js_repl_reset_handler);
     }
 
-    builder.push_spec(create_request_user_input_tool(
-        config.default_mode_request_user_input,
-    ));
+    builder.push_spec(create_request_user_input_tool(CollaborationModesConfig {
+        default_mode_request_user_input: config.default_mode_request_user_input,
+    }));
     builder.register_handler("request_user_input", request_user_input_handler);
 
     if config.search_tool
@@ -2057,7 +2062,7 @@ mod tests {
             create_exec_command_tool(true, false),
             create_write_stdin_tool(),
             PLAN_TOOL.clone(),
-            create_request_user_input_tool(false),
+            create_request_user_input_tool(CollaborationModesConfig::default()),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
@@ -2155,7 +2160,7 @@ mod tests {
         let request_user_input_tool = find_tool(&tools, "request_user_input");
         assert_eq!(
             request_user_input_tool.spec,
-            create_request_user_input_tool(false)
+            create_request_user_input_tool(CollaborationModesConfig::default())
         );
 
         features.enable(Feature::DefaultModeRequestUserInput);
@@ -2169,7 +2174,9 @@ mod tests {
         let request_user_input_tool = find_tool(&tools, "request_user_input");
         assert_eq!(
             request_user_input_tool.spec,
-            create_request_user_input_tool(true)
+            create_request_user_input_tool(CollaborationModesConfig {
+                default_mode_request_user_input: true,
+            })
         );
     }
 
