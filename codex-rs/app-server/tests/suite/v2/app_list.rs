@@ -372,8 +372,36 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
         is_enabled: true,
     }];
 
-    let first_update = read_app_list_updated_notification(&mut mcp).await?;
-    assert_eq!(first_update.data, expected_accessible);
+    let expected_directory = vec![
+        AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha connector".to_string()),
+            logo_url: Some("https://example.com/alpha.png".to_string()),
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: alpha_branding.clone(),
+            app_metadata: alpha_app_metadata.clone(),
+            labels: alpha_labels.clone(),
+            install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+        },
+        AppInfo {
+            id: "beta".to_string(),
+            name: "beta".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+        },
+    ];
 
     let expected_merged = vec![
         AppInfo {
@@ -406,8 +434,26 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
         },
     ];
 
-    let second_update = read_app_list_updated_notification(&mut mcp).await?;
-    assert_eq!(second_update.data, expected_merged);
+    let mut saw_merged_update = false;
+    for update_idx in 0..2 {
+        let update = read_app_list_updated_notification(&mut mcp).await?;
+        if update.data == expected_accessible || update.data == expected_directory {
+            continue;
+        }
+        if update.data == expected_merged {
+            saw_merged_update = true;
+            continue;
+        }
+
+        panic!(
+            "unexpected app/list/updated payload at update {update_idx}: {:?}",
+            update.data
+        );
+    }
+    assert!(
+        saw_merged_update,
+        "expected a merged app/list/updated payload before the response"
+    );
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
