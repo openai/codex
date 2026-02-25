@@ -2812,6 +2812,43 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
 }
 
 #[tokio::test]
+async fn exec_approval_uses_approval_id_when_present() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "sub-short".into(),
+        msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+            call_id: "call-parent".into(),
+            approval_id: Some("approval-subcommand".into()),
+            turn_id: "turn-short".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            reason: Some(
+                "this is a test reason such as one that would be produced by the model".into(),
+            ),
+            network_approval_context: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: None,
+            parsed_cmd: vec![],
+        }),
+    });
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+    let mut found = false;
+    while let Ok(app_ev) = rx.try_recv() {
+        if let AppEvent::CodexOp(Op::ExecApproval { id, decision, .. }) = app_ev {
+            assert_eq!(id, "approval-subcommand");
+            assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "expected ExecApproval op to be sent");
+}
+
+#[tokio::test]
 async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
