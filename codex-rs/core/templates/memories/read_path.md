@@ -26,7 +26,6 @@ Memory layout (general -> specific):
   - examples/ (optional example outputs)
   - templates/ (optional templates)
  - {{ base_path }}/rollout_summaries/ (per-rollout recaps + evidence snippets)
- - `rollout` entries, thesea are raw rollout logs
   - The paths of these entries can be found in {{ base_path }}/MEMORY.md or {{ base_path }}/rollout_summaries/ as `rollout_path`
   - These files are append-only `jsonl`: `session_meta.payload.id` identifies the session, `turn_context` marks turn boundaries, `event_msg` is the lightweight status stream, and `response_item` contains actual messages, tool calls, and tool outputs.
   - For efficient lookup, prefer matching the filename suffix or `session_meta.payload.id`; avoid broad full-content scans unless needed.
@@ -38,7 +37,7 @@ Quick memory pass (when applicable):
 3. Only if MEMORY.md directly points to rollout summaries/skills, open the 1-2
    most relevant files under {{ base_path }}/rollout_summaries/ or
    {{ base_path }}/skills/.
-4. If above are not clear and you need exact commands, error text, or precise evidence., open `rollout_path` for more evidence.
+4. If above are not clear and you need exact commands, error text, or precise evidence, search over `rollout_path` for more evidence.
 5. If there are no relevant hits, stop memory lookup and continue normally.
 
 Quick-pass budget:
