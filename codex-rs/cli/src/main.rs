@@ -80,6 +80,10 @@ struct MultitoolCli {
     #[arg(long = "quiet", default_value_t = false)]
     quiet: bool,
 
+    /// Print events to stdout as JSONL in non-interactive mode.
+    #[arg(long = "json", alias = "experimental-json", default_value_t = false)]
+    json_output: bool,
+
     #[clap(flatten)]
     interactive: TuiCli,
 
@@ -564,6 +568,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         feature_toggles,
         one_shot_prompt,
         quiet,
+        json_output,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
@@ -578,20 +583,19 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     if one_shot_prompt.is_some() && interactive.prompt.is_some() {
         anyhow::bail!("Use either positional `PROMPT` or `-P`/`--prompt`, not both.");
     }
-    if quiet && one_shot_prompt.is_none() && subcommand.is_none() {
+    let non_interactive_invocation = one_shot_prompt.is_some()
+        || matches!(
+            &subcommand,
+            Some(Subcommand::Exec(_)) | Some(Subcommand::Review(_))
+        );
+    if quiet && !non_interactive_invocation {
         anyhow::bail!(
             "`--quiet` is only supported with `codex -P`, `codex exec`, or `codex review`."
         );
     }
-    if quiet
-        && one_shot_prompt.is_none()
-        && !matches!(
-            &subcommand,
-            Some(Subcommand::Exec(_)) | Some(Subcommand::Review(_))
-        )
-    {
+    if json_output && !non_interactive_invocation {
         anyhow::bail!(
-            "`--quiet` is only supported with `codex -P`, `codex exec`, or `codex review`."
+            "`--json` is only supported with `codex -P`, `codex exec`, or `codex review`."
         );
     }
 
@@ -611,6 +615,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 exec_cli.cwd = interactive.cwd;
                 exec_cli.add_dir = interactive.add_dir;
                 exec_cli.quiet = quiet;
+                exec_cli.json = json_output;
                 exec_cli.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
                 if interactive.web_search {
                     exec_cli
@@ -634,6 +639,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             exec_cli.quiet |= quiet;
+            exec_cli.json |= json_output;
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -644,6 +650,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
             exec_cli.command = Some(ExecCommand::Review(review_args));
             exec_cli.quiet = quiet;
+            exec_cli.json = json_output;
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -1112,6 +1119,7 @@ mod tests {
             feature_toggles: _,
             one_shot_prompt: _,
             quiet: _,
+            json_output: _,
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {
@@ -1143,6 +1151,7 @@ mod tests {
             feature_toggles: _,
             one_shot_prompt: _,
             quiet: _,
+            json_output: _,
         } = cli;
 
         let Subcommand::Fork(ForkCommand {
@@ -1221,6 +1230,16 @@ mod tests {
 
         assert_eq!(cli.one_shot_prompt.as_deref(), Some("say hi"));
         assert!(cli.quiet);
+        assert!(cli.subcommand.is_none());
+    }
+
+    #[test]
+    fn one_shot_prompt_flag_accepts_json() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-P", "say hi", "--json"])
+            .expect("parse should succeed");
+
+        assert_eq!(cli.one_shot_prompt.as_deref(), Some("say hi"));
+        assert!(cli.json_output);
         assert!(cli.subcommand.is_none());
     }
 

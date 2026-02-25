@@ -53,6 +53,7 @@ You can enable notifications by configuring a script that is run whenever the ag
 To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
 For a shortcut from the top-level CLI, use `codex -P "PROMPT"` (or `codex --prompt "PROMPT"`), which is equivalent to running a one-shot `exec` prompt and exiting.
 Use `--quiet` with non-interactive runs to suppress progress/status chatter and print only the final response to stdout (for example: `codex -P "..." --quiet` or `codex exec --quiet "..."`).
+Use `--json` for JSONL event output in non-interactive runs, including `codex -P "..." --json`.
 Use `codex exec --ephemeral ...` to run without persisting session rollout files to disk.
 
 ### Experimenting with the Codex Sandbox
