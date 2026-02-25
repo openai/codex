@@ -115,7 +115,6 @@ pub use codex_git::GhostSnapshotConfig;
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
-pub(crate) const DEFAULT_AGENT_MAX_SPAWN_DEPTH: Option<usize> = Some(2);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
@@ -357,8 +356,6 @@ pub struct Config {
 
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
-    /// Maximum depth for thread-spawned subagents.
-    pub agent_max_spawn_depth: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
 
@@ -1340,9 +1337,6 @@ pub struct AgentsToml {
     /// When unset, no limit is enforced.
     #[schemars(range(min = 1))]
     pub max_threads: Option<usize>,
-    /// Maximum depth for thread-spawned subagents.
-    #[schemars(range(min = 1))]
-    pub max_spawn_depth: Option<usize>,
     /// Maximum nesting depth allowed for spawned agent threads.
     /// Root sessions start at depth 0.
     #[schemars(range(min = 1))]
@@ -1865,25 +1859,6 @@ impl Config {
             })
             .transpose()?
             .unwrap_or_default();
-        let agent_max_spawn_depth = cfg
-            .agents
-            .as_ref()
-            .and_then(|agents| agents.max_spawn_depth)
-            .or(DEFAULT_AGENT_MAX_SPAWN_DEPTH);
-        if agent_max_spawn_depth == Some(0) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "agents.max_spawn_depth must be at least 1",
-            ));
-        }
-        if let Some(max_spawn_depth) = agent_max_spawn_depth
-            && max_spawn_depth > i32::MAX as usize
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "agents.max_spawn_depth must fit within a 32-bit signed integer",
-            ));
-        }
         let agent_job_max_runtime_seconds = cfg
             .agents
             .as_ref()
@@ -2149,7 +2124,6 @@ impl Config {
             agent_max_depth,
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
-            agent_max_spawn_depth,
             agent_job_max_runtime_seconds,
             codex_home,
             sqlite_home,
@@ -4487,7 +4461,6 @@ model = "gpt-5.1-codex"
         let cfg = ConfigToml {
             agents: Some(AgentsToml {
                 max_threads: None,
-                max_spawn_depth: None,
                 max_depth: None,
                 job_max_runtime_seconds: None,
                 roles: BTreeMap::from([(
@@ -4763,7 +4736,6 @@ model_verbosity = "high"
                 agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
                 agent_roles: BTreeMap::new(),
                 memories: MemoriesConfig::default(),
-                agent_max_spawn_depth: DEFAULT_AGENT_MAX_SPAWN_DEPTH,
                 agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
                 codex_home: fixture.codex_home(),
                 sqlite_home: fixture.codex_home(),
@@ -4890,7 +4862,6 @@ model_verbosity = "high"
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
-            agent_max_spawn_depth: DEFAULT_AGENT_MAX_SPAWN_DEPTH,
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
             sqlite_home: fixture.codex_home(),
@@ -5015,7 +4986,6 @@ model_verbosity = "high"
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
-            agent_max_spawn_depth: DEFAULT_AGENT_MAX_SPAWN_DEPTH,
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
             sqlite_home: fixture.codex_home(),
@@ -5126,7 +5096,6 @@ model_verbosity = "high"
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
-            agent_max_spawn_depth: DEFAULT_AGENT_MAX_SPAWN_DEPTH,
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
             sqlite_home: fixture.codex_home(),
