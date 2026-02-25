@@ -2900,21 +2900,33 @@ impl Session {
                 }
                 RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
                     saw_turn_lifecycle_event = true;
-                    if let Some(aborted_turn_id) = event.turn_id.as_deref()
-                        && active_turn
-                            .as_ref()
-                            .is_some_and(|turn| turn.turn_id == aborted_turn_id)
-                        && let Some(active_turn) = active_turn.take()
-                    {
-                        push_replayed_turn(&mut replayed_segments, active_turn);
-                    } else if let Some(active_turn) = active_turn.take()
-                        && (active_turn.has_preturn_compaction
-                            || active_turn.has_midturn_compaction)
-                    {
-                        // Legacy/incomplete lifecycle events may omit `turn_id` on abort.
-                        // Keep fallback handling minimal: drop this ambiguous turn span and
-                        // preserve only a conservative "outside-turn compaction" marker.
-                        replayed_segments.push(RolloutReplayMetaSegment::CompactionOutsideTurn);
+                    match event.turn_id.as_deref() {
+                        Some(aborted_turn_id)
+                            if active_turn
+                                .as_ref()
+                                .is_some_and(|turn| turn.turn_id == aborted_turn_id) =>
+                        {
+                            if let Some(active_turn) = active_turn.take() {
+                                push_replayed_turn(&mut replayed_segments, active_turn);
+                            }
+                        }
+                        Some(_) => {
+                            // Ignore aborts for some other turn and keep the current active turn
+                            // alive so later `TurnContext`/`TurnComplete` events still apply.
+                        }
+                        None => {
+                            if let Some(active_turn) = active_turn.take()
+                                && (active_turn.has_preturn_compaction
+                                    || active_turn.has_midturn_compaction)
+                            {
+                                // Legacy/incomplete lifecycle events may omit `turn_id` on
+                                // abort. Keep fallback handling minimal: drop this ambiguous
+                                // turn span and preserve only a conservative "outside-turn
+                                // compaction" marker.
+                                replayed_segments
+                                    .push(RolloutReplayMetaSegment::CompactionOutsideTurn);
+                            }
+                        }
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
@@ -8176,6 +8188,108 @@ mod tests {
             Some(previous_model.to_string())
         );
         assert!(session.reference_context_item().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_for_later_turn_context()
+     {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_context_item = turn_context.to_turn_context_item();
+        let previous_turn_id = previous_context_item
+            .turn_id
+            .clone()
+            .expect("turn context should have turn_id");
+        let current_model = "current-rollout-model";
+        let current_turn_id = "current-turn".to_string();
+        let unmatched_abort_turn_id = "other-turn".to_string();
+        let current_context_item = TurnContextItem {
+            turn_id: Some(current_turn_id.clone()),
+            cwd: turn_context.cwd.clone(),
+            approval_policy: turn_context.approval_policy.value(),
+            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            network: None,
+            model: current_model.to_string(),
+            personality: turn_context.personality,
+            collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+            effort: turn_context.reasoning_effort,
+            summary: turn_context.reasoning_summary,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: Some(turn_context.truncation_policy.into()),
+        };
+
+        let rollout_items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: previous_turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "seed".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::TurnContext(previous_context_item),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: previous_turn_id,
+                    last_agent_message: None,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::TurnStarted(
+                codex_protocol::protocol::TurnStartedEvent {
+                    turn_id: current_turn_id.clone(),
+                    model_context_window: Some(128_000),
+                    collaboration_mode_kind: ModeKind::Default,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "current".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::TurnAborted(
+                codex_protocol::protocol::TurnAbortedEvent {
+                    turn_id: Some(unmatched_abort_turn_id),
+                    reason: TurnAbortReason::Interrupted,
+                },
+            )),
+            RolloutItem::TurnContext(current_context_item.clone()),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(
+                codex_protocol::protocol::TurnCompleteEvent {
+                    turn_id: current_turn_id,
+                    last_agent_message: None,
+                },
+            )),
+        ];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(
+            session.previous_model().await,
+            Some(current_model.to_string())
+        );
+        assert_eq!(
+            serde_json::to_value(session.reference_context_item().await)
+                .expect("serialize seeded reference context item"),
+            serde_json::to_value(Some(current_context_item))
+                .expect("serialize expected reference context item")
+        );
     }
 
     #[tokio::test]
