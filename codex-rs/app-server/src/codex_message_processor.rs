@@ -4988,6 +4988,7 @@ impl CodexMessageProcessor {
             connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
             connectors::list_cached_all_connectors(&config)
         );
+        let cached_all_connectors = all_connectors.clone();
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -5070,10 +5071,23 @@ impl CodexMessageProcessor {
                 }
             }
 
+            let showing_interim_force_refetch = force_refetch && !(accessible_loaded && all_loaded);
+            let all_connectors_for_update =
+                if showing_interim_force_refetch && cached_all_connectors.is_some() {
+                    cached_all_connectors.as_deref()
+                } else {
+                    all_connectors.as_deref()
+                };
+            let accessible_connectors_for_update =
+                if showing_interim_force_refetch && !accessible_loaded {
+                    None
+                } else {
+                    accessible_connectors.as_deref()
+                };
             let merged = connectors::with_app_enabled_state(
                 Self::merge_loaded_apps(
-                    all_connectors.as_deref(),
-                    accessible_connectors.as_deref(),
+                    all_connectors_for_update,
+                    accessible_connectors_for_update,
                 ),
                 &config,
             );
