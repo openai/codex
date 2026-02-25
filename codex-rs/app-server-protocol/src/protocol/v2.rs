@@ -657,7 +657,7 @@ pub struct ExternalAgentConfigMigrationItem {
     pub item_type: ExternalAgentConfigMigrationItemType,
     pub description: String,
     /// Null or empty means home-scoped migration; non-empty means repo-scoped migration.
-    pub cwd: Option<String>,
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -676,7 +676,7 @@ pub struct ExternalAgentConfigDetectParams {
     pub include_home: bool,
     /// Zero or more working directories to include for repo-scoped detection.
     #[ts(optional = nullable)]
-    pub cwds: Option<Vec<String>>,
+    pub cwds: Option<Vec<PathBuf>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
