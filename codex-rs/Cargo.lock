@@ -1717,6 +1717,7 @@ dependencies = [
  "codex-shell-escalation",
  "codex-skills",
  "codex-state",
+ "codex-test-macros",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
@@ -2295,6 +2296,15 @@ dependencies = [
  "pretty_assertions",
  "tempfile",
  "uds_windows",
+]
+
+[[package]]
+name = "codex-test-macros"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

@@ -62,6 +62,7 @@ members = [
     "codex-api",
     "state",
     "codex-experimental-api-macros",
+    "test-macros",
 ]
 resolver = "2"
 
@@ -116,6 +117,7 @@ codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
+codex-test-macros = { path = "test-macros" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
