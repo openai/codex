@@ -46,6 +46,7 @@ pub(crate) enum ApprovalRequest {
         id: String,
         command: Vec<String>,
         reason: Option<String>,
+        available_decisions: Vec<ReviewDecision>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
         proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
@@ -115,15 +116,13 @@ impl ApprovalOverlay {
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match &variant {
             ApprovalVariant::Exec {
+                available_decisions,
                 network_approval_context,
-                proposed_execpolicy_amendment,
-                proposed_network_policy_amendments,
                 additional_permissions,
                 ..
             } => (
                 exec_options(
-                    proposed_execpolicy_amendment.clone(),
-                    proposed_network_policy_amendments.clone(),
+                    available_decisions,
                     network_approval_context.as_ref(),
                     additional_permissions.as_ref(),
                 ),
@@ -365,6 +364,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 id,
                 command,
                 reason,
+                available_decisions,
                 network_approval_context,
                 proposed_execpolicy_amendment,
                 proposed_network_policy_amendments,
@@ -397,6 +397,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     variant: ApprovalVariant::Exec {
                         id,
                         command,
+                        available_decisions,
                         network_approval_context,
                         proposed_execpolicy_amendment,
                         proposed_network_policy_amendments,
@@ -455,6 +456,7 @@ enum ApprovalVariant {
     Exec {
         id: String,
         command: Vec<String>,
+        available_decisions: Vec<ReviewDecision>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
         proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
@@ -492,100 +494,93 @@ impl ApprovalOption {
 }
 
 fn exec_options(
-    proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
-    proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
+    available_decisions: &[ReviewDecision],
     network_approval_context: Option<&NetworkApprovalContext>,
     additional_permissions: Option<&PermissionProfile>,
 ) -> Vec<ApprovalOption> {
-    if network_approval_context.is_some() {
-        let mut options = vec![
-            ApprovalOption {
-                label: "Yes, just this once".to_string(),
+    available_decisions
+        .iter()
+        .filter_map(|decision| match decision {
+            ReviewDecision::Approved => Some(ApprovalOption {
+                label: if network_approval_context.is_some() {
+                    "Yes, just this once".to_string()
+                } else {
+                    "Yes, proceed".to_string()
+                },
                 decision: ApprovalDecision::Review(ReviewDecision::Approved),
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
-            },
-            ApprovalOption {
-                label: "Yes, and allow this host for this conversation".to_string(),
+            }),
+            ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment,
+            } => {
+                let rendered_prefix =
+                    strip_bash_lc_and_escape(proposed_execpolicy_amendment.command());
+                if rendered_prefix.contains('\n') || rendered_prefix.contains('\r') {
+                    return None;
+                }
+
+                Some(ApprovalOption {
+                    label: format!(
+                        "Yes, and don't ask again for commands that start with `{rendered_prefix}`"
+                    ),
+                    decision: ApprovalDecision::Review(
+                        ReviewDecision::ApprovedExecpolicyAmendment {
+                            proposed_execpolicy_amendment: proposed_execpolicy_amendment.clone(),
+                        },
+                    ),
+                    display_shortcut: None,
+                    additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
+                })
+            }
+            ReviewDecision::ApprovedForSession => Some(ApprovalOption {
+                label: if network_approval_context.is_some() {
+                    "Yes, and allow this host for this conversation".to_string()
+                } else if additional_permissions.is_some() {
+                    "Yes, and allow these permissions for this session".to_string()
+                } else {
+                    "Yes, and don't ask again for this command in this session".to_string()
+                },
                 decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
-            },
-        ];
-        for amendment in proposed_network_policy_amendments.unwrap_or_default() {
-            let (label, shortcut) = match amendment.action {
-                NetworkPolicyRuleAction::Allow => (
-                    "Yes, and allow this host in the future".to_string(),
-                    KeyCode::Char('p'),
-                ),
-                NetworkPolicyRuleAction::Deny => continue,
-            };
-            options.push(ApprovalOption {
-                label,
-                decision: ApprovalDecision::Review(ReviewDecision::NetworkPolicyAmendment {
-                    network_policy_amendment: amendment,
-                }),
+            }),
+            ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => {
+                let (label, shortcut) = match network_policy_amendment.action {
+                    NetworkPolicyRuleAction::Allow => (
+                        "Yes, and allow this host in the future".to_string(),
+                        KeyCode::Char('p'),
+                    ),
+                    NetworkPolicyRuleAction::Deny => (
+                        "No, and block this host in the future".to_string(),
+                        KeyCode::Char('d'),
+                    ),
+                };
+                Some(ApprovalOption {
+                    label,
+                    decision: ApprovalDecision::Review(ReviewDecision::NetworkPolicyAmendment {
+                        network_policy_amendment: network_policy_amendment.clone(),
+                    }),
+                    display_shortcut: None,
+                    additional_shortcuts: vec![key_hint::plain(shortcut)],
+                })
+            }
+            ReviewDecision::Denied => Some(ApprovalOption {
+                label: "No, continue without running it".to_string(),
+                decision: ApprovalDecision::Review(ReviewDecision::Denied),
                 display_shortcut: None,
-                additional_shortcuts: vec![key_hint::plain(shortcut)],
-            });
-        }
-        options.push(ApprovalOption {
-            label: "No, and tell Codex what to do differently".to_string(),
-            decision: ApprovalDecision::Review(ReviewDecision::Abort),
-            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
-        });
-        return options;
-    }
-
-    if additional_permissions.is_some() {
-        return vec![
-            ApprovalOption {
-                label: "Yes, proceed".to_string(),
-                decision: ApprovalDecision::Review(ReviewDecision::Approved),
-                display_shortcut: None,
-                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
-            },
-            ApprovalOption {
+                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('d'))],
+            }),
+            ReviewDecision::Abort => Some(ApprovalOption {
                 label: "No, and tell Codex what to do differently".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Abort),
                 display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
-            },
-        ];
-    }
-
-    vec![ApprovalOption {
-        label: "Yes, proceed".to_string(),
-        decision: ApprovalDecision::Review(ReviewDecision::Approved),
-        display_shortcut: None,
-        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
-    }]
-    .into_iter()
-    .chain(proposed_execpolicy_amendment.and_then(|prefix| {
-        let rendered_prefix = strip_bash_lc_and_escape(prefix.command());
-        if rendered_prefix.contains('\n') || rendered_prefix.contains('\r') {
-            return None;
-        }
-
-        Some(ApprovalOption {
-            label: format!(
-                "Yes, and don't ask again for commands that start with `{rendered_prefix}`"
-            ),
-            decision: ApprovalDecision::Review(ReviewDecision::ApprovedExecpolicyAmendment {
-                proposed_execpolicy_amendment: prefix,
             }),
-            display_shortcut: None,
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
         })
-    }))
-    .chain([ApprovalOption {
-        label: "No, and tell Codex what to do differently".to_string(),
-        decision: ApprovalDecision::Review(ReviewDecision::Abort),
-        display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
-        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
-    }])
-    .collect()
+        .collect()
 }
 
 fn format_additional_permissions_rule(
@@ -695,6 +690,7 @@ mod tests {
             id: "test".to_string(),
             command: vec!["echo".to_string(), "hi".to_string()],
             reason: Some("reason".to_string()),
+            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
@@ -740,6 +736,15 @@ mod tests {
                 id: "test".to_string(),
                 command: vec!["echo".to_string()],
                 reason: None,
+                available_decisions: vec![
+                    ReviewDecision::Approved,
+                    ReviewDecision::ApprovedExecpolicyAmendment {
+                        proposed_execpolicy_amendment: ExecPolicyAmendment::new(vec![
+                            "echo".to_string(),
+                        ]),
+                    },
+                    ReviewDecision::Abort,
+                ],
                 network_approval_context: None,
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                     "echo".to_string(),
@@ -781,6 +786,17 @@ mod tests {
                 id: "test".to_string(),
                 command: vec!["curl".to_string(), "https://example.com".to_string()],
                 reason: None,
+                available_decisions: vec![
+                    ReviewDecision::Approved,
+                    ReviewDecision::ApprovedForSession,
+                    ReviewDecision::NetworkPolicyAmendment {
+                        network_policy_amendment: NetworkPolicyAmendment {
+                            host: "example.com".to_string(),
+                            action: NetworkPolicyRuleAction::Allow,
+                        },
+                    },
+                    ReviewDecision::Abort,
+                ],
                 network_approval_context: Some(NetworkApprovalContext {
                     host: "example.com".to_string(),
                     protocol: NetworkApprovalProtocol::Https,
@@ -818,6 +834,7 @@ mod tests {
             id: "test".into(),
             command,
             reason: None,
+            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
@@ -850,17 +867,17 @@ mod tests {
             protocol: NetworkApprovalProtocol::Https,
         };
         let options = exec_options(
-            Some(ExecPolicyAmendment::new(vec!["curl".to_string()])),
-            Some(vec![
-                NetworkPolicyAmendment {
-                    host: "example.com".to_string(),
-                    action: NetworkPolicyRuleAction::Allow,
+            &[
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment: NetworkPolicyAmendment {
+                        host: "example.com".to_string(),
+                        action: NetworkPolicyRuleAction::Allow,
+                    },
                 },
-                NetworkPolicyAmendment {
-                    host: "example.com".to_string(),
-                    action: NetworkPolicyRuleAction::Deny,
-                },
-            ]),
+                ReviewDecision::Abort,
+            ],
             Some(&network_context),
             None,
         );
@@ -878,6 +895,29 @@ mod tests {
     }
 
     #[test]
+    fn generic_exec_options_can_offer_allow_for_session() {
+        let options = exec_options(
+            &[
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::Abort,
+            ],
+            None,
+            None,
+        );
+
+        let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Yes, proceed".to_string(),
+                "Yes, and don't ask again for this command in this session".to_string(),
+                "No, and tell Codex what to do differently".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn additional_permissions_exec_options_hide_execpolicy_amendment() {
         let additional_permissions = PermissionProfile {
             file_system: Some(FileSystemPermissions {
@@ -886,7 +926,11 @@ mod tests {
             }),
             ..Default::default()
         };
-        let options = exec_options(None, None, None, Some(&additional_permissions));
+        let options = exec_options(
+            &[ReviewDecision::Approved, ReviewDecision::Abort],
+            None,
+            Some(&additional_permissions),
+        );
 
         let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
         assert_eq!(
@@ -906,6 +950,7 @@ mod tests {
             id: "test".into(),
             command: vec!["cat".into(), "/tmp/readme.txt".into()],
             reason: None,
+            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
@@ -946,6 +991,7 @@ mod tests {
             id: "test".into(),
             command: vec!["cat".into(), "/tmp/readme.txt".into()],
             reason: Some("need filesystem access".into()),
+            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
@@ -973,6 +1019,17 @@ mod tests {
             id: "test".into(),
             command: vec!["curl".into(), "https://example.com".into()],
             reason: Some("network request blocked".into()),
+            available_decisions: vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment: NetworkPolicyAmendment {
+                        host: "example.com".to_string(),
+                        action: NetworkPolicyRuleAction::Allow,
+                    },
+                },
+                ReviewDecision::Abort,
+            ],
             network_approval_context: Some(NetworkApprovalContext {
                 host: "example.com".to_string(),
                 protocol: NetworkApprovalProtocol::Https,

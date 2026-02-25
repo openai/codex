@@ -2572,6 +2572,7 @@ impl ChatWidget {
             id: ev.effective_approval_id(),
             command: ev.command,
             reason: ev.reason,
+            available_decisions: ev.effective_available_decisions(),
             network_approval_context: ev.network_approval_context,
             proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
             proposed_network_policy_amendments: ev.proposed_network_policy_amendments,
