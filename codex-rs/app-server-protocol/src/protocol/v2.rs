@@ -1418,7 +1418,11 @@ pub struct CollaborationModePreset {
     pub name: String,
     pub mode: Option<ModeKind>,
     pub model: Option<String>,
+    #[serde(rename = "reasoning_effort")]
+    #[ts(rename = "reasoning_effort")]
     pub reasoning_effort: Option<Option<ReasoningEffort>>,
+    #[serde(rename = "developer_instructions")]
+    #[ts(rename = "developer_instructions")]
     #[deprecated(
         note = "Always null in collaborationMode/list. Clients should pass settings.developer_instructions: null when setting a mode to use built-in instructions, or provide their own instructions explicitly."
     )]
