@@ -2604,6 +2604,7 @@ impl Session {
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
         additional_permissions: Option<PermissionProfile>,
+        available_decisions: Option<Vec<ReviewDecision>>,
     ) -> ReviewDecision {
         self.request_command_approval_with_options(
             turn_context,
