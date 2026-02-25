@@ -347,6 +347,15 @@ impl ThreadEventStore {
     fn op_can_change_pending_replay_state(op: &Op) -> bool {
         PendingInteractiveReplayState::op_can_change_state(op)
     }
+
+    fn event_can_change_pending_thread_approvals(event: &Event) -> bool {
+        PendingInteractiveReplayState::event_can_change_pending_thread_approvals(event)
+    }
+
+    fn has_pending_thread_approvals(&self) -> bool {
+        self.pending_interactive_replay
+            .has_pending_thread_approvals()
+    }
 }
 
 #[derive(Debug)]
@@ -812,6 +821,7 @@ impl App {
         };
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = receiver;
+        self.refresh_pending_thread_approvals().await;
     }
 
     async fn store_active_thread_receiver(&mut self) {
@@ -845,6 +855,7 @@ impl App {
             self.set_thread_active(active_id, false).await;
         }
         self.active_thread_rx = None;
+        self.refresh_pending_thread_approvals().await;
     }
 
     async fn note_active_thread_outbound_op(&mut self, op: &Op) {
@@ -861,7 +872,63 @@ impl App {
         store.note_outbound_op(op);
     }
 
+    async fn refresh_pending_thread_approvals(&mut self) {
+        let channels: Vec<(ThreadId, Arc<Mutex<ThreadEventStore>>)> = self
+            .thread_event_channels
+            .iter()
+            .map(|(thread_id, channel)| (*thread_id, Arc::clone(&channel.store)))
+            .collect();
+
+        let mut pending_thread_ids = Vec::new();
+        for (thread_id, store) in channels {
+            if Some(thread_id) == self.active_thread_id {
+                continue;
+            }
+
+            let store = store.lock().await;
+            if store.has_pending_thread_approvals() {
+                pending_thread_ids.push(thread_id);
+            }
+        }
+
+        pending_thread_ids.sort_by_key(ThreadId::to_string);
+
+        let threads = pending_thread_ids
+            .into_iter()
+            .map(|thread_id| {
+                let is_primary = self.primary_thread_id == Some(thread_id);
+                let fallback_label = if is_primary {
+                    "Main [default]".to_string()
+                } else {
+                    let thread_id = thread_id.to_string();
+                    let short_id: String = thread_id.chars().take(8).collect();
+                    format!("Agent ({short_id})")
+                };
+                if let Some(entry) = self.agent_picker_threads.get(&thread_id) {
+                    let label = format_agent_picker_item_name(
+                        entry.agent_nickname.as_deref(),
+                        entry.agent_role.as_deref(),
+                        is_primary,
+                    );
+                    if label == "Agent" {
+                        let thread_id = thread_id.to_string();
+                        let short_id: String = thread_id.chars().take(8).collect();
+                        format!("{label} ({short_id})")
+                    } else {
+                        label
+                    }
+                } else {
+                    fallback_label
+                }
+            })
+            .collect();
+
+        self.chat_widget.set_pending_thread_approvals(threads);
+    }
+
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
+        let refresh_pending_thread_approvals =
+            ThreadEventStore::event_can_change_pending_thread_approvals(&event);
         let (sender, store) = {
             let channel = self.ensure_thread_channel(thread_id);
             (channel.sender.clone(), Arc::clone(&channel.store))
@@ -890,6 +957,9 @@ impl App {
                     tracing::warn!("thread {thread_id} event channel closed");
                 }
             }
+        }
+        if refresh_pending_thread_approvals {
+            self.refresh_pending_thread_approvals().await;
         }
         Ok(())
     }
@@ -1069,6 +1139,7 @@ impl App {
             );
         }
         self.drain_active_thread_events(tui).await?;
+        self.refresh_pending_thread_approvals().await;
 
         Ok(())
     }
@@ -1092,6 +1163,7 @@ impl App {
         self.active_thread_rx = None;
         self.primary_thread_id = None;
         self.pending_primary_events.clear();
+        self.chat_widget.set_pending_thread_approvals(Vec::new());
     }
 
     async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
@@ -1869,6 +1941,7 @@ impl App {
                 let submitted = self.chat_widget.submit_op(op);
                 if submitted && let Some(op) = replay_state_op.as_ref() {
                     self.note_active_thread_outbound_op(op).await;
+                    self.refresh_pending_thread_approvals().await;
                 }
             }
             AppEvent::DiffResult(text) => {
@@ -2615,6 +2688,9 @@ impl App {
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker().await;
             }
+            AppEvent::RefreshPendingThreadApprovals => {
+                self.refresh_pending_thread_approvals().await;
+            }
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, thread_id).await?;
             }
@@ -2954,6 +3030,7 @@ impl App {
             ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
         let sender = channel.sender.clone();
         let store = Arc::clone(&channel.store);
+        let app_event_tx = self.app_event_tx.clone();
         self.thread_event_channels.insert(thread_id, channel);
         tokio::spawn(async move {
             loop {
@@ -2964,11 +3041,16 @@ impl App {
                         break;
                     }
                 };
+                let refresh_pending_thread_approvals =
+                    ThreadEventStore::event_can_change_pending_thread_approvals(&event);
                 let should_send = {
                     let mut guard = store.lock().await;
                     guard.push_event(event.clone());
                     guard.active
                 };
+                if refresh_pending_thread_approvals {
+                    app_event_tx.send(AppEvent::RefreshPendingThreadApprovals);
+                }
                 if should_send && let Err(err) = sender.send(event).await {
                     tracing::debug!("external thread {thread_id} channel closed: {err}");
                     break;
@@ -3449,6 +3531,63 @@ mod tests {
             })
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_pending_thread_approvals_only_lists_inactive_threads() {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread");
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.thread_event_channels
+            .insert(main_thread_id, ThreadEventChannel::new(1));
+
+        let agent_channel = ThreadEventChannel::new(1);
+        {
+            let mut store = agent_channel.store.lock().await;
+            store.push_event(Event {
+                id: "ev-1".to_string(),
+                msg: EventMsg::ExecApprovalRequest(
+                    codex_protocol::protocol::ExecApprovalRequestEvent {
+                        call_id: "call-1".to_string(),
+                        approval_id: None,
+                        turn_id: "turn-1".to_string(),
+                        command: vec!["echo".to_string(), "hi".to_string()],
+                        cwd: PathBuf::from("/tmp"),
+                        reason: None,
+                        network_approval_context: None,
+                        proposed_execpolicy_amendment: None,
+                        proposed_network_policy_amendments: None,
+                        additional_permissions: None,
+                        parsed_cmd: Vec::new(),
+                    },
+                ),
+            });
+        }
+        app.thread_event_channels
+            .insert(agent_thread_id, agent_channel);
+        app.agent_picker_threads.insert(
+            agent_thread_id,
+            AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                is_closed: false,
+            },
+        );
+
+        app.refresh_pending_thread_approvals().await;
+        assert_eq!(
+            app.chat_widget.pending_thread_approvals(),
+            &["Robie [explorer]".to_string()]
+        );
+
+        app.active_thread_id = Some(agent_thread_id);
+        app.refresh_pending_thread_approvals().await;
+        assert!(app.chat_widget.pending_thread_approvals().is_empty());
     }
 
     #[test]
