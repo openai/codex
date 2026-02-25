@@ -1,3 +1,4 @@
+pub(crate) mod approval;
 pub mod auth;
 mod skill_dependencies;
 pub(crate) use skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
