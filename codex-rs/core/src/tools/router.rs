@@ -175,7 +175,6 @@ impl ToolRouter {
             call_id,
             tool_name,
             payload,
-            source,
         };
 
         match self.registry.dispatch(invocation).await {

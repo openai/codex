@@ -1334,9 +1334,14 @@ pub(crate) fn resolve_node(config_path: Option<&Path>) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::codex::make_session_and_context_with_dynamic_tools_and_rx;
     use crate::protocol::AskForApproval;
+    use crate::protocol::EventMsg;
     use crate::protocol::SandboxPolicy;
     use crate::turn_diff_tracker::TurnDiffTracker;
+    use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
+    use codex_protocol::dynamic_tools::DynamicToolResponse;
+    use codex_protocol::dynamic_tools::DynamicToolSpec;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::openai_models::InputModality;
@@ -2040,19 +2045,114 @@ console.log(out.output?.body?.text ?? "");
         assert!(result.output.contains("function_call_output"));
 
         let pending_input = session.get_pending_input().await;
-        let image_url = pending_input
-            .iter()
-            .find_map(|item| match item {
-                ResponseInputItem::Message { content, .. } => {
-                    content.iter().find_map(|content_item| match content_item {
-                        ContentItem::InputImage { image_url } => Some(image_url.as_str()),
-                        _ => None,
-                    })
-                }
-                _ => None,
-            })
-            .expect("view_image should inject an input_image message for the active turn");
+        let [ResponseInputItem::Message { role, content }] = pending_input.as_slice() else {
+            panic!(
+                "view_image should inject exactly one pending input message, got {pending_input:?}"
+            );
+        };
+        assert_eq!(role, "user");
+        let [ContentItem::InputImage { image_url }] = content.as_slice() else {
+            panic!(
+                "view_image should inject exactly one input_image content item, got {content:?}"
+            );
+        };
         assert!(image_url.starts_with("data:image/png;base64,"));
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_can_attach_image_via_dynamic_tool_with_mixed_content() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn, rx_event) =
+            make_session_and_context_with_dynamic_tools_and_rx(vec![DynamicToolSpec {
+                name: "inline_image".to_string(),
+                description: "Returns inline text and image content.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+            }])
+            .await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+const out = await codex.tool("inline_image", {});
+console.log(out.type);
+"#;
+        let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+
+        let session_for_response = Arc::clone(&session);
+        let response_watcher = async move {
+            loop {
+                let event = tokio::time::timeout(Duration::from_secs(2), rx_event.recv()).await??;
+                if let EventMsg::DynamicToolCallRequest(request) = event.msg {
+                    session_for_response
+                        .notify_dynamic_tool_response(
+                            &request.call_id,
+                            DynamicToolResponse {
+                                content_items: vec![
+                                    DynamicToolCallOutputContentItem::InputText {
+                                        text: "inline image note".to_string(),
+                                    },
+                                    DynamicToolCallOutputContentItem::InputImage {
+                                        image_url: image_url.to_string(),
+                                    },
+                                ],
+                                success: true,
+                            },
+                        )
+                        .await;
+                    return Ok::<(), anyhow::Error>(());
+                }
+            }
+        };
+
+        let (result, response_watcher_result) = tokio::join!(
+            manager.execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            ),
+            response_watcher,
+        );
+        response_watcher_result?;
+        let result = result?;
+        assert!(result.output.contains("function_call_output"));
+
+        let pending_input = session.get_pending_input().await;
+        assert_eq!(
+            pending_input,
+            vec![ResponseInputItem::Message {
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: "inline image note".to_string(),
+                    },
+                    ContentItem::InputImage {
+                        image_url: image_url.to_string(),
+                    },
+                ],
+            }]
+        );
 
         Ok(())
     }
