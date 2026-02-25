@@ -302,6 +302,7 @@ ORDER BY position ASC
     }
 
     /// List threads using the underlying database.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_threads(
         &self,
         page_size: usize,
@@ -310,6 +311,7 @@ ORDER BY position ASC
         allowed_sources: &[String],
         model_providers: Option<&[String]>,
         archived_only: bool,
+        search_term: Option<&str>,
     ) -> anyhow::Result<crate::ThreadsPage> {
         let limit = page_size.saturating_add(1);
 
@@ -345,6 +347,7 @@ FROM threads
             model_providers,
             anchor,
             sort_key,
+            search_term,
         );
         push_thread_order_and_limit(&mut builder, sort_key, limit);
 
@@ -682,6 +685,7 @@ WHERE id IN (
             model_providers,
             anchor,
             sort_key,
+            None,
         );
         push_thread_order_and_limit(&mut builder, sort_key, limit);
 
@@ -1654,6 +1658,7 @@ fn push_thread_filters<'a>(
     model_providers: Option<&'a [String]>,
     anchor: Option<&crate::Anchor>,
     sort_key: SortKey,
+    search_term: Option<&'a str>,
 ) {
     builder.push(" WHERE 1 = 1");
     if archived_only {
@@ -1679,6 +1684,11 @@ fn push_thread_filters<'a>(
             separated.push_bind(provider);
         }
         separated.push_unseparated(")");
+    }
+    if let Some(search_term) = search_term {
+        builder.push(" AND instr(title, ");
+        builder.push_bind(search_term);
+        builder.push(") > 0");
     }
     if let Some(anchor) = anchor {
         let anchor_ts = datetime_to_epoch_seconds(anchor.ts);

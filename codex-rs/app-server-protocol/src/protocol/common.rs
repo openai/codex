@@ -350,6 +350,14 @@ client_request_definitions! {
         params: v2::ConfigReadParams,
         response: v2::ConfigReadResponse,
     },
+    ExternalAgentConfigDetect => "externalAgentConfig/detect" {
+        params: v2::ExternalAgentConfigDetectParams,
+        response: v2::ExternalAgentConfigDetectResponse,
+    },
+    ExternalAgentConfigImport => "externalAgentConfig/import" {
+        params: v2::ExternalAgentConfigImportParams,
+        response: v2::ExternalAgentConfigImportResponse,
+    },
     ConfigValueWrite => "config/value/write" {
         params: v2::ConfigValueWriteParams,
         response: v2::ConfigWriteResponse,
