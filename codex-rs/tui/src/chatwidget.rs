@@ -2887,7 +2887,7 @@ impl ChatWidget {
                 .config
                 .tui_status_line
                 .as_ref()
-                .is_none_or(|items| !items.is_empty()),
+                .is_some_and(|items| !items.is_empty()),
         );
         widget.bottom_pane.set_collaboration_modes_enabled(true);
         widget.sync_personality_command_enabled();
@@ -3065,7 +3065,7 @@ impl ChatWidget {
                 .config
                 .tui_status_line
                 .as_ref()
-                .is_none_or(|items| !items.is_empty()),
+                .is_some_and(|items| !items.is_empty()),
         );
         widget.bottom_pane.set_collaboration_modes_enabled(true);
         widget.sync_personality_command_enabled();
@@ -3232,7 +3232,7 @@ impl ChatWidget {
                 .config
                 .tui_status_line
                 .as_ref()
-                .is_none_or(|items| !items.is_empty()),
+                .is_some_and(|items| !items.is_empty()),
         );
         widget.bottom_pane.set_collaboration_modes_enabled(true);
         widget.sync_personality_command_enabled();
