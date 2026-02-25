@@ -31,8 +31,8 @@ use codex_shell_escalation::ExecParams;
 use codex_shell_escalation::ExecResult;
 use codex_shell_escalation::ShellCommandExecutor;
 use codex_shell_escalation::Stopwatch;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -175,9 +175,9 @@ impl CoreShellActionProvider {
 
     async fn prompt(
         &self,
-        program: &Path,
+        program: &AbsolutePathBuf,
         argv: &[String],
-        workdir: &Path,
+        workdir: &AbsolutePathBuf,
         stopwatch: &Stopwatch,
     ) -> anyhow::Result<ReviewDecision> {
         let command = join_program_and_argv(program, argv);
@@ -208,7 +208,7 @@ impl CoreShellActionProvider {
     /// Because we should be intercepting execve(2) calls, `program` should be
     /// an absolute path. The idea is that we check to see whether it matches
     /// any skills.
-    async fn find_skill(&self, program: &Path) -> Option<SkillMetadata> {
+    async fn find_skill(&self, program: &AbsolutePathBuf) -> Option<SkillMetadata> {
         let force_reload = false;
         let skills_outcome = self
             .session
@@ -217,12 +217,13 @@ impl CoreShellActionProvider {
             .skills_for_cwd(&self.turn.cwd, force_reload)
             .await;
 
+        let program_path = program.as_path();
         for skill in skills_outcome.skills {
             // We intentionally ignore "enabled" status here for now.
             let Some(skill_root) = skill.path_to_skills_md.parent() else {
                 continue;
             };
-            if program.starts_with(skill_root.join("scripts")) {
+            if program_path.starts_with(skill_root.join("scripts")) {
                 return Some(skill);
             }
         }
@@ -234,9 +235,9 @@ impl CoreShellActionProvider {
         &self,
         decision: Decision,
         needs_escalation: bool,
-        program: &Path,
+        program: &AbsolutePathBuf,
         argv: &[String],
-        workdir: &Path,
+        workdir: &AbsolutePathBuf,
     ) -> anyhow::Result<EscalateAction> {
         let action = match decision {
             Decision::Forbidden => EscalateAction::Deny {
@@ -304,9 +305,9 @@ impl CoreShellActionProvider {
 impl EscalationPolicy for CoreShellActionProvider {
     async fn determine_action(
         &self,
-        program: &Path,
+        program: &AbsolutePathBuf,
         argv: &[String],
-        workdir: &Path,
+        workdir: &AbsolutePathBuf,
     ) -> anyhow::Result<EscalateAction> {
         tracing::debug!(
             "Determining escalation action for command {program:?} with args {argv:?} in {workdir:?}"
@@ -483,7 +484,7 @@ fn map_exec_result(
 /// The intercepted `argv` includes `argv[0]`, but once we have normalized the
 /// executable path in `program`, we should replace the original `argv[0]`
 /// rather than duplicating it as an apparent user argument.
-fn join_program_and_argv(program: &Path, argv: &[String]) -> Vec<String> {
+fn join_program_and_argv(program: &AbsolutePathBuf, argv: &[String]) -> Vec<String> {
     std::iter::once(program.to_string_lossy().to_string())
         .chain(argv.iter().skip(1).cloned())
         .collect::<Vec<_>>()
@@ -497,8 +498,8 @@ mod tests {
     use super::map_exec_result;
     use crate::exec::SandboxType;
     use codex_shell_escalation::ExecResult;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
-    use std::path::Path;
     use std::time::Duration;
 
     #[test]
@@ -523,13 +524,16 @@ mod tests {
     fn join_program_and_argv_replaces_original_argv_zero() {
         assert_eq!(
             join_program_and_argv(
-                Path::new("/tmp/tool"),
+                &AbsolutePathBuf::from_absolute_path("/tmp/tool").unwrap(),
                 &["./tool".into(), "--flag".into(), "value".into()],
             ),
             vec!["/tmp/tool", "--flag", "value"]
         );
         assert_eq!(
-            join_program_and_argv(Path::new("/tmp/tool"), &["./tool".into()]),
+            join_program_and_argv(
+                &AbsolutePathBuf::from_absolute_path("/tmp/tool").unwrap(),
+                &["./tool".into()]
+            ),
             vec!["/tmp/tool"]
         );
     }
