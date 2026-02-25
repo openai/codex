@@ -2569,7 +2569,7 @@ impl ChatWidget {
         self.notify(Notification::ExecApprovalRequested { command });
 
         let request = ApprovalRequest::Exec {
-            id: ev.call_id,
+            id: ev.effective_approval_id(),
             command: ev.command,
             reason: ev.reason,
             network_approval_context: ev.network_approval_context,
