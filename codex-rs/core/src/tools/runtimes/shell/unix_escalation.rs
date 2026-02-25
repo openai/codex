@@ -16,6 +16,7 @@ use crate::tools::sandboxing::ToolError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
+use codex_execpolicy::decision;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
@@ -165,6 +166,13 @@ struct CoreShellActionProvider {
     stopwatch: Stopwatch,
 }
 
+enum DecisionSource {
+    SkillScript,
+    PrefixRule,
+    /// Often, this is `is_safe_command()`.
+    UnmatchedCommandFallback,
+}
+
 impl CoreShellActionProvider {
     fn decision_driven_by_policy(matched_rules: &[RuleMatch], decision: Decision) -> bool {
         matched_rules.iter().any(|rule_match| {
@@ -238,6 +246,7 @@ impl CoreShellActionProvider {
         program: &AbsolutePathBuf,
         argv: &[String],
         workdir: &AbsolutePathBuf,
+        decision_source: DecisionSource,
     ) -> anyhow::Result<EscalateAction> {
         let action = match decision {
             Decision::Forbidden => EscalateAction::Deny {
@@ -255,8 +264,26 @@ impl CoreShellActionProvider {
                 } else {
                     match self.prompt(program, argv, workdir, &self.stopwatch).await? {
                         ReviewDecision::Approved
-                        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                        | ReviewDecision::ApprovedForSession => {
+                        | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+                            if needs_escalation {
+                                EscalateAction::Escalate
+                            } else {
+                                EscalateAction::Run
+                            }
+                        }
+                        ReviewDecision::ApprovedForSession => {
+                            // Currently, we only add session approvals for
+                            // skill scripts because we are storing only the
+                            // `program` whereas prefix rules may be restricted by a longer prefix.
+                            if matches!(decision_source, DecisionSource::SkillScript) {
+                                self.session
+                                    .services
+                                    .execve_session_approvals
+                                    .write()
+                                    .await
+                                    .insert(program.clone());
+                            }
+
                             if needs_escalation {
                                 EscalateAction::Escalate
                             } else {
@@ -325,8 +352,27 @@ impl EscalationPolicy for CoreShellActionProvider {
             // EscalateAction::Run case, rather than always escalating when a
             // skill matches.
             let needs_escalation = true;
+            let is_approved_for_session = self
+                .session
+                .services
+                .execve_session_approvals
+                .read()
+                .await
+                .contains(program);
+            let decision = if is_approved_for_session {
+                Decision::Allow
+            } else {
+                Decision::Prompt
+            };
             return self
-                .process_decision(Decision::Prompt, needs_escalation, program, argv, workdir)
+                .process_decision(
+                    decision,
+                    needs_escalation,
+                    program,
+                    argv,
+                    workdir,
+                    DecisionSource::SkillScript,
+                )
                 .await;
         }
 
@@ -360,12 +406,18 @@ impl EscalationPolicy for CoreShellActionProvider {
         let needs_escalation =
             self.sandbox_permissions.requires_escalated_permissions() || decision_driven_by_policy;
 
+        let decision_source = if decision_driven_by_policy {
+            DecisionSource::PrefixRule
+        } else {
+            DecisionSource::UnmatchedCommandFallback
+        };
         self.process_decision(
             evaluation.decision,
             needs_escalation,
             program,
             argv,
             workdir,
+            decision_source,
         )
         .await
     }
