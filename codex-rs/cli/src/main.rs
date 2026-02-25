@@ -76,12 +76,13 @@ struct MultitoolCli {
     /// Launch Codex in a dedicated git worktree.
     ///
     /// When omitted, Codex runs in the current directory. Pass `--worktree` to
-    /// auto-generate a branch name, or `--worktree <branch>` to use a specific
+    /// auto-generate a branch name, or `--worktree=<branch>` to use a specific
     /// branch.
     #[arg(
         long = "worktree",
         value_name = "BRANCH",
         num_args = 0..=1,
+        require_equals = true,
         default_missing_value = worktree::WORKTREE_AUTO_BRANCH_SENTINEL
     )]
     worktree: Option<String>,
@@ -1487,9 +1488,8 @@ mod tests {
 
     #[test]
     fn worktree_flag_parses_prompt_and_branch_value() {
-        let cli =
-            MultitoolCli::try_parse_from(["codex", "fix lint", "--worktree", "feature/cli-wt"])
-                .expect("parse should succeed");
+        let cli = MultitoolCli::try_parse_from(["codex", "fix lint", "--worktree=feature/cli-wt"])
+            .expect("parse should succeed");
         assert_eq!(cli.interactive.prompt.as_deref(), Some("fix lint"));
         assert_eq!(cli.worktree.as_deref(), Some("feature/cli-wt"));
         assert!(cli.subcommand.is_none());
@@ -1509,6 +1509,17 @@ mod tests {
         let cli = MultitoolCli::try_parse_from(["codex", "create docs", "--worktree"])
             .expect("parse should succeed");
         assert_eq!(cli.interactive.prompt.as_deref(), Some("create docs"));
+        assert_eq!(
+            cli.worktree.as_deref(),
+            Some(worktree::WORKTREE_AUTO_BRANCH_SENTINEL)
+        );
+    }
+
+    #[test]
+    fn worktree_without_equals_preserves_prompt() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--worktree", "fix auth timeout"])
+            .expect("parse should succeed");
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("fix auth timeout"));
         assert_eq!(
             cli.worktree.as_deref(),
             Some(worktree::WORKTREE_AUTO_BRANCH_SENTINEL)
