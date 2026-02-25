@@ -54,9 +54,7 @@ impl SandboxPermissions {
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct FileSystemPermissions {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read: Option<Vec<PathBuf>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub write: Option<Vec<PathBuf>>,
 }
 
@@ -68,13 +66,9 @@ impl FileSystemPermissions {
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct MacOsPermissions {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferences: Option<MacOsPreferencesValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub automations: Option<MacOsAutomationValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accessibility: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar: Option<bool>,
 }
 
@@ -103,11 +97,8 @@ pub enum MacOsAutomationValue {
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct PermissionProfile {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_system: Option<FileSystemPermissions>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub macos: Option<MacOsPermissions>,
 }
 

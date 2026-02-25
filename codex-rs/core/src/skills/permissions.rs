@@ -3,8 +3,10 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[cfg(target_os = "macos")]
 use codex_protocol::models::MacOsAutomationValue;
 use codex_protocol::models::MacOsPermissions;
+#[cfg(target_os = "macos")]
 use codex_protocol::models::MacOsPreferencesValue;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -260,8 +262,11 @@ mod tests {
     use crate::protocol::ReadOnlyAccess;
     use crate::protocol::SandboxPolicy;
     use codex_protocol::models::FileSystemPermissions;
+    #[cfg(target_os = "macos")]
     use codex_protocol::models::MacOsAutomationValue;
+    #[cfg(target_os = "macos")]
     use codex_protocol::models::MacOsPermissions;
+    #[cfg(target_os = "macos")]
     use codex_protocol::models::MacOsPreferencesValue;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
