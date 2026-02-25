@@ -27,7 +27,7 @@ Skills from {repo}:
 Which ones would you like installed?
 """
 
-After installing a skill, tell the user: "Restart Codex to pick up new skills."
+After installing a skill, tell the user: "Codex should pick up new skills automatically. If it does not, reopen the skills list or restart Codex as a fallback."
 
 ## Scripts
 

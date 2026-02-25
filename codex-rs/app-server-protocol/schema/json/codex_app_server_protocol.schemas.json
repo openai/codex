@@ -6298,6 +6298,26 @@
           "properties": {
             "method": {
               "enum": [
+                "skills/updated"
+              ],
+              "title": "Skills/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SkillsUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Skills/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/reasoning/summaryTextDelta"
               ],
               "title": "Item/reasoning/summaryTextDeltaNotificationMethod",
@@ -12205,6 +12225,12 @@
           "path"
         ],
         "title": "SkillsRemoteWriteResponse",
+        "type": "object"
+      },
+      "SkillsUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Notification emitted when local skill files or skill configuration changes.",
+        "title": "SkillsUpdatedNotification",
         "type": "object"
       },
       "SubAgentSource": {

@@ -1,0 +1,6 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Notification emitted when local skill files or skill configuration changes.",
+  "title": "SkillsUpdatedNotification",
+  "type": "object"
+}

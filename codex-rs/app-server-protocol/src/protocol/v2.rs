@@ -1673,6 +1673,16 @@ pub struct AppListUpdatedNotification {
     pub data: Vec<AppInfo>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Notification emitted when the server's local skill view changes.
+///
+/// The payload is intentionally empty because clients should treat this as a
+/// refresh hint and call `skills/list` again, typically with `forceReload:
+/// true`, instead of trying to apply an incremental update.
+pub struct SkillsUpdatedNotification {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

@@ -1449,6 +1449,10 @@
         }
       ]
     },
+    "SkillsUpdatedNotification": {
+      "description": "Notification emitted when local skill files or skill configuration changes.",
+      "type": "object"
+    },
     "SubAgentSource": {
       "oneOf": [
         {
@@ -3520,6 +3524,26 @@
         "params"
       ],
       "title": "App/list/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "skills/updated"
+          ],
+          "title": "Skills/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Skills/updatedNotification",
       "type": "object"
     },
     {

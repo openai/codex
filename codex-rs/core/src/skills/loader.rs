@@ -287,21 +287,32 @@ fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
     roots.retain(|root| seen.insert(root.path.clone()));
 }
 
-fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) -> Vec<SkillRoot> {
+/// Returns every repo-scoped `.agents/skills` path between the project root and `cwd`.
+///
+/// The loader filters these candidates down to existing directories, but the
+/// file watcher also consumes the full list so it can watch an ancestor before a
+/// new `.agents/skills` directory exists.
+pub(crate) fn repo_agents_skill_root_candidates(
+    config_layer_stack: &ConfigLayerStack,
+    cwd: &Path,
+) -> Vec<PathBuf> {
     let project_root_markers = project_root_markers_from_stack(config_layer_stack);
     let project_root = find_project_root(cwd, &project_root_markers);
-    let dirs = dirs_between_project_root_and_cwd(cwd, &project_root);
-    let mut roots = Vec::new();
-    for dir in dirs {
-        let agents_skills = dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
-        if agents_skills.is_dir() {
-            roots.push(SkillRoot {
-                path: agents_skills,
-                scope: SkillScope::Repo,
-            });
-        }
-    }
-    roots
+    dirs_between_project_root_and_cwd(cwd, &project_root)
+        .into_iter()
+        .map(|dir| dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME))
+        .collect()
+}
+
+fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) -> Vec<SkillRoot> {
+    repo_agents_skill_root_candidates(config_layer_stack, cwd)
+        .into_iter()
+        .filter(|path| path.is_dir())
+        .map(|path| SkillRoot {
+            path,
+            scope: SkillScope::Repo,
+        })
+        .collect()
 }
 
 fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec<String> {

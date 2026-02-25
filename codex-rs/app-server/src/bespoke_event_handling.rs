@@ -58,6 +58,10 @@ use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::SkillApprovalDecision as V2SkillApprovalDecision;
+use codex_app_server_protocol::SkillRequestApprovalParams;
+use codex_app_server_protocol::SkillRequestApprovalResponse;
+use codex_app_server_protocol::SkillsUpdatedNotification;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
@@ -1459,6 +1463,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
+        EventMsg::SkillsUpdateAvailable => {
+            handle_skills_updated(api_version, &outgoing).await;
+        }
         EventMsg::ShutdownComplete => {
             thread_watch_manager
                 .note_thread_shutdown(&conversation_id.to_string())
@@ -1509,6 +1516,23 @@ async fn handle_turn_plan_update(
         };
         outgoing
             .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
+            .await;
+    }
+}
+
+/// Bridges core's skill invalidation event into the v2 app-server notification stream.
+///
+/// Earlier protocol versions do not expose a dedicated skills refresh
+/// notification, so they intentionally ignore this event.
+async fn handle_skills_updated(
+    api_version: ApiVersion,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+) {
+    if let ApiVersion::V2 = api_version {
+        outgoing
+            .send_server_notification(ServerNotification::SkillsUpdated(
+                SkillsUpdatedNotification::default(),
+            ))
             .await;
     }
 }
@@ -2529,6 +2553,25 @@ mod tests {
                 assert_eq!(n.plan[0].status, TurnPlanStepStatus::Pending);
                 assert_eq!(n.plan[1].step, "second");
                 assert_eq!(n.plan[1].status, TurnPlanStepStatus::Completed);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_skills_updated_emits_notification_for_v2() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(outgoing, vec![ConnectionId(1)]);
+
+        handle_skills_updated(ApiVersion::V2, &outgoing).await;
+
+        let msg = recv_broadcast_message(&mut rx).await?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::SkillsUpdated(payload)) => {
+                assert_eq!(payload, SkillsUpdatedNotification::default());
             }
             other => bail!("unexpected message: {other:?}"),
         }

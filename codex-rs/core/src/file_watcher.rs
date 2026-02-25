@@ -23,6 +23,7 @@ use tokio::time::sleep_until;
 use tracing::warn;
 
 use crate::config::Config;
+use crate::skills::loader::repo_agents_skill_root_candidates;
 use crate::skills::loader::skill_roots_from_layer_stack_with_agents;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,8 +31,16 @@ pub enum FileWatcherEvent {
     SkillsChanged { paths: Vec<PathBuf> },
 }
 
+#[derive(Default)]
+/// Tracks logical skill roots separately from the concrete paths watched by `notify`.
+///
+/// Missing repo-scoped `.agents/skills` directories are watched through their
+/// nearest existing ancestor until the concrete directory exists, which means
+/// multiple logical roots can temporarily share one underlying watch target.
 struct WatchState {
     skills_root_ref_counts: HashMap<PathBuf, usize>,
+    watch_target_by_skills_root: HashMap<PathBuf, PathBuf>,
+    watch_target_ref_counts: HashMap<PathBuf, usize>,
 }
 
 struct FileWatcherInner {
@@ -116,9 +125,7 @@ impl FileWatcher {
             watched_paths: HashMap::new(),
         };
         let (tx, _) = broadcast::channel(128);
-        let state = Arc::new(RwLock::new(WatchState {
-            skills_root_ref_counts: HashMap::new(),
-        }));
+        let state = Arc::new(RwLock::new(WatchState::default()));
         let file_watcher = Self {
             inner: Some(Mutex::new(inner)),
             state: Arc::clone(&state),
@@ -132,9 +139,7 @@ impl FileWatcher {
         let (tx, _) = broadcast::channel(1);
         Self {
             inner: None,
-            state: Arc::new(RwLock::new(WatchState {
-                skills_root_ref_counts: HashMap::new(),
-            })),
+            state: Arc::new(RwLock::new(WatchState::default())),
             tx,
         }
     }
@@ -148,6 +153,10 @@ impl FileWatcher {
             skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd)
                 .into_iter()
                 .map(|root| root.path)
+                .chain(repo_agents_skill_root_candidates(
+                    &config.config_layer_stack,
+                    &config.cwd,
+                ))
                 .collect();
         let mut registered_roots: Vec<PathBuf> = deduped_roots.into_iter().collect();
         registered_roots.sort_unstable_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
@@ -232,8 +241,27 @@ impl FileWatcher {
             .entry(root.clone())
             .or_insert(0);
         *count += 1;
-        if *count == 1 {
-            self.watch_path(root, RecursiveMode::Recursive);
+        if *count > 1 {
+            return;
+        }
+
+        // If the concrete skills directory does not exist yet, watch the nearest
+        // existing ancestor so creating the directory later still triggers a
+        // refresh.
+        let watch_target = root
+            .ancestors()
+            .find(|path| path.exists())
+            .map_or_else(|| root.clone(), Path::to_path_buf);
+        state
+            .watch_target_by_skills_root
+            .insert(root, watch_target.clone());
+        let watch_count = state
+            .watch_target_ref_counts
+            .entry(watch_target.clone())
+            .or_insert(0);
+        *watch_count += 1;
+        if *watch_count == 1 {
+            self.watch_path(watch_target, RecursiveMode::Recursive);
         }
     }
 
@@ -242,22 +270,34 @@ impl FileWatcher {
             .state
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut watch_targets_to_unwatch = Vec::new();
         let mut inner_guard: Option<std::sync::MutexGuard<'_, FileWatcherInner>> = None;
 
         for root in roots {
-            let mut should_unwatch = false;
-            if let Some(count) = state.skills_root_ref_counts.get_mut(root) {
-                if *count > 1 {
-                    *count -= 1;
-                } else {
-                    state.skills_root_ref_counts.remove(root);
-                    should_unwatch = true;
-                }
-            }
-
-            if !should_unwatch {
+            if let Some(count) = state.skills_root_ref_counts.get_mut(root)
+                && *count > 1
+            {
+                *count -= 1;
                 continue;
             }
+            state.skills_root_ref_counts.remove(root);
+
+            let Some(watch_target) = state.watch_target_by_skills_root.remove(root) else {
+                continue;
+            };
+
+            let Some(count) = state.watch_target_ref_counts.get_mut(&watch_target) else {
+                continue;
+            };
+            if *count > 1 {
+                *count -= 1;
+                continue;
+            }
+            state.watch_target_ref_counts.remove(&watch_target);
+            watch_targets_to_unwatch.push(watch_target);
+        }
+
+        for watch_target in &watch_targets_to_unwatch {
             let Some(inner) = &self.inner else {
                 continue;
             };
@@ -271,11 +311,11 @@ impl FileWatcher {
             let Some(guard) = inner_guard.as_mut() else {
                 continue;
             };
-            if guard.watched_paths.remove(root).is_none() {
+            if guard.watched_paths.remove(watch_target).is_none() {
                 continue;
             }
-            if let Err(err) = guard.watcher.unwatch(root) {
-                warn!("failed to unwatch {}: {err}", root.display());
+            if let Err(err) = guard.watcher.unwatch(watch_target) {
+                warn!("failed to unwatch {}: {err}", watch_target.display());
             }
         }
     }
@@ -409,6 +449,7 @@ mod tests {
         let root = path("/tmp/skills");
         let state = RwLock::new(WatchState {
             skills_root_ref_counts: HashMap::from([(root.clone(), 1)]),
+            ..Default::default()
         });
         let event = notify_event(
             EventKind::Create(CreateKind::Any),
@@ -428,6 +469,7 @@ mod tests {
         let root_b = path("/tmp/workspace/.codex/skills");
         let state = RwLock::new(WatchState {
             skills_root_ref_counts: HashMap::from([(root_a.clone(), 1), (root_b.clone(), 1)]),
+            ..Default::default()
         });
         let event = notify_event(
             EventKind::Modify(ModifyKind::Any),
@@ -450,6 +492,7 @@ mod tests {
         let root = path("/tmp/skills");
         let state = RwLock::new(WatchState {
             skills_root_ref_counts: HashMap::from([(root.clone(), 1)]),
+            ..Default::default()
         });
         let path = root.join("demo/SKILL.md");
 
@@ -492,6 +535,31 @@ mod tests {
 
         let state = watcher.state.read().expect("state lock");
         assert_eq!(state.skills_root_ref_counts.len(), 0);
+    }
+
+    #[test]
+    fn register_missing_skills_root_watches_nearest_existing_ancestor() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let watcher = FileWatcher::new(temp_dir.path().to_path_buf()).expect("watcher");
+        let missing_root = temp_dir.path().join(".agents").join("skills");
+
+        watcher.register_skills_root(missing_root.clone());
+
+        let state = watcher.state.read().expect("state lock");
+        assert_eq!(state.skills_root_ref_counts.get(&missing_root), Some(&1));
+        assert_eq!(
+            state.watch_target_by_skills_root.get(&missing_root),
+            Some(&temp_dir.path().to_path_buf())
+        );
+        assert_eq!(state.watch_target_ref_counts.get(temp_dir.path()), Some(&1));
+        drop(state);
+
+        let inner = watcher.inner.as_ref().expect("watcher inner");
+        let inner = inner.lock().expect("inner lock");
+        assert_eq!(
+            inner.watched_paths.get(temp_dir.path()),
+            Some(&RecursiveMode::Recursive)
+        );
     }
 
     #[test]

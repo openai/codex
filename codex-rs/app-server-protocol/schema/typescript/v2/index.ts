@@ -157,6 +157,7 @@ export type { SkillsRemoteReadParams } from "./SkillsRemoteReadParams";
 export type { SkillsRemoteReadResponse } from "./SkillsRemoteReadResponse";
 export type { SkillsRemoteWriteParams } from "./SkillsRemoteWriteParams";
 export type { SkillsRemoteWriteResponse } from "./SkillsRemoteWriteResponse";
+export type { SkillsUpdatedNotification } from "./SkillsUpdatedNotification";
 export type { TerminalInteractionNotification } from "./TerminalInteractionNotification";
 export type { TextElement } from "./TextElement";
 export type { TextPosition } from "./TextPosition";

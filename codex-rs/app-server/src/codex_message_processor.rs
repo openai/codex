@@ -123,6 +123,7 @@ use codex_app_server_protocol::SkillsRemoteReadParams;
 use codex_app_server_protocol::SkillsRemoteReadResponse;
 use codex_app_server_protocol::SkillsRemoteWriteParams;
 use codex_app_server_protocol::SkillsRemoteWriteResponse;
+use codex_app_server_protocol::SkillsUpdatedNotification;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
@@ -5402,6 +5403,19 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    /// Sends the app-server refresh hint after a direct skill mutation.
+    ///
+    /// `skills/list` responses are cached per `cwd`, so app-server initiated
+    /// writes proactively emit the same invalidation signal that the filesystem
+    /// watcher path can later surface to connected clients.
+    async fn send_skills_updated_notification(outgoing: &Arc<OutgoingMessageSender>) {
+        outgoing
+            .send_server_notification(ServerNotification::SkillsUpdated(
+                SkillsUpdatedNotification::default(),
+            ))
+            .await;
+    }
+
     async fn skills_list(&self, request_id: ConnectionRequestId, params: SkillsListParams) {
         let SkillsListParams {
             cwds,
@@ -5521,6 +5535,7 @@ impl CodexMessageProcessor {
 
         match response {
             Ok(downloaded) => {
+                self.thread_manager.skills_manager().clear_cache();
                 self.outgoing
                     .send_response(
                         request_id,
@@ -5530,6 +5545,7 @@ impl CodexMessageProcessor {
                         },
                     )
                     .await;
+                Self::send_skills_updated_notification(&self.outgoing).await;
             }
             Err(err) => {
                 self.send_internal_error(
@@ -5564,6 +5580,7 @@ impl CodexMessageProcessor {
                         },
                     )
                     .await;
+                Self::send_skills_updated_notification(&self.outgoing).await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {

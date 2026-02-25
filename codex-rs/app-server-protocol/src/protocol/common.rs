@@ -843,6 +843,7 @@ server_notification_definitions! {
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     AppListUpdated => "app/list/updated" (v2::AppListUpdatedNotification),
+    SkillsUpdated => "skills/updated" (v2::SkillsUpdatedNotification),
     ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
@@ -1462,6 +1463,20 @@ mod tests {
                         "samplesPerChannel": 512
                     }
                 }
+            }),
+            serde_json::to_value(&notification)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_skills_updated_notification() -> Result<()> {
+        let notification =
+            ServerNotification::SkillsUpdated(v2::SkillsUpdatedNotification::default());
+        assert_eq!(
+            json!({
+                "method": "skills/updated",
+                "params": {}
             }),
             serde_json::to_value(&notification)?,
         );
