@@ -56,11 +56,10 @@ impl Session {
         #[derive(Debug)]
         enum RolloutReplayMetaSegment {
             UserTurn(Box<ReplayedUserTurn>),
-            // Unexpected for modern rollouts, where compaction should normally happen inside a
-            // turn span. We keep this as a minimal fallback for standalone/legacy compaction so
-            // later resume conservatively clears the baseline until another `TurnContextItem`
-            // re-establishes it.
-            Compaction,
+            // A later segment cleared any older `reference_context_item` without producing a new
+            // surviving user-turn baseline. This can come from standalone compaction turns or
+            // legacy/unmatched compaction replay.
+            ReferenceContextCleared,
         }
 
         let mut history = ContextManager::new();
@@ -78,7 +77,7 @@ impl Session {
                     },
                 )));
             } else if active_turn.cleared_reference_context_item {
-                replayed_segments.push(RolloutReplayMetaSegment::Compaction);
+                replayed_segments.push(RolloutReplayMetaSegment::ReferenceContextCleared);
             }
         };
 
@@ -106,7 +105,7 @@ impl Session {
                         active_turn.reference_context_item = None;
                         active_turn.cleared_reference_context_item = true;
                     } else {
-                        replayed_segments.push(RolloutReplayMetaSegment::Compaction);
+                        replayed_segments.push(RolloutReplayMetaSegment::ReferenceContextCleared);
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -213,7 +212,7 @@ impl Session {
 
             for segment in replayed_segments.iter().rev() {
                 match segment {
-                    RolloutReplayMetaSegment::Compaction => {
+                    RolloutReplayMetaSegment::ReferenceContextCleared => {
                         compaction_cleared_reference_context_item = true;
                     }
                     RolloutReplayMetaSegment::UserTurn(turn) => {
