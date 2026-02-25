@@ -1379,6 +1379,7 @@ dependencies = [
  "codex-protocol",
  "codex-rmcp-client",
  "codex-shell-command",
+ "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -1717,11 +1718,13 @@ dependencies = [
  "codex-shell-escalation",
  "codex-skills",
  "codex-state",
+ "codex-test-macros",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
  "codex-utils-pty",
  "codex-utils-readiness",
+ "codex-utils-stream-parser",
  "codex-utils-string",
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
@@ -2242,9 +2245,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
- "codex-execpolicy",
+ "codex-utils-absolute-path",
  "libc",
- "path-absolutize",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -2297,6 +2299,15 @@ dependencies = [
  "pretty_assertions",
  "tempfile",
  "uds_windows",
+]
+
+[[package]]
+name = "codex-test-macros"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -2536,6 +2547,13 @@ dependencies = [
  "libc",
  "tracing",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "codex-utils-stream-parser"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
 ]
 
 [[package]]

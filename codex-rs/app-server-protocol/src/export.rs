@@ -1947,6 +1947,15 @@ mod tests {
         let thread_start_ts =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.ts"))?;
         assert_eq!(thread_start_ts.contains("mockExperimentalField"), true);
+        let command_execution_request_approval_ts = fs::read_to_string(
+            output_dir
+                .join("v2")
+                .join("CommandExecutionRequestApprovalParams.ts"),
+        )?;
+        assert_eq!(
+            command_execution_request_approval_ts.contains("additionalPermissions"),
+            true
+        );
 
         Ok(())
     }
@@ -2083,6 +2092,12 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
         let thread_start_json =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.json"))?;
         assert_eq!(thread_start_json.contains("mockExperimentalField"), false);
+        let command_execution_request_approval_json =
+            fs::read_to_string(output_dir.join("CommandExecutionRequestApprovalParams.json"))?;
+        assert_eq!(
+            command_execution_request_approval_json.contains("additionalPermissions"),
+            false
+        );
 
         let client_request_json = fs::read_to_string(output_dir.join("ClientRequest.json"))?;
         assert_eq!(
@@ -2093,6 +2108,7 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
         let bundle_json =
             fs::read_to_string(output_dir.join("codex_app_server_protocol.schemas.json"))?;
         assert_eq!(bundle_json.contains("mockExperimentalField"), false);
+        assert_eq!(bundle_json.contains("additionalPermissions"), false);
         assert_eq!(bundle_json.contains("MockExperimentalMethodParams"), false);
         assert_eq!(
             bundle_json.contains("MockExperimentalMethodResponse"),

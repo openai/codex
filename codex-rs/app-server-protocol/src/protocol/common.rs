@@ -350,6 +350,14 @@ client_request_definitions! {
         params: v2::ConfigReadParams,
         response: v2::ConfigReadResponse,
     },
+    ExternalAgentConfigDetect => "externalAgentConfig/detect" {
+        params: v2::ExternalAgentConfigDetectParams,
+        response: v2::ExternalAgentConfigDetectResponse,
+    },
+    ExternalAgentConfigImport => "externalAgentConfig/import" {
+        params: v2::ExternalAgentConfigImportParams,
+        response: v2::ExternalAgentConfigImportResponse,
+    },
     ConfigValueWrite => "config/value/write" {
         params: v2::ConfigValueWriteParams,
         response: v2::ConfigWriteResponse,
@@ -501,6 +509,7 @@ macro_rules! server_request_definitions {
     ) => {
         /// Request initiated from the server and sent to the client.
         #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+        #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ServerRequest {
             $(
@@ -515,6 +524,7 @@ macro_rules! server_request_definitions {
         }
 
         #[derive(Debug, Clone, PartialEq, JsonSchema)]
+        #[allow(clippy::large_enum_variant)]
         pub enum ServerRequestPayload {
             $( $variant($params), )*
         }
@@ -1370,5 +1380,35 @@ mod tests {
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("mock/experimentalMethod"));
+    }
+
+    #[test]
+    fn command_execution_request_approval_additional_permissions_is_marked_experimental() {
+        let params = v2::CommandExecutionRequestApprovalParams {
+            thread_id: "thr_123".to_string(),
+            turn_id: "turn_123".to_string(),
+            item_id: "call_123".to_string(),
+            approval_id: None,
+            reason: None,
+            network_approval_context: None,
+            command: Some("cat file".to_string()),
+            cwd: None,
+            command_actions: None,
+            additional_permissions: Some(v2::AdditionalPermissionProfile {
+                network: None,
+                file_system: Some(v2::AdditionalFileSystemPermissions {
+                    read: Some(vec![std::path::PathBuf::from("/tmp/allowed")]),
+                    write: None,
+                }),
+                macos: None,
+            }),
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&params);
+        assert_eq!(
+            reason,
+            Some("item/commandExecution/requestApproval.additionalPermissions")
+        );
     }
 }

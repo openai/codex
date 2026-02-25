@@ -55,7 +55,7 @@ pub(crate) fn build_skill_name_counts(
     let mut exact_counts: HashMap<String, usize> = HashMap::new();
     let mut lower_counts: HashMap<String, usize> = HashMap::new();
     for skill in skills {
-        if disabled_paths.contains(&skill.path) {
+        if disabled_paths.contains(&skill.path_to_skills_md) {
             continue;
         }
         *exact_counts.entry(skill.name.clone()).or_insert(0) += 1;

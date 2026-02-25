@@ -8,8 +8,8 @@ When you need extra filesystem access for one command, use:
 
 - `sandbox_permissions: "with_additional_permissions"`
 - `additional_permissions` with one or both fields:
-  - `fs_read`: list of paths that need read access
-  - `fs_write`: list of paths that need write access
+  - `file_system.read`: list of paths that need read access
+  - `file_system.write`: list of paths that need write access
 
 This keeps execution inside the current sandbox policy, while adding only the requested permissions for that command, unless an exec-policy allow rule applies and authorizes running the command outside the sandbox.
 
