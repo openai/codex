@@ -300,7 +300,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_prewarm_uses_model_preference_when_feature_disabled() {
+async fn responses_websocket_prewarm_uses_v2_when_model_prefers_websockets_and_feature_disabled() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![vec![
@@ -324,20 +324,34 @@ async fn responses_websocket_prewarm_uses_model_preference_when_feature_disabled
         .await
         .expect("websocket prewarm failed");
 
-    // V1 prewarm only preconnects and should not issue a request.
+    // V2 prewarm issues a request on the websocket connection.
     assert_eq!(server.handshakes().len(), 1);
-    assert_eq!(server.single_connection().len(), 0);
+    assert_eq!(server.single_connection().len(), 1);
+
+    let handshake = server.single_handshake();
+    let openai_beta_header = handshake
+        .header(OPENAI_BETA_HEADER)
+        .expect("missing OpenAI-Beta header");
+    assert!(
+        openai_beta_header
+            .split(',')
+            .map(str::trim)
+            .any(|value| value == WS_V2_BETA_HEADER_VALUE)
+    );
+    assert!(
+        !openai_beta_header
+            .split(',')
+            .map(str::trim)
+            .any(|value| value == OPENAI_BETA_RESPONSES_WEBSOCKETS)
+    );
 
     stream_until_complete(&mut client_session, &harness, &prompt).await;
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
     assert_eq!(connection.len(), 1);
-    let turn = connection
-        .first()
-        .expect("missing turn request")
-        .body_json();
-    assert_eq!(turn["type"].as_str(), Some("response.create"));
-    assert_eq!(turn["input"], serde_json::to_value(&prompt.input).unwrap());
+    let prewarm = connection.first().expect("missing prewarm request").body_json();
+    assert_eq!(prewarm["type"].as_str(), Some("response.create"));
+    assert_eq!(prewarm["input"], serde_json::to_value(&prompt.input).unwrap());
 
     server.shutdown().await;
 }
