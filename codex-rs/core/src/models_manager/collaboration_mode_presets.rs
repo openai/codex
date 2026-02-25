@@ -10,13 +10,23 @@ const KNOWN_MODE_NAMES_PLACEHOLDER: &str = "{{KNOWN_MODE_NAMES}}";
 const REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER: &str = "{{REQUEST_USER_INPUT_AVAILABILITY}}";
 const QUESTION_STRATEGY_PLACEHOLDER: &str = "{{QUESTION_STRATEGY}}";
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CollaborationModesConfig {
+    pub default_mode_request_user_input: bool,
+}
+
+impl CollaborationModesConfig {
+    pub const fn new(default_mode_request_user_input: bool) -> Self {
+        Self {
+            default_mode_request_user_input,
+        }
+    }
+}
+
 pub(crate) fn builtin_collaboration_mode_presets(
-    default_mode_request_user_input: bool,
+    collaboration_modes_config: CollaborationModesConfig,
 ) -> Vec<CollaborationModeMask> {
-    vec![
-        plan_preset(),
-        default_preset(default_mode_request_user_input),
-    ]
+    vec![plan_preset(), default_preset(collaboration_modes_config)]
 }
 
 fn plan_preset() -> CollaborationModeMask {
@@ -29,23 +39,24 @@ fn plan_preset() -> CollaborationModeMask {
     }
 }
 
-fn default_preset(default_mode_request_user_input: bool) -> CollaborationModeMask {
+fn default_preset(collaboration_modes_config: CollaborationModesConfig) -> CollaborationModeMask {
     CollaborationModeMask {
         name: ModeKind::Default.display_name().to_string(),
         mode: Some(ModeKind::Default),
         model: None,
         reasoning_effort: None,
-        developer_instructions: Some(Some(default_mode_instructions(
-            default_mode_request_user_input,
-        ))),
+        developer_instructions: Some(Some(default_mode_instructions(collaboration_modes_config))),
     }
 }
 
-fn default_mode_instructions(default_mode_request_user_input: bool) -> String {
+fn default_mode_instructions(collaboration_modes_config: CollaborationModesConfig) -> String {
     let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
-    let request_user_input_availability =
-        request_user_input_availability_message(ModeKind::Default, default_mode_request_user_input);
-    let question_strategy = question_strategy_message(default_mode_request_user_input);
+    let request_user_input_availability = request_user_input_availability_message(
+        ModeKind::Default,
+        collaboration_modes_config.default_mode_request_user_input,
+    );
+    let question_strategy =
+        question_strategy_message(collaboration_modes_config.default_mode_request_user_input);
     COLLABORATION_MODE_DEFAULT
         .replace(KNOWN_MODE_NAMES_PLACEHOLDER, &known_mode_names)
         .replace(
@@ -97,7 +108,10 @@ mod tests {
     #[test]
     fn preset_names_use_mode_display_names() {
         assert_eq!(plan_preset().name, ModeKind::Plan.display_name());
-        assert_eq!(default_preset(false).name, ModeKind::Default.display_name());
+        assert_eq!(
+            default_preset(CollaborationModesConfig::default()).name,
+            ModeKind::Default.display_name()
+        );
         assert_eq!(
             plan_preset().reasoning_effort,
             Some(Some(ReasoningEffort::Medium))
@@ -106,7 +120,7 @@ mod tests {
 
     #[test]
     fn default_mode_instructions_replace_mode_names_placeholder() {
-        let default_instructions = default_preset(true)
+        let default_instructions = default_preset(CollaborationModesConfig::new(true))
             .developer_instructions
             .expect("default preset should include instructions")
             .expect("default instructions should be set");
@@ -127,7 +141,7 @@ mod tests {
 
     #[test]
     fn default_mode_instructions_use_plain_text_questions_when_feature_disabled() {
-        let default_instructions = default_preset(false)
+        let default_instructions = default_preset(CollaborationModesConfig::default())
             .developer_instructions
             .expect("default preset should include instructions")
             .expect("default instructions should be set");

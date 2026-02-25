@@ -24,6 +24,7 @@ use codex_core::config::ConstraintError;
 use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::RequirementSource;
 use codex_core::features::Feature;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
@@ -1637,7 +1638,7 @@ async fn make_chatwidget_manual(
         codex_home,
         auth_manager.clone(),
         None,
-        false,
+        CollaborationModesConfig::default(),
     ));
     let reasoning_effort = None;
     let base_mode = CollaborationMode {
@@ -1764,7 +1765,7 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         None,
-        false,
+        CollaborationModesConfig::default(),
     ));
 }
 
