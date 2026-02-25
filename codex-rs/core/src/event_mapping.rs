@@ -38,7 +38,7 @@ pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> boo
                 || UserInstructions::is_user_instructions_text(text)
                 || SkillInstructions::is_skill_instructions_text(text)
         }
-        ContentItem::OutputText { text } => is_session_prefix(text),
+        ContentItem::OutputText { .. } => false,
         ContentItem::InputImage { .. } => false,
     })
 }
