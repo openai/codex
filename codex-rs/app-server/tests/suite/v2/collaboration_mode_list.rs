@@ -24,7 +24,6 @@ use tokio::time::timeout;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Confirms the server returns the default collaboration mode presets in a stable order.
-#[allow(deprecated)]
 #[tokio::test]
 async fn list_collaboration_modes_returns_presets() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -52,7 +51,6 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
             mode: preset.mode,
             model: preset.model,
             reasoning_effort: preset.reasoning_effort,
-            developer_instructions: None,
         })
         .collect();
     assert_eq!(expected, items);
