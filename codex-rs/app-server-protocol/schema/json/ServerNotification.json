@@ -2177,6 +2177,120 @@
       ],
       "type": "object"
     },
+    "ThreadRealtimeAudioChunk": {
+      "description": "EXPERIMENTAL - thread realtime audio chunk.",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "numChannels": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "sampleRate": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "samplesPerChannel": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data",
+        "numChannels",
+        "sampleRate"
+      ],
+      "type": "object"
+    },
+    "ThreadRealtimeClosedNotification": {
+      "description": "EXPERIMENTAL - emitted when thread realtime transport closes.",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadRealtimeErrorNotification": {
+      "description": "EXPERIMENTAL - emitted when thread realtime encounters an error.",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadRealtimeItemAddedNotification": {
+      "description": "EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.",
+      "properties": {
+        "item": true,
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadRealtimeOutputAudioDeltaNotification": {
+      "description": "EXPERIMENTAL - streamed output audio emitted by thread realtime.",
+      "properties": {
+        "audio": {
+          "$ref": "#/definitions/ThreadRealtimeAudioChunk"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "audio",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadRealtimeStartedNotification": {
+      "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
+      "properties": {
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadStartedNotification": {
       "properties": {
         "thread": {
@@ -3451,6 +3565,106 @@
         "params"
       ],
       "title": "FuzzyFileSearch/sessionCompletedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/realtime/started"
+          ],
+          "title": "Thread/realtime/startedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeStartedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/realtime/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/realtime/itemAdded"
+          ],
+          "title": "Thread/realtime/itemAddedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeItemAddedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/realtime/itemAddedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/realtime/outputAudio/delta"
+          ],
+          "title": "Thread/realtime/outputAudio/deltaNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeOutputAudioDeltaNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/realtime/outputAudio/deltaNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/realtime/error"
+          ],
+          "title": "Thread/realtime/errorNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeErrorNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/realtime/errorNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/realtime/closed"
+          ],
+          "title": "Thread/realtime/closedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeClosedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/realtime/closedNotification",
       "type": "object"
     },
     {

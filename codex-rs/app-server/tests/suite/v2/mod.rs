@@ -15,6 +15,7 @@ mod model_list;
 mod output_schema;
 mod plan_item;
 mod rate_limits;
+mod realtime_conversation;
 mod request_user_input;
 mod review;
 mod safety_check_downgrade;

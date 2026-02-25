@@ -62,6 +62,11 @@ use codex_app_server_protocol::SkillRequestApprovalResponse;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
+use codex_app_server_protocol::ThreadRealtimeClosedNotification;
+use codex_app_server_protocol::ThreadRealtimeErrorNotification;
+use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
+use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -97,6 +102,7 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
@@ -170,6 +176,73 @@ pub(crate) async fn apply_bespoke_event_handling(
                 };
                 outgoing
                     .send_server_notification(ServerNotification::ModelRerouted(notification))
+                    .await;
+            }
+        }
+        EventMsg::RealtimeConversationStarted(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = ThreadRealtimeStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    session_id: event.session_id,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadRealtimeStarted(
+                        notification,
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::RealtimeConversationRealtime(event) => {
+            if let ApiVersion::V2 = api_version {
+                match event.payload {
+                    RealtimeEvent::SessionCreated { .. } => {}
+                    RealtimeEvent::SessionUpdated { .. } => {}
+                    RealtimeEvent::AudioOut(audio) => {
+                        let notification = ThreadRealtimeOutputAudioDeltaNotification {
+                            thread_id: conversation_id.to_string(),
+                            audio: audio.into(),
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::ThreadRealtimeOutputAudioDelta(notification),
+                            )
+                            .await;
+                    }
+                    RealtimeEvent::ConversationItemAdded(item) => {
+                        let notification = ThreadRealtimeItemAddedNotification {
+                            thread_id: conversation_id.to_string(),
+                            item,
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                                notification,
+                            ))
+                            .await;
+                    }
+                    RealtimeEvent::Error(message) => {
+                        let notification = ThreadRealtimeErrorNotification {
+                            thread_id: conversation_id.to_string(),
+                            message,
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ThreadRealtimeError(
+                                notification,
+                            ))
+                            .await;
+                    }
+                }
+            }
+        }
+        EventMsg::RealtimeConversationClosed(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = ThreadRealtimeClosedNotification {
+                    thread_id: conversation_id.to_string(),
+                    reason: event.reason,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadRealtimeClosed(
+                        notification,
+                    ))
                     .await;
             }
         }
