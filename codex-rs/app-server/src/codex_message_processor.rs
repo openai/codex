@@ -368,6 +368,7 @@ pub(crate) struct CodexMessageProcessor {
     cli_overrides: Vec<(String, TomlValue)>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
+    pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
@@ -440,6 +441,7 @@ impl CodexMessageProcessor {
             cli_overrides,
             cloud_requirements,
             active_login: Arc::new(Mutex::new(None)),
+            pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
             thread_state_manager: ThreadStateManager::new(),
             thread_watch_manager: ThreadWatchManager::new_with_outgoing(outgoing),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
@@ -2890,6 +2892,23 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_resume(&mut self, request_id: ConnectionRequestId, params: ThreadResumeParams) {
+        if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
+            && self
+                .pending_thread_unloads
+                .lock()
+                .await
+                .contains(&thread_id)
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "thread {thread_id} is closing; retry thread/resume after the thread is closed"
+                ),
+            )
+            .await;
+            return;
+        }
+
         if self
             .resume_running_thread(request_id.clone(), &params)
             .await
@@ -4767,7 +4786,8 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn clear_thread_runtime_tracking(&mut self, thread_id: ThreadId) {
+    async fn finalize_thread_teardown(&mut self, thread_id: ThreadId) {
+        self.pending_thread_unloads.lock().await.remove(&thread_id);
         self.outgoing.cancel_requests_for_thread(thread_id).await;
         self.thread_state_manager
             .remove_thread_state(thread_id)
@@ -4795,7 +4815,7 @@ impl CodexMessageProcessor {
             // Reconcile stale app-server bookkeeping when the thread has already been
             // removed from the core manager. This keeps loaded-status/subscription state
             // consistent with the source of truth before reporting NotLoaded.
-            self.clear_thread_runtime_tracking(thread_id).await;
+            self.finalize_thread_teardown(thread_id).await;
             self.outgoing
                 .send_response(
                     request_id,
@@ -4826,6 +4846,7 @@ impl CodexMessageProcessor {
         if !self.thread_state_manager.has_subscribers(thread_id).await {
             // This connection was the last subscriber. Only now do we unload the thread.
             info!("thread {thread_id} has no subscribers; shutting down");
+            self.pending_thread_unloads.lock().await.insert(thread_id);
             // Any pending app-server -> client requests for this thread can no longer be
             // answered; cancel their callbacks before shutdown/unload.
             self.outgoing.cancel_requests_for_thread(thread_id).await;
@@ -4834,6 +4855,7 @@ impl CodexMessageProcessor {
                 .await;
 
             let outgoing = self.outgoing.clone();
+            let pending_thread_unloads = self.pending_thread_unloads.clone();
             let thread_manager = self.thread_manager.clone();
             let thread_watch_manager = self.thread_watch_manager.clone();
             tokio::spawn(async move {
@@ -4846,6 +4868,7 @@ impl CodexMessageProcessor {
                             thread_watch_manager
                                 .remove_thread(&thread_id.to_string())
                                 .await;
+                            pending_thread_unloads.lock().await.remove(&thread_id);
                             return;
                         }
                         thread_watch_manager
@@ -4859,11 +4882,14 @@ impl CodexMessageProcessor {
                                 notification,
                             ))
                             .await;
+                        pending_thread_unloads.lock().await.remove(&thread_id);
                     }
                     ThreadShutdownResult::SubmitFailed => {
+                        pending_thread_unloads.lock().await.remove(&thread_id);
                         warn!("failed to submit Shutdown to thread {thread_id}");
                     }
                     ThreadShutdownResult::TimedOut => {
+                        pending_thread_unloads.lock().await.remove(&thread_id);
                         warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
                     }
                 }
@@ -4963,7 +4989,7 @@ impl CodexMessageProcessor {
                 }
             }
         }
-        self.clear_thread_runtime_tracking(thread_id).await;
+        self.finalize_thread_teardown(thread_id).await;
 
         if state_db_ctx.is_none() {
             state_db_ctx = get_state_db(&self.config, None).await;

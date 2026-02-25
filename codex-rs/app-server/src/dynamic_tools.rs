@@ -12,10 +12,10 @@ use crate::outgoing_message::ClientRequestResult;
 
 pub(crate) async fn on_call_response(
     call_id: String,
-    pending_request: oneshot::Receiver<ClientRequestResult>,
+    receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
 ) {
-    let response = pending_request.await;
+    let response = receiver.await;
     let (response, _error) = match response {
         Ok(Ok(value)) => decode_response(value),
         Ok(Err(err)) => {
