@@ -223,6 +223,8 @@
     "https://bcr.bazel.build/modules/toolchains_llvm_bootstrapped/0.5.2/MODULE.bazel": "f7c822cea99caef928d7cbe695498096e53c4b2c0ea45997e9a64bf6b77b43b0",
     "https://bcr.bazel.build/modules/toolchains_llvm_bootstrapped/0.5.3/MODULE.bazel": "902ab5c2bc9eff04df45d17aac3c5c642afaad2d4569dcfdc86d0256f68f18e0",
     "https://bcr.bazel.build/modules/toolchains_llvm_bootstrapped/0.5.3/source.json": "8c03ccd25188ecf8baf4a97a8b42c507ff592d917bcbc06333b9c82d18c7ef13",
+    "https://bcr.bazel.build/modules/toolchains_llvm_bootstrapped/0.5.6/MODULE.bazel": "7298112608aefec21ea8bfbe325b14472222a0243c3dabcd0287eba418791f35",
+    "https://bcr.bazel.build/modules/toolchains_llvm_bootstrapped/0.5.6/source.json": "c2a30627cfe15e4deeba63a75d1894324444ae0276eb17ac0161ba5c220c1cb2",
     "https://bcr.bazel.build/modules/upb/0.0.0-20220923-a547704/MODULE.bazel": "7298990c00040a0e2f121f6c32544bab27d4452f80d9ce51349b1a28f3005c43",
     "https://bcr.bazel.build/modules/with_cfg.bzl/0.12.0/MODULE.bazel": "b573395fe63aef4299ba095173e2f62ccfee5ad9bbf7acaa95dba73af9fc2b38",
     "https://bcr.bazel.build/modules/with_cfg.bzl/0.12.0/source.json": "3f3fbaeafecaf629877ad152a2c9def21f8d330d91aa94c5dc75bbb98c10b8b8",
