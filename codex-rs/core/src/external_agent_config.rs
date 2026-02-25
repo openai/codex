@@ -415,7 +415,7 @@ fn rewrite_and_copy_text_file(source: &Path, target: &Path) -> io::Result<()> {
 }
 
 fn rewrite_claude_terms(content: &str) -> String {
-    let mut rewritten = content.to_string();
+    let mut rewritten = replace_case_insensitive_with_boundaries(content, "claude.md", "AGENTS.md");
     for from in [
         "claude code",
         "claude-code",
@@ -860,7 +860,7 @@ mod tests {
         fs::create_dir_all(repo_with_existing_target.join(".git")).expect("create git");
         fs::write(
             repo_root.join("CLAUDE.md"),
-            "Claude code\nclaude\nCLAUDE-CODE\n",
+            "Claude code\nclaude\nCLAUDE-CODE\nSee CLAUDE.md\n",
         )
         .expect("write source");
         fs::write(repo_with_existing_target.join("CLAUDE.md"), "new source").expect("write source");
@@ -887,7 +887,7 @@ mod tests {
 
         assert_eq!(
             fs::read_to_string(repo_root.join("AGENTS.md")).expect("read target"),
-            "Codex\nCodex\nCodex\n"
+            "Codex\nCodex\nCodex\nSee AGENTS.md\n"
         );
         assert_eq!(
             fs::read_to_string(repo_with_existing_target.join("AGENTS.md"))
