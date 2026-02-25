@@ -914,18 +914,7 @@ async fn run_ratatui_app(
     app_result
 }
 
-pub(crate) fn parse_thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
-    let file_name = path.file_name()?.to_str()?;
-    let core = file_name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
-    core.match_indices('-')
-        .rev()
-        .find_map(|(index, _)| ThreadId::from_string(&core[index + 1..]).ok())
-}
-
 pub(crate) async fn resolve_thread_id_for_session_path(path: &Path) -> Option<ThreadId> {
-    if let Some(thread_id) = parse_thread_id_from_rollout_path(path) {
-        return Some(thread_id);
-    }
     read_session_meta_line(path)
         .await
         .ok()
