@@ -44,6 +44,7 @@ pub(crate) struct ToolsConfig {
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
+    pub request_user_input_outside_plan_mode: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -66,6 +67,8 @@ impl ToolsConfig {
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = true;
+        let request_user_input_outside_plan_mode =
+            features.enabled(Feature::RequestUserInputOutsidePlanMode);
         let include_search_tool = features.enabled(Feature::Apps);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
@@ -106,6 +109,7 @@ impl ToolsConfig {
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
+            request_user_input_outside_plan_mode,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
@@ -668,7 +672,7 @@ fn create_wait_tool() -> ToolSpec {
     })
 }
 
-fn create_request_user_input_tool() -> ToolSpec {
+fn create_request_user_input_tool(request_user_input_outside_plan_mode: bool) -> ToolSpec {
     let mut option_props = BTreeMap::new();
     option_props.insert(
         "label".to_string(),
@@ -739,7 +743,7 @@ fn create_request_user_input_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "request_user_input".to_string(),
-        description: request_user_input_tool_description(),
+        description: request_user_input_tool_description(request_user_input_outside_plan_mode),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1520,7 +1524,9 @@ pub(crate) fn build_specs(
     }
 
     if config.collaboration_modes_tools {
-        builder.push_spec(create_request_user_input_tool());
+        builder.push_spec(create_request_user_input_tool(
+            config.request_user_input_outside_plan_mode,
+        ));
         builder.register_handler("request_user_input", request_user_input_handler);
     }
 
@@ -1836,7 +1842,7 @@ mod tests {
             create_exec_command_tool(true),
             create_write_stdin_tool(),
             PLAN_TOOL.clone(),
-            create_request_user_input_tool(),
+            create_request_user_input_tool(false),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
                 external_web_access: Some(true),

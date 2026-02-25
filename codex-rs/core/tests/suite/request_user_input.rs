@@ -71,10 +71,13 @@ fn call_output_content_and_success(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> {
-    request_user_input_round_trip_for_mode(ModeKind::Plan).await
+    request_user_input_round_trip_for_mode(ModeKind::Plan, false).await
 }
 
-async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Result<()> {
+async fn request_user_input_round_trip_for_mode(
+    mode: ModeKind,
+    request_user_input_outside_plan_mode: bool,
+) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -86,8 +89,13 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
         session_configured,
         ..
     } = builder
-        .with_config(|config| {
+        .with_config(move |config| {
             config.features.enable(Feature::CollaborationModes);
+            if request_user_input_outside_plan_mode {
+                config
+                    .features
+                    .enable(Feature::RequestUserInputOutsidePlanMode);
+            }
         })
         .build(&server)
         .await?;
@@ -188,6 +196,24 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
     );
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_round_trip_resolves_pending_in_default_mode_with_flag()
+-> anyhow::Result<()> {
+    request_user_input_round_trip_for_mode(ModeKind::Default, true).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_round_trip_resolves_pending_in_execute_mode_with_flag()
+-> anyhow::Result<()> {
+    request_user_input_round_trip_for_mode(ModeKind::Execute, true).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_round_trip_resolves_pending_in_pair_mode_with_flag()
+-> anyhow::Result<()> {
+    request_user_input_round_trip_for_mode(ModeKind::PairProgramming, true).await
 }
 
 async fn assert_request_user_input_rejected<F>(mode_name: &str, build_mode: F) -> anyhow::Result<()>

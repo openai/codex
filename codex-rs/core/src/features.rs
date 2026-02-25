@@ -138,6 +138,8 @@ pub enum Feature {
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
+    /// Allow request_user_input outside plan mode.
+    RequestUserInputOutsidePlanMode,
     /// Enable personality selection in the TUI.
     Personality,
     /// Enable voice transcription in the TUI composer.
@@ -630,6 +632,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "collaboration_modes",
         stage: Stage::Removed,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::RequestUserInputOutsidePlanMode,
+        key: "request_user_input_outside_plan_mode",
+        stage: Stage::Experimental {
+            name: "Request user input outside Plan mode",
+            menu_description: "Allow Codex to use request_user_input in Default mode too.",
+            announcement: "NEW: request_user_input can be enabled outside Plan mode in /experimental.",
+        },
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Personality,

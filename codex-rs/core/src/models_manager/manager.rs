@@ -50,6 +50,7 @@ pub struct ModelsManager {
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
     provider: ModelProviderInfo,
+    request_user_input_outside_plan_mode: bool,
 }
 
 impl ModelsManager {
@@ -62,6 +63,7 @@ impl ModelsManager {
         codex_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         model_catalog: Option<ModelsResponse>,
+        request_user_input_outside_plan_mode: bool,
     ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
@@ -79,6 +81,7 @@ impl ModelsManager {
             etag: RwLock::new(None),
             cache_manager,
             provider: ModelProviderInfo::create_openai_provider(),
+            request_user_input_outside_plan_mode,
         }
     }
 
@@ -97,7 +100,7 @@ impl ModelsManager {
     ///
     /// Returns a static set of presets seeded with the configured model.
     pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        builtin_collaboration_mode_presets()
+        builtin_collaboration_mode_presets(self.request_user_input_outside_plan_mode)
     }
 
     /// Attempt to list models without blocking, using the current cached state.
@@ -348,6 +351,7 @@ impl ModelsManager {
             etag: RwLock::new(None),
             cache_manager,
             provider,
+            request_user_input_outside_plan_mode: false,
         }
     }
 
@@ -470,7 +474,8 @@ mod tests {
             .expect("load default test config");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None);
+        let manager =
+            ModelsManager::new(codex_home.path().to_path_buf(), auth_manager, None, false);
         let known_slug = manager
             .get_remote_models()
             .await
@@ -507,6 +512,7 @@ mod tests {
             Some(ModelsResponse {
                 models: vec![remote_model("gpt-overlay", "Overlay", 0)],
             }),
+            false,
         );
 
         let model_info = manager

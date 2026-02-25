@@ -1234,6 +1234,9 @@ impl App {
             auth_manager.clone(),
             SessionSource::Cli,
             config.model_catalog.clone(),
+            config
+                .features
+                .enabled(codex_core::features::Feature::RequestUserInputOutsidePlanMode),
         ));
         let mut model = thread_manager
             .get_models_manager()
