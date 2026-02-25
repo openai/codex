@@ -39,7 +39,10 @@ use rmcp::service::{self};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::auth::AuthClient;
 use rmcp::transport::auth::AuthError;
-use rmcp::transport::auth::OAuthState;
+use rmcp::transport::auth::AuthorizationManager;
+use rmcp::transport::auth::CredentialStore;
+use rmcp::transport::auth::InMemoryCredentialStore;
+use rmcp::transport::auth::StoredCredentials;
 use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde_json::Value;
@@ -595,22 +598,20 @@ async fn create_oauth_transport_and_runtime(
 )> {
     let http_client =
         apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
-    let mut oauth_state = OAuthState::new(url.to_string(), Some(http_client.clone())).await?;
-
-    oauth_state
-        .set_credentials(
-            &initial_tokens.client_id,
-            initial_tokens.token_response.0.clone(),
-        )
+    let runtime_credentials = InMemoryCredentialStore::new();
+    runtime_credentials
+        .save(StoredCredentials {
+            client_id: initial_tokens.client_id.clone(),
+            token_response: Some(initial_tokens.token_response.0.clone()),
+        })
         .await?;
 
-    let manager = match oauth_state {
-        OAuthState::Authorized(manager) => manager,
-        OAuthState::Unauthorized(manager) => manager,
-        OAuthState::Session(_) | OAuthState::AuthorizedHttpClient(_) => {
-            return Err(anyhow!("unexpected OAuth state during client setup"));
-        }
-    };
+    let mut manager = AuthorizationManager::new(url.to_string()).await?;
+    manager.set_credential_store(runtime_credentials.clone());
+    manager.with_client(http_client.clone())?;
+    let metadata = manager.discover_metadata().await?;
+    manager.set_metadata(metadata);
+    manager.configure_client_id(&initial_tokens.client_id)?;
 
     let auth_client = AuthClient::new(http_client, manager);
     let auth_manager = auth_client.auth_manager.clone();
@@ -624,6 +625,7 @@ async fn create_oauth_transport_and_runtime(
         server_name.to_string(),
         url.to_string(),
         auth_manager,
+        runtime_credentials,
         credentials_store,
         Some(initial_tokens),
     );

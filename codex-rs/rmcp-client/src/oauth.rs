@@ -25,7 +25,10 @@ use oauth2::RefreshToken;
 use oauth2::Scope;
 use oauth2::TokenResponse;
 use oauth2::basic::BasicTokenType;
+use rmcp::transport::auth::CredentialStore;
+use rmcp::transport::auth::InMemoryCredentialStore;
 use rmcp::transport::auth::OAuthTokenResponse;
+use rmcp::transport::auth::StoredCredentials;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -273,8 +276,17 @@ struct OAuthPersistorInner {
     server_name: String,
     url: String,
     authorization_manager: Arc<Mutex<AuthorizationManager>>,
+    runtime_credentials: InMemoryCredentialStore,
     store_mode: OAuthCredentialsStoreMode,
     last_credentials: Mutex<Option<StoredOAuthTokens>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum GuardedRefreshOutcome {
+    NoAction,
+    ReloadedChanged(StoredOAuthTokens),
+    ReloadedNoChange,
+    MissingOrInvalid,
 }
 
 impl OAuthPersistor {
@@ -282,6 +294,7 @@ impl OAuthPersistor {
         server_name: String,
         url: String,
         authorization_manager: Arc<Mutex<AuthorizationManager>>,
+        runtime_credentials: InMemoryCredentialStore,
         store_mode: OAuthCredentialsStoreMode,
         initial_credentials: Option<StoredOAuthTokens>,
     ) -> Self {
@@ -290,6 +303,7 @@ impl OAuthPersistor {
                 server_name,
                 url,
                 authorization_manager,
+                runtime_credentials,
                 store_mode,
                 last_credentials: Mutex::new(initial_credentials),
             }),
@@ -350,28 +364,111 @@ impl OAuthPersistor {
         Ok(())
     }
 
+    /// Guard refreshes against multi-process refresh-token reuse.
+    ///
+    /// MCP OAuth credentials live in shared storage, but each Codex process also keeps an
+    /// in-memory snapshot. Before refreshing, reload the shared credentials and compare them to
+    /// the cached copy:
+    /// - if shared storage changed, another process already refreshed, so adopt those credentials
+    ///   in the live runtime and skip the local refresh;
+    /// - if shared storage is unchanged, this process still owns the refresh and can rotate the
+    ///   tokens with the authority;
+    /// - if shared storage no longer has credentials, treat that as logged out and clear the live
+    ///   runtime instead of sending a stale refresh token.
     pub(crate) async fn refresh_if_needed(&self) -> Result<()> {
-        let expires_at = {
+        let cached_credentials = {
             let guard = self.inner.last_credentials.lock().await;
-            guard.as_ref().and_then(|tokens| tokens.expires_at)
+            guard.clone()
         };
 
-        if !token_needs_refresh(expires_at) {
-            return Ok(());
+        match self.guarded_refresh_outcome(cached_credentials.as_ref()) {
+            GuardedRefreshOutcome::NoAction => Ok(()),
+            GuardedRefreshOutcome::ReloadedChanged(credentials) => {
+                self.apply_runtime_credentials(Some(credentials)).await
+            }
+            GuardedRefreshOutcome::ReloadedNoChange => {
+                {
+                    let manager = self.inner.authorization_manager.clone();
+                    let guard = manager.lock().await;
+                    guard.refresh_token().await.with_context(|| {
+                        format!(
+                            "failed to refresh OAuth tokens for server {}",
+                            self.inner.server_name
+                        )
+                    })?;
+                }
+
+                self.persist_if_needed().await
+            }
+            GuardedRefreshOutcome::MissingOrInvalid => self.apply_runtime_credentials(None).await,
+        }
+    }
+
+    fn guarded_refresh_outcome(
+        &self,
+        cached_credentials: Option<&StoredOAuthTokens>,
+    ) -> GuardedRefreshOutcome {
+        let Some(cached_credentials) = cached_credentials else {
+            return GuardedRefreshOutcome::NoAction;
+        };
+
+        if !token_needs_refresh(cached_credentials.expires_at) {
+            return GuardedRefreshOutcome::NoAction;
         }
 
+        let persisted_credentials = match load_oauth_tokens(
+            &self.inner.server_name,
+            &self.inner.url,
+            self.inner.store_mode,
+        ) {
+            Ok(credentials) => credentials,
+            Err(error) => {
+                warn!(
+                    "failed to reload OAuth tokens for server {}: {error}",
+                    self.inner.server_name
+                );
+                return GuardedRefreshOutcome::MissingOrInvalid;
+            }
+        };
+
+        determine_guarded_refresh_outcome(cached_credentials, persisted_credentials)
+    }
+
+    async fn apply_runtime_credentials(
+        &self,
+        credentials: Option<StoredOAuthTokens>,
+    ) -> Result<()> {
         {
             let manager = self.inner.authorization_manager.clone();
-            let guard = manager.lock().await;
-            guard.refresh_token().await.with_context(|| {
-                format!(
-                    "failed to refresh OAuth tokens for server {}",
-                    self.inner.server_name
-                )
-            })?;
+            let mut guard = manager.lock().await;
+
+            match credentials.as_ref() {
+                Some(credentials) => {
+                    self.inner
+                        .runtime_credentials
+                        .save(StoredCredentials {
+                            client_id: credentials.client_id.clone(),
+                            token_response: Some(credentials.token_response.0.clone()),
+                        })
+                        .await?;
+                    guard
+                        .configure_client_id(&credentials.client_id)
+                        .with_context(|| {
+                            format!(
+                                "failed to reconfigure OAuth client for server {}",
+                                self.inner.server_name
+                            )
+                        })?;
+                }
+                None => {
+                    self.inner.runtime_credentials.clear().await?;
+                }
+            }
         }
 
-        self.persist_if_needed().await
+        let mut last_credentials = self.inner.last_credentials.lock().await;
+        *last_credentials = credentials;
+        Ok(())
     }
 }
 
@@ -519,6 +616,61 @@ fn token_needs_refresh(expires_at: Option<u64>) -> bool {
         .as_millis() as u64;
 
     now.saturating_add(REFRESH_SKEW_MILLIS) >= expires_at
+}
+
+fn determine_guarded_refresh_outcome(
+    cached_credentials: &StoredOAuthTokens,
+    persisted_credentials: Option<StoredOAuthTokens>,
+) -> GuardedRefreshOutcome {
+    match persisted_credentials {
+        Some(persisted_credentials)
+            if oauth_tokens_equal_for_refresh(
+                Some(cached_credentials),
+                Some(&persisted_credentials),
+            ) =>
+        {
+            GuardedRefreshOutcome::ReloadedNoChange
+        }
+        Some(persisted_credentials) => {
+            GuardedRefreshOutcome::ReloadedChanged(persisted_credentials)
+        }
+        None => GuardedRefreshOutcome::MissingOrInvalid,
+    }
+}
+
+fn oauth_tokens_equal_for_refresh(
+    left: Option<&StoredOAuthTokens>,
+    right: Option<&StoredOAuthTokens>,
+) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.server_name == right.server_name
+                && left.url == right.url
+                && left.client_id == right.client_id
+                && left.expires_at == right.expires_at
+                && oauth_token_responses_equal_for_refresh(
+                    &left.token_response,
+                    &right.token_response,
+                )
+        }
+        _ => false,
+    }
+}
+
+fn oauth_token_responses_equal_for_refresh(
+    left: &WrappedOAuthTokenResponse,
+    right: &WrappedOAuthTokenResponse,
+) -> bool {
+    let left = &left.0;
+    let right = &right.0;
+
+    left.access_token().secret() == right.access_token().secret()
+        && left.token_type() == right.token_type()
+        && left.refresh_token().map(RefreshToken::secret)
+            == right.refresh_token().map(RefreshToken::secret)
+        && left.scopes() == right.scopes()
+        && left.extra_fields() == right.extra_fields()
 }
 
 fn compute_store_key(server_name: &str, server_url: &str) -> Result<String> {
@@ -853,6 +1005,81 @@ mod tests {
         super::refresh_expires_in_from_timestamp(&mut tokens);
 
         assert!(tokens.token_response.0.expires_in().is_none());
+    }
+
+    #[test]
+    fn guarded_refresh_outcome_reloads_when_persisted_credentials_changed() {
+        let cached = sample_tokens();
+        let mut persisted = sample_tokens();
+        persisted
+            .token_response
+            .0
+            .set_refresh_token(Some(RefreshToken::new("rotated-refresh-token".to_string())));
+        persisted
+            .token_response
+            .0
+            .set_expires_in(Some(&Duration::from_secs(7200)));
+        persisted.expires_at = super::compute_expires_at_millis(&persisted.token_response.0);
+
+        assert_eq!(
+            super::determine_guarded_refresh_outcome(&cached, Some(persisted.clone())),
+            super::GuardedRefreshOutcome::ReloadedChanged(persisted),
+        );
+    }
+
+    #[test]
+    fn guarded_refresh_outcome_refreshes_when_persisted_credentials_match() {
+        let cached = sample_tokens();
+        let mut persisted = cached.clone();
+        persisted
+            .token_response
+            .0
+            .set_expires_in(Some(&Duration::from_secs(5)));
+
+        assert_eq!(
+            super::determine_guarded_refresh_outcome(&cached, Some(persisted)),
+            super::GuardedRefreshOutcome::ReloadedNoChange,
+        );
+    }
+
+    #[test]
+    fn guarded_refresh_outcome_clears_when_persisted_credentials_are_missing() {
+        assert_eq!(
+            super::determine_guarded_refresh_outcome(&sample_tokens(), None),
+            super::GuardedRefreshOutcome::MissingOrInvalid,
+        );
+    }
+
+    #[test]
+    fn oauth_tokens_equal_for_refresh_ignores_only_expires_in() {
+        let left = sample_tokens();
+        let mut right = left.clone();
+        right
+            .token_response
+            .0
+            .set_expires_in(Some(&Duration::from_secs(5)));
+
+        assert!(super::oauth_tokens_equal_for_refresh(
+            Some(&left),
+            Some(&right),
+        ));
+
+        let mut different_refresh_token = right.clone();
+        different_refresh_token
+            .token_response
+            .0
+            .set_refresh_token(Some(RefreshToken::new("different-refresh".to_string())));
+        assert!(!super::oauth_tokens_equal_for_refresh(
+            Some(&left),
+            Some(&different_refresh_token),
+        ));
+
+        let mut different_expiry = right;
+        different_expiry.expires_at = different_expiry.expires_at.map(|value| value + 1000);
+        assert!(!super::oauth_tokens_equal_for_refresh(
+            Some(&left),
+            Some(&different_expiry),
+        ));
     }
 
     fn assert_tokens_match_without_expiry(
