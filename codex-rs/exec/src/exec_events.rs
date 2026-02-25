@@ -65,6 +65,12 @@ pub struct Usage {
     pub cached_input_tokens: i64,
     /// The number of output tokens used during the turn.
     pub output_tokens: i64,
+    /// The number of reasoning output tokens used during the turn.
+    pub reasoning_output_tokens: i64,
+    /// The provider-reported total tokens used during the turn.
+    pub total_tokens: i64,
+    /// The blended total used by human-readable output: non-cached input + output.
+    pub blended_total_tokens: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]

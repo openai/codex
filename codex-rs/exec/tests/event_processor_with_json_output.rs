@@ -1304,6 +1304,9 @@ fn task_complete_produces_turn_completed_with_usage() {
                 input_tokens: 1200,
                 cached_input_tokens: 200,
                 output_tokens: 345,
+                reasoning_output_tokens: 0,
+                total_tokens: 0,
+                blended_total_tokens: 1345,
             },
         })]
     );

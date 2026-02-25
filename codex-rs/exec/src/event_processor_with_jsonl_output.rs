@@ -755,6 +755,9 @@ impl EventProcessorWithJsonOutput {
                 input_tokens: u.input_tokens,
                 cached_input_tokens: u.cached_input_tokens,
                 output_tokens: u.output_tokens,
+                reasoning_output_tokens: u.reasoning_output_tokens,
+                total_tokens: u.total_tokens,
+                blended_total_tokens: u.blended_total(),
             }
         } else {
             Usage::default()
