@@ -166,6 +166,13 @@ struct CoreShellActionProvider {
     stopwatch: Stopwatch,
 }
 
+enum DecisionSource {
+    SkillScript,
+    PrefixRule,
+    /// Often, this is `is_safe_command()`.
+    UnmatchedCommandFallback,
+}
+
 impl CoreShellActionProvider {
     fn decision_driven_by_policy(matched_rules: &[RuleMatch], decision: Decision) -> bool {
         matched_rules.iter().any(|rule_match| {
@@ -233,6 +240,7 @@ impl CoreShellActionProvider {
         None
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn process_decision(
         &self,
         decision: Decision,
@@ -241,6 +249,7 @@ impl CoreShellActionProvider {
         argv: &[String],
         workdir: &AbsolutePathBuf,
         additional_permissions: Option<PermissionProfile>,
+        decision_source: DecisionSource,
     ) -> anyhow::Result<EscalateAction> {
         let action = match decision {
             Decision::Forbidden => EscalateAction::Deny {
@@ -267,8 +276,26 @@ impl CoreShellActionProvider {
                         .await?
                     {
                         ReviewDecision::Approved
-                        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                        | ReviewDecision::ApprovedForSession => {
+                        | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+                            if needs_escalation {
+                                EscalateAction::Escalate
+                            } else {
+                                EscalateAction::Run
+                            }
+                        }
+                        ReviewDecision::ApprovedForSession => {
+                            // Currently, we only add session approvals for
+                            // skill scripts because we are storing only the
+                            // `program` whereas prefix rules may be restricted by a longer prefix.
+                            if matches!(decision_source, DecisionSource::SkillScript) {
+                                self.session
+                                    .services
+                                    .execve_session_approvals
+                                    .write()
+                                    .await
+                                    .insert(program.clone());
+                            }
+
                             if needs_escalation {
                                 EscalateAction::Escalate
                             } else {
@@ -337,14 +364,27 @@ impl EscalationPolicy for CoreShellActionProvider {
             // EscalateAction::Run case, rather than always escalating when a
             // skill matches.
             let needs_escalation = true;
+            let is_approved_for_session = self
+                .session
+                .services
+                .execve_session_approvals
+                .read()
+                .await
+                .contains(program);
+            let decision = if is_approved_for_session {
+                Decision::Allow
+            } else {
+                Decision::Prompt
+            };
             return self
                 .process_decision(
-                    Decision::Prompt,
+                    decision,
                     needs_escalation,
                     program,
                     argv,
                     workdir,
                     skill.permission_profile.clone(),
+                    DecisionSource::SkillScript,
                 )
                 .await;
         }
@@ -379,6 +419,11 @@ impl EscalationPolicy for CoreShellActionProvider {
         let needs_escalation =
             self.sandbox_permissions.requires_escalated_permissions() || decision_driven_by_policy;
 
+        let decision_source = if decision_driven_by_policy {
+            DecisionSource::PrefixRule
+        } else {
+            DecisionSource::UnmatchedCommandFallback
+        };
         self.process_decision(
             evaluation.decision,
             needs_escalation,
@@ -386,6 +431,7 @@ impl EscalationPolicy for CoreShellActionProvider {
             argv,
             workdir,
             None,
+            decision_source,
         )
         .await
     }
