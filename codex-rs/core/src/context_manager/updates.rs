@@ -1,5 +1,6 @@
 use crate::codex::TurnContext;
 use crate::environment_context::EnvironmentContext;
+use crate::features::Feature;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_protocol::config_types::Personality;
@@ -43,6 +44,7 @@ fn build_permissions_update_item(
             next.approval_policy.value(),
             exec_policy,
             &next.cwd,
+            next.features.enabled(Feature::RequestPermissions),
         )
         .into(),
     )

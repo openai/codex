@@ -1613,6 +1613,17 @@
         },
         {
           "properties": {
+            "additional_permissions": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PermissionProfile"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional additional filesystem permissions requested for this command."
+            },
             "approval_id": {
               "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
               "type": [
@@ -3302,6 +3313,29 @@
         }
       ]
     },
+    "FileSystemPermissions": {
+      "properties": {
+        "read": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "write": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "FunctionCallOutputBody": {
       "anyOf": [
         {
@@ -3494,6 +3528,66 @@
         "incomplete"
       ],
       "type": "string"
+    },
+    "MacOsAutomationValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "MacOsPermissions": {
+      "properties": {
+        "accessibility": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "automations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsAutomationValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calendar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "preferences": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsPreferencesValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MacOsPreferencesValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string"
+        }
+      ]
     },
     "McpAuthStatus": {
       "enum": [
@@ -3811,6 +3905,37 @@
         "declined"
       ],
       "type": "string"
+    },
+    "PermissionProfile": {
+      "properties": {
+        "file_system": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "macos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "PlanItemArg": {
       "additionalProperties": false,
@@ -6914,6 +7039,17 @@
     },
     {
       "properties": {
+        "additional_permissions": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional additional filesystem permissions requested for this command."
+        },
         "approval_id": {
           "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
           "type": [

@@ -4,6 +4,7 @@ use std::os::fd::FromRawFd as _;
 use std::os::fd::OwnedFd;
 
 use anyhow::Context as _;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::unix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
 use crate::unix::escalate_protocol::EXEC_WRAPPER_ENV_VAR;
@@ -27,7 +28,10 @@ fn get_escalate_client() -> anyhow::Result<AsyncDatagramSocket> {
     Ok(unsafe { AsyncDatagramSocket::from_raw_fd(client_fd) }?)
 }
 
-pub async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> {
+pub async fn run_shell_escalation_execve_wrapper(
+    file: String,
+    argv: Vec<String>,
+) -> anyhow::Result<i32> {
     let handshake_client = get_escalate_client()?;
     let (server, client) = AsyncSocket::pair()?;
     const HANDSHAKE_MESSAGE: [u8; 1] = [0];
@@ -47,7 +51,7 @@ pub async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> {
         .send(EscalateRequest {
             file: file.clone().into(),
             argv: argv.clone(),
-            workdir: std::env::current_dir()?,
+            workdir: AbsolutePathBuf::current_dir()?,
             env,
         })
         .await

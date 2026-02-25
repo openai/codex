@@ -421,9 +421,9 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
 
 /// Approximate model-visible byte cost for one image input.
 ///
-/// The estimator later converts bytes to tokens using a 4-bytes/token heuristic,
-/// so 340 bytes is approximately 85 tokens.
-const IMAGE_BYTES_ESTIMATE: i64 = 340;
+/// The estimator later converts bytes to tokens using a 4-bytes/token heuristic
+/// with ceiling division, so 7,373 bytes maps to approximately 1,844 tokens.
+const IMAGE_BYTES_ESTIMATE: i64 = 7373;
 
 pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {

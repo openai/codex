@@ -5,6 +5,7 @@ import type { ExecPolicyAmendment } from "./ExecPolicyAmendment";
 import type { NetworkApprovalContext } from "./NetworkApprovalContext";
 import type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
 import type { ParsedCommand } from "./ParsedCommand";
+import type { PermissionProfile } from "./PermissionProfile";
 
 export type ExecApprovalRequestEvent = { 
 /**
@@ -46,4 +47,8 @@ proposed_execpolicy_amendment?: ExecPolicyAmendment,
 /**
  * Proposed network policy amendments (for example allow/deny this host in future).
  */
-proposed_network_policy_amendments?: Array<NetworkPolicyAmendment>, parsed_cmd: Array<ParsedCommand>, };
+proposed_network_policy_amendments?: Array<NetworkPolicyAmendment>, 
+/**
+ * Optional additional filesystem permissions requested for this command.
+ */
+additional_permissions?: PermissionProfile, parsed_cmd: Array<ParsedCommand>, };

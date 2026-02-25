@@ -62,6 +62,7 @@ pub(crate) const MAX_EXEC_OUTPUT_DELTAS_PER_CALL: usize = 10_000;
 #[derive(Debug)]
 pub struct ExecParams {
     pub command: Vec<String>,
+    pub original_command: String,
     pub cwd: PathBuf,
     pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
@@ -180,6 +181,7 @@ pub async fn process_exec_tool_call(
 
     let ExecParams {
         command,
+        original_command: _,
         cwd,
         mut env,
         expiration,
@@ -206,6 +208,7 @@ pub async fn process_exec_tool_call(
         env,
         expiration,
         sandbox_permissions,
+        additional_permissions: None,
         justification,
     };
 
@@ -225,7 +228,7 @@ pub async fn process_exec_tool_call(
         .map_err(CodexErr::from)?;
 
     // Route through the sandboxing module for a single, unified execution path.
-    crate::sandboxing::execute_env(exec_req, sandbox_policy, stdout_stream).await
+    crate::sandboxing::execute_env(exec_req, stdout_stream).await
 }
 
 pub(crate) async fn execute_exec_env(
@@ -242,11 +245,14 @@ pub(crate) async fn execute_exec_env(
         sandbox,
         windows_sandbox_level,
         sandbox_permissions,
+        sandbox_policy: _sandbox_policy_from_env,
         justification,
         arg0,
     } = env;
 
     let params = ExecParams {
+        original_command: shlex::try_join(command.iter().map(String::as_str))
+            .unwrap_or_else(|_| command.join(" ")),
         command,
         cwd,
         expiration,
@@ -517,6 +523,9 @@ pub(crate) mod errors {
                 SandboxTransformError::SeatbeltUnavailable => CodexErr::UnsupportedOperation(
                     "seatbelt sandbox is only available on macOS".to_string(),
                 ),
+                SandboxTransformError::InvalidAdditionalPermissionsPath(path) => {
+                    CodexErr::InvalidRequest(format!("invalid additional_permissions path: {path}"))
+                }
             }
         }
     }
@@ -1116,6 +1125,8 @@ mod tests {
         ];
         let env: HashMap<String, String> = std::env::vars().collect();
         let params = ExecParams {
+            original_command: shlex::try_join(command.iter().map(String::as_str))
+                .unwrap_or_else(|_| command.join(" ")),
             command,
             cwd: std::env::current_dir()?,
             expiration: 500.into(),
@@ -1169,6 +1180,8 @@ mod tests {
         let cancel_token = CancellationToken::new();
         let cancel_tx = cancel_token.clone();
         let params = ExecParams {
+            original_command: shlex::try_join(command.iter().map(String::as_str))
+                .unwrap_or_else(|_| command.join(" ")),
             command,
             cwd: cwd.clone(),
             expiration: ExecExpiration::Cancellation(cancel_token),

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -17,11 +18,14 @@ pub const LEGACY_BASH_EXEC_WRAPPER_ENV_VAR: &str = "BASH_EXEC_WRAPPER";
 /// The client sends this to the server to request an exec() call.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct EscalateRequest {
-    /// The absolute path to the executable to run, i.e. the first arg to exec.
+    /// The executable path from the intercepted exec call.
+    ///
+    /// This may be relative, in which case it should be resolved against
+    /// `workdir`.
     pub file: PathBuf,
     /// The argv, including the program name (argv[0]).
     pub argv: Vec<String>,
-    pub workdir: PathBuf,
+    pub workdir: AbsolutePathBuf,
     pub env: HashMap<String, String>,
 }
 

@@ -20,6 +20,6 @@ pub async fn main_execve_wrapper() -> anyhow::Result<()> {
         .init();
 
     let ExecveWrapperCli { file, argv } = ExecveWrapperCli::parse();
-    let exit_code = crate::run(file, argv).await?;
+    let exit_code = crate::run_shell_escalation_execve_wrapper(file, argv).await?;
     std::process::exit(exit_code);
 }
