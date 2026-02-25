@@ -224,7 +224,7 @@ async fn run_compact_task_inner(
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
-    sess.replace_history(new_history.clone(), reference_context_item)
+    sess.replace_history(new_history.clone(), reference_context_item.clone())
         .await;
     sess.recompute_token_usage(&turn_context).await;
 
@@ -232,7 +232,15 @@ async fn run_compact_task_inner(
         message: summary_text.clone(),
         replacement_history: Some(new_history),
     });
-    sess.persist_rollout_items(&[rollout_item]).await;
+    let rollout_items = if let Some(turn_context_item) = reference_context_item {
+        // Mid-turn compaction re-injected initial context into the replacement history, so
+        // persist a fresh `TurnContextItem` after `Compacted` to re-establish the baseline for
+        // resume/fork replay.
+        vec![rollout_item, RolloutItem::TurnContext(turn_context_item)]
+    } else {
+        vec![rollout_item]
+    };
+    sess.persist_rollout_items(&rollout_items).await;
 
     sess.emit_turn_item_completed(&turn_context, compaction_item)
         .await;

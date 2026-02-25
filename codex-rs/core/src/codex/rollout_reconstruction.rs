@@ -18,62 +18,47 @@ impl Session {
         //   2) resume/fork hydration metadata (`previous_model` and
         //      `reference_context_item`)
         //
-        // The metadata part needs rollback-aware accounting over "turn spans" and
-        // compaction placement:
-        // - `ActiveRolloutTurn` tracks the in-progress turn span while we walk forward
-        //   through lifecycle events (`TurnStarted` ... `TurnComplete`/`TurnAborted`).
-        // - `ReplayedRolloutTurn` is the finalized per-turn metadata we keep after a
-        //   turn ends (whether it had a user message, a `TurnContextItem`, and whether
-        //   any compaction in that span happened before or after the first
-        //   `TurnContextItem` for that turn).
-        // - `RolloutReplayMetaSegment` stores the finalized sequence we later
-        //   rollback-adjust and reverse-scan to find the last surviving regular turn
-        //   context. Replaced/trailing incomplete turns are finalized as ordinary
-        //   `Turn(...)` segments.
+        // `TurnContextItem` is now only persisted when the current user turn actually
+        // emits model-visible context items (during normal context updates or when
+        // mid-turn compaction reinjects full initial context). That means replay only
+        // needs to answer:
+        // - which surviving user turn last established a model baseline
+        // - whether any later compaction cleared that baseline before resume
         //
-        // Explicit replay rule:
-        // - compaction before the first `TurnContextItem` in a turn span is treated as
-        //   preturn compaction for that turn and invalidates
-        //   `reference_context_item` on resume
-        // - compaction after the first `TurnContextItem` in the same turn span is
-        //   treated as mid-turn compaction and does not invalidate that turn's own
-        //   `reference_context_item`
-        // - compaction outside any matched turn span is treated conservatively as
-        //   preturn-equivalent for baseline hydration (invalidate older baseline)
+        // We model that with:
+        // - one active turn span while walking lifecycle events
+        // - one finalized metadata segment per surviving user turn
+        // - conservative `Compaction` markers for standalone compaction outside user turns
         //
         // `ThreadRolledBack` updates both:
         // - history: drop user turns from reconstructed response items
-        // - metadata segments: remove finalized turn spans that consumed those user turns
+        // - metadata segments: drop the same number of surviving user-turn segments
         //
-        // This keeps resume/fork baseline hydration consistent with the same replay
-        // logic used to rebuild history, instead of maintaining a second bespoke scan.
+        // This keeps history reconstruction and resume/fork hydration on the same replay.
         #[derive(Debug)]
         struct ActiveRolloutTurn {
             turn_id: String,
             saw_user_message: bool,
-            turn_context_item: Option<TurnContextItem>,
-            has_preturn_compaction: bool,
-            has_midturn_compaction: bool,
+            previous_model: Option<String>,
+            reference_context_item: Option<TurnContextItem>,
+            cleared_reference_context_item: bool,
         }
 
         #[derive(Debug)]
-        struct ReplayedRolloutTurn {
-            saw_user_message: bool,
-            turn_context_item: Option<TurnContextItem>,
-            has_preturn_compaction: bool,
-            has_midturn_compaction: bool,
+        struct ReplayedUserTurn {
+            previous_model: Option<String>,
+            reference_context_item: Option<TurnContextItem>,
+            cleared_reference_context_item: bool,
         }
 
         #[derive(Debug)]
         enum RolloutReplayMetaSegment {
-            Turn(Box<ReplayedRolloutTurn>),
-            // Unexpected for modern rollouts, where compaction should occur inside
-            // a matched turn span (`TurnStarted` ... `TurnComplete`/`TurnAborted`).
-            //
-            // We keep this as a minimal fallback for legacy/incomplete lifecycle
-            // data: treat as "compaction happened after older baseline" and prefer
-            // conservative baseline invalidation over complex reconstruction.
-            CompactionOutsideTurn,
+            UserTurn(Box<ReplayedUserTurn>),
+            // Unexpected for modern rollouts, where compaction should normally happen inside a
+            // turn span. We keep this as a minimal fallback for standalone/legacy compaction so
+            // later resume conservatively clears the baseline until another `TurnContextItem`
+            // re-establishes it.
+            Compaction,
         }
 
         let mut history = ContextManager::new();
@@ -82,14 +67,17 @@ impl Session {
         let mut replayed_segments = Vec::new();
         let push_replayed_turn = |replayed_segments: &mut Vec<RolloutReplayMetaSegment>,
                                   active_turn: ActiveRolloutTurn| {
-            replayed_segments.push(RolloutReplayMetaSegment::Turn(Box::new(
-                ReplayedRolloutTurn {
-                    saw_user_message: active_turn.saw_user_message,
-                    turn_context_item: active_turn.turn_context_item,
-                    has_preturn_compaction: active_turn.has_preturn_compaction,
-                    has_midturn_compaction: active_turn.has_midturn_compaction,
-                },
-            )));
+            if active_turn.saw_user_message {
+                replayed_segments.push(RolloutReplayMetaSegment::UserTurn(Box::new(
+                    ReplayedUserTurn {
+                        previous_model: active_turn.previous_model,
+                        reference_context_item: active_turn.reference_context_item,
+                        cleared_reference_context_item: active_turn.cleared_reference_context_item,
+                    },
+                )));
+            } else if active_turn.cleared_reference_context_item {
+                replayed_segments.push(RolloutReplayMetaSegment::Compaction);
+            }
         };
 
         for item in rollout_items {
@@ -113,13 +101,10 @@ impl Session {
                         history.replace(rebuilt);
                     }
                     if let Some(active_turn) = active_turn.as_mut() {
-                        if active_turn.turn_context_item.is_none() {
-                            active_turn.has_preturn_compaction = true;
-                        } else {
-                            active_turn.has_midturn_compaction = true;
-                        }
+                        active_turn.reference_context_item = None;
+                        active_turn.cleared_reference_context_item = true;
                     } else {
-                        replayed_segments.push(RolloutReplayMetaSegment::CompactionOutsideTurn);
+                        replayed_segments.push(RolloutReplayMetaSegment::Compaction);
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -133,7 +118,7 @@ impl Session {
                     {
                         // Match `drop_last_n_user_turns`: an unfinished active turn that has
                         // already emitted a user message is the newest user turn and should be
-                        // dropped before we trim older finalized turn spans.
+                        // dropped before we trim older finalized user-turn segments.
                         active_turn = None;
                         turns_to_drop -= 1;
                     }
@@ -141,9 +126,7 @@ impl Session {
                         let mut idx = replayed_segments.len();
                         while idx > 0 && turns_to_drop > 0 {
                             idx -= 1;
-                            if let RolloutReplayMetaSegment::Turn(turn) = &replayed_segments[idx]
-                                && turn.saw_user_message
-                            {
+                            if let RolloutReplayMetaSegment::UserTurn(_) = &replayed_segments[idx] {
                                 replayed_segments.remove(idx);
                                 turns_to_drop -= 1;
                             }
@@ -153,16 +136,14 @@ impl Session {
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
                     saw_turn_lifecycle_event = true;
                     if let Some(active_turn) = active_turn.take() {
-                        // Treat a replaced incomplete turn as ended at the point the next turn
-                        // starts so replay preserves any `TurnContextItem` it already emitted.
                         push_replayed_turn(&mut replayed_segments, active_turn);
                     }
                     active_turn = Some(ActiveRolloutTurn {
                         turn_id: event.turn_id.clone(),
                         saw_user_message: false,
-                        turn_context_item: None,
-                        has_preturn_compaction: false,
-                        has_midturn_compaction: false,
+                        previous_model: None,
+                        reference_context_item: None,
+                        cleared_reference_context_item: false,
                     });
                 }
                 RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
@@ -192,16 +173,8 @@ impl Session {
                             // alive so later `TurnContext`/`TurnComplete` events still apply.
                         }
                         None => {
-                            if let Some(active_turn) = active_turn.take()
-                                && (active_turn.has_preturn_compaction
-                                    || active_turn.has_midturn_compaction)
-                            {
-                                // Legacy/incomplete lifecycle events may omit `turn_id` on
-                                // abort. Keep fallback handling minimal: drop this ambiguous
-                                // turn span and preserve only a conservative "outside-turn
-                                // compaction" marker.
-                                replayed_segments
-                                    .push(RolloutReplayMetaSegment::CompactionOutsideTurn);
+                            if let Some(active_turn) = active_turn.take() {
+                                push_replayed_turn(&mut replayed_segments, active_turn);
                             }
                         }
                     }
@@ -218,8 +191,9 @@ impl Session {
                             .as_deref()
                             .is_none_or(|turn_id| turn_id == active_turn.turn_id)
                     {
-                        // Keep the latest `TurnContextItem` in rollout order for the turn.
-                        active_turn.turn_context_item = Some(ctx.clone());
+                        active_turn.previous_model = Some(ctx.model.clone());
+                        active_turn.reference_context_item = Some(ctx.clone());
+                        active_turn.cleared_reference_context_item = false;
                     }
                 }
                 _ => {}
@@ -227,52 +201,40 @@ impl Session {
         }
 
         if let Some(active_turn) = active_turn.take() {
-            // Treat a trailing incomplete turn as ended at EOF so replay preserves any
-            // `TurnContextItem` it already emitted before the rollout was truncated.
             push_replayed_turn(&mut replayed_segments, active_turn);
         }
 
         let (previous_model, reference_context_item) = if saw_turn_lifecycle_event {
             let mut compaction_cleared_reference_context_item = false;
-            let mut previous_regular_turn_context_item = None;
+            let mut previous_model = None;
+            let mut reference_context_item = None;
 
             for segment in replayed_segments.iter().rev() {
                 match segment {
-                    RolloutReplayMetaSegment::CompactionOutsideTurn => {
+                    RolloutReplayMetaSegment::Compaction => {
                         compaction_cleared_reference_context_item = true;
                     }
-                    RolloutReplayMetaSegment::Turn(turn) => {
-                        if let Some(turn_context_item) = &turn.turn_context_item {
-                            if turn.has_preturn_compaction {
-                                compaction_cleared_reference_context_item = true;
+                    RolloutReplayMetaSegment::UserTurn(turn) => {
+                        if let Some(turn_previous_model) = &turn.previous_model {
+                            previous_model = Some(turn_previous_model.clone());
+                            if !compaction_cleared_reference_context_item
+                                && !turn.cleared_reference_context_item
+                            {
+                                reference_context_item = turn.reference_context_item.clone();
                             }
-                            previous_regular_turn_context_item = Some(turn_context_item.clone());
                             break;
                         }
-                        if turn.has_preturn_compaction || turn.has_midturn_compaction {
-                            // This later surviving turn compacted (for example via `/compact` or
-                            // auto-compaction) but did not persist a replacement TurnContextItem,
-                            // so conservatively invalidate any older baseline we might select.
+                        if turn.cleared_reference_context_item {
                             compaction_cleared_reference_context_item = true;
                         }
                     }
                 }
             }
 
-            let previous_model = previous_regular_turn_context_item
-                .as_ref()
-                .map(|ctx| ctx.model.clone());
-            let reference_context_item = if compaction_cleared_reference_context_item {
-                // Keep the baseline empty when compaction may have stripped the referenced
-                // context diffs so the first resumed regular turn fully reinjects context.
-                None
-            } else {
-                previous_regular_turn_context_item
-            };
             (previous_model, reference_context_item)
         } else {
             // Legacy/minimal fallback (no lifecycle events): use the last persisted
-            // `TurnContextItem` in rollout order and conservatively null baseline when a
+            // `TurnContextItem` in rollout order and conservatively clear the baseline when a
             // later `Compacted` item exists.
             let mut legacy_last_turn_context_item: Option<TurnContextItem> = None;
             let mut legacy_saw_compaction_after_last_turn_context = false;

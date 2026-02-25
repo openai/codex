@@ -2969,7 +2969,7 @@ impl Session {
         state.reference_context_item()
     }
 
-    /// Persist the latest turn context snapshot and emit any required model-visible context updates.
+    /// Persist the latest turn context snapshot only when we emit model-visible context updates.
     ///
     /// When the reference snapshot is missing, this injects full initial context. Otherwise, it
     /// emits only settings diff items.
@@ -2977,9 +2977,10 @@ impl Session {
     /// If full context is injected and a model switch occurred, this prepends the
     /// `<model_switch>` developer message so model-specific instructions are not lost.
     ///
-    /// Invariant: this is the only runtime path that writes a non-`None`
-    /// `reference_context_item`. Non-regular tasks intentionally do not update that
-    /// baseline; `reference_context_item` tracks the latest regular model turn.
+    /// This is the normal runtime path that establishes a new `reference_context_item`.
+    /// Mid-turn compaction is the other path that can re-establish that baseline when it
+    /// reinjects full initial context into replacement history. Other non-regular tasks
+    /// intentionally do not update the baseline.
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
@@ -3001,10 +3002,13 @@ impl Session {
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
                 .await;
-        }
+            let turn_context_item = turn_context.to_turn_context_item();
+            self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
+                .await;
 
-        let mut state = self.state.lock().await;
-        state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
+            let mut state = self.state.lock().await;
+            state.set_reference_context_item(Some(turn_context_item));
+        }
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -6014,17 +6018,6 @@ async fn try_run_sampling_request(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    // Persist one TurnContext marker per sampling request (not just per user turn) so rollout
-    // analysis can reconstruct API-turn boundaries. `run_turn` persists model-visible context
-    // diffs/full reinjection earlier in the same regular turn before reaching this path.
-    //
-    // Replay invariant for resume/fork hydration:
-    // compaction events in a turn span that happen before this first persisted TurnContextItem
-    // are treated as preturn compaction for that turn and invalidate
-    // `reference_context_item`, while compaction after this point in the same turn span is
-    // treated as mid-turn compaction and does not invalidate that turn's own baseline.
-    let rollout_item = RolloutItem::TurnContext(turn_context.to_turn_context_item());
-
     feedback_tags!(
         model = turn_context.model_info.slug.clone(),
         approval_policy = turn_context.approval_policy.value(),
@@ -6033,8 +6026,6 @@ async fn try_run_sampling_request(
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
-
-    sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = client_session
         .stream(
             prompt,
@@ -7725,7 +7716,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_initial_history_resumed_nulls_reference_context_item_for_preturn_compaction_in_same_turn()
+    async fn record_initial_history_resumed_turn_context_after_compaction_reestablishes_reference_context_item()
      {
         let (session, turn_context) = make_session_and_context().await;
         let previous_model = "previous-rollout-model";
@@ -7765,7 +7756,7 @@ mod tests {
                     text_elements: Vec::new(),
                 },
             )),
-            // Compaction before the first TurnContextItem in this turn is treated as preturn.
+            // Compaction clears baseline until a later TurnContextItem re-establishes it.
             RolloutItem::Compacted(CompactedItem {
                 message: String::new(),
                 replacement_history: Some(Vec::new()),
@@ -7791,7 +7782,27 @@ mod tests {
             session.previous_model().await,
             Some(previous_model.to_string())
         );
-        assert!(session.reference_context_item().await.is_none());
+        assert_eq!(
+            serde_json::to_value(session.reference_context_item().await)
+                .expect("serialize seeded reference context item"),
+            serde_json::to_value(Some(TurnContextItem {
+                turn_id: Some(turn_context.sub_id.clone()),
+                cwd: turn_context.cwd.clone(),
+                approval_policy: turn_context.approval_policy.value(),
+                sandbox_policy: turn_context.sandbox_policy.get().clone(),
+                network: None,
+                model: previous_model.to_string(),
+                personality: turn_context.personality,
+                collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+                effort: turn_context.reasoning_effort,
+                summary: turn_context.reasoning_summary,
+                user_instructions: None,
+                developer_instructions: None,
+                final_output_json_schema: None,
+                truncation_policy: Some(turn_context.truncation_policy.into()),
+            }))
+            .expect("serialize expected reference context item")
+        );
     }
 
     #[tokio::test]
