@@ -10,13 +10,6 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Run build/test workflow only and skip release/publish side effects.
-        required: false
-        default: true
-        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}
@@ -33,12 +26,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Tag validation"
-
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
-            echo "INFO: workflow_dispatch dry_run enabled; skipping tag validation."
-            echo "::endgroup::"
-            exit 0
-          fi
 
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
@@ -383,7 +370,6 @@ jobs:
 
   shell-tool-mcp:
     name: shell-tool-mcp
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') }}
     needs: tag-check
     uses: ./.github/workflows/shell-tool-mcp.yml
     with:
@@ -392,7 +378,6 @@ jobs:
     secrets: inherit
 
   release:
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') }}
     needs:
       - build
       - build-windows
@@ -545,7 +530,7 @@ jobs:
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') && needs.release.outputs.should_publish_npm == 'true' }}
+    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
@@ -652,7 +637,6 @@ jobs:
 
   update-branch:
     name: Update latest-alpha-cli branch
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') }}
     permissions:
       contents: write
     needs: release
