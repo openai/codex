@@ -1,5 +1,5 @@
-use codex_core::protocol::NetworkAccess;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::NetworkAccess;
+use codex_protocol::protocol::SandboxPolicy;
 
 pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
     match sandbox_policy {

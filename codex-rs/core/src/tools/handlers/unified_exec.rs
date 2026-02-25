@@ -1,3 +1,4 @@
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
@@ -5,10 +6,12 @@ use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
+use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -19,6 +22,7 @@ use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::PermissionProfile;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,8 +36,8 @@ pub(crate) struct ExecCommandArgs {
     pub(crate) workdir: Option<String>,
     #[serde(default)]
     shell: Option<String>,
-    #[serde(default = "default_login")]
-    login: bool,
+    #[serde(default)]
+    login: Option<bool>,
     #[serde(default = "default_tty")]
     tty: bool,
     #[serde(default = "default_exec_yield_time_ms")]
@@ -42,6 +46,8 @@ pub(crate) struct ExecCommandArgs {
     max_output_tokens: Option<usize>,
     #[serde(default)]
     sandbox_permissions: SandboxPermissions,
+    #[serde(default)]
+    additional_permissions: Option<PermissionProfile>,
     #[serde(default)]
     justification: Option<String>,
     #[serde(default)]
@@ -66,10 +72,6 @@ fn default_exec_yield_time_ms() -> u64 {
 
 fn default_write_stdin_yield_time_ms() -> u64 {
     250
-}
-
-fn default_login() -> bool {
-    true
 }
 
 fn default_tty() -> bool {
@@ -98,7 +100,14 @@ impl ToolHandler for UnifiedExecHandler {
         let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
             return true;
         };
-        let command = get_command(&params, invocation.session.user_shell());
+        let command = match get_command(
+            &params,
+            invocation.session.user_shell(),
+            invocation.turn.tools_config.allow_login_shell,
+        ) {
+            Ok(command) => command,
+            Err(_) => return true,
+        };
         !is_known_safe_command(&command)
     }
 
@@ -128,8 +137,20 @@ impl ToolHandler for UnifiedExecHandler {
         let response = match tool_name.as_str() {
             "exec_command" => {
                 let args: ExecCommandArgs = parse_arguments(&arguments)?;
+                maybe_emit_implicit_skill_invocation(
+                    session.as_ref(),
+                    turn.as_ref(),
+                    &args.cmd,
+                    args.workdir.as_deref(),
+                )
+                .await;
                 let process_id = manager.allocate_process_id().await;
-                let command = get_command(&args, session.user_shell());
+                let command = get_command(
+                    &args,
+                    session.user_shell(),
+                    turn.tools_config.allow_login_shell,
+                )
+                .map_err(FunctionCallError::RespondToModel)?;
 
                 let ExecCommandArgs {
                     workdir,
@@ -137,18 +158,22 @@ impl ToolHandler for UnifiedExecHandler {
                     yield_time_ms,
                     max_output_tokens,
                     sandbox_permissions,
+                    additional_permissions,
                     justification,
                     prefix_rule,
                     ..
                 } = args;
 
-                if sandbox_permissions.requires_escalated_permissions()
+                let request_permission_enabled =
+                    session.features().enabled(Feature::RequestPermissions);
+
+                if sandbox_permissions.requires_additional_permissions()
                     && !matches!(
-                        context.turn.approval_policy,
+                        context.turn.approval_policy.value(),
                         codex_protocol::protocol::AskForApproval::OnRequest
                     )
                 {
-                    let approval_policy = context.turn.approval_policy;
+                    let approval_policy = context.turn.approval_policy.value();
                     manager.release_process_id(&process_id).await;
                     return Err(FunctionCallError::RespondToModel(format!(
                         "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
@@ -159,13 +184,27 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
+                let normalized_additional_permissions =
+                    match normalize_and_validate_additional_permissions(
+                        request_permission_enabled,
+                        context.turn.approval_policy.value(),
+                        sandbox_permissions,
+                        additional_permissions,
+                        &cwd,
+                    ) {
+                        Ok(normalized) => normalized,
+                        Err(err) => {
+                            manager.release_process_id(&process_id).await;
+                            return Err(FunctionCallError::RespondToModel(err));
+                        }
+                    };
 
                 if let Some(output) = intercept_apply_patch(
                     &command,
                     &cwd,
                     Some(yield_time_ms),
-                    context.session.as_ref(),
-                    context.turn.as_ref(),
+                    context.session.clone(),
+                    context.turn.clone(),
                     Some(&tracker),
                     &context.call_id,
                     tool_name.as_str(),
@@ -187,6 +226,7 @@ impl ToolHandler for UnifiedExecHandler {
                             network: context.turn.network.clone(),
                             tty,
                             sandbox_permissions,
+                            additional_permissions: normalized_additional_permissions,
                             justification,
                             prefix_rule,
                         },
@@ -238,7 +278,11 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-pub(crate) fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
+pub(crate) fn get_command(
+    args: &ExecCommandArgs,
+    session_shell: Arc<Shell>,
+    allow_login_shell: bool,
+) -> Result<Vec<String>, String> {
     let model_shell = args.shell.as_ref().map(|shell_str| {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
         shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
@@ -246,8 +290,17 @@ pub(crate) fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> 
     });
 
     let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
+    let use_login_shell = match args.login {
+        Some(true) if !allow_login_shell => {
+            return Err(
+                "login shell is disabled by config; omit `login` or set it to false.".to_string(),
+            );
+        }
+        Some(use_login_shell) => use_login_shell,
+        None => allow_login_shell,
+    };
 
-    shell.derive_exec_args(&args.cmd, args.login)
+    Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
@@ -283,6 +336,7 @@ fn format_response(response: &UnifiedExecResponse) -> String {
 mod tests {
     use super::*;
     use crate::shell::default_user_shell;
+    use pretty_assertions::assert_eq;
     use std::sync::Arc;
 
     #[test]
@@ -293,7 +347,8 @@ mod tests {
 
         assert!(args.shell.is_none());
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command =
+            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
 
         assert_eq!(command.len(), 3);
         assert_eq!(command[2], "echo hello");
@@ -308,7 +363,8 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command =
+            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
 
         assert_eq!(command.last(), Some(&"echo hello".to_string()));
         if command
@@ -328,7 +384,8 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("powershell"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command =
+            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
 
         assert_eq!(command[2], "echo hello");
         Ok(())
@@ -342,9 +399,25 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("cmd"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command =
+            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
 
         assert_eq!(command[2], "echo hello");
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<()> {
+        let json = r#"{"cmd": "echo hello", "login": true}"#;
+
+        let args: ExecCommandArgs = parse_arguments(json)?;
+        let err = get_command(&args, Arc::new(default_user_shell()), false)
+            .expect_err("explicit login should be rejected");
+
+        assert!(
+            err.contains("login shell is disabled by config"),
+            "unexpected error: {err}"
+        );
         Ok(())
     }
 }

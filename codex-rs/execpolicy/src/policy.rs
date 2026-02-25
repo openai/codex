@@ -1,11 +1,14 @@
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
+use crate::rule::NetworkRule;
+use crate::rule::NetworkRuleProtocol;
 use crate::rule::PatternToken;
 use crate::rule::PrefixPattern;
 use crate::rule::PrefixRule;
 use crate::rule::RuleMatch;
 use crate::rule::RuleRef;
+use crate::rule::normalize_network_rule_host;
 use multimap::MultiMap;
 use serde::Deserialize;
 use serde::Serialize;
@@ -16,11 +19,22 @@ type HeuristicsFallback<'a> = Option<&'a dyn Fn(&[String]) -> Decision>;
 #[derive(Clone, Debug)]
 pub struct Policy {
     rules_by_program: MultiMap<String, RuleRef>,
+    network_rules: Vec<NetworkRule>,
 }
 
 impl Policy {
     pub fn new(rules_by_program: MultiMap<String, RuleRef>) -> Self {
-        Self { rules_by_program }
+        Self::from_parts(rules_by_program, Vec::new())
+    }
+
+    pub fn from_parts(
+        rules_by_program: MultiMap<String, RuleRef>,
+        network_rules: Vec<NetworkRule>,
+    ) -> Self {
+        Self {
+            rules_by_program,
+            network_rules,
+        }
     }
 
     pub fn empty() -> Self {
@@ -29,6 +43,10 @@ impl Policy {
 
     pub fn rules(&self) -> &MultiMap<String, RuleRef> {
         &self.rules_by_program
+    }
+
+    pub fn network_rules(&self) -> &[NetworkRule] {
+        &self.network_rules
     }
 
     pub fn get_allowed_prefixes(&self) -> Vec<Vec<String>> {
@@ -75,6 +93,51 @@ impl Policy {
 
         self.rules_by_program.insert(first_token.clone(), rule);
         Ok(())
+    }
+
+    pub fn add_network_rule(
+        &mut self,
+        host: &str,
+        protocol: NetworkRuleProtocol,
+        decision: Decision,
+        justification: Option<String>,
+    ) -> Result<()> {
+        let host = normalize_network_rule_host(host)?;
+        if let Some(raw) = justification.as_deref()
+            && raw.trim().is_empty()
+        {
+            return Err(Error::InvalidRule(
+                "justification cannot be empty".to_string(),
+            ));
+        }
+        self.network_rules.push(NetworkRule {
+            host,
+            protocol,
+            decision,
+            justification,
+        });
+        Ok(())
+    }
+
+    pub fn compiled_network_domains(&self) -> (Vec<String>, Vec<String>) {
+        let mut allowed = Vec::new();
+        let mut denied = Vec::new();
+
+        for rule in &self.network_rules {
+            match rule.decision {
+                Decision::Allow => {
+                    denied.retain(|entry| entry != &rule.host);
+                    upsert_domain(&mut allowed, &rule.host);
+                }
+                Decision::Forbidden => {
+                    allowed.retain(|entry| entry != &rule.host);
+                    upsert_domain(&mut denied, &rule.host);
+                }
+                Decision::Prompt => {}
+            }
+        }
+
+        (allowed, denied)
     }
 
     pub fn check<F>(&self, cmd: &[String], heuristics_fallback: &F) -> Evaluation
@@ -138,6 +201,11 @@ impl Policy {
             matched_rules
         }
     }
+}
+
+fn upsert_domain(entries: &mut Vec<String>, host: &str) {
+    entries.retain(|entry| entry != host);
+    entries.push(host.to_string());
 }
 
 fn render_pattern_token(token: &PatternToken) -> String {

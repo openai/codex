@@ -4,6 +4,7 @@
 
 const { Buffer } = require("node:buffer");
 const crypto = require("node:crypto");
+const fs = require("node:fs");
 const { builtinModules, createRequire } = require("node:module");
 const { createInterface } = require("node:readline");
 const { performance } = require("node:perf_hooks");
@@ -83,6 +84,8 @@ let previousModule = null;
 /** @type {Binding[]} */
 let previousBindings = [];
 let cellCounter = 0;
+let activeExecId = null;
+let fatalExitScheduled = false;
 
 const builtinModuleSet = new Set([
   ...builtinModules,
@@ -114,9 +117,6 @@ function isDeniedBuiltin(specifier) {
 const pendingTool = new Map();
 let toolCounter = 0;
 const tmpDir = process.env.CODEX_JS_TMP_DIR || process.cwd();
-// Explicit long-lived mutable store exposed as `codex.state`. This is useful
-// when callers want shared state without relying on lexical binding carry-over.
-const state = {};
 const nodeModuleDirEnv = process.env.CODEX_JS_REPL_NODE_MODULE_DIRS ?? "";
 const moduleSearchBases = (() => {
   const bases = [];
@@ -149,6 +149,14 @@ const moduleSearchBases = (() => {
 const importResolveConditions = new Set(["node", "import"]);
 const requireByBase = new Map();
 
+function canonicalizePath(value) {
+  try {
+    return fs.realpathSync.native(value);
+  } catch {
+    return value;
+  }
+}
+
 function getRequireForBase(base) {
   let req = requireByBase.get(base);
   if (!req) {
@@ -165,8 +173,10 @@ function isModuleNotFoundError(err) {
 }
 
 function isWithinBaseNodeModules(base, resolvedPath) {
-  const nodeModulesRoot = path.resolve(base, "node_modules");
-  const relative = path.relative(nodeModulesRoot, resolvedPath);
+  const canonicalBase = canonicalizePath(base);
+  const canonicalResolved = canonicalizePath(resolvedPath);
+  const nodeModulesRoot = path.resolve(canonicalBase, "node_modules");
+  const relative = path.relative(nodeModulesRoot, canonicalResolved);
   return (
     relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
   );
@@ -387,6 +397,54 @@ function send(message) {
   process.stdout.write("\n");
 }
 
+function formatErrorMessage(error) {
+  if (error && typeof error === "object" && "message" in error) {
+    return error.message ? String(error.message) : String(error);
+  }
+  return String(error);
+}
+
+function sendFatalExecResultSync(kind, error) {
+  if (!activeExecId) {
+    return;
+  }
+  const payload = {
+    type: "exec_result",
+    id: activeExecId,
+    ok: false,
+    output: "",
+    error: `js_repl kernel ${kind}: ${formatErrorMessage(error)}; kernel reset. Catch or handle async errors (including Promise rejections and EventEmitter 'error' events) to avoid kernel termination.`,
+  };
+  try {
+    fs.writeSync(process.stdout.fd, `${JSON.stringify(payload)}\n`);
+  } catch {
+    // Best effort only; the host will still surface stdout EOF diagnostics.
+  }
+}
+
+function scheduleFatalExit(kind, error) {
+  if (fatalExitScheduled) {
+    process.exitCode = 1;
+    return;
+  }
+  fatalExitScheduled = true;
+  sendFatalExecResultSync(kind, error);
+
+  try {
+    fs.writeSync(
+      process.stderr.fd,
+      `js_repl kernel ${kind}: ${formatErrorMessage(error)}\n`,
+    );
+  } catch {
+    // ignore
+  }
+
+  // The host will observe stdout EOF, reset kernel state, and restart on demand.
+  setImmediate(() => {
+    process.exit(1);
+  });
+}
+
 function formatLog(args) {
   return args
     .map((arg) =>
@@ -423,6 +481,7 @@ function withCapturedConsole(ctx, fn) {
 }
 
 async function handleExec(message) {
+  activeExecId = message.id;
   const tool = (toolName, args) => {
     if (typeof toolName !== "string" || !toolName) {
       return Promise.reject(new Error("codex.tool expects a tool name string"));
@@ -459,8 +518,7 @@ async function handleExec(message) {
     const { source, nextBindings } = await buildModuleSource(code);
     let output = "";
 
-    context.state = state;
-    context.codex = { state, tmpDir, tool };
+    context.codex = { tmpDir, tool };
     context.tmpDir = tmpDir;
 
     await withCapturedConsole(context, async (logs) => {
@@ -520,6 +578,10 @@ async function handleExec(message) {
       output: "",
       error: error && error.message ? error.message : String(error),
     });
+  } finally {
+    if (activeExecId === message.id) {
+      activeExecId = null;
+    }
   }
 }
 
@@ -532,6 +594,14 @@ function handleToolResult(message) {
 }
 
 let queue = Promise.resolve();
+
+process.on("uncaughtException", (error) => {
+  scheduleFatalExit("uncaught exception", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  scheduleFatalExit("unhandled rejection", reason);
+});
 
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 input.on("line", (line) => {

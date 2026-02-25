@@ -6,11 +6,11 @@ use std::sync::Arc;
 use anyhow::Result;
 use codex_core::config::types::Personality;
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -308,6 +308,8 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
         config.personality = Some(Personality::Pragmatic);
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
+    fs::create_dir_all(&resume_override_cwd)?;
     resumed
         .codex
         .submit(Op::UserTurn {
@@ -316,7 +318,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: resumed.cwd_path().to_path_buf(),
+            cwd: resume_override_cwd,
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: resumed.session_configured.model.clone(),
@@ -398,10 +400,12 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
         config.model = Some("gpt-5.2-codex".to_string());
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
+    fs::create_dir_all(&resume_override_cwd)?;
     resumed
         .codex
         .submit(Op::OverrideTurnContext {
-            cwd: None,
+            cwd: Some(resume_override_cwd),
             approval_policy: None,
             sandbox_policy: None,
             windows_sandbox_level: None,

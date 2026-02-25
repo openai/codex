@@ -190,13 +190,12 @@ impl AgentMessageItem {
     }
 
     pub fn as_legacy_events(&self) -> Vec<EventMsg> {
-        // Legacy events only preserve visible assistant text; `phase` has no
-        // representation in the v1 event stream.
         self.content
             .iter()
             .map(|c| match c {
                 AgentMessageContent::Text { text } => EventMsg::AgentMessage(AgentMessageEvent {
                     message: text.clone(),
+                    phase: self.phase.clone(),
                 }),
             })
             .collect()

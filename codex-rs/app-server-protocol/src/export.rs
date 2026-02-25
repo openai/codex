@@ -36,6 +36,37 @@ use ts_rs::TS;
 
 const HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
+const JSON_V1_ALLOWLIST: &[&str] = &["InitializeParams", "InitializeResponse"];
+const V1_CLIENT_REQUEST_METHODS: &[&str] = &[
+    "newConversation",
+    "getConversationSummary",
+    "listConversations",
+    "resumeConversation",
+    "forkConversation",
+    "archiveConversation",
+    "sendUserMessage",
+    "sendUserTurn",
+    "interruptConversation",
+    "addConversationListener",
+    "removeConversationListener",
+    "gitDiffToRemote",
+    "loginApiKey",
+    "loginChatGpt",
+    "cancelLoginChatGpt",
+    "logoutChatGpt",
+    "getAuthStatus",
+    "getUserSavedConfig",
+    "setDefaultModel",
+    "getUserAgent",
+    "userInfo",
+    "execOneOffCommand",
+];
+const EXCLUDED_SERVER_NOTIFICATION_METHODS_FOR_JSON: &[&str] = &[
+    "authStatusChange",
+    "loginChatGptComplete",
+    "sessionConfigured",
+    "rawResponseItem/completed",
+];
 
 #[derive(Clone)]
 pub struct GeneratedSchema {
@@ -181,6 +212,8 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
     schemas.extend(export_server_response_schemas(out_dir)?);
     schemas.extend(export_client_notification_schemas(out_dir)?);
     schemas.extend(export_server_notification_schemas(out_dir)?);
+    schemas
+        .retain(|schema| !schema.in_v1_dir || JSON_V1_ALLOWLIST.contains(&schema.logical_name()));
 
     let mut bundle = build_schema_bundle(schemas)?;
     if !experimental_api {
@@ -948,13 +981,23 @@ where
     T: JsonSchema,
 {
     let file_stem = name.trim();
+    let (raw_namespace, logical_name) = split_namespace(file_stem);
+    let include_in_json_codegen =
+        raw_namespace != Some("v1") || JSON_V1_ALLOWLIST.contains(&logical_name);
     let schema = schema_for!(T);
     let mut schema_value = serde_json::to_value(schema)?;
-    annotate_schema(&mut schema_value, Some(file_stem));
+    if include_in_json_codegen {
+        if file_stem == "ClientRequest" {
+            strip_v1_client_request_variants_from_json_schema(&mut schema_value);
+        } else if file_stem == "ServerNotification" {
+            strip_v1_server_notification_variants_from_json_schema(&mut schema_value);
+        }
+        enforce_numbered_definition_collision_overrides(file_stem, &mut schema_value);
+        annotate_schema(&mut schema_value, Some(file_stem));
+    }
     // If the name looks like a namespaced path (e.g., "v2::Type"), mirror
     // the TypeScript layout and write to out_dir/v2/Type.json. Otherwise
     // write alongside the legacy files.
-    let (raw_namespace, logical_name) = split_namespace(file_stem);
     let out_path = if let Some(ns) = raw_namespace {
         let dir = out_dir.join(ns);
         ensure_dir(&dir)?;
@@ -963,7 +1006,7 @@ where
         out_dir.join(format!("{file_stem}.json"))
     };
 
-    if !IGNORED_DEFINITIONS.contains(&logical_name) {
+    if include_in_json_codegen && !IGNORED_DEFINITIONS.contains(&logical_name) {
         write_pretty_json(out_path, &schema_value)
             .with_context(|| format!("Failed to write JSON schema for {file_stem}"))?;
     }
@@ -978,6 +1021,167 @@ where
         logical_name: logical_name.to_string(),
         value: schema_value,
     })
+}
+
+fn enforce_numbered_definition_collision_overrides(schema_name: &str, schema: &mut Value) {
+    for defs_key in ["definitions", "$defs"] {
+        let Some(defs) = schema.get(defs_key).and_then(Value::as_object) else {
+            continue;
+        };
+        detect_numbered_definition_collisions(schema_name, defs_key, defs);
+    }
+}
+
+fn strip_v1_client_request_variants_from_json_schema(schema: &mut Value) {
+    let v1_methods: HashSet<&str> = V1_CLIENT_REQUEST_METHODS.iter().copied().collect();
+    strip_method_variants_from_json_schema(schema, &v1_methods);
+}
+
+fn strip_v1_server_notification_variants_from_json_schema(schema: &mut Value) {
+    let methods: HashSet<&str> = EXCLUDED_SERVER_NOTIFICATION_METHODS_FOR_JSON
+        .iter()
+        .copied()
+        .collect();
+    strip_method_variants_from_json_schema(schema, &methods);
+}
+
+fn strip_method_variants_from_json_schema(schema: &mut Value, methods_to_remove: &HashSet<&str>) {
+    {
+        let Some(root) = schema.as_object_mut() else {
+            return;
+        };
+        let Some(Value::Array(variants)) = root.get_mut("oneOf") else {
+            return;
+        };
+        variants.retain(|variant| !is_method_variant_in_set(variant, methods_to_remove));
+    }
+
+    let reachable = reachable_local_definitions(schema, "definitions");
+    let Some(root) = schema.as_object_mut() else {
+        return;
+    };
+    if let Some(definitions) = root.get_mut("definitions").and_then(Value::as_object_mut) {
+        definitions.retain(|name, _| reachable.contains(name));
+    }
+}
+
+fn is_method_variant_in_set(value: &Value, methods: &HashSet<&str>) -> bool {
+    let Value::Object(map) = value else {
+        return false;
+    };
+    let Some(properties) = map.get("properties").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(method_schema) = properties.get("method") else {
+        return false;
+    };
+    let Some(method) = string_literal(method_schema) else {
+        return false;
+    };
+    methods.contains(method)
+}
+
+fn reachable_local_definitions(schema: &Value, defs_key: &str) -> HashSet<String> {
+    let Some(definitions) = schema.get(defs_key).and_then(Value::as_object) else {
+        return HashSet::new();
+    };
+    let mut queue: Vec<String> = Vec::new();
+    let mut reachable: HashSet<String> = HashSet::new();
+
+    collect_local_definition_refs_excluding_maps(schema, defs_key, &mut queue, &mut reachable);
+
+    while let Some(name) = queue.pop() {
+        if let Some(def_schema) = definitions.get(&name) {
+            collect_local_definition_refs(def_schema, defs_key, &mut queue, &mut reachable);
+        }
+    }
+    reachable
+}
+
+fn collect_local_definition_refs_excluding_maps(
+    value: &Value,
+    defs_key: &str,
+    queue: &mut Vec<String>,
+    reachable: &mut HashSet<String>,
+) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if key == defs_key || key == "$defs" || key == "definitions" {
+                    continue;
+                }
+                collect_local_definition_refs_excluding_maps(child, defs_key, queue, reachable);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_local_definition_refs_excluding_maps(child, defs_key, queue, reachable);
+            }
+        }
+        _ => {}
+    }
+    collect_local_definition_ref_here(value, defs_key, queue, reachable);
+}
+
+fn collect_local_definition_refs(
+    value: &Value,
+    defs_key: &str,
+    queue: &mut Vec<String>,
+    reachable: &mut HashSet<String>,
+) {
+    collect_local_definition_ref_here(value, defs_key, queue, reachable);
+    match value {
+        Value::Object(map) => {
+            for child in map.values() {
+                collect_local_definition_refs(child, defs_key, queue, reachable);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_local_definition_refs(child, defs_key, queue, reachable);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_local_definition_ref_here(
+    value: &Value,
+    defs_key: &str,
+    queue: &mut Vec<String>,
+    reachable: &mut HashSet<String>,
+) {
+    let Some(reference) = value
+        .as_object()
+        .and_then(|obj| obj.get("$ref"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    let Some(name) = reference.strip_prefix(&format!("#/{defs_key}/")) else {
+        return;
+    };
+    let name = name.split('/').next().unwrap_or(name);
+    if reachable.insert(name.to_string()) {
+        queue.push(name.to_string());
+    }
+}
+
+fn detect_numbered_definition_collisions(
+    schema_name: &str,
+    defs_key: &str,
+    defs: &Map<String, Value>,
+) {
+    for generated_name in defs.keys() {
+        let base_name = generated_name.trim_end_matches(|c: char| c.is_ascii_digit());
+        if base_name == generated_name || !defs.contains_key(base_name) {
+            continue;
+        }
+
+        panic!(
+            "Numbered definition naming collision detected: schema={schema_name}|container={defs_key}|generated={generated_name}|base={base_name}"
+        );
+    }
 }
 
 pub(crate) fn write_json_schema<T>(out_dir: &Path, name: &str) -> Result<GeneratedSchema>
@@ -1084,7 +1288,11 @@ fn variant_definition_name(base: &str, variant: &Value) -> Option<String> {
         if props.len() == 1
             && let Some(key) = props.keys().next()
         {
-            let pascal = to_pascal_case(key);
+            let pascal = props
+                .get(key)
+                .and_then(string_literal)
+                .map(to_pascal_case)
+                .unwrap_or_else(|| to_pascal_case(key));
             return Some(format!("{pascal}{base}"));
         }
     }
@@ -1197,11 +1405,12 @@ fn annotate_variant_list(variants: &mut [Value], base: Option<&str>) {
             && let Some(base_name) = base
             && let Some(name) = variant_definition_name(base_name, variant)
         {
-            let mut candidate = name.clone();
-            let mut index = 2;
-            while seen.contains(&candidate) {
-                candidate = format!("{name}{index}");
-                index += 1;
+            let candidate = name.clone();
+            if seen.contains(&candidate) {
+                let collision_key = variant_title_collision_key(base_name, &name, variant);
+                panic!(
+                    "Variant title naming collision detected: {collision_key} (generated name: {name})"
+                );
             }
             if let Some(obj) = variant.as_object_mut() {
                 obj.insert("title".into(), Value::String(candidate.clone()));
@@ -1219,6 +1428,48 @@ fn annotate_variant_list(variants: &mut [Value], base: Option<&str>) {
 
         annotate_schema(variant, base);
     }
+}
+
+fn variant_title_collision_key(base: &str, generated_name: &str, variant: &Value) -> String {
+    let mut parts = vec![
+        format!("base={base}"),
+        format!("generated={generated_name}"),
+    ];
+
+    if let Some(props) = variant.get("properties").and_then(Value::as_object) {
+        for key in DISCRIMINATOR_KEYS {
+            if let Some(value) = literal_from_property(props, key) {
+                parts.push(format!("{key}={value}"));
+            }
+        }
+        for (key, value) in props {
+            if DISCRIMINATOR_KEYS.contains(&key.as_str()) {
+                continue;
+            }
+            if let Some(literal) = string_literal(value) {
+                parts.push(format!("literal:{key}={literal}"));
+            }
+        }
+
+        if props.len() == 1
+            && let Some(key) = props.keys().next()
+        {
+            parts.push(format!("only_property={key}"));
+        }
+    }
+
+    if let Some(required) = variant.get("required").and_then(Value::as_array)
+        && required.len() == 1
+        && let Some(key) = required[0].as_str()
+    {
+        parts.push(format!("required_only={key}"));
+    }
+
+    if parts.len() == 2 {
+        parts.push(format!("variant={variant}"));
+    }
+
+    parts.join("|")
 }
 
 const DISCRIMINATOR_KEYS: &[&str] = &["type", "method", "mode", "status", "role", "reason"];
@@ -1475,7 +1726,18 @@ mod tests {
                         .file_stem()
                         .and_then(|stem| stem.to_str())
                         .is_some_and(|stem| {
-                            stem.ends_with("Params") || stem == "InitializeCapabilities"
+                            stem.ends_with("Params")
+                                || stem == "InitializeCapabilities"
+                                || matches!(
+                                    stem,
+                                    "CollabAgentRef"
+                                        | "CollabAgentStatusEntry"
+                                        | "CollabAgentSpawnEndEvent"
+                                        | "CollabAgentInteractionEndEvent"
+                                        | "CollabCloseEndEvent"
+                                        | "CollabResumeBeginEvent"
+                                        | "CollabResumeEndEvent"
+                                )
                         });
 
                     let contents = fs::read_to_string(&path)?;
@@ -1685,6 +1947,15 @@ mod tests {
         let thread_start_ts =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.ts"))?;
         assert_eq!(thread_start_ts.contains("mockExperimentalField"), true);
+        let command_execution_request_approval_ts = fs::read_to_string(
+            output_dir
+                .join("v2")
+                .join("CommandExecutionRequestApprovalParams.ts"),
+        )?;
+        assert_eq!(
+            command_execution_request_approval_ts.contains("additionalPermissions"),
+            true
+        );
 
         Ok(())
     }
@@ -1821,6 +2092,12 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
         let thread_start_json =
             fs::read_to_string(output_dir.join("v2").join("ThreadStartParams.json"))?;
         assert_eq!(thread_start_json.contains("mockExperimentalField"), false);
+        let command_execution_request_approval_json =
+            fs::read_to_string(output_dir.join("CommandExecutionRequestApprovalParams.json"))?;
+        assert_eq!(
+            command_execution_request_approval_json.contains("additionalPermissions"),
+            false
+        );
 
         let client_request_json = fs::read_to_string(output_dir.join("ClientRequest.json"))?;
         assert_eq!(
@@ -1831,6 +2108,7 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
         let bundle_json =
             fs::read_to_string(output_dir.join("codex_app_server_protocol.schemas.json"))?;
         assert_eq!(bundle_json.contains("mockExperimentalField"), false);
+        assert_eq!(bundle_json.contains("additionalPermissions"), false);
         assert_eq!(bundle_json.contains("MockExperimentalMethodParams"), false);
         assert_eq!(
             bundle_json.contains("MockExperimentalMethodResponse"),

@@ -172,6 +172,8 @@ mod tests {
                 originator: "test_originator".to_string(),
                 cli_version: "test_version".to_string(),
                 source: SessionSource::Cli,
+                agent_nickname: None,
+                agent_role: None,
                 model_provider: None,
                 base_instructions: None,
                 dynamic_tools: None,

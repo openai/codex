@@ -38,7 +38,10 @@ pub fn assess_patch_safety(
     }
 
     match policy {
-        AskForApproval::OnFailure | AskForApproval::Never | AskForApproval::OnRequest => {
+        AskForApproval::OnFailure
+        | AskForApproval::Never
+        | AskForApproval::OnRequest
+        | AskForApproval::Reject(_) => {
             // Continue to see if this can be auto-approved.
         }
         // TODO(ragona): I'm not sure this is actually correct? I believe in this case
@@ -48,11 +51,17 @@ pub fn assess_patch_safety(
         }
     }
 
+    let rejects_sandbox_approval = matches!(policy, AskForApproval::Never)
+        || matches!(
+            policy,
+            AskForApproval::Reject(reject_config) if reject_config.sandbox_approval
+        );
+
     // Even though the patch appears to be constrained to writable paths, it is
     // possible that paths in the patch are hard links to files outside the
     // writable roots, so we should still run `apply_patch` in a sandbox in that case.
     if is_write_patch_constrained_to_writable_paths(action, sandbox_policy, cwd)
-        || policy == AskForApproval::OnFailure
+        || matches!(policy, AskForApproval::OnFailure)
     {
         if matches!(
             sandbox_policy,
@@ -72,10 +81,20 @@ pub fn assess_patch_safety(
                     sandbox_type,
                     user_explicitly_approved: false,
                 },
-                None => SafetyCheck::AskUser,
+                None => {
+                    if rejects_sandbox_approval {
+                        SafetyCheck::Reject {
+                            reason:
+                                "writing outside of the project; rejected by user approval settings"
+                                    .to_string(),
+                        }
+                    } else {
+                        SafetyCheck::AskUser
+                    }
+                }
             }
         }
-    } else if policy == AskForApproval::Never {
+    } else if rejects_sandbox_approval {
         SafetyCheck::Reject {
             reason: "writing outside of the project; rejected by user approval settings"
                 .to_string(),
@@ -174,6 +193,7 @@ fn is_write_patch_constrained_to_writable_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::RejectConfig;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use tempfile::TempDir;
 
@@ -251,6 +271,81 @@ mod tests {
                 sandbox_type: SandboxType::None,
                 user_explicitly_approved: false,
             }
+        );
+    }
+
+    #[test]
+    fn reject_with_all_flags_false_matches_on_request_for_out_of_root_patch() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_path_buf();
+        let parent = cwd.parent().unwrap().to_path_buf();
+        let add_outside =
+            ApplyPatchAction::new_add_for_test(&parent.join("outside.txt"), "".to_string());
+        let policy_workspace_only = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: Default::default(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        assert_eq!(
+            assess_patch_safety(
+                &add_outside,
+                AskForApproval::OnRequest,
+                &policy_workspace_only,
+                &cwd,
+                WindowsSandboxLevel::Disabled,
+            ),
+            SafetyCheck::AskUser,
+        );
+        assert_eq!(
+            assess_patch_safety(
+                &add_outside,
+                AskForApproval::Reject(RejectConfig {
+                    sandbox_approval: false,
+                    rules: false,
+                    mcp_elicitations: false,
+                }),
+                &policy_workspace_only,
+                &cwd,
+                WindowsSandboxLevel::Disabled,
+            ),
+            SafetyCheck::AskUser,
+        );
+    }
+
+    #[test]
+    fn reject_sandbox_approval_rejects_out_of_root_patch() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_path_buf();
+        let parent = cwd.parent().unwrap().to_path_buf();
+        let add_outside =
+            ApplyPatchAction::new_add_for_test(&parent.join("outside.txt"), "".to_string());
+        let policy_workspace_only = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: Default::default(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        assert_eq!(
+            assess_patch_safety(
+                &add_outside,
+                AskForApproval::Reject(RejectConfig {
+                    sandbox_approval: true,
+                    rules: false,
+                    mcp_elicitations: false,
+                }),
+                &policy_workspace_only,
+                &cwd,
+                WindowsSandboxLevel::Disabled,
+            ),
+            SafetyCheck::Reject {
+                reason: "writing outside of the project; rejected by user approval settings"
+                    .to_string(),
+            },
         );
     }
 }

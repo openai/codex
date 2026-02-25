@@ -141,9 +141,10 @@ def codex_rust_crate(
             tags = test_tags,
         )
 
-        maybe_lib = [name]
-    else:
-        maybe_lib = []
+        if proc_macro:
+            proc_macro_deps += [name]
+        else:
+            deps += [name]
 
     sanitized_binaries = []
     cargo_env = {}
@@ -156,7 +157,7 @@ def codex_rust_crate(
             name = binary,
             crate_name = binary.replace("-", "_"),
             crate_root = main,
-            deps = maybe_lib + deps,
+            deps = deps,
             proc_macro_deps = proc_macro_deps,
             edition = crate_edition,
             rustc_flags = rustc_flags_extra,
@@ -183,7 +184,7 @@ def codex_rust_crate(
             srcs = [test],
             data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
-            deps = maybe_lib + deps + dev_deps + integration_deps_extra,
+            deps = deps + dev_deps + integration_deps_extra,
             proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
             # Keep `file!()` paths Cargo-like (`core/tests/...`) instead of
             # Bazel workspace-prefixed (`codex-rs/core/tests/...`) for snapshot parity.

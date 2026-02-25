@@ -309,6 +309,11 @@ client_request_definitions! {
         response: v2::ListMcpServerStatusResponse,
     },
 
+    WindowsSandboxSetupStart => "windowsSandbox/setupStart" {
+        params: v2::WindowsSandboxSetupStartParams,
+        response: v2::WindowsSandboxSetupStartResponse,
+    },
+
     LoginAccount => "account/login/start" {
         params: v2::LoginAccountParams,
         inspect_params: true,
@@ -496,6 +501,7 @@ macro_rules! server_request_definitions {
     ) => {
         /// Request initiated from the server and sent to the client.
         #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+        #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ServerRequest {
             $(
@@ -510,6 +516,7 @@ macro_rules! server_request_definitions {
         }
 
         #[derive(Debug, Clone, PartialEq, JsonSchema)]
+        #[allow(clippy::large_enum_variant)]
         pub enum ServerRequestPayload {
             $( $variant($params), )*
         }
@@ -666,6 +673,11 @@ server_request_definitions! {
         response: v2::ToolRequestUserInputResponse,
     },
 
+    SkillRequestApproval => "skill/requestApproval" {
+        params: v2::SkillRequestApprovalParams,
+        response: v2::SkillRequestApprovalResponse,
+    },
+
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,
@@ -769,6 +781,7 @@ server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
@@ -805,6 +818,7 @@ server_notification_definitions! {
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
+    WindowsSandboxSetupCompleted => "windowsSandbox/setupCompleted" (v2::WindowsSandboxSetupCompletedNotification),
 
     #[serde(rename = "account/login/completed")]
     #[ts(rename = "account/login/completed")]
@@ -1329,6 +1343,28 @@ mod tests {
     }
 
     #[test]
+    fn serialize_thread_status_changed_notification() -> Result<()> {
+        let notification =
+            ServerNotification::ThreadStatusChanged(v2::ThreadStatusChangedNotification {
+                thread_id: "thr_123".to_string(),
+                status: v2::ThreadStatus::Idle,
+            });
+        assert_eq!(
+            json!({
+                "method": "thread/status/changed",
+                "params": {
+                    "threadId": "thr_123",
+                    "status": {
+                        "type": "idle"
+                    },
+                }
+            }),
+            serde_json::to_value(&notification)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn mock_experimental_method_is_marked_experimental() {
         let request = ClientRequest::MockExperimentalMethod {
             request_id: RequestId::Integer(1),
@@ -1336,5 +1372,35 @@ mod tests {
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("mock/experimentalMethod"));
+    }
+
+    #[test]
+    fn command_execution_request_approval_additional_permissions_is_marked_experimental() {
+        let params = v2::CommandExecutionRequestApprovalParams {
+            thread_id: "thr_123".to_string(),
+            turn_id: "turn_123".to_string(),
+            item_id: "call_123".to_string(),
+            approval_id: None,
+            reason: None,
+            network_approval_context: None,
+            command: Some("cat file".to_string()),
+            cwd: None,
+            command_actions: None,
+            additional_permissions: Some(v2::AdditionalPermissionProfile {
+                network: None,
+                file_system: Some(v2::AdditionalFileSystemPermissions {
+                    read: Some(vec![std::path::PathBuf::from("/tmp/allowed")]),
+                    write: None,
+                }),
+                macos: None,
+            }),
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&params);
+        assert_eq!(
+            reason,
+            Some("item/commandExecution/requestApproval.additionalPermissions")
+        );
     }
 }

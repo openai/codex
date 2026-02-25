@@ -990,7 +990,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bottom_pane::selection_popup_common::truncate_line_with_ellipsis_if_overflow;
+    use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
     use crate::test_backend::VT100Backend;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;

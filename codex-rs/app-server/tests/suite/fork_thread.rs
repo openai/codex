@@ -10,7 +10,7 @@ use codex_app_server_protocol::NewConversationParams; // reused for overrides sh
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
-use codex_core::protocol::EventMsg;
+use codex_protocol::protocol::EventMsg;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;

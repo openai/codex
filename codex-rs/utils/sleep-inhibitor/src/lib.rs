@@ -1,36 +1,43 @@
 //! Cross-platform helper for preventing idle sleep while a turn is running.
 //!
-//! On macOS this uses native IOKit power assertions instead of spawning
-//! `caffeinate`, so assertion lifecycle is tied directly to Rust object lifetime.
+//! Platform-specific behavior:
+//! - macOS: Uses native IOKit power assertions instead of spawning `caffeinate`.
+//! - Linux: Spawns `systemd-inhibit` or `gnome-session-inhibit` while active.
+//! - Windows: Uses `PowerCreateRequest` + `PowerSetRequest` with
+//!   `PowerRequestSystemRequired`.
+//! - Other platforms: No-op backend.
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod dummy;
+#[cfg(target_os = "linux")]
+mod linux_inhibitor;
 #[cfg(target_os = "macos")]
-mod macos_inhibitor;
+mod macos;
+#[cfg(target_os = "windows")]
+mod windows_inhibitor;
 
-use std::fmt::Debug;
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+use dummy as imp;
+#[cfg(target_os = "linux")]
+use linux_inhibitor as imp;
+#[cfg(target_os = "macos")]
+use macos as imp;
+#[cfg(target_os = "windows")]
+use windows_inhibitor as imp;
 
 /// Keeps the machine awake while a turn is in progress when enabled.
 #[derive(Debug)]
 pub struct SleepInhibitor {
     enabled: bool,
-    platform: Box<dyn PlatformSleepInhibitor>,
-}
-
-pub(crate) trait PlatformSleepInhibitor: Debug {
-    fn acquire(&mut self);
-    fn release(&mut self);
+    platform: imp::SleepInhibitor,
 }
 
 impl SleepInhibitor {
     pub fn new(enabled: bool) -> Self {
-        #[cfg(target_os = "macos")]
-        let platform: Box<dyn PlatformSleepInhibitor> =
-            Box::new(macos_inhibitor::MacOsSleepInhibitor::new());
-        #[cfg(not(target_os = "macos"))]
-        let platform: Box<dyn PlatformSleepInhibitor> = Box::new(dummy::DummySleepInhibitor::new());
-
-        Self { enabled, platform }
+        Self {
+            enabled,
+            platform: imp::SleepInhibitor::new(),
+        }
     }
 
     /// Update the active turn state; turns sleep prevention on/off as needed.

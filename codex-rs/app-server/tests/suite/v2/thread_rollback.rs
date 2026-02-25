@@ -12,9 +12,11 @@ use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -106,11 +108,25 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
         mcp.read_stream_until_response_message(RequestId::Integer(rollback_id)),
     )
     .await??;
+    let rollback_result = rollback_resp.result.clone();
     let ThreadRollbackResponse {
         thread: rolled_back_thread,
     } = to_response::<ThreadRollbackResponse>(rollback_resp)?;
 
+    // Wire contract: thread title field is `name`, serialized as null when unset.
+    let thread_json = rollback_result
+        .get("thread")
+        .and_then(Value::as_object)
+        .expect("thread/rollback result.thread must be an object");
+    assert_eq!(rolled_back_thread.name, None);
+    assert_eq!(
+        thread_json.get("name"),
+        Some(&Value::Null),
+        "thread/rollback must serialize `name: null` when unset"
+    );
+
     assert_eq!(rolled_back_thread.turns.len(), 1);
+    assert_eq!(rolled_back_thread.status, ThreadStatus::Idle);
     assert_eq!(rolled_back_thread.turns[0].items.len(), 2);
     match &rolled_back_thread.turns[0].items[0] {
         ThreadItem::UserMessage { content, .. } => {
@@ -140,6 +156,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
     assert_eq!(thread.turns.len(), 1);
+    assert_eq!(thread.status, ThreadStatus::Idle);
     assert_eq!(thread.turns[0].items.len(), 2);
     match &thread.turns[0].items[0] {
         ThreadItem::UserMessage { content, .. } => {

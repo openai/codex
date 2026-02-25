@@ -478,6 +478,7 @@ fn assert_permissions_message(item: &ResponseItem) {
                 AskForApproval::Never,
                 &Policy::empty(),
                 &PathBuf::from("/tmp"),
+                false,
             )
             .into_text();
             assert_eq!(

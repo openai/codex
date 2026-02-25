@@ -12,7 +12,7 @@ use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
-use codex_core::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortReason;
 use core_test_support::skip_if_no_network;
 use tempfile::TempDir;
 use tokio::time::timeout;

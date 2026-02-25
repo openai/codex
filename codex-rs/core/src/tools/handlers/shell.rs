@@ -9,37 +9,55 @@ use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
+use crate::skills::SKILL_APPROVAL_DECLINED_MESSAGE;
+use crate::skills::ensure_skill_approval_for_command;
+use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
+use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
+use crate::tools::spec::ShellCommandBackendConfig;
+use codex_protocol::models::PermissionProfile;
 
 pub struct ShellHandler;
 
-pub struct ShellCommandHandler;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellCommandBackend {
+    Classic,
+    ZshFork,
+}
+
+pub struct ShellCommandHandler {
+    backend: ShellCommandBackend,
+}
 
 struct RunExecLikeArgs {
     tool_name: String,
     exec_params: ExecParams,
+    additional_permissions: Option<PermissionProfile>,
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::codex::Session>,
     turn: Arc<TurnContext>,
     tracker: crate::tools::context::SharedTurnDiffTracker,
     call_id: String,
     freeform: bool,
+    shell_runtime_backend: ShellRuntimeBackend,
 }
 
 impl ShellHandler {
@@ -50,11 +68,12 @@ impl ShellHandler {
     ) -> ExecParams {
         ExecParams {
             command: params.command.clone(),
+            original_command: shlex::try_join(params.command.iter().map(String::as_str))
+                .unwrap_or_else(|_| params.command.join(" ")),
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
             network: turn_context.network.clone(),
-            network_attempt_id: None,
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
@@ -64,8 +83,27 @@ impl ShellHandler {
 }
 
 impl ShellCommandHandler {
-    fn base_command(shell: &Shell, command: &str, login: Option<bool>) -> Vec<String> {
-        let use_login_shell = login.unwrap_or(true);
+    fn shell_runtime_backend(&self) -> ShellRuntimeBackend {
+        match self.backend {
+            ShellCommandBackend::Classic => ShellRuntimeBackend::ShellCommandClassic,
+            ShellCommandBackend::ZshFork => ShellRuntimeBackend::ShellCommandZshFork,
+        }
+    }
+
+    fn resolve_use_login_shell(
+        login: Option<bool>,
+        allow_login_shell: bool,
+    ) -> Result<bool, FunctionCallError> {
+        if !allow_login_shell && login == Some(true) {
+            return Err(FunctionCallError::RespondToModel(
+                "login shell is disabled by config; omit `login` or set it to false.".to_string(),
+            ));
+        }
+
+        Ok(login.unwrap_or(allow_login_shell))
+    }
+
+    fn base_command(shell: &Shell, command: &str, use_login_shell: bool) -> Vec<String> {
         shell.derive_exec_args(command, use_login_shell)
     }
 
@@ -74,22 +112,34 @@ impl ShellCommandHandler {
         session: &crate::codex::Session,
         turn_context: &TurnContext,
         thread_id: ThreadId,
-    ) -> ExecParams {
+        allow_login_shell: bool,
+    ) -> Result<ExecParams, FunctionCallError> {
         let shell = session.user_shell();
-        let command = Self::base_command(shell.as_ref(), &params.command, params.login);
+        let use_login_shell = Self::resolve_use_login_shell(params.login, allow_login_shell)?;
+        let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
 
-        ExecParams {
+        Ok(ExecParams {
             command,
+            original_command: params.command.clone(),
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
             network: turn_context.network.clone(),
-            network_attempt_id: None,
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
             arg0: None,
-        }
+        })
+    }
+}
+
+impl From<ShellCommandBackendConfig> for ShellCommandHandler {
+    fn from(config: ShellCommandBackendConfig) -> Self {
+        let backend = match config {
+            ShellCommandBackendConfig::Classic => ShellCommandBackend::Classic,
+            ShellCommandBackendConfig::ZshFork => ShellCommandBackend::ZshFork,
+        };
+        Self { backend }
     }
 }
 
@@ -126,6 +176,7 @@ impl ToolHandler for ShellHandler {
             call_id,
             tool_name,
             payload,
+            ..
         } = invocation;
 
         match payload {
@@ -137,12 +188,14 @@ impl ToolHandler for ShellHandler {
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
                     exec_params,
+                    additional_permissions: params.additional_permissions.clone(),
                     prefix_rule,
                     session,
                     turn,
                     tracker,
                     call_id,
                     freeform: false,
+                    shell_runtime_backend: ShellRuntimeBackend::Generic,
                 })
                 .await
             }
@@ -152,12 +205,14 @@ impl ToolHandler for ShellHandler {
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
                     exec_params,
+                    additional_permissions: None,
                     prefix_rule: None,
                     session,
                     turn,
                     tracker,
                     call_id,
                     freeform: false,
+                    shell_runtime_backend: ShellRuntimeBackend::Generic,
                 })
                 .await
             }
@@ -185,8 +240,15 @@ impl ToolHandler for ShellCommandHandler {
 
         serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .map(|params| {
+                let use_login_shell = match Self::resolve_use_login_shell(
+                    params.login,
+                    invocation.turn.tools_config.allow_login_shell,
+                ) {
+                    Ok(use_login_shell) => use_login_shell,
+                    Err(_) => return true,
+                };
                 let shell = invocation.session.user_shell();
-                let command = Self::base_command(shell.as_ref(), &params.command, params.login);
+                let command = Self::base_command(shell.as_ref(), &params.command, use_login_shell);
                 !is_known_safe_command(&command)
             })
             .unwrap_or(true)
@@ -200,6 +262,7 @@ impl ToolHandler for ShellCommandHandler {
             call_id,
             tool_name,
             payload,
+            ..
         } = invocation;
 
         let ToolPayload::Function { arguments } = payload else {
@@ -215,16 +278,19 @@ impl ToolHandler for ShellCommandHandler {
             session.as_ref(),
             turn.as_ref(),
             session.conversation_id,
-        );
+            turn.tools_config.allow_login_shell,
+        )?;
         ShellHandler::run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,
+            additional_permissions: params.additional_permissions.clone(),
             prefix_rule,
             session,
             turn,
             tracker,
             call_id,
             freeform: true,
+            shell_runtime_backend: self.shell_runtime_backend(),
         })
         .await
     }
@@ -235,12 +301,14 @@ impl ShellHandler {
         let RunExecLikeArgs {
             tool_name,
             exec_params,
+            additional_permissions,
             prefix_rule,
             session,
             turn,
             tracker,
             call_id,
             freeform,
+            shell_runtime_backend,
         } = args;
 
         let mut exec_params = exec_params;
@@ -256,28 +324,60 @@ impl ShellHandler {
             }
         }
 
+        let request_permission_enabled = session.features().enabled(Feature::RequestPermissions);
+        let normalized_additional_permissions = normalize_and_validate_additional_permissions(
+            request_permission_enabled,
+            turn.approval_policy.value(),
+            exec_params.sandbox_permissions,
+            additional_permissions,
+            &exec_params.cwd,
+        )
+        .map_err(FunctionCallError::RespondToModel)?;
+
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
             .sandbox_permissions
-            .requires_escalated_permissions()
+            .requires_additional_permissions()
             && !matches!(
-                turn.approval_policy,
+                turn.approval_policy.value(),
                 codex_protocol::protocol::AskForApproval::OnRequest
             )
         {
-            let approval_policy = turn.approval_policy;
+            let approval_policy = turn.approval_policy.value();
             return Err(FunctionCallError::RespondToModel(format!(
                 "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
         }
+        let original_command = exec_params.original_command.as_str();
+        if !ensure_skill_approval_for_command(
+            session.as_ref(),
+            turn.as_ref(),
+            &call_id,
+            original_command,
+            exec_params.cwd.as_path(),
+        )
+        .await
+        {
+            return Err(FunctionCallError::RespondToModel(
+                SKILL_APPROVAL_DECLINED_MESSAGE.to_string(),
+            ));
+        }
+        let workdir = exec_params.cwd.to_string_lossy().into_owned();
+        maybe_emit_implicit_skill_invocation(
+            session.as_ref(),
+            turn.as_ref(),
+            original_command,
+            Some(workdir.as_str()),
+        )
+        .await;
 
         // Intercept apply_patch if present.
         if let Some(output) = intercept_apply_patch(
             &exec_params.command,
             &exec_params.cwd,
             exec_params.expiration.timeout_ms(),
-            session.as_ref(),
-            turn.as_ref(),
+            session.clone(),
+            turn.clone(),
             Some(&tracker),
             &call_id,
             tool_name.as_str(),
@@ -302,8 +402,8 @@ impl ShellHandler {
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &exec_params.command,
-                approval_policy: turn.approval_policy,
-                sandbox_policy: &turn.sandbox_policy,
+                approval_policy: turn.approval_policy.value(),
+                sandbox_policy: turn.sandbox_policy.get(),
                 sandbox_permissions: exec_params.sandbox_permissions,
                 prefix_rule,
             })
@@ -317,20 +417,34 @@ impl ShellHandler {
             explicit_env_overrides,
             network: exec_params.network.clone(),
             sandbox_permissions: exec_params.sandbox_permissions,
+            additional_permissions: normalized_additional_permissions,
             justification: exec_params.justification.clone(),
             exec_approval_requirement,
         };
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = ShellRuntime::new();
+        let mut runtime = {
+            use ShellRuntimeBackend::*;
+            match shell_runtime_backend {
+                Generic => ShellRuntime::new(),
+                backend @ (ShellCommandClassic | ShellCommandZshFork) => {
+                    ShellRuntime::for_shell_command(backend)
+                }
+            }
+        };
         let tool_ctx = ToolCtx {
-            session: session.as_ref(),
-            turn: turn.as_ref(),
+            session: session.clone(),
+            turn: turn.clone(),
             call_id: call_id.clone(),
             tool_name,
-            network_attempt_id: None,
         };
         let out = orchestrator
-            .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
+            .run(
+                &mut runtime,
+                &req,
+                &tool_ctx,
+                &turn,
+                turn.approval_policy.value(),
+            )
             .await
             .map(|result| result.output);
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
@@ -433,6 +547,7 @@ mod tests {
             login,
             timeout_ms,
             sandbox_permissions: Some(sandbox_permissions),
+            additional_permissions: None,
             prefix_rule: None,
             justification: justification.clone(),
         };
@@ -442,7 +557,9 @@ mod tests {
             &session,
             &turn_context,
             session.conversation_id,
-        );
+            true,
+        )
+        .expect("login shells should be allowed");
 
         // ExecParams cannot derive Eq due to the CancellationToken field, so we manually compare the fields.
         assert_eq!(exec_params.command, expected_command);
@@ -467,18 +584,58 @@ mod tests {
             shell_snapshot,
         };
 
-        let login_command =
-            ShellCommandHandler::base_command(&shell, "echo login shell", Some(true));
+        let login_command = ShellCommandHandler::base_command(&shell, "echo login shell", true);
         assert_eq!(
             login_command,
             shell.derive_exec_args("echo login shell", true)
         );
 
         let non_login_command =
-            ShellCommandHandler::base_command(&shell, "echo non login shell", Some(false));
+            ShellCommandHandler::base_command(&shell, "echo non login shell", false);
         assert_eq!(
             non_login_command,
             shell.derive_exec_args("echo non login shell", false)
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
+        let (session, turn_context) = make_session_and_context().await;
+        let params = ShellCommandToolCallParams {
+            command: "echo hello".to_string(),
+            workdir: None,
+            login: None,
+            timeout_ms: None,
+            sandbox_permissions: None,
+            additional_permissions: None,
+            prefix_rule: None,
+            justification: None,
+        };
+
+        let exec_params = ShellCommandHandler::to_exec_params(
+            &params,
+            &session,
+            &turn_context,
+            session.conversation_id,
+            false,
+        )
+        .expect("non-login shells should still be allowed");
+
+        assert_eq!(
+            exec_params.command,
+            session.user_shell().derive_exec_args("echo hello", false)
+        );
+    }
+
+    #[test]
+    fn shell_command_handler_rejects_login_when_disallowed() {
+        let err = ShellCommandHandler::resolve_use_login_shell(Some(true), false)
+            .expect_err("explicit login should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("login shell is disabled by config"),
+            "unexpected error: {err}"
         );
     }
 }

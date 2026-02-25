@@ -39,6 +39,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
     pub(crate) connectors_enabled: bool,
     pub(crate) personality_command_enabled: bool,
+    pub(crate) realtime_conversation_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
 }
 
@@ -49,6 +50,7 @@ impl CommandPopup {
             flags.collaboration_modes_enabled,
             flags.connectors_enabled,
             flags.personality_command_enabled,
+            flags.realtime_conversation_enabled,
             flags.windows_degraded_sandbox_active,
         )
         .into_iter()
@@ -220,6 +222,7 @@ impl CommandPopup {
                 };
                 GenericDisplayRow {
                     name,
+                    name_prefix_spans: Vec::new(),
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     display_shortcut: None,
                     description: Some(description),
@@ -494,6 +497,7 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 personality_command_enabled: true,
+                realtime_conversation_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -513,6 +517,7 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 personality_command_enabled: true,
+                realtime_conversation_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -532,6 +537,7 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 personality_command_enabled: false,
+                realtime_conversation_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -559,6 +565,7 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 personality_command_enabled: true,
+                realtime_conversation_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );

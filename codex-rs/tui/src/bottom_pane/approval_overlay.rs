@@ -17,13 +17,16 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use codex_core::features::Features;
-use codex_core::protocol::ElicitationAction;
-use codex_core::protocol::ExecPolicyAmendment;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::NetworkApprovalContext;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
 use codex_protocol::mcp::RequestId;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::ElicitationAction;
+use codex_protocol::protocol::ExecPolicyAmendment;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::NetworkApprovalContext;
+use codex_protocol::protocol::NetworkPolicyAmendment;
+use codex_protocol::protocol::NetworkPolicyRuleAction;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -45,6 +48,8 @@ pub(crate) enum ApprovalRequest {
         reason: Option<String>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+        proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
+        additional_permissions: Option<PermissionProfile>,
     },
     ApplyPatch {
         id: String,
@@ -112,17 +117,21 @@ impl ApprovalOverlay {
             ApprovalVariant::Exec {
                 network_approval_context,
                 proposed_execpolicy_amendment,
+                proposed_network_policy_amendments,
+                additional_permissions,
                 ..
             } => (
                 exec_options(
                     proposed_execpolicy_amendment.clone(),
+                    proposed_network_policy_amendments.clone(),
                     network_approval_context.as_ref(),
+                    additional_permissions.as_ref(),
                 ),
                 network_approval_context.as_ref().map_or_else(
                     || "Would you like to run the following command?".to_string(),
                     |network_approval_context| {
                         format!(
-                            "Do you want to approve access to \"{}\"?",
+                            "Do you want to approve network access to \"{}\"?",
                             network_approval_context.host
                         )
                     },
@@ -358,10 +367,22 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 reason,
                 network_approval_context,
                 proposed_execpolicy_amendment,
+                proposed_network_policy_amendments,
+                additional_permissions,
             } => {
                 let mut header: Vec<Line<'static>> = Vec::new();
                 if let Some(reason) = reason {
                     header.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
+                    header.push(Line::from(""));
+                }
+                if let Some(ref additional_permissions) = additional_permissions
+                    && let Some(rule_line) =
+                        format_additional_permissions_rule(additional_permissions)
+                {
+                    header.push(Line::from(vec![
+                        "Permission rule: ".into(),
+                        rule_line.cyan(),
+                    ]));
                     header.push(Line::from(""));
                 }
                 let full_cmd = strip_bash_lc_and_escape(&command);
@@ -369,13 +390,17 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 if let Some(first) = full_cmd_lines.first_mut() {
                     first.spans.insert(0, Span::from("$ "));
                 }
-                header.extend(full_cmd_lines);
+                if network_approval_context.is_none() {
+                    header.extend(full_cmd_lines);
+                }
                 Self {
                     variant: ApprovalVariant::Exec {
                         id,
                         command,
                         network_approval_context,
                         proposed_execpolicy_amendment,
+                        proposed_network_policy_amendments,
+                        additional_permissions,
                     },
                     header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
                 }
@@ -432,6 +457,8 @@ enum ApprovalVariant {
         command: Vec<String>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+        proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
+        additional_permissions: Option<PermissionProfile>,
     },
     ApplyPatch {
         id: String,
@@ -466,10 +493,12 @@ impl ApprovalOption {
 
 fn exec_options(
     proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+    proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
     network_approval_context: Option<&NetworkApprovalContext>,
+    additional_permissions: Option<&PermissionProfile>,
 ) -> Vec<ApprovalOption> {
     if network_approval_context.is_some() {
-        return vec![
+        let mut options = vec![
             ApprovalOption {
                 label: "Yes, just this once".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Approved),
@@ -477,10 +506,45 @@ fn exec_options(
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
             },
             ApprovalOption {
-                label: "Yes, and allow this host for this session".to_string(),
+                label: "Yes, and allow this host for this conversation".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+            },
+        ];
+        for amendment in proposed_network_policy_amendments.unwrap_or_default() {
+            let (label, shortcut) = match amendment.action {
+                NetworkPolicyRuleAction::Allow => (
+                    "Yes, and allow this host in the future".to_string(),
+                    KeyCode::Char('p'),
+                ),
+                NetworkPolicyRuleAction::Deny => continue,
+            };
+            options.push(ApprovalOption {
+                label,
+                decision: ApprovalDecision::Review(ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment: amendment,
+                }),
+                display_shortcut: None,
+                additional_shortcuts: vec![key_hint::plain(shortcut)],
+            });
+        }
+        options.push(ApprovalOption {
+            label: "No, and tell Codex what to do differently".to_string(),
+            decision: ApprovalDecision::Review(ReviewDecision::Abort),
+            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+        });
+        return options;
+    }
+
+    if additional_permissions.is_some() {
+        return vec![
+            ApprovalOption {
+                label: "Yes, proceed".to_string(),
+                decision: ApprovalDecision::Review(ReviewDecision::Approved),
+                display_shortcut: None,
+                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
             },
             ApprovalOption {
                 label: "No, and tell Codex what to do differently".to_string(),
@@ -522,6 +586,36 @@ fn exec_options(
         additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
     }])
     .collect()
+}
+
+fn format_additional_permissions_rule(
+    additional_permissions: &PermissionProfile,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(file_system) = additional_permissions.file_system.as_ref() {
+        if let Some(read) = file_system.read.as_ref() {
+            let reads = read
+                .iter()
+                .map(|path| format!("`{}`", path.display()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!("read {reads}"));
+        }
+        if let Some(write) = file_system.write.as_ref() {
+            let writes = write
+                .iter()
+                .map(|path| format!("`{}`", path.display()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!("write {writes}"));
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("; "))
+    }
 }
 
 fn patch_options() -> Vec<ApprovalOption> {
@@ -574,9 +668,27 @@ fn elicitation_options() -> Vec<ApprovalOption> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use codex_core::protocol::NetworkApprovalProtocol;
+    use codex_protocol::models::FileSystemPermissions;
+    use codex_protocol::protocol::NetworkApprovalProtocol;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn render_overlay_lines(view: &ApprovalOverlay, width: u16) -> String {
+        let height = view.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        view.render(Rect::new(0, 0, width, height), &mut buf);
+        (0..buf.area.height)
+            .map(|row| {
+                (0..buf.area.width)
+                    .map(|col| buf[(col, row)].symbol().to_string())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
@@ -585,6 +697,8 @@ mod tests {
             reason: Some("reason".to_string()),
             network_approval_context: None,
             proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: None,
         }
     }
 
@@ -630,6 +744,8 @@ mod tests {
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                     "echo".to_string(),
                 ])),
+                proposed_network_policy_amendments: None,
+                additional_permissions: None,
             },
             tx,
             Features::with_defaults(),
@@ -657,6 +773,43 @@ mod tests {
     }
 
     #[test]
+    fn network_deny_forever_shortcut_is_not_bound() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(
+            ApprovalRequest::Exec {
+                id: "test".to_string(),
+                command: vec!["curl".to_string(), "https://example.com".to_string()],
+                reason: None,
+                network_approval_context: Some(NetworkApprovalContext {
+                    host: "example.com".to_string(),
+                    protocol: NetworkApprovalProtocol::Https,
+                }),
+                proposed_execpolicy_amendment: None,
+                proposed_network_policy_amendments: Some(vec![
+                    NetworkPolicyAmendment {
+                        host: "example.com".to_string(),
+                        action: NetworkPolicyRuleAction::Allow,
+                    },
+                    NetworkPolicyAmendment {
+                        host: "example.com".to_string(),
+                        action: NetworkPolicyRuleAction::Deny,
+                    },
+                ]),
+                additional_permissions: None,
+            },
+            tx,
+            Features::with_defaults(),
+        );
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected approval event emitted for hidden network deny shortcut"
+        );
+    }
+
+    #[test]
     fn header_includes_command_snippet() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
@@ -667,6 +820,8 @@ mod tests {
             reason: None,
             network_approval_context: None,
             proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
@@ -696,7 +851,18 @@ mod tests {
         };
         let options = exec_options(
             Some(ExecPolicyAmendment::new(vec!["curl".to_string()])),
+            Some(vec![
+                NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Allow,
+                },
+                NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Deny,
+                },
+            ]),
             Some(&network_context),
+            None,
         );
 
         let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
@@ -704,9 +870,98 @@ mod tests {
             labels,
             vec![
                 "Yes, just this once".to_string(),
-                "Yes, and allow this host for this session".to_string(),
+                "Yes, and allow this host for this conversation".to_string(),
+                "Yes, and allow this host in the future".to_string(),
                 "No, and tell Codex what to do differently".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn additional_permissions_exec_options_hide_execpolicy_amendment() {
+        let additional_permissions = PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![PathBuf::from("/tmp/readme.txt")]),
+                write: Some(vec![PathBuf::from("/tmp/out.txt")]),
+            }),
+            ..Default::default()
+        };
+        let options = exec_options(None, None, None, Some(&additional_permissions));
+
+        let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Yes, proceed".to_string(),
+                "No, and tell Codex what to do differently".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn additional_permissions_prompt_shows_permission_rule_line() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let exec_request = ApprovalRequest::Exec {
+            id: "test".into(),
+            command: vec!["cat".into(), "/tmp/readme.txt".into()],
+            reason: None,
+            network_approval_context: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: Some(PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![PathBuf::from("/tmp/readme.txt")]),
+                    write: Some(vec![PathBuf::from("/tmp/out.txt")]),
+                }),
+                ..Default::default()
+            }),
+        };
+
+        let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 120, view.desired_height(120)));
+        view.render(Rect::new(0, 0, 120, view.desired_height(120)), &mut buf);
+
+        let rendered: Vec<String> = (0..buf.area.height)
+            .map(|row| {
+                (0..buf.area.width)
+                    .map(|col| buf[(col, row)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("Permission rule:")),
+            "expected permission-rule line, got {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn additional_permissions_prompt_snapshot() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let exec_request = ApprovalRequest::Exec {
+            id: "test".into(),
+            command: vec!["cat".into(), "/tmp/readme.txt".into()],
+            reason: Some("need filesystem access".into()),
+            network_approval_context: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: Some(PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![PathBuf::from("/tmp/readme.txt")]),
+                    write: Some(vec![PathBuf::from("/tmp/out.txt")]),
+                }),
+                ..Default::default()
+            }),
+        };
+
+        let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
+        assert_snapshot!(
+            "approval_overlay_additional_permissions_prompt",
+            render_overlay_lines(&view, 120)
         );
     }
 
@@ -723,11 +978,23 @@ mod tests {
                 protocol: NetworkApprovalProtocol::Https,
             }),
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec!["curl".into()])),
+            proposed_network_policy_amendments: Some(vec![
+                NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Allow,
+                },
+                NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Deny,
+                },
+            ]),
+            additional_permissions: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
         let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(100)));
         view.render(Rect::new(0, 0, 100, view.desired_height(100)), &mut buf);
+        assert_snapshot!("network_exec_prompt", format!("{buf:?}"));
 
         let rendered: Vec<String> = (0..buf.area.height)
             .map(|row| {
@@ -738,10 +1005,14 @@ mod tests {
             .collect();
 
         assert!(
-            rendered
-                .iter()
-                .any(|line| line.contains("Do you want to approve access to \"example.com\"?")),
+            rendered.iter().any(|line| {
+                line.contains("Do you want to approve network access to \"example.com\"?")
+            }),
             "expected network title to include host, got {rendered:?}"
+        );
+        assert!(
+            !rendered.iter().any(|line| line.contains("$ curl")),
+            "network prompt should not show command line, got {rendered:?}"
         );
         assert!(
             !rendered.iter().any(|line| line.contains("don't ask again")),

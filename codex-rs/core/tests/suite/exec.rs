@@ -7,10 +7,10 @@ use codex_core::exec::ExecParams;
 use codex_core::exec::ExecToolCallOutput;
 use codex_core::exec::SandboxType;
 use codex_core::exec::process_exec_tool_call;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::protocol::SandboxPolicy;
 use tempfile::TempDir;
 
 use codex_core::error::Result;
@@ -33,11 +33,11 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
 
     let params = ExecParams {
         command: cmd.iter().map(ToString::to_string).collect(),
+        original_command: cmd.iter().map(ToString::to_string).collect(),
         cwd: tmp.path().to_path_buf(),
         expiration: 1000.into(),
         env: HashMap::new(),
         network: None,
-        network_attempt_id: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         justification: None,

@@ -1,8 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_core::features::Feature;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;

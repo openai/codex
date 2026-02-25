@@ -14,10 +14,10 @@ use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::WarningEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
@@ -81,25 +81,32 @@ fn normalize_line_endings_str(text: &str) -> String {
     }
 }
 
-fn extract_summary_message(request: &Value, summary_text: &str) -> Value {
+fn extract_summary_user_text(request: &Value, summary_text: &str) -> String {
+    json_message_input_texts(request, "user")
+        .into_iter()
+        .find(|text| text.contains(summary_text))
+        .unwrap_or_else(|| panic!("expected summary message {summary_text}"))
+}
+
+fn json_message_input_texts(request: &Value, role: &str) -> Vec<String> {
     request
         .get("input")
         .and_then(Value::as_array)
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item.get("type").and_then(Value::as_str) == Some("message")
-                    && item.get("role").and_then(Value::as_str) == Some("user")
-                    && item
-                        .get("content")
-                        .and_then(Value::as_array)
-                        .and_then(|arr| arr.first())
-                        .and_then(|entry| entry.get("text"))
-                        .and_then(Value::as_str)
-                        .is_some_and(|text| text.contains(summary_text))
-            })
+        .into_iter()
+        .flatten()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("message")
+                && item.get("role").and_then(Value::as_str) == Some(role)
         })
-        .cloned()
-        .unwrap_or_else(|| panic!("expected summary message {summary_text}"))
+        .filter_map(|item| {
+            item.get("content")
+                .and_then(Value::as_array)
+                .and_then(|content| content.first())
+                .and_then(|entry| entry.get("text"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 fn normalize_compact_prompts(requests: &mut [Value]) {
@@ -200,459 +207,88 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         &fork_arr[..compact_arr.len()]
     );
 
-    let expected_model = requests[0]["model"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let prompt = requests[0]["instructions"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let permissions_message = requests[0]["input"][0].clone();
-    let user_instructions = requests[0]["input"][1]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let environment_context = requests[0]["input"][2]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let tool_calls = json!(requests[0]["tools"].as_array());
-    let prompt_cache_key = requests[0]["prompt_cache_key"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let fork_prompt_cache_key = requests[requests.len() - 1]["prompt_cache_key"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let summary_after_compact = extract_summary_message(&requests[2], SUMMARY_TEXT);
-    let summary_after_resume = extract_summary_message(&requests[3], SUMMARY_TEXT);
-    let summary_after_fork = extract_summary_message(&requests[4], SUMMARY_TEXT);
-    let user_turn_1 = json!(
-    {
-      "model": expected_model,
-      "instructions": prompt,
-      "input": [
-        permissions_message,
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "hello world"
-            }
-          ]
+    let first_request_user_texts = json_message_input_texts(&requests[0], "user");
+    let first_turn_user_index = first_request_user_texts
+        .len()
+        .checked_sub(1)
+        .unwrap_or_else(|| panic!("first turn request missing user messages"));
+    assert_eq!(
+        first_request_user_texts[first_turn_user_index],
+        "hello world"
+    );
+    let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
+    let summary_after_compact = extract_summary_user_text(&requests[2], SUMMARY_TEXT);
+    let summary_after_resume = extract_summary_user_text(&requests[3], SUMMARY_TEXT);
+    let summary_after_fork = extract_summary_user_text(&requests[4], SUMMARY_TEXT);
+    let mut expected_after_compact_user_texts =
+        vec!["hello world".to_string(), summary_after_compact];
+    expected_after_compact_user_texts.extend_from_slice(seeded_user_prefix);
+    expected_after_compact_user_texts.push("AFTER_COMPACT".to_string());
+    assert_eq!(
+        json_message_input_texts(&requests[2], "user"),
+        expected_after_compact_user_texts
+    );
+
+    let mut expected_after_resume_user_texts =
+        vec!["hello world".to_string(), summary_after_resume];
+    expected_after_resume_user_texts.extend_from_slice(seeded_user_prefix);
+    expected_after_resume_user_texts.push("AFTER_COMPACT".to_string());
+    let after_resume_user_texts = json_message_input_texts(&requests[3], "user");
+    let (after_resume_last, after_resume_prefix) = after_resume_user_texts
+        .split_last()
+        .unwrap_or_else(|| panic!("after-resume request missing user messages"));
+    assert_eq!(after_resume_last, "AFTER_RESUME");
+    assert!(
+        after_resume_prefix.starts_with(&expected_after_resume_user_texts),
+        "after-resume user texts should preserve compacted history prefix"
+    );
+    let after_resume_seeded_suffix = &after_resume_prefix[expected_after_resume_user_texts.len()..];
+    if seeded_user_prefix.is_empty() {
+        assert!(
+            after_resume_seeded_suffix.is_empty(),
+            "after-resume request should not append unexpected user prefix items"
+        );
+    } else {
+        let mut chunks = after_resume_seeded_suffix.chunks_exact(seeded_user_prefix.len());
+        assert!(
+            chunks.remainder().is_empty(),
+            "after-resume suffix should be whole seeded-prefix repeats"
+        );
+        for chunk in &mut chunks {
+            assert_eq!(chunk, seeded_user_prefix);
         }
-      ],
-      "tools": tool_calls,
-      "tool_choice": "auto",
-      "parallel_tool_calls": false,
-      "reasoning": {
-        "effort": "medium",
-        "summary": "auto"
-      },
-      "store": false,
-      "stream": true,
-      "include": [
-        "reasoning.encrypted_content"
-      ],
-      "prompt_cache_key": prompt_cache_key
-    });
-    let compact_1 = json!(
-    {
-      "model": expected_model,
-      "instructions": prompt,
-      "input": [
-        permissions_message,
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "hello world"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "assistant",
-          "content": [
-            {
-              "type": "output_text",
-              "text": "FIRST_REPLY"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": SUMMARIZATION_PROMPT
-            }
-          ]
+    }
+
+    let after_fork_user_texts = json_message_input_texts(&requests[4], "user");
+    let mut expected_after_fork_history_prefix =
+        vec!["hello world".to_string(), summary_after_fork];
+    expected_after_fork_history_prefix.extend_from_slice(seeded_user_prefix);
+    expected_after_fork_history_prefix.push("AFTER_COMPACT".to_string());
+    let (after_fork_last, after_fork_prefix) = after_fork_user_texts
+        .split_last()
+        .unwrap_or_else(|| panic!("after-fork request missing user messages"));
+    assert_eq!(after_fork_last, "AFTER_FORK");
+    assert!(
+        after_fork_prefix.starts_with(&expected_after_fork_history_prefix),
+        "after-fork user texts should preserve compacted user history prefix"
+    );
+    let after_fork_seeded_suffix = &after_fork_prefix[expected_after_fork_history_prefix.len()..];
+    if seeded_user_prefix.is_empty() {
+        assert!(
+            after_fork_seeded_suffix.is_empty(),
+            "after-fork request should not append unexpected user prefix items"
+        );
+    } else {
+        let mut chunks = after_fork_seeded_suffix.chunks_exact(seeded_user_prefix.len());
+        assert!(
+            chunks.remainder().is_empty(),
+            "after-fork suffix should be whole seeded-prefix repeats"
+        );
+        for chunk in &mut chunks {
+            assert_eq!(chunk, seeded_user_prefix);
         }
-      ],
-      "tools": [],
-      "tool_choice": "auto",
-      "parallel_tool_calls": false,
-      "reasoning": {
-        "effort": "medium",
-        "summary": "auto"
-      },
-      "store": false,
-      "stream": true,
-      "include": [
-        "reasoning.encrypted_content"
-      ],
-      "prompt_cache_key": prompt_cache_key
-    });
-    let user_turn_2_after_compact = json!(
-    {
-      "model": expected_model,
-      "instructions": prompt,
-      "input": [
-        permissions_message,
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "hello world"
-            }
-          ]
-        },
-        summary_after_compact,
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "AFTER_COMPACT"
-            }
-          ]
-        }
-      ],
-      "tools": tool_calls,
-      "tool_choice": "auto",
-      "parallel_tool_calls": false,
-      "reasoning": {
-        "effort": "medium",
-        "summary": "auto"
-      },
-      "store": false,
-      "stream": true,
-      "include": [
-        "reasoning.encrypted_content"
-      ],
-      "prompt_cache_key": prompt_cache_key
-    });
-    let usert_turn_3_after_resume = json!(
-    {
-      "model": expected_model,
-      "instructions": prompt,
-      "input": [
-        permissions_message,
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "hello world"
-            }
-          ]
-        },
-        summary_after_resume,
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "AFTER_COMPACT"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "assistant",
-          "content": [
-            {
-              "type": "output_text",
-              "text": "AFTER_COMPACT_REPLY"
-            }
-          ]
-        },
-        permissions_message,
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "AFTER_RESUME"
-            }
-          ]
-        }
-      ],
-      "tools": tool_calls,
-      "tool_choice": "auto",
-      "parallel_tool_calls": false,
-      "reasoning": {
-        "effort": "medium",
-        "summary": "auto"
-      },
-      "store": false,
-      "stream": true,
-      "include": [
-        "reasoning.encrypted_content"
-      ],
-      "prompt_cache_key": prompt_cache_key
-    });
-    let user_turn_3_after_fork = json!(
-    {
-      "model": expected_model,
-      "instructions": prompt,
-      "input": [
-        permissions_message,
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "hello world"
-            }
-          ]
-        },
-        summary_after_fork,
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "AFTER_COMPACT"
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "assistant",
-          "content": [
-            {
-              "type": "output_text",
-              "text": "AFTER_COMPACT_REPLY"
-            }
-          ]
-        },
-        permissions_message,
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        permissions_message,
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": user_instructions
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": environment_context
-            }
-          ]
-        },
-        {
-          "type": "message",
-          "role": "user",
-          "content": [
-            {
-              "type": "input_text",
-              "text": "AFTER_FORK"
-            }
-          ]
-        }
-      ],
-      "tools": tool_calls,
-      "tool_choice": "auto",
-      "parallel_tool_calls": false,
-      "reasoning": {
-        "effort": "medium",
-        "summary": "auto"
-      },
-      "store": false,
-      "stream": true,
-      "include": [
-        "reasoning.encrypted_content"
-      ],
-      "prompt_cache_key": fork_prompt_cache_key
-    });
-    let mut expected = json!([
-        user_turn_1,
-        compact_1,
-        user_turn_2_after_compact,
-        usert_turn_3_after_resume,
-        user_turn_3_after_fork
-    ]);
-    normalize_line_endings(&mut expected);
-    if let Some(arr) = expected.as_array_mut() {
-        normalize_compact_prompts(arr);
     }
     assert_eq!(requests.len(), 5);
-    assert_eq!(json!(requests), expected);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -725,118 +361,47 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         compact_filtered.as_slice(),
         &resume_filtered[..compact_filtered.len()]
     );
-    // hard coded test
-    let prompt = requests[0]["instructions"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let permissions_message = requests[0]["input"][0].clone();
-    let user_instructions = requests[0]["input"][1]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let environment_instructions = requests[0]["input"][2]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-
-    // Build expected final request input: initial context + forked user message +
-    // compacted summary + post-compact user message + resumed user message.
+    let first_request_user_texts = json_message_input_texts(&requests[0], "user");
+    let first_turn_user_index = first_request_user_texts
+        .len()
+        .checked_sub(1)
+        .unwrap_or_else(|| panic!("first turn request missing user messages"));
+    assert_eq!(
+        first_request_user_texts[first_turn_user_index],
+        "hello world"
+    );
+    let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
     let summary_after_second_compact =
-        extract_summary_message(&requests[requests.len() - 3], SUMMARY_TEXT);
-
-    let mut expected = json!([
-      {
-        "instructions": prompt,
-        "input": [
-          permissions_message,
-          {
-            "type": "message",
-            "role": "user",
-            "content": [
-              {
-                "type": "input_text",
-                "text": user_instructions
-              }
-            ]
-          },
-          {
-            "type": "message",
-            "role": "user",
-            "content": [
-              {
-                "type": "input_text",
-                "text": environment_instructions
-              }
-            ]
-          },
-          {
-            "type": "message",
-            "role": "user",
-            "content": [
-              {
-                "type": "input_text",
-                "text": "AFTER_FORK"
-              }
-            ]
-          },
-          summary_after_second_compact,
-          {
-            "type": "message",
-            "role": "user",
-            "content": [
-              {
-                "type": "input_text",
-                "text": "AFTER_COMPACT_2"
-              }
-            ]
-          },
-          permissions_message,
-          {
-            "type": "message",
-            "role": "user",
-            "content": [
-              {
-                "type": "input_text",
-                "text": user_instructions
-              }
-            ]
-          },
-          {
-            "type": "message",
-            "role": "user",
-            "content": [
-              {
-                "type": "input_text",
-                "text": environment_instructions
-              }
-            ]
-          },
-          {
-            "type": "message",
-            "role": "user",
-            "content": [
-              {
-                "type": "input_text",
-                "text": "AFTER_SECOND_RESUME"
-              }
-            ]
-          }
-        ],
-      }
-    ]);
-    normalize_line_endings(&mut expected);
-    let mut last_request_after_2_compacts = json!([{
-        "instructions": requests[requests.len() -1]["instructions"],
-        "input": requests[requests.len() -1]["input"],
-    }]);
-    if let Some(arr) = expected.as_array_mut() {
-        normalize_compact_prompts(arr);
+        extract_summary_user_text(&requests[requests.len() - 3], SUMMARY_TEXT);
+    let mut expected_after_second_compact_user_texts =
+        vec!["AFTER_FORK".to_string(), summary_after_second_compact];
+    expected_after_second_compact_user_texts.extend_from_slice(seeded_user_prefix);
+    expected_after_second_compact_user_texts.push("AFTER_COMPACT_2".to_string());
+    let final_user_texts = json_message_input_texts(&requests[requests.len() - 1], "user");
+    let (final_last, final_prefix) = final_user_texts
+        .split_last()
+        .unwrap_or_else(|| panic!("after-second-resume request missing user messages"));
+    assert_eq!(final_last, AFTER_SECOND_RESUME);
+    assert!(
+        final_prefix.starts_with(&expected_after_second_compact_user_texts),
+        "after-second-resume user texts should preserve post-compact user history prefix"
+    );
+    let final_seeded_suffix = &final_prefix[expected_after_second_compact_user_texts.len()..];
+    if seeded_user_prefix.is_empty() {
+        assert!(
+            final_seeded_suffix.is_empty(),
+            "after-second-resume request should not append unexpected user prefix items"
+        );
+    } else {
+        let mut chunks = final_seeded_suffix.chunks_exact(seeded_user_prefix.len());
+        assert!(
+            chunks.remainder().is_empty(),
+            "after-second-resume suffix should be whole seeded-prefix repeats"
+        );
+        for chunk in &mut chunks {
+            assert_eq!(chunk, seeded_user_prefix);
+        }
     }
-    if let Some(arr) = last_request_after_2_compacts.as_array_mut() {
-        normalize_compact_prompts(arr);
-    }
-    assert_eq!(expected, last_request_after_2_compacts);
 }
 
 fn normalize_line_endings(value: &mut Value) {

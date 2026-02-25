@@ -499,6 +499,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+      - name: Set up Node.js for js_repl tests
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: codex-rs/node-version.txt
       - name: Install Linux build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -580,6 +584,17 @@ jobs:
         with:
           tool: nextest
           version: 0.9.103
+
+      - name: Enable unprivileged user namespaces (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          # Required for bubblewrap to work on Linux CI runners.
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+          # Ubuntu 24.04+ can additionally gate unprivileged user namespaces
+          # behind AppArmor.
+          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
 
       - name: tests
         id: test

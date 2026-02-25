@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "format_labeled_requests_snapshot(\"Remote pre-turn compaction during model switch currently excludes incoming user input, strips incoming <model_switch> from the compact request payload, and restores it in the post-compaction follow-up request.\",\n&[(\"Initial Request (Previous Model)\", &requests[0]),\n(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
+expression: "format_labeled_requests_snapshot(\"Remote pre-turn compaction during model switch currently excludes incoming user input, strips incoming <model_switch> from the compact request payload, and restores it in the post-compaction follow-up request.\",\n&[(\"Initial Request (Previous Model)\", &initial_turn_request),\n(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &post_compact_turn_request),])"
 ---
 Scenario: Remote pre-turn compaction during model switch currently excludes incoming user input, strips incoming <model_switch> from the compact request payload, and restores it in the post-compaction follow-up request.
 
@@ -19,10 +19,10 @@ Scenario: Remote pre-turn compaction during model switch currently excludes inco
 
 ## Remote Post-Compaction History Layout
 00:message/user:BEFORE_SWITCH_USER
-01:message/developer:<PERMISSIONS_INSTRUCTIONS>
-02:message/developer:<personality_spec> The user has requested a new communication st...
-03:message/user:<AGENTS_MD>
-04:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-05:message/user:<COMPACTION_SUMMARY>\nREMOTE_SWITCH_SUMMARY
-06:message/developer:<model_switch>\nThe user was previously using a different model....
+01:compaction:encrypted=true
+02:message/developer:<model_switch>\nThe user was previously using a different model....
+03:message/developer:<PERMISSIONS_INSTRUCTIONS>
+04:message/developer:<personality_spec> The user has requested a new communication st...
+05:message/user:<AGENTS_MD>
+06:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 07:message/user:AFTER_SWITCH_USER

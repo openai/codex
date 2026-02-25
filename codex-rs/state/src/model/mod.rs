@@ -1,8 +1,16 @@
+mod agent_job;
 mod backfill_state;
 mod log;
 mod memories;
 mod thread_metadata;
 
+pub use agent_job::AgentJob;
+pub use agent_job::AgentJobCreateParams;
+pub use agent_job::AgentJobItem;
+pub use agent_job::AgentJobItemCreateParams;
+pub use agent_job::AgentJobItemStatus;
+pub use agent_job::AgentJobProgress;
+pub use agent_job::AgentJobStatus;
 pub use backfill_state::BackfillState;
 pub use backfill_state::BackfillStatus;
 pub use log::LogEntry;
@@ -21,6 +29,8 @@ pub use thread_metadata::ThreadMetadata;
 pub use thread_metadata::ThreadMetadataBuilder;
 pub use thread_metadata::ThreadsPage;
 
+pub(crate) use agent_job::AgentJobItemRow;
+pub(crate) use agent_job::AgentJobRow;
 pub(crate) use memories::Stage1OutputRow;
 pub(crate) use thread_metadata::ThreadRow;
 pub(crate) use thread_metadata::anchor_from_item;

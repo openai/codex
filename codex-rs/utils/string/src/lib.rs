@@ -62,10 +62,53 @@ pub fn sanitize_metric_tag_value(value: &str) -> String {
     }
 }
 
+/// Find all UUIDs in a string.
+#[allow(clippy::unwrap_used)]
+pub fn find_uuids(s: &str) -> Vec<String> {
+    static RE: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex_lite::Regex::new(
+            r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}",
+        )
+        .unwrap() // Unwrap is safe thanks to the tests.
+    });
+
+    re.find_iter(s).map(|m| m.as_str().to_string()).collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::find_uuids;
     use super::sanitize_metric_tag_value;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn find_uuids_finds_multiple() {
+        let input =
+            "x 00112233-4455-6677-8899-aabbccddeeff-k y 12345678-90ab-cdef-0123-456789abcdef";
+        assert_eq!(
+            find_uuids(input),
+            vec![
+                "00112233-4455-6677-8899-aabbccddeeff".to_string(),
+                "12345678-90ab-cdef-0123-456789abcdef".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn find_uuids_ignores_invalid() {
+        let input = "not-a-uuid-1234-5678-9abc-def0-123456789abc";
+        assert_eq!(find_uuids(input), Vec::<String>::new());
+    }
+
+    #[test]
+    fn find_uuids_handles_non_ascii_without_overlap() {
+        let input = "🙂 55e5d6f7-8a7f-4d2a-8d88-123456789012abc";
+        assert_eq!(
+            find_uuids(input),
+            vec!["55e5d6f7-8a7f-4d2a-8d88-123456789012".to_string()]
+        );
+    }
 
     #[test]
     fn sanitize_metric_tag_value_trims_and_fills_unspecified() {

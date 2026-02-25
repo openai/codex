@@ -9,26 +9,47 @@ fn bump_palette_version() {
     DEFAULT_PALETTE_VERSION.fetch_add(1, Ordering::Relaxed);
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StdoutColorLevel {
+    TrueColor,
+    Ansi256,
+    Ansi16,
+    Unknown,
+}
+
+pub fn stdout_color_level() -> StdoutColorLevel {
+    match supports_color::on_cached(supports_color::Stream::Stdout) {
+        Some(level) if level.has_16m => StdoutColorLevel::TrueColor,
+        Some(level) if level.has_256 => StdoutColorLevel::Ansi256,
+        Some(_) => StdoutColorLevel::Ansi16,
+        None => StdoutColorLevel::Unknown,
+    }
+}
+
+#[allow(clippy::disallowed_methods)]
+pub fn rgb_color((r, g, b): (u8, u8, u8)) -> Color {
+    Color::Rgb(r, g, b)
+}
+
+#[allow(clippy::disallowed_methods)]
+pub fn indexed_color(index: u8) -> Color {
+    Color::Indexed(index)
+}
+
 /// Returns the closest color to the target color that the terminal can display.
 pub fn best_color(target: (u8, u8, u8)) -> Color {
-    let Some(color_level) = supports_color::on_cached(supports_color::Stream::Stdout) else {
-        return Color::default();
-    };
-    if color_level.has_16m {
-        let (r, g, b) = target;
-        #[allow(clippy::disallowed_methods)]
-        Color::Rgb(r, g, b)
-    } else if color_level.has_256
+    let color_level = stdout_color_level();
+    if color_level == StdoutColorLevel::TrueColor {
+        rgb_color(target)
+    } else if color_level == StdoutColorLevel::Ansi256
         && let Some((i, _)) = xterm_fixed_colors().min_by(|(_, a), (_, b)| {
             perceptual_distance(*a, target)
                 .partial_cmp(&perceptual_distance(*b, target))
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
     {
-        #[allow(clippy::disallowed_methods)]
-        Color::Indexed(i as u8)
+        indexed_color(i as u8)
     } else {
-        #[allow(clippy::disallowed_methods)]
         Color::default()
     }
 }

@@ -1,46 +1,49 @@
 use codex_core::config::Config;
-use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningRawContentEvent;
-use codex_core::protocol::AgentStatus;
-use codex_core::protocol::BackgroundEventEvent;
-use codex_core::protocol::CollabAgentInteractionBeginEvent;
-use codex_core::protocol::CollabAgentInteractionEndEvent;
-use codex_core::protocol::CollabAgentSpawnBeginEvent;
-use codex_core::protocol::CollabAgentSpawnEndEvent;
-use codex_core::protocol::CollabCloseBeginEvent;
-use codex_core::protocol::CollabCloseEndEvent;
-use codex_core::protocol::CollabWaitingBeginEvent;
-use codex_core::protocol::CollabWaitingEndEvent;
-use codex_core::protocol::DeprecationNoticeEvent;
-use codex_core::protocol::ErrorEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::ItemCompletedEvent;
-use codex_core::protocol::McpInvocation;
-use codex_core::protocol::McpToolCallBeginEvent;
-use codex_core::protocol::McpToolCallEndEvent;
-use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::PatchApplyEndEvent;
-use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TurnAbortReason;
-use codex_core::protocol::TurnCompleteEvent;
-use codex_core::protocol::TurnDiffEvent;
-use codex_core::protocol::WarningEvent;
-use codex_core::protocol::WebSearchEndEvent;
 use codex_core::web_search::web_search_detail;
 use codex_protocol::items::TurnItem;
 use codex_protocol::num_format::format_with_separators;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::AgentReasoningRawContentEvent;
+use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::BackgroundEventEvent;
+use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
+use codex_protocol::protocol::CollabAgentInteractionEndEvent;
+use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
+use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabCloseBeginEvent;
+use codex_protocol::protocol::CollabCloseEndEvent;
+use codex_protocol::protocol::CollabWaitingBeginEvent;
+use codex_protocol::protocol::CollabWaitingEndEvent;
+use codex_protocol::protocol::DeprecationNoticeEvent;
+use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandBeginEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::McpToolCallBeginEvent;
+use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::PatchApplyBeginEvent;
+use codex_protocol::protocol::PatchApplyEndEvent;
+use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_protocol::protocol::StreamErrorEvent;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::protocol::WarningEvent;
+use codex_protocol::protocol::WebSearchEndEvent;
 use codex_utils_elapsed::format_duration;
 use codex_utils_elapsed::format_elapsed;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
+use serde::Deserialize;
 use shlex::try_join;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 use std::time::Instant;
 
 use crate::event_processor::CodexStatus;
@@ -73,14 +76,20 @@ pub(crate) struct EventProcessorWithHumanOutput {
     show_agent_reasoning: bool,
     show_raw_agent_reasoning: bool,
     last_message_path: Option<PathBuf>,
-    last_total_token_usage: Option<codex_core::protocol::TokenUsageInfo>,
+    last_total_token_usage: Option<codex_protocol::protocol::TokenUsageInfo>,
     final_message: Option<String>,
     last_proposed_plan: Option<String>,
+    progress_active: bool,
+    progress_last_len: usize,
+    use_ansi_cursor: bool,
+    progress_anchor: bool,
+    progress_done: bool,
 }
 
 impl EventProcessorWithHumanOutput {
     pub(crate) fn create_with_ansi(
         with_ansi: bool,
+        cursor_ansi: bool,
         config: &Config,
         last_message_path: Option<PathBuf>,
     ) -> Self {
@@ -103,6 +112,11 @@ impl EventProcessorWithHumanOutput {
                 last_total_token_usage: None,
                 final_message: None,
                 last_proposed_plan: None,
+                progress_active: false,
+                progress_last_len: 0,
+                use_ansi_cursor: cursor_ansi,
+                progress_anchor: false,
+                progress_done: false,
             }
         } else {
             Self {
@@ -121,9 +135,25 @@ impl EventProcessorWithHumanOutput {
                 last_total_token_usage: None,
                 final_message: None,
                 last_proposed_plan: None,
+                progress_active: false,
+                progress_last_len: 0,
+                use_ansi_cursor: cursor_ansi,
+                progress_anchor: false,
+                progress_done: false,
             }
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentJobProgressMessage {
+    job_id: String,
+    total_items: usize,
+    pending_items: usize,
+    running_items: usize,
+    completed_items: usize,
+    failed_items: usize,
+    eta_seconds: Option<u64>,
 }
 
 struct PatchApplyBegin {
@@ -176,6 +206,18 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 
     fn process_event(&mut self, event: Event) -> CodexStatus {
         let Event { id: _, msg } = event;
+        if let EventMsg::BackgroundEvent(BackgroundEventEvent { message }) = &msg
+            && let Some(update) = Self::parse_agent_job_progress(message)
+        {
+            self.render_agent_job_progress(update);
+            return CodexStatus::Running;
+        }
+        if self.progress_active && !Self::should_interrupt_progress(&msg) {
+            return CodexStatus::Running;
+        }
+        if !Self::is_silent_event(&msg) {
+            self.finish_progress_line();
+        }
         match msg {
             EventMsg::Error(ErrorEvent { message, .. }) => {
                 let prefix = "ERROR:".style(self.red);
@@ -201,10 +243,12 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::McpStartupUpdate(update) => {
                 let status_text = match update.status {
-                    codex_core::protocol::McpStartupStatus::Starting => "starting".to_string(),
-                    codex_core::protocol::McpStartupStatus::Ready => "ready".to_string(),
-                    codex_core::protocol::McpStartupStatus::Cancelled => "cancelled".to_string(),
-                    codex_core::protocol::McpStartupStatus::Failed { ref error } => {
+                    codex_protocol::protocol::McpStartupStatus::Starting => "starting".to_string(),
+                    codex_protocol::protocol::McpStartupStatus::Ready => "ready".to_string(),
+                    codex_protocol::protocol::McpStartupStatus::Cancelled => {
+                        "cancelled".to_string()
+                    }
+                    codex_protocol::protocol::McpStartupStatus::Failed { ref error } => {
                         format!("failed: {error}")
                     }
                 };
@@ -299,7 +343,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     );
                 }
             }
-            EventMsg::AgentMessage(AgentMessageEvent { message }) => {
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
                 ts_msg!(
                     self,
                     "{}\n{}",
@@ -632,6 +676,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 new_thread_id,
                 prompt,
                 status,
+                ..
             }) => {
                 let success = new_thread_id.is_some() && !is_collab_status_failure(&status);
                 let title_style = if success { self.green } else { self.red };
@@ -669,6 +714,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 receiver_thread_id,
                 prompt,
                 status,
+                ..
             }) => {
                 let success = !is_collab_status_failure(&status);
                 let title_style = if success { self.green } else { self.red };
@@ -687,6 +733,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 sender_thread_id: _,
                 receiver_thread_ids,
                 call_id,
+                ..
             }) => {
                 ts_msg!(
                     self,
@@ -703,6 +750,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 sender_thread_id: _,
                 call_id,
                 statuses,
+                ..
             }) => {
                 if statuses.is_empty() {
                     ts_msg!(
@@ -755,6 +803,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 sender_thread_id: _,
                 receiver_thread_id,
                 status,
+                ..
             }) => {
                 let success = !is_collab_status_failure(&status);
                 let title_style = if success { self.green } else { self.red };
@@ -801,12 +850,17 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::RequestUserInput(_)
             | EventMsg::CollabResumeBegin(_)
             | EventMsg::CollabResumeEnd(_)
-            | EventMsg::DynamicToolCallRequest(_) => {}
+            | EventMsg::RealtimeConversationStarted(_)
+            | EventMsg::RealtimeConversationRealtime(_)
+            | EventMsg::RealtimeConversationClosed(_)
+            | EventMsg::DynamicToolCallRequest(_)
+            | EventMsg::SkillRequestApproval(_) => {}
         }
         CodexStatus::Running
     }
 
     fn print_final_output(&mut self) {
+        self.finish_progress_line();
         if let Some(usage_info) = &self.last_total_token_usage {
             eprintln!(
                 "{}\n{}",
@@ -828,6 +882,207 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
         }
     }
+}
+
+impl EventProcessorWithHumanOutput {
+    fn parse_agent_job_progress(message: &str) -> Option<AgentJobProgressMessage> {
+        let payload = message.strip_prefix("agent_job_progress:")?;
+        serde_json::from_str::<AgentJobProgressMessage>(payload).ok()
+    }
+
+    fn is_silent_event(msg: &EventMsg) -> bool {
+        matches!(
+            msg,
+            EventMsg::ThreadNameUpdated(_)
+                | EventMsg::TokenCount(_)
+                | EventMsg::TurnStarted(_)
+                | EventMsg::ExecApprovalRequest(_)
+                | EventMsg::ApplyPatchApprovalRequest(_)
+                | EventMsg::TerminalInteraction(_)
+                | EventMsg::ExecCommandOutputDelta(_)
+                | EventMsg::GetHistoryEntryResponse(_)
+                | EventMsg::McpListToolsResponse(_)
+                | EventMsg::ListCustomPromptsResponse(_)
+                | EventMsg::ListSkillsResponse(_)
+                | EventMsg::ListRemoteSkillsResponse(_)
+                | EventMsg::RemoteSkillDownloaded(_)
+                | EventMsg::RawResponseItem(_)
+                | EventMsg::UserMessage(_)
+                | EventMsg::EnteredReviewMode(_)
+                | EventMsg::ExitedReviewMode(_)
+                | EventMsg::AgentMessageDelta(_)
+                | EventMsg::AgentReasoningDelta(_)
+                | EventMsg::AgentReasoningRawContentDelta(_)
+                | EventMsg::ItemStarted(_)
+                | EventMsg::ItemCompleted(_)
+                | EventMsg::AgentMessageContentDelta(_)
+                | EventMsg::PlanDelta(_)
+                | EventMsg::ReasoningContentDelta(_)
+                | EventMsg::ReasoningRawContentDelta(_)
+                | EventMsg::SkillsUpdateAvailable
+                | EventMsg::UndoCompleted(_)
+                | EventMsg::UndoStarted(_)
+                | EventMsg::ThreadRolledBack(_)
+                | EventMsg::RequestUserInput(_)
+                | EventMsg::DynamicToolCallRequest(_)
+        )
+    }
+
+    fn should_interrupt_progress(msg: &EventMsg) -> bool {
+        matches!(
+            msg,
+            EventMsg::Error(_)
+                | EventMsg::Warning(_)
+                | EventMsg::DeprecationNotice(_)
+                | EventMsg::StreamError(_)
+                | EventMsg::TurnComplete(_)
+                | EventMsg::ShutdownComplete
+        )
+    }
+
+    fn finish_progress_line(&mut self) {
+        if self.progress_active {
+            self.progress_active = false;
+            self.progress_last_len = 0;
+            self.progress_done = false;
+            if self.use_ansi_cursor {
+                if self.progress_anchor {
+                    eprintln!("\u{1b}[1A\u{1b}[1G\u{1b}[2K");
+                } else {
+                    eprintln!("\u{1b}[1G\u{1b}[2K");
+                }
+            } else {
+                eprintln!();
+            }
+            self.progress_anchor = false;
+        }
+    }
+
+    fn render_agent_job_progress(&mut self, update: AgentJobProgressMessage) {
+        let total = update.total_items.max(1);
+        let processed = update.completed_items + update.failed_items;
+        let percent = (processed as f64 / total as f64 * 100.0).round() as i64;
+        let job_label = update.job_id.chars().take(8).collect::<String>();
+        let eta = update
+            .eta_seconds
+            .map(|secs| format_duration(Duration::from_secs(secs)))
+            .unwrap_or_else(|| "--".to_string());
+        let columns = std::env::var("COLUMNS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0);
+        let line = format_agent_job_progress_line(
+            columns,
+            job_label.as_str(),
+            AgentJobProgressStats {
+                processed,
+                total,
+                percent,
+                failed: update.failed_items,
+                running: update.running_items,
+                pending: update.pending_items,
+            },
+            eta.as_str(),
+        );
+        let done = processed >= update.total_items;
+        if !self.use_ansi_cursor {
+            eprintln!("{line}");
+            if done {
+                self.progress_active = false;
+                self.progress_last_len = 0;
+            }
+            return;
+        }
+        if done && self.progress_done {
+            return;
+        }
+        if !self.progress_active {
+            eprintln!();
+            self.progress_anchor = true;
+            self.progress_done = false;
+        }
+        let mut output = String::new();
+        if self.progress_anchor {
+            output.push_str("\u{1b}[1A\u{1b}[1G\u{1b}[2K");
+        } else {
+            output.push_str("\u{1b}[1G\u{1b}[2K");
+        }
+        output.push_str(&line);
+        if done {
+            output.push('\n');
+            eprint!("{output}");
+            self.progress_active = false;
+            self.progress_last_len = 0;
+            self.progress_anchor = false;
+            self.progress_done = true;
+            return;
+        }
+        eprint!("{output}");
+        let _ = std::io::stderr().flush();
+        self.progress_active = true;
+        self.progress_last_len = line.len();
+    }
+}
+
+struct AgentJobProgressStats {
+    processed: usize,
+    total: usize,
+    percent: i64,
+    failed: usize,
+    running: usize,
+    pending: usize,
+}
+
+fn format_agent_job_progress_line(
+    columns: Option<usize>,
+    job_label: &str,
+    stats: AgentJobProgressStats,
+    eta: &str,
+) -> String {
+    let rest = format!(
+        "{processed}/{total} {percent}% f{failed} r{running} p{pending} eta {eta}",
+        processed = stats.processed,
+        total = stats.total,
+        percent = stats.percent,
+        failed = stats.failed,
+        running = stats.running,
+        pending = stats.pending
+    );
+    let prefix = format!("job {job_label}");
+    let base_len = prefix.len() + rest.len() + 4;
+    let mut bar_width = columns
+        .and_then(|columns| columns.checked_sub(base_len))
+        .filter(|available| *available > 0)
+        .unwrap_or(20usize);
+    let with_bar = |width: usize| {
+        let filled = ((stats.processed as f64 / stats.total as f64) * width as f64)
+            .round()
+            .clamp(0.0, width as f64) as usize;
+        let mut bar = "#".repeat(filled);
+        bar.push_str(&"-".repeat(width - filled));
+        format!("{prefix} [{bar}] {rest}")
+    };
+    let mut line = with_bar(bar_width);
+    if let Some(columns) = columns
+        && line.len() > columns
+    {
+        let min_line = format!("{prefix} {rest}");
+        if min_line.len() > columns {
+            let mut truncated = min_line;
+            if columns > 2 && truncated.len() > columns {
+                truncated.truncate(columns - 2);
+                truncated.push_str("..");
+            }
+            return truncated;
+        }
+        let available = columns.saturating_sub(base_len);
+        if available == 0 {
+            return min_line;
+        }
+        bar_width = available.min(bar_width).max(1);
+        line = with_bar(bar_width);
+    }
+    line
 }
 
 fn escape_command(command: &[String]) -> String {

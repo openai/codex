@@ -1,4 +1,11 @@
 load("@apple_support//xcode:xcode_config.bzl", "xcode_config")
+load("@rules_cc//cc:defs.bzl", "cc_shared_library")
+
+cc_shared_library(
+    name = "clang",
+    deps = ["@llvm-project//clang:libclang"],
+    visibility = ["//visibility:public"],
+)
 
 xcode_config(name = "disable_xcode")
 

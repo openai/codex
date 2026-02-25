@@ -1,6 +1,6 @@
 #![cfg(unix)]
-use codex_core::protocol::SandboxPolicy;
 use codex_core::spawn::StdioPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::future::Future;

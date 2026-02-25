@@ -1,0 +1,17 @@
+---
+source: tui/src/bottom_pane/approval_overlay.rs
+expression: "render_overlay_lines(&view, 120)"
+---
+
+  Would you like to run the following command?
+
+  Reason: need filesystem access
+
+  Permission rule: read `/tmp/readme.txt`; write `/tmp/out.txt`
+
+  $ cat /tmp/readme.txt
+
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

@@ -372,7 +372,8 @@ impl RealtimeWebsocketClient {
         default_headers: HeaderMap,
     ) -> Result<RealtimeWebsocketConnection, ApiError> {
         ensure_rustls_crypto_provider();
-        let ws_url = websocket_url_from_api_url(config.api_url.as_str())?;
+        // Keep provider base_url semantics aligned with HTTP clients; derive the ws endpoint here.
+        let ws_url = websocket_url_from_api_url(self.provider.base_url.as_str())?;
 
         let mut request = ws_url
             .as_str()
@@ -638,7 +639,7 @@ mod tests {
 
         let provider = Provider {
             name: "test".to_string(),
-            base_url: "http://localhost".to_string(),
+            base_url: format!("http://{addr}"),
             query_params: Some(HashMap::new()),
             headers: HeaderMap::new(),
             retry: crate::provider::RetryConfig {
@@ -654,7 +655,6 @@ mod tests {
         let connection = client
             .connect(
                 RealtimeSessionConfig {
-                    api_url: format!("ws://{addr}"),
                     prompt: "backend prompt".to_string(),
                     session_id: Some("conv_1".to_string()),
                 },
@@ -765,7 +765,7 @@ mod tests {
 
         let provider = Provider {
             name: "test".to_string(),
-            base_url: "http://localhost".to_string(),
+            base_url: format!("http://{addr}"),
             query_params: Some(HashMap::new()),
             headers: HeaderMap::new(),
             retry: crate::provider::RetryConfig {
@@ -781,7 +781,6 @@ mod tests {
         let connection = client
             .connect(
                 RealtimeSessionConfig {
-                    api_url: format!("ws://{addr}"),
                     prompt: "backend prompt".to_string(),
                     session_id: Some("conv_1".to_string()),
                 },

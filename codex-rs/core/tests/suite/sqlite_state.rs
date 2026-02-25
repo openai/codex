@@ -33,7 +33,7 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
 
     let thread_id = test.session_configured.session_id;
     let rollout_path = test.codex.rollout_path().expect("rollout path");
-    let db_path = codex_state::state_db_path(test.config.codex_home.as_path());
+    let db_path = codex_state::state_db_path(test.config.sqlite_home.as_path());
 
     for _ in 0..100 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
@@ -123,6 +123,8 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     originator: "test".to_string(),
                     cli_version: "test".to_string(),
                     source: SessionSource::default(),
+                    agent_nickname: None,
+                    agent_role: None,
                     model_provider: None,
                     base_instructions: None,
                     dynamic_tools: Some(dynamic_tools_for_hook),
@@ -159,7 +161,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
 
     let test = builder.build(&server).await?;
 
-    let db_path = codex_state::state_db_path(test.config.codex_home.as_path());
+    let db_path = codex_state::state_db_path(test.config.sqlite_home.as_path());
     let rollout_path = test.config.codex_home.join(&rollout_rel_path);
     let default_provider = test.config.model_provider_id.clone();
 
@@ -218,7 +220,7 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let db_path = codex_state::state_db_path(test.config.codex_home.as_path());
+    let db_path = codex_state::state_db_path(test.config.sqlite_home.as_path());
     for _ in 0..100 {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
             break;

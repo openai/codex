@@ -39,6 +39,41 @@ use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
+
+/// Marks buffer cells that have cyan+underlined style as an OSC 8 hyperlink.
+///
+/// Terminal emulators recognise the OSC 8 escape sequence and treat the entire
+/// marked region as a single clickable link, regardless of row wrapping.  This
+/// is necessary because ratatui's cell-based rendering emits `MoveTo` at every
+/// row boundary, which breaks normal terminal URL detection for long URLs that
+/// wrap across multiple rows.
+pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
+    // Sanitize: strip any characters that could break out of the OSC 8
+    // sequence (ESC or BEL) to prevent terminal escape injection from a
+    // malformed or compromised upstream URL.
+    let safe_url: String = url
+        .chars()
+        .filter(|&c| c != '\x1B' && c != '\x07')
+        .collect();
+    if safe_url.is_empty() {
+        return;
+    }
+
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buf[(x, y)];
+            // Only mark cells that carry the URL's distinctive style.
+            if cell.fg != Color::Cyan || !cell.modifier.contains(Modifier::UNDERLINED) {
+                continue;
+            }
+            let sym = cell.symbol().to_string();
+            if sym.trim().is_empty() {
+                continue;
+            }
+            cell.set_symbol(&format!("\x1B]8;;{safe_url}\x07{sym}\x1B]8;;\x07"));
+        }
+    }
+}
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -370,7 +405,7 @@ impl AuthModeWidget {
         let mut lines = vec![spans.into(), "".into()];
 
         let sign_in_state = self.sign_in_state.read().unwrap();
-        if let SignInState::ChatGptContinueInBrowser(state) = &*sign_in_state
+        let auth_url = if let SignInState::ChatGptContinueInBrowser(state) = &*sign_in_state
             && !state.auth_url.is_empty()
         {
             lines.push("  If the link doesn't open automatically, open the following link to authenticate:".into());
@@ -386,12 +421,21 @@ impl AuthModeWidget {
                 ".".into(),
             ]));
             lines.push("".into());
-        }
+            Some(state.auth_url.clone())
+        } else {
+            None
+        };
 
         lines.push("  Press Esc to cancel".dim().into());
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);
+
+        // Wrap cyan+underlined URL cells with OSC 8 so the terminal treats
+        // the entire region as a single clickable hyperlink.
+        if let Some(url) = &auth_url {
+            mark_url_hyperlink(buf, area, url);
+        }
     }
 
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
@@ -841,5 +885,99 @@ mod tests {
             SignInState::PickMode
         ));
         assert_eq!(widget.login_status, LoginStatus::NotAuthenticated);
+    }
+
+    /// Collects all buffer cell symbols that contain the OSC 8 open sequence
+    /// for the given URL.  Returns the concatenated "inner" characters.
+    fn collect_osc8_chars(buf: &Buffer, area: Rect, url: &str) -> String {
+        let open = format!("\x1B]8;;{url}\x07");
+        let close = "\x1B]8;;\x07";
+        let mut chars = String::new();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                let sym = buf[(x, y)].symbol();
+                if let Some(rest) = sym.strip_prefix(open.as_str())
+                    && let Some(ch) = rest.strip_suffix(close)
+                {
+                    chars.push_str(ch);
+                }
+            }
+        }
+        chars
+    }
+
+    #[test]
+    fn continue_in_browser_renders_osc8_hyperlink() {
+        let (widget, _tmp) = widget_forced_chatgpt();
+        let url = "https://auth.example.com/login?state=abc123";
+        *widget.sign_in_state.write().unwrap() =
+            SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+                auth_url: url.to_string(),
+                shutdown_flag: None,
+            });
+
+        // Render into a narrow buffer so the URL wraps across multiple rows.
+        let area = Rect::new(0, 0, 30, 20);
+        let mut buf = Buffer::empty(area);
+        widget.render_continue_in_browser(area, &mut buf);
+
+        // Every character of the URL should be present as an OSC 8 cell.
+        let found = collect_osc8_chars(&buf, area, url);
+        assert_eq!(found, url, "OSC 8 hyperlink should cover the full URL");
+    }
+
+    #[test]
+    fn mark_url_hyperlink_wraps_cyan_underlined_cells() {
+        let url = "https://example.com";
+        let area = Rect::new(0, 0, 20, 1);
+        let mut buf = Buffer::empty(area);
+
+        // Manually write some cyan+underlined characters to simulate a rendered URL.
+        for (i, ch) in "example".chars().enumerate() {
+            let cell = &mut buf[(i as u16, 0)];
+            cell.set_symbol(&ch.to_string());
+            cell.fg = Color::Cyan;
+            cell.modifier = Modifier::UNDERLINED;
+        }
+        // Leave a plain cell that should NOT be marked.
+        buf[(7, 0)].set_symbol("X");
+
+        mark_url_hyperlink(&mut buf, area, url);
+
+        // Each cyan+underlined cell should now carry the OSC 8 wrapper.
+        let found = collect_osc8_chars(&buf, area, url);
+        assert_eq!(found, "example");
+
+        // The plain "X" cell should be untouched.
+        assert_eq!(buf[(7, 0)].symbol(), "X");
+    }
+
+    #[test]
+    fn mark_url_hyperlink_sanitizes_control_chars() {
+        let area = Rect::new(0, 0, 10, 1);
+        let mut buf = Buffer::empty(area);
+
+        // One cyan+underlined cell to mark.
+        let cell = &mut buf[(0, 0)];
+        cell.set_symbol("a");
+        cell.fg = Color::Cyan;
+        cell.modifier = Modifier::UNDERLINED;
+
+        // URL contains ESC and BEL that could break the OSC 8 sequence.
+        let malicious_url = "https://evil.com/\x1B]8;;\x07injected";
+        mark_url_hyperlink(&mut buf, area, malicious_url);
+
+        let sym = buf[(0, 0)].symbol().to_string();
+        // The sanitized URL retains `]` (printable) but strips ESC and BEL.
+        let sanitized = "https://evil.com/]8;;injected";
+        assert!(
+            sym.contains(sanitized),
+            "symbol should contain sanitized URL, got: {sym:?}"
+        );
+        // The injected close-sequence must not survive: \x1B and \x07 are gone.
+        assert!(
+            !sym.contains("\x1B]8;;\x07injected"),
+            "symbol must not contain raw control chars from URL"
+        );
     }
 }

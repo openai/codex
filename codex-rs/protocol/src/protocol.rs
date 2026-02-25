@@ -32,6 +32,7 @@ use crate::mcp::Tool as McpTool;
 use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
+use crate::models::MessagePhase;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
@@ -39,6 +40,7 @@ use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::request_user_input::RequestUserInputResponse;
+use crate::skill_approval::SkillApprovalResponse;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
@@ -56,7 +58,10 @@ pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
 pub use crate::approvals::NetworkApprovalContext;
 pub use crate::approvals::NetworkApprovalProtocol;
+pub use crate::approvals::NetworkPolicyAmendment;
+pub use crate::approvals::NetworkPolicyRuleAction;
 pub use crate::request_user_input::RequestUserInputEvent;
+pub use crate::skill_approval::SkillRequestApprovalEvent;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -84,6 +89,41 @@ pub struct McpServerRefreshConfig {
     pub mcp_oauth_credentials_store_mode: Value,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ConversationStartParams {
+    pub prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeAudioFrame {
+    pub data: String,
+    pub sample_rate: u32,
+    pub num_channels: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub samples_per_channel: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub enum RealtimeEvent {
+    SessionCreated { session_id: String },
+    SessionUpdated { backend_prompt: Option<String> },
+    AudioOut(RealtimeAudioFrame),
+    ConversationItemAdded(Value),
+    Error(String),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ConversationAudioParams {
+    pub frame: RealtimeAudioFrame,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ConversationTextParams {
+    pub text: String,
+}
+
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -96,6 +136,18 @@ pub enum Op {
 
     /// Terminate all running background terminal processes for this thread.
     CleanBackgroundTerminals,
+
+    /// Start a realtime conversation stream.
+    RealtimeConversationStart(ConversationStartParams),
+
+    /// Send audio input to the running realtime conversation stream.
+    RealtimeConversationAudio(ConversationAudioParams),
+
+    /// Send text input to the running realtime conversation stream.
+    RealtimeConversationText(ConversationTextParams),
+
+    /// Close the running realtime conversation stream.
+    RealtimeConversationClose,
 
     /// Legacy user input.
     ///
@@ -243,6 +295,14 @@ pub enum Op {
         response: DynamicToolResponse,
     },
 
+    /// Resolve a skill approval request.
+    SkillApproval {
+        /// Item id for the in-flight request.
+        id: String,
+        /// User decision.
+        response: SkillApprovalResponse,
+    },
+
     /// Append an entry to the persistent cross-session message history.
     ///
     /// Note the entry is not guaranteed to be logged if the user has
@@ -377,9 +437,39 @@ pub enum AskForApproval {
     #[default]
     OnRequest,
 
+    /// Fine-grained rejection controls for approval prompts.
+    ///
+    /// When a field is `true`, prompts of that category are automatically
+    /// rejected instead of shown to the user.
+    Reject(RejectConfig),
+
     /// Never ask the user to approve commands. Failures are immediately returned
     /// to the model, and never escalated to the user for approval.
     Never,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
+pub struct RejectConfig {
+    /// Reject approval prompts related to sandbox escalation.
+    pub sandbox_approval: bool,
+    /// Reject prompts triggered by execpolicy `prompt` rules.
+    pub rules: bool,
+    /// Reject MCP elicitation prompts.
+    pub mcp_elicitations: bool,
+}
+
+impl RejectConfig {
+    pub const fn rejects_sandbox_approval(self) -> bool {
+        self.sandbox_approval
+    }
+
+    pub const fn rejects_rules_approval(self) -> bool {
+        self.rules
+    }
+
+    pub const fn rejects_mcp_elicitations(self) -> bool {
+        self.mcp_elicitations
+    }
 }
 
 /// Represents whether outbound network access is available to the agent.
@@ -868,6 +958,15 @@ pub enum EventMsg {
     /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
 
+    /// Realtime conversation lifecycle start event.
+    RealtimeConversationStarted(RealtimeConversationStartedEvent),
+
+    /// Realtime conversation streaming payload event.
+    RealtimeConversationRealtime(RealtimeConversationRealtimeEvent),
+
+    /// Realtime conversation lifecycle close event.
+    RealtimeConversationClosed(RealtimeConversationClosedEvent),
+
     /// Model routing changed from the requested model to a different model.
     ModelReroute(ModelRerouteEvent),
 
@@ -953,6 +1052,8 @@ pub enum EventMsg {
     RequestUserInput(RequestUserInputEvent),
 
     DynamicToolCallRequest(DynamicToolCallRequest),
+
+    SkillRequestApproval(SkillRequestApprovalEvent),
 
     ElicitationRequest(ElicitationRequestEvent),
 
@@ -1045,6 +1146,22 @@ pub enum EventMsg {
     CollabResumeBegin(CollabResumeBeginEvent),
     /// Collab interaction: resume end.
     CollabResumeEnd(CollabResumeEndEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct RealtimeConversationStartedEvent {
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct RealtimeConversationRealtimeEvent {
+    pub payload: RealtimeEvent,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct RealtimeConversationClosedEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl From<CollabAgentSpawnBeginEvent> for EventMsg {
@@ -1580,6 +1697,8 @@ impl fmt::Display for FinalOutput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentMessageEvent {
     pub message: String,
+    #[serde(default)]
+    pub phase: Option<MessagePhase>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1828,6 +1947,10 @@ pub enum SubAgentSource {
     ThreadSpawn {
         parent_thread_id: ThreadId,
         depth: i32,
+        #[serde(default)]
+        agent_nickname: Option<String>,
+        #[serde(default, alias = "agent_type")]
+        agent_role: Option<String>,
     },
     MemoryConsolidation,
     Other(String),
@@ -1846,6 +1969,32 @@ impl fmt::Display for SessionSource {
     }
 }
 
+impl SessionSource {
+    pub fn get_nickname(&self) -> Option<String> {
+        match self {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {
+                agent_nickname.clone()
+            }
+            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
+                Some("morpheus".to_string())
+            }
+            _ => None,
+        }
+    }
+
+    pub fn get_agent_role(&self) -> Option<String> {
+        match self {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. }) => {
+                agent_role.clone()
+            }
+            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
+                Some("memory builder".to_string())
+            }
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for SubAgentSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1855,6 +2004,7 @@ impl fmt::Display for SubAgentSource {
             SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
+                ..
             } => {
                 write!(f, "thread_spawn_{parent_thread_id}_d{depth}")
             }
@@ -1879,6 +2029,12 @@ pub struct SessionMeta {
     pub cli_version: String,
     #[serde(default)]
     pub source: SessionSource,
+    /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_nickname: Option<String>,
+    /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
+    #[serde(default, alias = "agent_type", skip_serializing_if = "Option::is_none")]
+    pub agent_role: Option<String>,
     pub model_provider: Option<String>,
     /// base_instructions for the session. This *should* always be present when creating a new session,
     /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
@@ -1898,6 +2054,8 @@ impl Default for SessionMeta {
             originator: String::new(),
             cli_version: String::new(),
             source: SessionSource::default(),
+            agent_nickname: None,
+            agent_role: None,
             model_provider: None,
             base_instructions: None,
             dynamic_tools: None,
@@ -1950,6 +2108,10 @@ pub struct TurnContextNetworkItem {
     pub denied_domains: Vec<String>,
 }
 
+/// Persist only when the same turn also persists the corresponding
+/// model-visible context updates (diffs or full reinjection), so
+/// resume/fork does not use a `reference_context_item` whose context
+/// was never actually visible to the model.
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2608,6 +2770,12 @@ pub enum ReviewDecision {
     /// remainder of the session.
     ApprovedForSession,
 
+    /// User chose to persist a network policy rule (allow/deny) for future
+    /// requests to the same host.
+    NetworkPolicyAmendment {
+        network_policy_amendment: NetworkPolicyAmendment,
+    },
+
     /// User has denied this command and the agent should not execute it, but
     /// it should continue the session and try something else.
     #[default]
@@ -2626,6 +2794,12 @@ impl ReviewDecision {
             ReviewDecision::Approved => "approved",
             ReviewDecision::ApprovedExecpolicyAmendment { .. } => "approved_with_amendment",
             ReviewDecision::ApprovedForSession => "approved_for_session",
+            ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => match network_policy_amendment.action {
+                NetworkPolicyRuleAction::Allow => "approved_with_network_policy_allow",
+                NetworkPolicyRuleAction::Deny => "denied_with_network_policy_deny",
+            },
             ReviewDecision::Denied => "denied",
             ReviewDecision::Abort => "abort",
         }
@@ -2681,6 +2855,32 @@ pub struct CollabAgentSpawnBeginEvent {
     pub prompt: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct CollabAgentRef {
+    /// Thread ID of the receiver/new agent.
+    pub thread_id: ThreadId,
+    /// Optional nickname assigned to an AgentControl-spawned sub-agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_nickname: Option<String>,
+    /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
+    #[serde(default, alias = "agent_type", skip_serializing_if = "Option::is_none")]
+    pub agent_role: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct CollabAgentStatusEntry {
+    /// Thread ID of the receiver/new agent.
+    pub thread_id: ThreadId,
+    /// Optional nickname assigned to an AgentControl-spawned sub-agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_nickname: Option<String>,
+    /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
+    #[serde(default, alias = "agent_type", skip_serializing_if = "Option::is_none")]
+    pub agent_role: Option<String>,
+    /// Last known status of the agent.
+    pub status: AgentStatus,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct CollabAgentSpawnEndEvent {
     /// Identifier for the collab tool call.
@@ -2689,6 +2889,12 @@ pub struct CollabAgentSpawnEndEvent {
     pub sender_thread_id: ThreadId,
     /// Thread ID of the newly spawned agent, if it was created.
     pub new_thread_id: Option<ThreadId>,
+    /// Optional nickname assigned to the new agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_agent_nickname: Option<String>,
+    /// Optional role assigned to the new agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_agent_role: Option<String>,
     /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
     /// beginning.
     pub prompt: String,
@@ -2717,6 +2923,12 @@ pub struct CollabAgentInteractionEndEvent {
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
     pub receiver_thread_id: ThreadId,
+    /// Optional nickname assigned to the receiver agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_nickname: Option<String>,
+    /// Optional role assigned to the receiver agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_role: Option<String>,
     /// Prompt sent from the sender to the receiver. Can be empty to prevent CoT
     /// leaking at the beginning.
     pub prompt: String,
@@ -2730,6 +2942,9 @@ pub struct CollabWaitingBeginEvent {
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receivers.
     pub receiver_thread_ids: Vec<ThreadId>,
+    /// Optional nicknames/roles for receivers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub receiver_agents: Vec<CollabAgentRef>,
     /// ID of the waiting call.
     pub call_id: String,
 }
@@ -2740,6 +2955,9 @@ pub struct CollabWaitingEndEvent {
     pub sender_thread_id: ThreadId,
     /// ID of the waiting call.
     pub call_id: String,
+    /// Optional receiver metadata paired with final statuses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_statuses: Vec<CollabAgentStatusEntry>,
     /// Last known status of the receiver agents reported to the sender agent.
     pub statuses: HashMap<ThreadId, AgentStatus>,
 }
@@ -2762,6 +2980,12 @@ pub struct CollabCloseEndEvent {
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
     pub receiver_thread_id: ThreadId,
+    /// Optional nickname assigned to the receiver agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_nickname: Option<String>,
+    /// Optional role assigned to the receiver agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_role: Option<String>,
     /// Last known status of the receiver agent reported to the sender agent before
     /// the close.
     pub status: AgentStatus,
@@ -2775,6 +2999,12 @@ pub struct CollabResumeBeginEvent {
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
     pub receiver_thread_id: ThreadId,
+    /// Optional nickname assigned to the receiver agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_nickname: Option<String>,
+    /// Optional role assigned to the receiver agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -2785,6 +3015,12 @@ pub struct CollabResumeEndEvent {
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
     pub receiver_thread_id: ThreadId,
+    /// Optional nickname assigned to the receiver agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_nickname: Option<String>,
+    /// Optional role assigned to the receiver agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_agent_role: Option<String>,
     /// Last known status of the receiver agent reported to the sender agent after
     /// resume.
     pub status: AgentStatus,
@@ -2813,6 +3049,26 @@ mod tests {
         };
         assert!(enabled.has_full_disk_write_access());
         assert!(enabled.has_full_network_access());
+    }
+
+    #[test]
+    fn reject_config_mcp_elicitation_flag_is_field_driven() {
+        assert!(
+            RejectConfig {
+                sandbox_approval: false,
+                rules: false,
+                mcp_elicitations: true,
+            }
+            .rejects_mcp_elicitations()
+        );
+        assert!(
+            !RejectConfig {
+                sandbox_approval: false,
+                rules: false,
+                mcp_elicitations: false,
+            }
+            .rejects_mcp_elicitations()
+        );
     }
 
     #[test]
@@ -2897,6 +3153,61 @@ mod tests {
             codex_error_info: Some(CodexErrorInfo::Other),
         };
         assert!(event.affects_turn_status());
+    }
+
+    #[test]
+    fn conversation_op_serializes_as_unnested_variants() {
+        let audio = Op::RealtimeConversationAudio(ConversationAudioParams {
+            frame: RealtimeAudioFrame {
+                data: "AQID".to_string(),
+                sample_rate: 24_000,
+                num_channels: 1,
+                samples_per_channel: Some(480),
+            },
+        });
+        let start = Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "be helpful".to_string(),
+            session_id: Some("conv_1".to_string()),
+        });
+        let text = Op::RealtimeConversationText(ConversationTextParams {
+            text: "hello".to_string(),
+        });
+        let close = Op::RealtimeConversationClose;
+
+        assert_eq!(
+            serde_json::to_value(&start).unwrap(),
+            json!({
+                "type": "realtime_conversation_start",
+                "prompt": "be helpful",
+                "session_id": "conv_1"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&audio).unwrap(),
+            json!({
+                "type": "realtime_conversation_audio",
+                "frame": {
+                    "data": "AQID",
+                    "sample_rate": 24000,
+                    "num_channels": 1,
+                    "samples_per_channel": 480
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(serde_json::to_value(&text).unwrap()).unwrap(),
+            text
+        );
+        assert_eq!(
+            serde_json::to_value(&close).unwrap(),
+            json!({
+                "type": "realtime_conversation_close"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(serde_json::to_value(&close).unwrap()).unwrap(),
+            close
+        );
     }
 
     #[test]

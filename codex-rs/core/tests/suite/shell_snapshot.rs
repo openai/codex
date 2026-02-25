@@ -1,12 +1,12 @@
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandBeginEvent;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandBeginEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -52,10 +52,16 @@ async fn wait_for_snapshot(codex_home: &Path) -> Result<PathBuf> {
     let snapshot_dir = codex_home.join("shell_snapshots");
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Ok(mut entries) = fs::read_dir(&snapshot_dir).await
-            && let Some(entry) = entries.next_entry().await?
-        {
-            return Ok(entry.path());
+        if let Ok(mut entries) = fs::read_dir(&snapshot_dir).await {
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
+                    continue;
+                };
+                if extension == "sh" || extension == "ps1" {
+                    return Ok(path);
+                }
+            }
         }
 
         if Instant::now() >= deadline {
@@ -535,16 +541,16 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         })
         .await?;
 
+    let snapshot_path = wait_for_snapshot(&codex_home).await?;
+    let snapshot_content = fs::read_to_string(&snapshot_path).await?;
+    assert_posix_snapshot_sections(&snapshot_content);
+
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     assert_eq!(
         wait_for_file_contents(&target).await?,
         "hello from snapshot\n"
     );
-
-    let snapshot_path = wait_for_snapshot(&codex_home).await?;
-    let snapshot_content = fs::read_to_string(&snapshot_path).await?;
-    assert_posix_snapshot_sections(&snapshot_content);
 
     Ok(())
 }

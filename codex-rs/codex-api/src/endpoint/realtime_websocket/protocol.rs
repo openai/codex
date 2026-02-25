@@ -1,31 +1,13 @@
-use serde::Deserialize;
+pub use codex_protocol::protocol::RealtimeAudioFrame;
+pub use codex_protocol::protocol::RealtimeEvent;
 use serde::Serialize;
 use serde_json::Value;
 use tracing::debug;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealtimeSessionConfig {
-    pub api_url: String,
     pub prompt: String,
     pub session_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RealtimeAudioFrame {
-    pub data: String,
-    pub sample_rate: u32,
-    pub num_channels: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub samples_per_channel: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RealtimeEvent {
-    SessionCreated { session_id: String },
-    SessionUpdated { backend_prompt: Option<String> },
-    AudioOut(RealtimeAudioFrame),
-    ConversationItemAdded(Value),
-    Error(String),
 }
 
 #[derive(Debug, Clone, Serialize)]

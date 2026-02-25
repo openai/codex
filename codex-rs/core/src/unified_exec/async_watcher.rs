@@ -139,43 +139,6 @@ pub(crate) fn spawn_exit_watcher(
     });
 }
 
-pub(crate) fn spawn_network_denial_watcher(
-    process: Arc<UnifiedExecProcess>,
-    session: Arc<Session>,
-    process_id: String,
-    network_attempt_id: String,
-) {
-    let exit_token = process.cancellation_token();
-    tokio::spawn(async move {
-        let mut poll = tokio::time::interval(Duration::from_millis(100));
-        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-        loop {
-            tokio::select! {
-                _ = exit_token.cancelled() => {
-                    break;
-                }
-                _ = poll.tick() => {
-                    if session
-                        .services
-                        .network_approval
-                        .take_user_denial_outcome(&network_attempt_id)
-                        .await
-                    {
-                        process.terminate();
-                        session
-                            .services
-                            .unified_exec_manager
-                            .release_process_id(&process_id)
-                            .await;
-                        break;
-                    }
-                }
-            }
-        }
-    });
-}
-
 async fn process_chunk(
     pending: &mut Vec<u8>,
     transcript: &Arc<Mutex<HeadTailBuffer>>,

@@ -4,7 +4,6 @@
 //! decision to avoid re-prompting, builds the self-invocation command for
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
-use crate::CODEX_APPLY_PATCH_ARG1;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
@@ -20,6 +19,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
@@ -57,17 +57,21 @@ impl ApplyPatchRuntime {
         let program = exe.to_string_lossy().to_string();
         Ok(CommandSpec {
             program,
-            args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.action.patch.clone()],
+            args: vec![
+                CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
+                req.action.patch.clone(),
+            ],
             cwd: req.action.cwd.clone(),
             expiration: req.timeout_ms.into(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             sandbox_permissions: SandboxPermissions::UseDefault,
+            additional_permissions: None,
             justification: None,
         })
     }
 
-    fn stdout_stream(ctx: &ToolCtx<'_>) -> Option<crate::exec::StdoutStream> {
+    fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
         Some(crate::exec::StdoutStream {
             sub_id: ctx.turn.sub_id.clone(),
             call_id: ctx.call_id.clone(),
@@ -127,7 +131,13 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
     }
 
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
-        !matches!(policy, AskForApproval::Never)
+        match policy {
+            AskForApproval::Never => false,
+            AskForApproval::Reject(reject_config) => !reject_config.rejects_sandbox_approval(),
+            AskForApproval::OnFailure => true,
+            AskForApproval::OnRequest => true,
+            AskForApproval::UnlessTrusted => true,
+        }
     }
 
     // apply_patch approvals are decided upstream by assess_patch_safety.
@@ -147,15 +157,41 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         &mut self,
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx<'_>,
+        ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let spec = Self::build_command_spec(req)?;
         let env = attempt
             .env_for(spec, None)
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
+        let out = execute_env(env, Self::stdout_stream(ctx))
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::RejectConfig;
+
+    #[test]
+    fn wants_no_sandbox_approval_reject_respects_sandbox_flag() {
+        let runtime = ApplyPatchRuntime::new();
+        assert!(runtime.wants_no_sandbox_approval(AskForApproval::OnRequest));
+        assert!(
+            !runtime.wants_no_sandbox_approval(AskForApproval::Reject(RejectConfig {
+                sandbox_approval: true,
+                rules: false,
+                mcp_elicitations: false,
+            }))
+        );
+        assert!(
+            runtime.wants_no_sandbox_approval(AskForApproval::Reject(RejectConfig {
+                sandbox_approval: false,
+                rules: false,
+                mcp_elicitations: false,
+            }))
+        );
     }
 }

@@ -1,4 +1,4 @@
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use std::path::PathBuf;
 
 /// Returns a warning describing why `--add-dir` entries will be ignored for the
@@ -34,8 +34,8 @@ fn format_warning(additional_dirs: &[PathBuf]) -> String {
 #[cfg(test)]
 mod tests {
     use super::add_dir_warning_message;
-    use codex_core::protocol::NetworkAccess;
-    use codex_core::protocol::SandboxPolicy;
+    use codex_protocol::protocol::NetworkAccess;
+    use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 

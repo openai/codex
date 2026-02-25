@@ -7,6 +7,7 @@ use anyhow::Result;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error;
 use codex_execpolicy::Evaluation;
+use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
@@ -65,6 +66,45 @@ fn append_allow_prefix_rule_dedupes_existing_rule() -> Result<()> {
 "#
     );
     Ok(())
+}
+
+#[test]
+fn network_rules_compile_into_domain_lists() -> Result<()> {
+    let policy_src = r#"
+network_rule(host = "google.com", protocol = "http", decision = "allow")
+network_rule(host = "api.github.com", protocol = "https", decision = "allow")
+network_rule(host = "blocked.example.com", protocol = "https", decision = "deny")
+network_rule(host = "prompt-only.example.com", protocol = "https", decision = "prompt")
+    "#;
+    let mut parser = PolicyParser::new();
+    parser.parse("network.rules", policy_src)?;
+    let policy = parser.build();
+
+    assert_eq!(policy.network_rules().len(), 4);
+    assert_eq!(
+        policy.network_rules()[1].protocol,
+        NetworkRuleProtocol::Https
+    );
+
+    let (allowed, denied) = policy.compiled_network_domains();
+    assert_eq!(
+        allowed,
+        vec!["google.com".to_string(), "api.github.com".to_string()]
+    );
+    assert_eq!(denied, vec!["blocked.example.com".to_string()]);
+    Ok(())
+}
+
+#[test]
+fn network_rule_rejects_wildcard_hosts() {
+    let mut parser = PolicyParser::new();
+    let err = parser
+        .parse(
+            "network.rules",
+            r#"network_rule(host="*", protocol="http", decision="allow")"#,
+        )
+        .expect_err("wildcard network_rule host should fail");
+    assert!(err.to_string().contains("wildcards are not allowed"));
 }
 
 #[test]
