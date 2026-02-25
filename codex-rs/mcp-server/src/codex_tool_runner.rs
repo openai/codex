@@ -227,6 +227,7 @@ async fn run_codex_tool_session_inner(
                             parsed_cmd,
                             network_approval_context: _,
                             additional_permissions: _,
+                            available_decisions: _,
                         } = ev;
                         handle_exec_approval_request(
                             command,
@@ -363,6 +364,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::ExitedReviewMode(_)
                     | EventMsg::RequestUserInput(_)
                     | EventMsg::DynamicToolCallRequest(_)
+                    | EventMsg::DynamicToolCallResponse(_)
                     | EventMsg::SkillRequestApproval(_)
                     | EventMsg::ContextCompacted(_)
                     | EventMsg::ModelReroute(_)

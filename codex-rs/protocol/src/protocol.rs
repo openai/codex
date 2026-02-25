@@ -20,6 +20,7 @@ use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
 use crate::custom_prompts::CustomPrompt;
+use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
@@ -1053,6 +1054,8 @@ pub enum EventMsg {
 
     DynamicToolCallRequest(DynamicToolCallRequest),
 
+    DynamicToolCallResponse(DynamicToolCallResponseEvent),
+
     SkillRequestApproval(SkillRequestApprovalEvent),
 
     ElicitationRequest(ElicitationRequestEvent),
@@ -1779,6 +1782,27 @@ pub struct McpToolCallEndEvent {
     pub duration: Duration,
     /// Result of the tool call. Note this could be an error.
     pub result: Result<CallToolResult, String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
+pub struct DynamicToolCallResponseEvent {
+    /// Identifier for the corresponding DynamicToolCallRequest.
+    pub call_id: String,
+    /// Turn ID that this dynamic tool call belongs to.
+    pub turn_id: String,
+    /// Dynamic tool name.
+    pub tool: String,
+    /// Dynamic tool call arguments.
+    pub arguments: serde_json::Value,
+    /// Dynamic tool response content items.
+    pub content_items: Vec<DynamicToolCallOutputContentItem>,
+    /// Whether the tool call succeeded.
+    pub success: bool,
+    /// Optional error text when the tool call failed before producing a response.
+    pub error: Option<String>,
+    /// The duration of the dynamic tool call.
+    #[ts(type = "string")]
+    pub duration: Duration,
 }
 
 impl McpToolCallEndEvent {
@@ -2765,8 +2789,8 @@ pub enum ReviewDecision {
         proposed_execpolicy_amendment: ExecPolicyAmendment,
     },
 
-    /// User has approved this command and wants to automatically approve any
-    /// future identical instances (`command` and `cwd` match exactly) for the
+    /// User has approved this request and wants future prompts in the same
+    /// session-scoped approval cache to be automatically approved for the
     /// remainder of the session.
     ApprovedForSession,
 

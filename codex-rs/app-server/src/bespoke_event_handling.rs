@@ -27,7 +27,9 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
+use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
+use codex_app_server_protocol::DynamicToolCallStatus;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
@@ -334,6 +336,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .note_permission_requested(&conversation_id.to_string())
                 .await;
             let approval_id_for_op = ev.effective_approval_id();
+            let available_decisions = ev
+                .effective_available_decisions()
+                .into_iter()
+                .map(CommandExecutionApprovalDecision::from)
+                .collect::<Vec<_>>();
             let ExecApprovalRequestEvent {
                 call_id,
                 approval_id,
@@ -430,6 +437,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         additional_permissions,
                         proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                         proposed_network_policy_amendments: proposed_network_policy_amendments_v2,
+                        available_decisions: Some(available_decisions),
                     };
                     let rx = outgoing
                         .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
@@ -550,12 +558,32 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::DynamicToolCallRequest(request) => {
             if matches!(api_version, ApiVersion::V2) {
                 let call_id = request.call_id;
+                let turn_id = request.turn_id;
+                let tool = request.tool;
+                let arguments = request.arguments;
+                let item = ThreadItem::DynamicToolCall {
+                    id: call_id.clone(),
+                    tool: tool.clone(),
+                    arguments: arguments.clone(),
+                    status: DynamicToolCallStatus::InProgress,
+                    content_items: None,
+                    success: None,
+                    duration_ms: None,
+                };
+                let notification = ItemStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: turn_id.clone(),
+                    item,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemStarted(notification))
+                    .await;
                 let params = DynamicToolCallParams {
                     thread_id: conversation_id.to_string(),
-                    turn_id: request.turn_id,
+                    turn_id: turn_id.clone(),
                     call_id: call_id.clone(),
-                    tool: request.tool,
-                    arguments: request.arguments,
+                    tool: tool.clone(),
+                    arguments: arguments.clone(),
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::DynamicToolCall(params))
@@ -579,6 +607,46 @@ pub(crate) async fn apply_bespoke_event_handling(
                             success: false,
                         },
                     })
+                    .await;
+            }
+        }
+        EventMsg::DynamicToolCallResponse(response) => {
+            if matches!(api_version, ApiVersion::V2) {
+                let status = if response.success {
+                    DynamicToolCallStatus::Completed
+                } else {
+                    DynamicToolCallStatus::Failed
+                };
+                let duration_ms = i64::try_from(response.duration.as_millis()).ok();
+                let item = ThreadItem::DynamicToolCall {
+                    id: response.call_id,
+                    tool: response.tool,
+                    arguments: response.arguments,
+                    status,
+                    content_items: Some(
+                        response
+                            .content_items
+                            .into_iter()
+                            .map(|item| match item {
+                                CoreDynamicToolCallOutputContentItem::InputText { text } => {
+                                    DynamicToolCallOutputContentItem::InputText { text }
+                                }
+                                CoreDynamicToolCallOutputContentItem::InputImage { image_url } => {
+                                    DynamicToolCallOutputContentItem::InputImage { image_url }
+                                }
+                            })
+                            .collect(),
+                    ),
+                    success: Some(response.success),
+                    duration_ms,
+                };
+                let notification = ItemCompletedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: response.turn_id,
+                    item,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemCompleted(notification))
                     .await;
             }
         }

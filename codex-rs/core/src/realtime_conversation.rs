@@ -29,6 +29,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tracing::debug;
 use tracing::error;
 use tracing::warn;
 
@@ -217,6 +218,7 @@ pub(crate) async fn handle_start(
                 _ => None,
             };
             if let Some(text) = maybe_routed_text {
+                debug!(text = %text, "[realtime-text] realtime conversation text output");
                 let sess_for_routed_text = Arc::clone(&sess_clone);
                 sess_for_routed_text.route_realtime_text_input(text).await;
             }
@@ -279,6 +281,8 @@ pub(crate) async fn handle_text(
     sub_id: String,
     params: ConversationTextParams,
 ) {
+    debug!(text = %params.text, "[realtime-text] appending realtime conversation text input");
+
     if let Err(err) = sess.conversation.text_in(params.text).await {
         send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
     }

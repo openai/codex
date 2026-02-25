@@ -10,6 +10,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
 use crate::tools::runtimes::build_command_spec;
+use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
@@ -164,7 +165,9 @@ struct CoreShellActionProvider {
 }
 
 enum DecisionSource {
-    SkillScript,
+    SkillScript {
+        skill: SkillMetadata,
+    },
     PrefixRule,
     /// Often, this is `is_safe_command()`.
     UnmatchedCommandFallback,
@@ -263,13 +266,7 @@ impl CoreShellActionProvider {
                     }
                 } else {
                     match self
-                        .prompt(
-                            program,
-                            argv,
-                            workdir,
-                            &self.stopwatch,
-                            additional_permissions,
-                        )
+                        .prompt(program, argv, workdir, &self.stopwatch, additional_permissions)
                         .await?
                     {
                         ReviewDecision::Approved
@@ -284,13 +281,21 @@ impl CoreShellActionProvider {
                             // Currently, we only add session approvals for
                             // skill scripts because we are storing only the
                             // `program` whereas prefix rules may be restricted by a longer prefix.
-                            if matches!(decision_source, DecisionSource::SkillScript) {
+                            if let DecisionSource::SkillScript { skill } = decision_source {
+                                tracing::debug!(
+                                    "Adding session approval for {program:?} due to user approval of skill script {skill:?}"
+                                );
                                 self.session
                                     .services
                                     .execve_session_approvals
                                     .write()
                                     .await
-                                    .insert(program.clone());
+                                    .insert(
+                                        program.clone(),
+                                        ExecveSessionApproval {
+                                            skill: Some(skill.clone()),
+                                        },
+                                    );
                             }
 
                             if needs_escalation {
@@ -351,37 +356,61 @@ impl EscalationPolicy for CoreShellActionProvider {
 
         // In the usual case, the execve wrapper reports the command being
         // executed in `program`, so a direct skill lookup is sufficient.
+        let approval = {
+            self.session
+                .services
+                .execve_session_approvals
+                .read()
+                .await
+                .get(program)
+                .cloned()
+        };
+        if let Some(approval) = approval {
+            tracing::debug!(
+                "Found session approval for {program:?}, allowing execution without further checks"
+            );
+            let needs_escalation = true;
+            let (permissions, decision_source) = if let Some(skill) = approval.skill.as_ref() {
+                (
+                    skill.permission_profile.clone(),
+                    DecisionSource::SkillScript {
+                        skill: skill.clone(),
+                    },
+                )
+            } else {
+                (None, DecisionSource::UnmatchedCommandFallback)
+            };
+            return self
+                .process_decision(
+                    Decision::Allow,
+                    needs_escalation,
+                    program,
+                    argv,
+                    workdir,
+                    permissions,
+                    decision_source,
+                )
+                .await;
+        }
+
         if let Some(skill) = self.find_skill(program).await {
             // For now, we always prompt for scripts that look like they belong
             // to skills, which means we ignore exec policy rules for those
             // scripts.
             tracing::debug!("Matched {program:?} to skill {skill:?}, prompting for approval");
-            // TODO(mbolin): We should read the permissions associated with the
-            // skill and use those specific permissions in the
-            // EscalateAction::Run case, rather than always escalating when a
-            // skill matches.
             let needs_escalation = true;
-            let is_approved_for_session = self
-                .session
-                .services
-                .execve_session_approvals
-                .read()
-                .await
-                .contains(program);
-            let decision = if is_approved_for_session {
-                Decision::Allow
-            } else {
-                Decision::Prompt
+            let decision_source = DecisionSource::SkillScript {
+                skill: skill.clone(),
             };
             return self
                 .process_decision(
-                    decision,
+                    Decision::Prompt,
                     needs_escalation,
                     program,
                     argv,
                     workdir,
                     skill.permission_profile.clone(),
-                    DecisionSource::SkillScript,
+                    decision_source,
                 )
                 .await;
         }

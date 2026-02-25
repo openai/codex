@@ -2568,10 +2568,12 @@ impl ChatWidget {
             .unwrap_or_else(|_| ev.command.join(" "));
         self.notify(Notification::ExecApprovalRequested { command });
 
+        let available_decisions = ev.effective_available_decisions();
         let request = ApprovalRequest::Exec {
             id: ev.effective_approval_id(),
             command: ev.command,
             reason: ev.reason,
+            available_decisions,
             network_approval_context: ev.network_approval_context,
             proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
             proposed_network_policy_amendments: ev.proposed_network_policy_amendments,
@@ -4464,6 +4466,7 @@ impl ChatWidget {
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
+            | EventMsg::DynamicToolCallResponse(_)
             | EventMsg::SkillRequestApproval(_) => {}
             EventMsg::RealtimeConversationStarted(ev) => {
                 if !from_replay {
