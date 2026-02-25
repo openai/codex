@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "description": "Notification emitted when local skill files or skill configuration changes.",
+  "description": "Notification emitted when the server's local skill view changes.\n\nThe payload is intentionally empty because clients should treat this as a refresh hint and call `skills/list` again, typically with `forceReload: true`, instead of trying to apply an incremental update.",
   "title": "SkillsUpdatedNotification",
   "type": "object"
 }
