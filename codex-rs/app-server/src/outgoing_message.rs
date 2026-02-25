@@ -9,6 +9,7 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_protocol::ThreadId;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -48,23 +49,31 @@ pub(crate) enum OutgoingEnvelope {
 pub(crate) struct OutgoingMessageSender {
     next_server_request_id: AtomicI64,
     sender: mpsc::Sender<OutgoingEnvelope>,
-    request_id_to_callback: Mutex<HashMap<RequestId, oneshot::Sender<ClientRequestResult>>>,
+    request_id_to_callback: Mutex<HashMap<RequestId, PendingCallbackEntry>>,
 }
 
 #[derive(Clone)]
 pub(crate) struct ThreadScopedOutgoingMessageSender {
     outgoing: Arc<OutgoingMessageSender>,
     connection_ids: Arc<Vec<ConnectionId>>,
+    thread_id: ThreadId,
+}
+
+struct PendingCallbackEntry {
+    callback: oneshot::Sender<ClientRequestResult>,
+    thread_id: Option<ThreadId>,
 }
 
 impl ThreadScopedOutgoingMessageSender {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
         connection_ids: Vec<ConnectionId>,
+        thread_id: ThreadId,
     ) -> Self {
         Self {
             outgoing,
             connection_ids: Arc::new(connection_ids),
+            thread_id,
         }
     }
 
@@ -72,12 +81,12 @@ impl ThreadScopedOutgoingMessageSender {
         &self,
         payload: ServerRequestPayload,
     ) -> oneshot::Receiver<ClientRequestResult> {
-        if self.connection_ids.is_empty() {
-            let (_tx, rx) = oneshot::channel();
-            return rx;
-        }
         self.outgoing
-            .send_request_to_connections(self.connection_ids.as_slice(), payload)
+            .send_request_to_thread_connections(
+                self.thread_id,
+                self.connection_ids.as_slice(),
+                payload,
+            )
             .await
     }
 
@@ -116,35 +125,52 @@ impl OutgoingMessageSender {
         }
     }
 
-    pub(crate) async fn send_request_to_connections(
-        &self,
-        connection_ids: &[ConnectionId],
-        request: ServerRequestPayload,
-    ) -> oneshot::Receiver<ClientRequestResult> {
-        let (_id, rx) = self
-            .send_request_with_id_to_connections(connection_ids, request)
-            .await;
-        rx
-    }
-
-    pub(crate) async fn send_request_with_id(
+    pub(crate) async fn send_request(
         &self,
         request: ServerRequestPayload,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
-        self.send_request_with_id_to_connections(&[], request).await
+        self.send_request_with_id_to_connections(&[], request, None)
+            .await
+    }
+
+    async fn send_request_to_thread_connections(
+        &self,
+        thread_id: ThreadId,
+        connection_ids: &[ConnectionId],
+        request: ServerRequestPayload,
+    ) -> oneshot::Receiver<ClientRequestResult> {
+        if connection_ids.is_empty() {
+            let (_tx, rx) = oneshot::channel();
+            return rx;
+        }
+        let (_request_id, receiver) = self
+            .send_request_with_id_to_connections(connection_ids, request, Some(thread_id))
+            .await;
+        receiver
+    }
+
+    fn next_request_id(&self) -> RequestId {
+        RequestId::Integer(self.next_server_request_id.fetch_add(1, Ordering::Relaxed))
     }
 
     async fn send_request_with_id_to_connections(
         &self,
         connection_ids: &[ConnectionId],
         request: ServerRequestPayload,
+        thread_id: Option<ThreadId>,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
-        let id = RequestId::Integer(self.next_server_request_id.fetch_add(1, Ordering::Relaxed));
+        let id = self.next_request_id();
         let outgoing_message_id = id.clone();
         let (tx_approve, rx_approve) = oneshot::channel();
         {
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
-            request_id_to_callback.insert(id, tx_approve);
+            request_id_to_callback.insert(
+                id,
+                PendingCallbackEntry {
+                    callback: tx_approve,
+                    thread_id,
+                },
+            );
         }
 
         let outgoing_message =
@@ -191,8 +217,8 @@ impl OutgoingMessageSender {
         };
 
         match entry {
-            Some((id, sender)) => {
-                if let Err(err) = sender.send(Ok(result)) {
+            Some((id, entry)) => {
+                if let Err(err) = entry.callback.send(Ok(result)) {
                     warn!("could not notify callback for {id:?} due to: {err:?}");
                 }
             }
@@ -209,9 +235,9 @@ impl OutgoingMessageSender {
         };
 
         match entry {
-            Some((id, sender)) => {
+            Some((id, entry)) => {
                 warn!("client responded with error for {id:?}: {error:?}");
-                if let Err(err) = sender.send(Err(error)) {
+                if let Err(err) = entry.callback.send(Err(error)) {
                     warn!("could not notify callback for {id:?} due to: {err:?}");
                 }
             }
@@ -227,6 +253,19 @@ impl OutgoingMessageSender {
             request_id_to_callback.remove_entry(id)
         };
         entry.is_some()
+    }
+
+    pub(crate) async fn cancel_requests_for_thread(&self, thread_id: ThreadId) {
+        let mut request_id_to_callback = self.request_id_to_callback.lock().await;
+        let request_ids = request_id_to_callback
+            .iter()
+            .filter_map(|(request_id, entry)| {
+                (entry.thread_id == Some(thread_id)).then_some(request_id.clone())
+            })
+            .collect::<Vec<_>>();
+        for request_id in request_ids {
+            request_id_to_callback.remove(&request_id);
+        }
     }
 
     pub(crate) async fn send_response<T: Serialize>(
@@ -657,7 +696,7 @@ mod tests {
         let outgoing = OutgoingMessageSender::new(tx);
 
         let (request_id, wait_for_result) = outgoing
-            .send_request_with_id(ServerRequestPayload::ApplyPatchApproval(
+            .send_request(ServerRequestPayload::ApplyPatchApproval(
                 ApplyPatchApprovalParams {
                     conversation_id: ThreadId::new(),
                     call_id: "call-id".to_string(),

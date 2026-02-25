@@ -3,6 +3,8 @@ use crate::protocol::v2::CollabAgentTool;
 use crate::protocol::v2::CollabAgentToolCallStatus;
 use crate::protocol::v2::CommandAction;
 use crate::protocol::v2::CommandExecutionStatus;
+use crate::protocol::v2::DynamicToolCallOutputContentItem;
+use crate::protocol::v2::DynamicToolCallStatus;
 use crate::protocol::v2::FileUpdateChange;
 use crate::protocol::v2::McpToolCallError;
 use crate::protocol::v2::McpToolCallResult;
@@ -22,6 +24,7 @@ use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ContextCompactedEvent;
+use codex_protocol::protocol::DynamicToolCallResponseEvent;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
@@ -125,6 +128,12 @@ impl ThreadHistoryBuilder {
             EventMsg::ExecCommandEnd(payload) => self.handle_exec_command_end(payload),
             EventMsg::PatchApplyBegin(payload) => self.handle_patch_apply_begin(payload),
             EventMsg::PatchApplyEnd(payload) => self.handle_patch_apply_end(payload),
+            EventMsg::DynamicToolCallRequest(payload) => {
+                self.handle_dynamic_tool_call_request(payload)
+            }
+            EventMsg::DynamicToolCallResponse(payload) => {
+                self.handle_dynamic_tool_call_response(payload)
+            }
             EventMsg::McpToolCallBegin(payload) => self.handle_mcp_tool_call_begin(payload),
             EventMsg::McpToolCallEnd(payload) => self.handle_mcp_tool_call_end(payload),
             EventMsg::ViewImageToolCall(payload) => self.handle_view_image_tool_call(payload),
@@ -374,6 +383,49 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status,
+        };
+        if payload.turn_id.is_empty() {
+            self.upsert_item_in_current_turn(item);
+        } else {
+            self.upsert_item_in_turn_id(&payload.turn_id, item);
+        }
+    }
+
+    fn handle_dynamic_tool_call_request(
+        &mut self,
+        payload: &codex_protocol::dynamic_tools::DynamicToolCallRequest,
+    ) {
+        let item = ThreadItem::DynamicToolCall {
+            id: payload.call_id.clone(),
+            tool: payload.tool.clone(),
+            arguments: payload.arguments.clone(),
+            status: DynamicToolCallStatus::InProgress,
+            content_items: None,
+            success: None,
+            duration_ms: None,
+        };
+        if payload.turn_id.is_empty() {
+            self.upsert_item_in_current_turn(item);
+        } else {
+            self.upsert_item_in_turn_id(&payload.turn_id, item);
+        }
+    }
+
+    fn handle_dynamic_tool_call_response(&mut self, payload: &DynamicToolCallResponseEvent) {
+        let status = if payload.success {
+            DynamicToolCallStatus::Completed
+        } else {
+            DynamicToolCallStatus::Failed
+        };
+        let duration_ms = i64::try_from(payload.duration.as_millis()).ok();
+        let item = ThreadItem::DynamicToolCall {
+            id: payload.call_id.clone(),
+            tool: payload.tool.clone(),
+            arguments: payload.arguments.clone(),
+            status,
+            content_items: Some(convert_dynamic_tool_content_items(&payload.content_items)),
+            success: Some(payload.success),
+            duration_ms,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -913,6 +965,23 @@ pub fn convert_patch_changes(
     converted
 }
 
+fn convert_dynamic_tool_content_items(
+    items: &[codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem],
+) -> Vec<DynamicToolCallOutputContentItem> {
+    items
+        .iter()
+        .cloned()
+        .map(|item| match item {
+            codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem::InputText { text } => {
+                DynamicToolCallOutputContentItem::InputText { text }
+            }
+            codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem::InputImage {
+                image_url,
+            } => DynamicToolCallOutputContentItem::InputImage { image_url },
+        })
+        .collect()
+}
+
 fn map_patch_change_kind(change: &codex_protocol::protocol::FileChange) -> PatchChangeKind {
     match change {
         codex_protocol::protocol::FileChange::Add { .. } => PatchChangeKind::Add,
@@ -1002,6 +1071,7 @@ impl From<&PendingTurn> for Turn {
 mod tests {
     use super::*;
     use codex_protocol::ThreadId;
+    use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
     use codex_protocol::items::TurnItem as CoreTurnItem;
     use codex_protocol::items::UserMessageItem as CoreUserMessageItem;
     use codex_protocol::models::MessagePhase as CoreMessagePhase;
@@ -1012,6 +1082,7 @@ mod tests {
     use codex_protocol::protocol::AgentReasoningRawContentEvent;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::CompactedItem;
+    use codex_protocol::protocol::DynamicToolCallResponseEvent;
     use codex_protocol::protocol::ExecCommandEndEvent;
     use codex_protocol::protocol::ExecCommandSource;
     use codex_protocol::protocol::ItemStartedEvent;
@@ -1602,6 +1673,65 @@ mod tests {
                     message: "boom".into(),
                 }),
                 duration_ms: Some(8),
+            }
+        );
+    }
+
+    #[test]
+    fn reconstructs_dynamic_tool_items_from_request_and_response_events() {
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "run dynamic tool".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::DynamicToolCallRequest(
+                codex_protocol::dynamic_tools::DynamicToolCallRequest {
+                    call_id: "dyn-1".into(),
+                    turn_id: "turn-1".into(),
+                    tool: "lookup_ticket".into(),
+                    arguments: serde_json::json!({"id":"ABC-123"}),
+                },
+            ),
+            EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
+                call_id: "dyn-1".into(),
+                turn_id: "turn-1".into(),
+                tool: "lookup_ticket".into(),
+                arguments: serde_json::json!({"id":"ABC-123"}),
+                content_items: vec![CoreDynamicToolCallOutputContentItem::InputText {
+                    text: "Ticket is open".into(),
+                }],
+                success: true,
+                error: None,
+                duration: Duration::from_millis(42),
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 2);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::DynamicToolCall {
+                id: "dyn-1".into(),
+                tool: "lookup_ticket".into(),
+                arguments: serde_json::json!({"id":"ABC-123"}),
+                status: DynamicToolCallStatus::Completed,
+                content_items: Some(vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "Ticket is open".into(),
+                }]),
+                success: Some(true),
+                duration_ms: Some(42),
             }
         );
     }

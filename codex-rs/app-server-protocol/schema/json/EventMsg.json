@@ -500,6 +500,50 @@
       ],
       "type": "object"
     },
+    "DynamicToolCallOutputContentItem": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "inputText"
+              ],
+              "title": "InputTextDynamicToolCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "InputTextDynamicToolCallOutputContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "imageUrl": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "inputImage"
+              ],
+              "title": "InputImageDynamicToolCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "imageUrl",
+            "type"
+          ],
+          "title": "InputImageDynamicToolCallOutputContentItem",
+          "type": "object"
+        }
+      ]
+    },
     "EventMsg": {
       "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
       "oneOf": [
@@ -1774,6 +1818,70 @@
             "type"
           ],
           "title": "DynamicToolCallRequestEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": {
+              "description": "Dynamic tool call arguments."
+            },
+            "call_id": {
+              "description": "Identifier for the corresponding DynamicToolCallRequest.",
+              "type": "string"
+            },
+            "content_items": {
+              "description": "Dynamic tool response content items.",
+              "items": {
+                "$ref": "#/definitions/DynamicToolCallOutputContentItem"
+              },
+              "type": "array"
+            },
+            "duration": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Duration"
+                }
+              ],
+              "description": "The duration of the dynamic tool call."
+            },
+            "error": {
+              "description": "Optional error text when the tool call failed before producing a response.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "success": {
+              "description": "Whether the tool call succeeded.",
+              "type": "boolean"
+            },
+            "tool": {
+              "description": "Dynamic tool name.",
+              "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this dynamic tool call belongs to.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "dynamic_tool_call_response"
+              ],
+              "title": "DynamicToolCallResponseEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "call_id",
+            "content_items",
+            "duration",
+            "success",
+            "tool",
+            "turn_id",
+            "type"
+          ],
+          "title": "DynamicToolCallResponseEventMsg",
           "type": "object"
         },
         {
@@ -7200,6 +7308,70 @@
         "type"
       ],
       "title": "DynamicToolCallRequestEventMsg",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "arguments": {
+          "description": "Dynamic tool call arguments."
+        },
+        "call_id": {
+          "description": "Identifier for the corresponding DynamicToolCallRequest.",
+          "type": "string"
+        },
+        "content_items": {
+          "description": "Dynamic tool response content items.",
+          "items": {
+            "$ref": "#/definitions/DynamicToolCallOutputContentItem"
+          },
+          "type": "array"
+        },
+        "duration": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Duration"
+            }
+          ],
+          "description": "The duration of the dynamic tool call."
+        },
+        "error": {
+          "description": "Optional error text when the tool call failed before producing a response.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "success": {
+          "description": "Whether the tool call succeeded.",
+          "type": "boolean"
+        },
+        "tool": {
+          "description": "Dynamic tool name.",
+          "type": "string"
+        },
+        "turn_id": {
+          "description": "Turn ID that this dynamic tool call belongs to.",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "dynamic_tool_call_response"
+          ],
+          "title": "DynamicToolCallResponseEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "arguments",
+        "call_id",
+        "content_items",
+        "duration",
+        "success",
+        "tool",
+        "turn_id",
+        "type"
+      ],
+      "title": "DynamicToolCallResponseEventMsg",
       "type": "object"
     },
     {

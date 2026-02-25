@@ -12,8 +12,10 @@ use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::protocol::DynamicToolCallResponseEvent;
 use codex_protocol::protocol::EventMsg;
 use serde_json::Value;
+use std::time::Instant;
 use tokio::sync::oneshot;
 use tracing::warn;
 
@@ -81,7 +83,7 @@ async fn request_dynamic_tool(
     tool: String,
     arguments: Value,
 ) -> Option<DynamicToolResponse> {
-    let _sub_id = turn_context.sub_id.clone();
+    let turn_id = turn_context.sub_id.clone();
     let (tx_response, rx_response) = oneshot::channel();
     let event_id = call_id.clone();
     let prev_entry = {
@@ -98,12 +100,39 @@ async fn request_dynamic_tool(
         warn!("Overwriting existing pending dynamic tool call for call_id: {event_id}");
     }
 
+    let started_at = Instant::now();
     let event = EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
-        call_id,
-        turn_id: turn_context.sub_id.clone(),
-        tool,
-        arguments,
+        call_id: call_id.clone(),
+        turn_id: turn_id.clone(),
+        tool: tool.clone(),
+        arguments: arguments.clone(),
     });
     session.send_event(turn_context, event).await;
-    rx_response.await.ok()
+    let response = rx_response.await.ok();
+
+    let response_event = match &response {
+        Some(response) => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
+            call_id,
+            turn_id,
+            tool,
+            arguments,
+            content_items: response.content_items.clone(),
+            success: response.success,
+            error: None,
+            duration: started_at.elapsed(),
+        }),
+        None => EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
+            call_id,
+            turn_id,
+            tool,
+            arguments,
+            content_items: Vec::new(),
+            success: false,
+            error: Some("dynamic tool call was cancelled before receiving a response".to_string()),
+            duration: started_at.elapsed(),
+        }),
+    };
+    session.send_event(turn_context, response_event).await;
+
+    response
 }
