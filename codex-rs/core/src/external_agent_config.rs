@@ -1,4 +1,6 @@
 use serde_json::Value as JsonValue;
+use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -142,7 +144,12 @@ impl ExternalAgentConfigService {
             || self.home_target_skills_dir(),
             |repo_root| repo_root.join(".agents").join("skills"),
         );
-        if has_subdirectories(&source_skills)? {
+        let source_skill_names = collect_subdirectory_names(&source_skills)?;
+        let target_skill_names = collect_subdirectory_names(&target_skills)?;
+        if source_skill_names
+            .iter()
+            .any(|skill_name| !target_skill_names.contains(skill_name))
+        {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Skills,
                 description: format!(
@@ -328,18 +335,20 @@ fn find_repo_root(cwd: Option<&Path>) -> io::Result<Option<PathBuf>> {
     Ok(Some(fallback))
 }
 
-fn has_subdirectories(path: &Path) -> io::Result<bool> {
+fn collect_subdirectory_names(path: &Path) -> io::Result<HashSet<OsString>> {
+    let mut names = HashSet::new();
     if !path.is_dir() {
-        return Ok(false);
+        return Ok(names);
     }
 
     for entry in fs::read_dir(path)? {
-        if entry?.file_type()?.is_dir() {
-            return Ok(true);
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            names.insert(entry.file_name());
         }
     }
 
-    Ok(false)
+    Ok(names)
 }
 
 fn is_missing_or_empty_text_file(path: &Path) -> io::Result<bool> {
@@ -784,6 +793,26 @@ mod tests {
             "#,
         )
         .expect("write config");
+
+        let items = service_for_paths(claude_home, codex_home)
+            .detect(ExternalAgentConfigDetectOptions {
+                include_home: true,
+                cwds: None,
+            })
+            .expect("detect");
+
+        assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
+    }
+
+    #[test]
+    fn detect_home_skips_skills_when_all_skill_directories_exist() {
+        let (_root, claude_home, codex_home) = fixture_paths();
+        let agents_skills = codex_home
+            .parent()
+            .map(|parent| parent.join(".agents").join("skills"))
+            .unwrap_or_else(|| PathBuf::from(".agents").join("skills"));
+        fs::create_dir_all(claude_home.join("skills").join("skill-a")).expect("create source");
+        fs::create_dir_all(agents_skills.join("skill-a")).expect("create target");
 
         let items = service_for_paths(claude_home, codex_home)
             .detect(ExternalAgentConfigDetectOptions {
