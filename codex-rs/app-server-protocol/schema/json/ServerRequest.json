@@ -268,6 +268,85 @@
         }
       ]
     },
+    "CommandExecutionApprovalDecision": {
+      "oneOf": [
+        {
+          "description": "User approved the command.",
+          "enum": [
+            "accept"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "User approved the command and future prompts in the same session-scoped approval cache should run without prompting.",
+          "enum": [
+            "acceptForSession"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "User approved the command, and wants to apply the proposed execpolicy amendment so future matching commands can run without prompting.",
+          "properties": {
+            "acceptWithExecpolicyAmendment": {
+              "properties": {
+                "execpolicy_amendment": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "execpolicy_amendment"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "acceptWithExecpolicyAmendment"
+          ],
+          "title": "AcceptWithExecpolicyAmendmentCommandExecutionApprovalDecision",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "User chose a persistent network policy rule (allow/deny) for this host.",
+          "properties": {
+            "applyNetworkPolicyAmendment": {
+              "properties": {
+                "network_policy_amendment": {
+                  "$ref": "#/definitions/NetworkPolicyAmendment"
+                }
+              },
+              "required": [
+                "network_policy_amendment"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "applyNetworkPolicyAmendment"
+          ],
+          "title": "ApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision",
+          "type": "object"
+        },
+        {
+          "description": "User denied the command. The agent will continue the turn.",
+          "enum": [
+            "decline"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "User denied the command. The turn will also be immediately interrupted.",
+          "enum": [
+            "cancel"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "CommandExecutionRequestApprovalParams": {
       "properties": {
         "approvalId": {
