@@ -21,6 +21,7 @@ use codex_core::ThreadsPage;
 use codex_core::config::Config;
 use codex_core::find_thread_names_by_ids;
 use codex_core::path_utils;
+use codex_core::read_session_meta_line;
 use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -412,7 +413,10 @@ impl PickerState {
                     let path = row.path.clone();
                     let thread_id = match row.thread_id {
                         Some(thread_id) => Some(thread_id),
-                        None => crate::resolve_thread_id_for_session_path(path.as_path()).await,
+                        None => read_session_meta_line(path.as_path())
+                            .await
+                            .ok()
+                            .map(|meta_line| meta_line.meta.id),
                     };
                     if let Some(thread_id) = thread_id {
                         return Ok(Some(self.action.selection(path, thread_id)));

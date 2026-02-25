@@ -675,7 +675,11 @@ async fn run_ratatui_app(
                             Err(_) => return missing_session_exit(id_str, "fork"),
                         }
                     } else {
-                        match resolve_thread_id_for_session_path(path.as_path()).await {
+                        match read_session_meta_line(path.as_path())
+                            .await
+                            .ok()
+                            .map(|meta_line| meta_line.meta.id)
+                        {
                             Some(thread_id) => thread_id,
                             None => return missing_session_exit(id_str, "fork"),
                         }
@@ -702,7 +706,11 @@ async fn run_ratatui_app(
             {
                 Ok(page) => match page.items.first() {
                     Some(item) => {
-                        match resolve_thread_id_for_session_path(item.path.as_path()).await {
+                        match read_session_meta_line(item.path.as_path())
+                            .await
+                            .ok()
+                            .map(|meta_line| meta_line.meta.id)
+                        {
                             Some(thread_id) => resume_picker::SessionSelection::Fork(
                                 resume_picker::SessionTarget {
                                     path: item.path.clone(),
@@ -749,7 +757,11 @@ async fn run_ratatui_app(
                         Err(_) => return missing_session_exit(id_str, "resume"),
                     }
                 } else {
-                    match resolve_thread_id_for_session_path(path.as_path()).await {
+                    match read_session_meta_line(path.as_path())
+                        .await
+                        .ok()
+                        .map(|meta_line| meta_line.meta.id)
+                    {
                         Some(thread_id) => thread_id,
                         None => return missing_session_exit(id_str, "resume"),
                     }
@@ -780,7 +792,11 @@ async fn run_ratatui_app(
         )
         .await
         {
-            Ok(Some(path)) => match resolve_thread_id_for_session_path(path.as_path()).await {
+            Ok(Some(path)) => match read_session_meta_line(path.as_path())
+                .await
+                .ok()
+                .map(|meta_line| meta_line.meta.id)
+            {
                 Some(thread_id) => {
                     resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
                         path,
@@ -912,13 +928,6 @@ async fn run_ratatui_app(
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
     app_result
-}
-
-pub(crate) async fn resolve_thread_id_for_session_path(path: &Path) -> Option<ThreadId> {
-    read_session_meta_line(path)
-        .await
-        .ok()
-        .map(|meta_line| meta_line.meta.id)
 }
 
 pub(crate) async fn read_session_cwd(
