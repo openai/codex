@@ -376,6 +376,8 @@ impl OAuthPersistor {
     /// MCP OAuth credentials live in shared storage, but each Codex process also keeps an
     /// in-memory snapshot. Before refreshing, reload the shared credentials and compare them to
     /// the cached copy:
+    /// - if the local cache was cleared, reload shared storage first so this process can recover
+    ///   when another process logs in and persists fresh credentials;
     /// - if shared storage changed, another process already refreshed, so adopt those credentials
     ///   in the live runtime and skip the local refresh;
     /// - if shared storage is unchanged, this process still owns the refresh and can rotate the
@@ -383,10 +385,22 @@ impl OAuthPersistor {
     /// - if shared storage no longer has credentials, treat that as logged out and clear the live
     ///   runtime instead of sending a stale refresh token.
     pub(crate) async fn refresh_if_needed(&self) -> Result<()> {
-        let cached_credentials = {
+        let mut cached_credentials = {
             let guard = self.inner.last_credentials.lock().await;
             guard.clone()
         };
+
+        if cached_credentials.is_none()
+            && let Some(credentials) = load_oauth_tokens_when_cache_missing(
+                &self.inner.server_name,
+                &self.inner.url,
+                self.inner.store_mode,
+            )
+        {
+            self.apply_runtime_credentials(Some(credentials.clone()))
+                .await?;
+            cached_credentials = Some(credentials);
+        }
 
         match self.guarded_refresh_outcome(cached_credentials.as_ref()) {
             GuardedRefreshOutcome::NoAction => Ok(()),
@@ -499,6 +513,18 @@ fn load_oauth_tokens_for_guarded_refresh(
                 server_name,
             )
         }
+    }
+}
+
+fn load_oauth_tokens_when_cache_missing(
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+) -> Option<StoredOAuthTokens> {
+    match load_oauth_tokens_for_guarded_refresh(server_name, url, store_mode) {
+        GuardedRefreshPersistedCredentials::Loaded(Some(credentials)) => Some(credentials),
+        GuardedRefreshPersistedCredentials::Loaded(None)
+        | GuardedRefreshPersistedCredentials::ReloadFailed => None,
     }
 }
 
@@ -1170,6 +1196,50 @@ mod tests {
                 &tokens.url,
             ),
             super::GuardedRefreshPersistedCredentials::ReloadFailed,
+        );
+    }
+
+    #[test]
+    fn missing_cached_credentials_reload_shared_store_from_file() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let tokens = sample_tokens();
+        let expected = tokens.clone();
+        super::save_oauth_tokens_to_file(&tokens)?;
+
+        let loaded = super::load_oauth_tokens_when_cache_missing(
+            &tokens.server_name,
+            &tokens.url,
+            OAuthCredentialsStoreMode::File,
+        )
+        .expect("tokens should reload from shared file store");
+        assert_tokens_match_without_expiry(&loaded, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_cached_credentials_ignore_reload_failures() {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)
+            .expect("store key should compute");
+        store.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
+
+        assert_eq!(
+            super::load_oauth_tokens_for_guarded_refresh_with_keyring_fallback(
+                &store,
+                &tokens.server_name,
+                &tokens.url,
+            ),
+            super::GuardedRefreshPersistedCredentials::ReloadFailed,
+        );
+        assert_eq!(
+            super::load_oauth_tokens_when_cache_missing(
+                &tokens.server_name,
+                &tokens.url,
+                OAuthCredentialsStoreMode::Auto,
+            ),
+            None,
         );
     }
 
