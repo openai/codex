@@ -1,10 +1,16 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use anyhow::Result;
+use codex_core::config::Constrained;
 use codex_core::features::Feature;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::skill_approval::SkillApprovalResponse;
+#[cfg(unix)]
+use core_test_support::fetch_dotslash_file;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -59,6 +65,21 @@ fn command_for_script(script_path: &Path) -> Result<String> {
 }
 
 async fn submit_turn(test: &TestCodex, prompt: &str) -> Result<()> {
+    submit_turn_with_policies(
+        test,
+        prompt,
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await
+}
+
+async fn submit_turn_with_policies(
+    test: &TestCodex,
+    prompt: &str,
+    approval_policy: AskForApproval,
+    sandbox_policy: SandboxPolicy,
+) -> Result<()> {
     let session_model = test.session_configured.model.clone();
     test.codex
         .submit(Op::UserTurn {
@@ -68,8 +89,8 @@ async fn submit_turn(test: &TestCodex, prompt: &str) -> Result<()> {
             }],
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
-            approval_policy: codex_protocol::protocol::AskForApproval::Never,
-            sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+            approval_policy,
+            sandbox_policy,
             model: session_model,
             effort: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -89,6 +110,60 @@ async fn wait_for_turn_complete_without_skill_approval(test: &TestCodex) {
         _ => None,
     })
     .await;
+}
+
+#[cfg(unix)]
+fn write_skill_with_shell_script(home: &Path, name: &str, script_name: &str) -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let skill_dir = home.join("skills").join(name);
+    let scripts_dir = skill_dir.join("scripts");
+    fs::create_dir_all(&scripts_dir)?;
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: {name} skill\n---\n"),
+    )?;
+
+    let script_path = scripts_dir.join(script_name);
+    fs::write(&script_path, "#!/bin/sh\necho 'hello mbolin this worked'\n")?;
+    let mut permissions = fs::metadata(&script_path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions)?;
+    Ok(script_path)
+}
+
+#[cfg(unix)]
+fn find_test_zsh_path() -> Result<Option<PathBuf>> {
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let dotslash_zsh = repo_root.join("codex-rs/app-server/tests/suite/zsh");
+    if !dotslash_zsh.is_file() {
+        eprintln!(
+            "skipping zsh-fork skill test: shared zsh DotSlash file not found at {}",
+            dotslash_zsh.display()
+        );
+        return Ok(None);
+    }
+
+    match fetch_dotslash_file(&dotslash_zsh, None) {
+        Ok(path) => Ok(Some(path)),
+        Err(error) => {
+            eprintln!("skipping zsh-fork skill test: failed to fetch zsh via dotslash: {error:#}");
+            Ok(None)
+        }
+    }
+}
+
+#[cfg(unix)]
+fn supports_exec_wrapper_intercept(zsh_path: &Path) -> bool {
+    let status = std::process::Command::new(zsh_path)
+        .arg("-fc")
+        .arg("/usr/bin/true")
+        .env("EXEC_WRAPPER", "/usr/bin/false")
+        .status();
+    match status {
+        Ok(status) => !status.success(),
+        Err(_) => false,
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -310,6 +385,103 @@ async fn skill_approval_cache_is_per_skill() -> Result<()> {
             response: SkillApprovalResponse { approved: true },
         })
         .await?;
+    wait_for_event(test.codex.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_zsh_fork_prompts_for_skill_script_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(zsh_path) = find_test_zsh_path()? else {
+        return Ok(());
+    };
+    if !supports_exec_wrapper_intercept(&zsh_path) {
+        eprintln!(
+            "skipping zsh-fork skill test: zsh does not support EXEC_WRAPPER intercepts ({})",
+            zsh_path.display()
+        );
+        return Ok(());
+    }
+    let Ok(main_execve_wrapper_exe) = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")
+    else {
+        eprintln!("skipping zsh-fork skill test: unable to resolve `codex-execve-wrapper` binary");
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let tool_call_id = "zsh-fork-skill-call";
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_skill_with_shell_script(home, "mbolin-test-skill", "hello-mbolin.sh").unwrap();
+        })
+        .with_config(move |config| {
+            config.features.enable(Feature::ShellTool);
+            config.features.enable(Feature::ShellZshFork);
+            config.zsh_path = Some(zsh_path.clone());
+            config.main_execve_wrapper_exe = Some(main_execve_wrapper_exe);
+            config.permissions.allow_login_shell = false;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.permissions.sandbox_policy =
+                Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+        });
+    let test = builder.build(&server).await?;
+
+    let script_path = fs::canonicalize(
+        test.codex_home_path()
+            .join("skills/mbolin-test-skill/scripts/hello-mbolin.sh"),
+    )?;
+    let script_path_str = script_path.to_string_lossy().into_owned();
+    let command = shlex::try_join(["exec", script_path_str.as_str()])?;
+    let arguments = shell_command_arguments(&command)?;
+    let mocks =
+        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
+            .await;
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let maybe_approval = wait_for_event_match(test.codex.as_ref(), |event| match event {
+        EventMsg::ExecApprovalRequest(request) => Some(Some(request.clone())),
+        EventMsg::TurnComplete(_) => Some(None),
+        _ => None,
+    })
+    .await;
+    let approval = match maybe_approval {
+        Some(approval) => approval,
+        None => {
+            let call_output = mocks
+                .completion
+                .single_request()
+                .function_call_output(tool_call_id);
+            panic!(
+                "expected exec approval request before completion; function_call_output={call_output:?}"
+            );
+        }
+    };
+    assert_eq!(approval.call_id, tool_call_id);
+    let script_path = script_path.to_string_lossy().into_owned();
+    assert_eq!(approval.command.first(), Some(&script_path));
+    assert!(approval.command.iter().any(|arg| arg == &script_path));
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
     wait_for_event(test.codex.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
