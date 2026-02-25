@@ -132,8 +132,8 @@ Example with notification opt-out:
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
-- `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input.
+- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode". Requests whose combined text input exceeds `1,048,576` characters are rejected before a turn starts with JSON-RPC `invalid params` (`-32602`) and structured `error.data`.
+- `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input. Requests whose combined text input exceeds `1,048,576` characters are rejected with JSON-RPC `invalid params` (`-32602`) and structured `error.data`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
@@ -345,6 +345,8 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 
 You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn.
 
+If the combined text across all `input` items exceeds `1,048,576` characters, the server rejects the request before creating a turn and returns JSON-RPC `invalid params` (`-32602`). `error.data` includes `input_error_code: "input_too_large"`, `max_chars`, and `actual_chars`.
+
 ```json
 { "method": "turn/start", "id": 30, "params": {
     "threadId": "thr_123",
@@ -446,6 +448,8 @@ Use `thread/backgroundTerminals/clean` to terminate all running background termi
 
 Use `turn/steer` to append additional user input to the currently active turn. This does not emit
 `turn/started` and does not accept turn context overrides.
+
+If the combined text across all `input` items exceeds `1,048,576` characters, the server rejects the request with JSON-RPC `invalid params` (`-32602`). `error.data` includes `input_error_code: "input_too_large"`, `max_chars`, and `actual_chars`.
 
 ```json
 { "method": "turn/steer", "id": 32, "params": {

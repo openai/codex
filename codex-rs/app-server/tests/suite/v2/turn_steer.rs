@@ -17,10 +17,12 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
 #[tokio::test]
 async fn turn_steer_requires_active_turn() -> Result<()> {
@@ -63,6 +65,109 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
     )
     .await??;
     assert_eq!(steer_err.error.code, -32600);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    let shell_command = vec![
+        "powershell".to_string(),
+        "-Command".to_string(),
+        "Start-Sleep -Seconds 10".to_string(),
+    ];
+    #[cfg(not(target_os = "windows"))]
+    let shell_command = vec!["sleep".to_string(), "10".to_string()];
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let working_directory = tmp.path().join("workdir");
+    std::fs::create_dir(&working_directory)?;
+
+    let server =
+        create_mock_responses_server_sequence_unchecked(vec![create_shell_command_sse_response(
+            shell_command.clone(),
+            Some(&working_directory),
+            Some(10_000),
+            "call_sleep",
+        )?])
+        .await;
+    create_config_toml(&codex_home, &server.uri())?;
+
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run sleep".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(working_directory.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let _task_started: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_started"),
+    )
+    .await??;
+
+    let oversized_input = "x".repeat(MAX_USER_INPUT_TEXT_CHARS + 1);
+    let steer_req = mcp
+        .send_turn_steer_request(TurnSteerParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: oversized_input.clone(),
+                text_elements: Vec::new(),
+            }],
+            expected_turn_id: turn.id.clone(),
+        })
+        .await?;
+    let steer_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(steer_req)),
+    )
+    .await??;
+
+    assert_eq!(steer_err.error.code, INVALID_PARAMS_ERROR_CODE);
+    assert_eq!(
+        steer_err.error.message,
+        format!("Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters.")
+    );
+    let data = steer_err
+        .error
+        .data
+        .expect("expected structured error data");
+    assert_eq!(data["input_error_code"], "input_too_large");
+    assert_eq!(data["max_chars"], MAX_USER_INPUT_TEXT_CHARS);
+    assert_eq!(data["actual_chars"], oversized_input.chars().count());
+
+    mcp.interrupt_turn_and_wait_for_aborted(thread.id, turn.id, DEFAULT_READ_TIMEOUT)
+        .await?;
 
     Ok(())
 }

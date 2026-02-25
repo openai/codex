@@ -1,5 +1,6 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::error_code::INTERNAL_ERROR_CODE;
+use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::FuzzyFileSearchSession;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
@@ -251,6 +252,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_utils_json_to_toml::json_to_toml;
@@ -285,6 +287,7 @@ use crate::thread_state::ThreadStateManager;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
+const INPUT_TOO_LARGE_ERROR_CODE: &str = "input_too_large";
 
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
@@ -4670,6 +4673,36 @@ impl CodexMessageProcessor {
         self.outgoing.send_error(request_id, error).await;
     }
 
+    fn input_too_large_error(actual_chars: usize) -> JSONRPCErrorError {
+        JSONRPCErrorError {
+            code: INVALID_PARAMS_ERROR_CODE,
+            message: format!(
+                "Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters."
+            ),
+            data: Some(serde_json::json!({
+                "input_error_code": INPUT_TOO_LARGE_ERROR_CODE,
+                "max_chars": MAX_USER_INPUT_TEXT_CHARS,
+                "actual_chars": actual_chars,
+            })),
+        }
+    }
+
+    fn validate_v1_input_limit(items: &[WireInputItem]) -> Result<(), JSONRPCErrorError> {
+        let actual_chars: usize = items.iter().map(WireInputItem::text_char_count).sum();
+        if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
+            return Err(Self::input_too_large_error(actual_chars));
+        }
+        Ok(())
+    }
+
+    fn validate_v2_input_limit(items: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
+        let actual_chars: usize = items.iter().map(V2UserInput::text_char_count).sum();
+        if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
+            return Err(Self::input_too_large_error(actual_chars));
+        }
+        Ok(())
+    }
+
     async fn send_internal_error(&self, request_id: ConnectionRequestId, message: String) {
         let error = JSONRPCErrorError {
             code: INTERNAL_ERROR_CODE,
@@ -4843,6 +4876,10 @@ impl CodexMessageProcessor {
             conversation_id,
             items,
         } = params;
+        if let Err(error) = Self::validate_v1_input_limit(&items) {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
         let Ok(conversation) = self.thread_manager.get_thread(conversation_id).await else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -4894,6 +4931,10 @@ impl CodexMessageProcessor {
             summary,
             output_schema,
         } = params;
+        if let Err(error) = Self::validate_v1_input_limit(&items) {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         let Ok(conversation) = self.thread_manager.get_thread(conversation_id).await else {
             let error = JSONRPCErrorError {
@@ -5376,6 +5417,10 @@ impl CodexMessageProcessor {
     }
 
     async fn turn_start(&self, request_id: ConnectionRequestId, params: TurnStartParams) {
+        if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
             Err(error) => {
@@ -5476,6 +5521,10 @@ impl CodexMessageProcessor {
                 "expectedTurnId must not be empty".to_string(),
             )
             .await;
+            return;
+        }
+        if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+            self.outgoing.send_error(request_id, error).await;
             return;
         }
 

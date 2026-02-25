@@ -2602,6 +2602,16 @@ mod tests {
         insta::assert_snapshot!(rendered);
     }
 
+    #[test]
+    fn error_event_oversized_input_snapshot() {
+        let cell = new_error_event(
+            "Message exceeds the maximum length of 1048576 characters (1048577 provided)."
+                .to_string(),
+        );
+        let rendered = render_lines(&cell.display_lines(120)).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
     #[tokio::test]
     async fn mcp_tools_output_masks_sensitive_values() {
         let mut config = test_config().await;
