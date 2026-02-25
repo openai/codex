@@ -315,7 +315,10 @@ impl ModelClient {
             instructions: &instructions,
         };
 
-        let extra_headers = self.build_subagent_headers();
+        let mut extra_headers = self.build_subagent_headers();
+        extra_headers.extend(build_conversation_headers(Some(
+            self.state.conversation_id.to_string(),
+        )));
         client
             .compact_input(&payload, extra_headers)
             .await
