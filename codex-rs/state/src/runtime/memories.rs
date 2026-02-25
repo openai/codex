@@ -49,6 +49,43 @@ WHERE kind = ? OR kind = ?
         Ok(())
     }
 
+    /// Record usage for cited stage-1 outputs.
+    ///
+    /// Each thread id increments `usage_count` by one and sets `last_usage` to
+    /// the current Unix timestamp. Missing rows are ignored.
+    pub async fn record_stage1_output_usage(
+        &self,
+        thread_ids: &[ThreadId],
+    ) -> anyhow::Result<usize> {
+        if thread_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let now = Utc::now().timestamp();
+        let mut tx = self.pool.begin().await?;
+        let mut updated_rows = 0;
+
+        for thread_id in thread_ids {
+            updated_rows += sqlx::query(
+                r#"
+UPDATE stage1_outputs
+SET
+    usage_count = COALESCE(usage_count, 0) + 1,
+    last_usage = ?
+WHERE thread_id = ?
+                "#,
+            )
+            .bind(now)
+            .bind(thread_id.to_string())
+            .execute(&mut *tx)
+            .await?
+            .rows_affected() as usize;
+        }
+
+        tx.commit().await?;
+        Ok(updated_rows)
+    }
+
     /// Selects and claims stage-1 startup jobs for stale threads.
     ///
     /// Query behavior:

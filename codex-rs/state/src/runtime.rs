@@ -3115,6 +3115,105 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
+    async fn record_stage1_output_usage_updates_usage_metadata() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
+        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
+        let missing = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("missing id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_a,
+                codex_home.join("workspace-a"),
+            ))
+            .await
+            .expect("upsert thread a");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_b,
+                codex_home.join("workspace-b"),
+            ))
+            .await
+            .expect("upsert thread b");
+
+        let claim_a = runtime
+            .try_claim_stage1_job(thread_a, owner, 100, 3600, 64)
+            .await
+            .expect("claim stage1 a");
+        let token_a = match claim_a {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome for a: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(thread_a, token_a.as_str(), 100, "raw a", "sum a", None)
+                .await
+                .expect("mark stage1 succeeded a")
+        );
+
+        let claim_b = runtime
+            .try_claim_stage1_job(thread_b, owner, 101, 3600, 64)
+            .await
+            .expect("claim stage1 b");
+        let token_b = match claim_b {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome for b: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(thread_b, token_b.as_str(), 101, "raw b", "sum b", None)
+                .await
+                .expect("mark stage1 succeeded b")
+        );
+
+        let updated_rows = runtime
+            .record_stage1_output_usage(&[thread_a, thread_a, thread_b, missing])
+            .await
+            .expect("record stage1 output usage");
+        assert_eq!(updated_rows, 3);
+
+        let row_a =
+            sqlx::query("SELECT usage_count, last_usage FROM stage1_outputs WHERE thread_id = ?")
+                .bind(thread_a.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("load stage1 usage row a");
+        let row_b =
+            sqlx::query("SELECT usage_count, last_usage FROM stage1_outputs WHERE thread_id = ?")
+                .bind(thread_b.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("load stage1 usage row b");
+
+        assert_eq!(
+            row_a
+                .try_get::<i64, _>("usage_count")
+                .expect("usage_count a"),
+            2
+        );
+        assert_eq!(
+            row_b
+                .try_get::<i64, _>("usage_count")
+                .expect("usage_count b"),
+            1
+        );
+
+        let last_usage_a = row_a.try_get::<i64, _>("last_usage").expect("last_usage a");
+        let last_usage_b = row_b.try_get::<i64, _>("last_usage").expect("last_usage b");
+        assert_eq!(last_usage_a, last_usage_b);
+        assert!(last_usage_a > 0);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn mark_stage1_job_succeeded_enqueues_global_consolidation() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
