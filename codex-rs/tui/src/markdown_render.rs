@@ -2,6 +2,7 @@ use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
+use codex_utils_string::normalize_markdown_hash_location_suffix;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::CowStr;
 use pulldown_cmark::Event;
@@ -108,6 +109,7 @@ static COLON_LOCATION_SUFFIX_RE: LazyLock<Regex> =
         },
     );
 
+// Covered by load_location_suffix_regexes.
 static HASH_LOCATION_SUFFIX_RE: LazyLock<Regex> =
     LazyLock::new(|| match Regex::new(r"^L\d+(?:C\d+)?(?:-L\d+(?:C\d+)?)?$") {
         Ok(regex) => regex,
@@ -126,64 +128,6 @@ fn is_local_path_like_link(dest_url: &str) -> bool {
             [drive, b':', separator, ..]
                 if drive.is_ascii_alphabetic() && matches!(separator, b'/' | b'\\')
         )
-}
-
-fn hidden_local_link_location_suffix(dest_url: &str) -> Option<String> {
-    if !is_local_path_like_link(dest_url) {
-        return None;
-    }
-
-    parse_hash_location_suffix(dest_url)
-        .and_then(normalize_hash_location_suffix)
-        .or_else(|| parse_colon_location_suffix(dest_url).map(std::string::ToString::to_string))
-}
-
-fn extract_location_suffix(text: &str) -> Option<&str> {
-    parse_hash_location_suffix(text).or_else(|| parse_colon_location_suffix(text))
-}
-
-fn parse_hash_location_suffix(text: &str) -> Option<&str> {
-    let (_, fragment) = text.rsplit_once('#')?;
-    HASH_LOCATION_SUFFIX_RE
-        .is_match(fragment)
-        .then_some(text.get(text.len() - fragment.len() - 1..)?)
-}
-
-fn parse_colon_location_suffix(text: &str) -> Option<&str> {
-    COLON_LOCATION_SUFFIX_RE.find(text).map(|m| m.as_str())
-}
-
-fn normalize_hash_location_suffix(suffix: &str) -> Option<String> {
-    let fragment = suffix.strip_prefix('#')?;
-    let (start, end) = match fragment.split_once('-') {
-        Some((start, end)) => (start, Some(end)),
-        None => (fragment, None),
-    };
-    let (start_line, start_column) = parse_hash_location_point(start)?;
-    let mut normalized = String::from(":");
-    normalized.push_str(start_line);
-    if let Some(column) = start_column {
-        normalized.push(':');
-        normalized.push_str(column);
-    }
-    if let Some(end) = end {
-        let (end_line, end_column) = parse_hash_location_point(end)?;
-        normalized.push('-');
-        normalized.push_str(end_line);
-        if let Some(column) = end_column {
-            normalized.push(':');
-            normalized.push_str(column);
-        }
-    }
-    Some(normalized)
-}
-
-fn parse_hash_location_point(point: &str) -> Option<(&str, Option<&str>)> {
-    let point = point.strip_prefix('L')?;
-    match point.split_once('C') {
-        Some((line, column)) => Some((line, Some(column))),
-        None => Some((point, None)),
-    }
 }
 
 struct Writer<'a, I>
@@ -580,7 +524,23 @@ where
         }
         self.link = Some(LinkState {
             show_destination,
-            hidden_location_suffix: hidden_local_link_location_suffix(&dest_url),
+            hidden_location_suffix: if is_local_path_like_link(&dest_url) {
+                dest_url
+                    .rsplit_once('#')
+                    .and_then(|(_, fragment)| {
+                        HASH_LOCATION_SUFFIX_RE
+                            .is_match(fragment)
+                            .then(|| format!("#{fragment}"))
+                    })
+                    .and_then(|suffix| normalize_markdown_hash_location_suffix(&suffix))
+                    .or_else(|| {
+                        COLON_LOCATION_SUFFIX_RE
+                            .find(&dest_url)
+                            .map(|m| m.as_str().to_string())
+                    })
+            } else {
+                None
+            },
             label_start_span_idx,
             label_styled,
             destination: dest_url,
@@ -609,7 +569,13 @@ where
                         })
                     })
                     .unwrap_or_default();
-                if extract_location_suffix(&label_text).is_none() {
+                if label_text
+                    .rsplit_once('#')
+                    .is_some_and(|(_, fragment)| HASH_LOCATION_SUFFIX_RE.is_match(fragment))
+                    || COLON_LOCATION_SUFFIX_RE.find(&label_text).is_some()
+                {
+                    // The label already carries a location suffix; don't duplicate it.
+                } else {
                     self.push_span(Span::styled(location_suffix.to_string(), self.styles.code));
                 }
                 if link.label_styled {

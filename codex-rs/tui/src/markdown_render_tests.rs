@@ -4,6 +4,8 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
 
+use crate::markdown_render::COLON_LOCATION_SUFFIX_RE;
+use crate::markdown_render::HASH_LOCATION_SUFFIX_RE;
 use crate::markdown_render::render_markdown_text;
 use insta::assert_snapshot;
 
@@ -649,6 +651,12 @@ fn link() {
         ")".into(),
     ]));
     assert_eq!(text, expected);
+}
+
+#[test]
+fn load_location_suffix_regexes() {
+    let _colon = &*COLON_LOCATION_SUFFIX_RE;
+    let _hash = &*HASH_LOCATION_SUFFIX_RE;
 }
 
 #[test]
