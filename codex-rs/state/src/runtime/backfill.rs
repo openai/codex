@@ -122,11 +122,11 @@ ON CONFLICT(id) DO NOTHING
 #[cfg(test)]
 mod tests {
     use super::StateRuntime;
-    use chrono::Utc;
     use super::state_db_filename;
     use super::test_support::unique_temp_dir;
     use crate::STATE_DB_FILENAME;
     use crate::STATE_DB_VERSION;
+    use chrono::Utc;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]

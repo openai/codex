@@ -11,11 +11,11 @@ use crate::model::Stage1StartupClaimParams;
 use crate::model::ThreadRow;
 use crate::model::stage1_output_ref_from_parts;
 use chrono::Duration;
-use uuid::Uuid;
 use sqlx::Executor;
 use sqlx::QueryBuilder;
 use sqlx::Sqlite;
 use std::collections::HashSet;
+use uuid::Uuid;
 
 const JOB_KIND_MEMORY_STAGE1: &str = "memory_stage1";
 const JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL: &str = "memory_consolidate_global";
