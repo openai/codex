@@ -158,15 +158,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
         AuthCredentialsStoreMode::File,
     )?;
 
-    let server_base_url = format!("{}/v1", server.uri());
-    let mut mcp = McpProcess::new_with_env(
-        codex_home.path(),
-        &[
-            ("OPENAI_BASE_URL", Some(server_base_url.as_str())),
-            ("OPENAI_API_KEY", None),
-        ],
-    )
-    .await?;
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_thread(&mut mcp).await?;

@@ -502,7 +502,7 @@ describe("Codex", () => {
       ],
     });
 
-    const { envs: spawnEnvs, restore } = codexExecSpy();
+    const { args: spawnArgs, envs: spawnEnvs, restore } = codexExecSpy();
     process.env.CODEX_ENV_SHOULD_NOT_LEAK = "leak";
 
     try {
@@ -521,11 +521,18 @@ describe("Codex", () => {
       if (!spawnEnv) {
         throw new Error("Spawn env missing");
       }
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      if (!commandArgs) {
+        throw new Error("Command args missing");
+      }
       expect(spawnEnv.CUSTOM_ENV).toBe("custom");
       expect(spawnEnv.CODEX_ENV_SHOULD_NOT_LEAK).toBeUndefined();
-      expect(spawnEnv.OPENAI_BASE_URL).toBe(url);
+      expect(spawnEnv.OPENAI_BASE_URL).toBeUndefined();
       expect(spawnEnv.CODEX_API_KEY).toBe("test");
       expect(spawnEnv.CODEX_INTERNAL_ORIGINATOR_OVERRIDE).toBeDefined();
+      expect(commandArgs).toContain("--config");
+      expect(commandArgs).toContain(`openai_base_url=${JSON.stringify(url)}`);
     } finally {
       delete process.env.CODEX_ENV_SHOULD_NOT_LEAK;
       restore();

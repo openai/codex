@@ -12,7 +12,6 @@ use codex_core::built_in_model_providers;
 use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
 use codex_core::features::Feature;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -450,7 +449,7 @@ async fn chatgpt_auth_sends_correct_request() {
     )
     .await;
 
-    let mut model_provider = built_in_model_providers()["openai"].clone();
+    let mut model_provider = built_in_model_providers(None)["openai"].clone();
     model_provider.base_url = Some(format!("{}/api/codex", server.uri()));
     let mut builder = test_codex()
         .with_auth(create_dummy_codex_auth())
@@ -526,7 +525,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
+        ..built_in_model_providers(None)["openai"].clone()
     };
 
     // Init session
@@ -550,17 +549,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
             Ok(None) => panic!("No CodexAuth found in codex_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
-    let thread_manager = ThreadManager::new(
-        codex_home.path().to_path_buf(),
-        auth_manager,
-        SessionSource::Exec,
-        config.model_catalog.clone(),
-        CollaborationModesConfig {
-            default_mode_request_user_input: config
-                .features
-                .enabled(Feature::DefaultModeRequestUserInput),
-        },
-    );
+    let thread_manager = ThreadManager::new(&config, auth_manager, SessionSource::Exec);
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config)
         .await
@@ -1562,7 +1551,7 @@ async fn token_count_includes_rate_limits_snapshot() {
         .mount(&server)
         .await;
 
-    let mut provider = built_in_model_providers()["openai"].clone();
+    let mut provider = built_in_model_providers(None)["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
 
     let mut builder = test_codex()
