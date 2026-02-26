@@ -31,6 +31,7 @@ pub struct Stage1OutputRef {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Phase2InputSelection {
     pub selected: Vec<Stage1Output>,
+    pub previous_selected: Vec<Stage1Output>,
     pub retained_thread_ids: Vec<ThreadId>,
     pub removed: Vec<Stage1OutputRef>,
 }

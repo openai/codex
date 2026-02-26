@@ -81,13 +81,19 @@ If there is input, it then:
 Selection diff behavior:
 
 - successful Phase 2 runs mark the exact stage-1 snapshots they consumed with
-  `selected_for_phase2 = 1`
+  `selected_for_phase2 = 1` and persist the matching
+  `selected_for_phase2_source_updated_at`
 - Phase 1 upserts preserve the previous `selected_for_phase2` baseline until
   the next successful Phase 2 run rewrites it
 - the next Phase 2 run compares the current top-N stage-1 inputs against that
-  prior snapshot selection to label inputs as `added` or `retained`
+  prior snapshot selection to label inputs as `added` or `retained`; a
+  refreshed thread stays `added` until Phase 2 successfully selects its newer
+  snapshot
 - rows that were previously selected but still exist outside the current top-N
   selection are surfaced as `removed`
+- before the agent starts, local `rollout_summaries/` and `raw_memories.md`
+  keep the union of the current selection and the previous successful
+  selection, so removed-thread evidence stays available during forgetting
 
 Watermark behavior:
 

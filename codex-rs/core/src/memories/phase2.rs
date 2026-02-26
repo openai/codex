@@ -8,6 +8,7 @@ use crate::memories::metrics;
 use crate::memories::phase_two;
 use crate::memories::prompts::build_consolidation_prompt;
 use crate::memories::storage::rebuild_raw_memories_file_from_memories;
+use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
 use codex_config::Constrained;
 use codex_protocol::ThreadId;
@@ -17,8 +18,10 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
+use codex_state::Stage1Output;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -82,13 +85,15 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         }
     };
     let raw_memories = selection.selected.to_vec();
+    let artifact_memories = artifact_memories_for_phase2(&selection);
     let new_watermark = get_watermark(claim.watermark, &raw_memories);
 
     // 4. Update the file system by syncing the raw memories with the one extracted from DB at
     //    step 3
     // [`rollout_summaries/`]
     if let Err(err) =
-        sync_rollout_summaries_from_memories(&root, &raw_memories, max_raw_memories).await
+        sync_rollout_summaries_from_memories(&root, &artifact_memories, artifact_memories.len())
+            .await
     {
         tracing::error!("failed syncing local memory artifacts for global consolidation: {err}");
         job::failed(session, db, &claim, "failed_sync_artifacts").await;
@@ -96,7 +101,8 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     }
     // [`raw_memories.md`]
     if let Err(err) =
-        rebuild_raw_memories_file_from_memories(&root, &raw_memories, max_raw_memories).await
+        rebuild_raw_memories_file_from_memories(&root, &artifact_memories, artifact_memories.len())
+            .await
     {
         tracing::error!("failed syncing local memory artifacts for global consolidation: {err}");
         job::failed(session, db, &claim, "failed_rebuild_raw_memories").await;
@@ -148,6 +154,22 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         input: raw_memories.len() as i64,
     };
     emit_metrics(session, counters);
+}
+
+fn artifact_memories_for_phase2(
+    selection: &codex_state::Phase2InputSelection,
+) -> Vec<Stage1Output> {
+    let mut seen = HashSet::new();
+    let mut memories = selection.selected.clone();
+    for memory in &selection.selected {
+        seen.insert(rollout_summary_file_stem(memory));
+    }
+    for memory in &selection.previous_selected {
+        if seen.insert(rollout_summary_file_stem(memory)) {
+            memories.push(memory.clone());
+        }
+    }
+    memories
 }
 
 mod job {

@@ -267,8 +267,10 @@ LIMIT ?
     /// - current selection is the latest `n` non-empty stage-1 outputs ordered
     ///   by `source_updated_at DESC, thread_id DESC`
     /// - previously selected rows are identified by `selected_for_phase2 = 1`
-    /// - `retained_thread_ids` records which current rows were previously
-    ///   selected
+    /// - `previous_selected` contains the current persisted rows that belonged
+    ///   to the last successful phase-2 baseline
+    /// - `retained_thread_ids` records which current rows still match the exact
+    ///   snapshot selected in the last successful phase-2 run
     /// - removed rows are previously selected rows that are still present in
     ///   `stage1_outputs` but fall outside the current top-`n` selection
     pub async fn get_phase2_input_selection(
@@ -290,6 +292,7 @@ SELECT
     so.rollout_slug,
     so.generated_at,
     so.selected_for_phase2,
+    so.selected_for_phase2_source_updated_at,
     COALESCE(t.cwd, '') AS cwd
 FROM stage1_outputs AS so
 LEFT JOIN threads AS t
@@ -309,7 +312,11 @@ LIMIT ?
         for row in current_rows {
             let thread_id = row.try_get::<String, _>("thread_id")?;
             current_thread_ids.insert(thread_id.clone());
-            if row.try_get::<i64, _>("selected_for_phase2")? != 0 {
+            let source_updated_at = row.try_get::<i64, _>("source_updated_at")?;
+            if row.try_get::<i64, _>("selected_for_phase2")? != 0
+                && row.try_get::<Option<i64>, _>("selected_for_phase2_source_updated_at")?
+                    == Some(source_updated_at)
+            {
                 retained_thread_ids.push(ThreadId::try_from(thread_id.clone())?);
             }
             selected.push(Stage1Output::try_from(Stage1OutputRow::try_from_row(
@@ -321,9 +328,16 @@ LIMIT ?
             r#"
 SELECT
     so.thread_id,
+    COALESCE(t.rollout_path, '') AS rollout_path,
     so.source_updated_at,
+    so.raw_memory,
+    so.rollout_summary,
     so.rollout_slug
+  , so.generated_at
+  , COALESCE(t.cwd, '') AS cwd
 FROM stage1_outputs AS so
+LEFT JOIN threads AS t
+    ON t.id = so.thread_id
 WHERE so.selected_for_phase2 = 1
 ORDER BY so.source_updated_at DESC, so.thread_id DESC
             "#,
@@ -331,6 +345,11 @@ ORDER BY so.source_updated_at DESC, so.thread_id DESC
         .fetch_all(self.pool.as_ref())
         .await?;
 
+        let previous_selected = previous_rows
+            .iter()
+            .map(Stage1OutputRow::try_from_row)
+            .map(|row| row.and_then(Stage1Output::try_from))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut removed = Vec::new();
         for row in previous_rows {
             let thread_id = row.try_get::<String, _>("thread_id")?;
@@ -346,6 +365,7 @@ ORDER BY so.source_updated_at DESC, so.thread_id DESC
 
         Ok(Phase2InputSelection {
             selected,
+            previous_selected,
             retained_thread_ids,
             removed,
         })
@@ -548,8 +568,9 @@ WHERE kind = ? AND job_key = ?
     /// - sets `status='done'` and `last_success_watermark = input_watermark`
     /// - upserts `stage1_outputs` for the thread, replacing existing output only
     ///   when `source_updated_at` is newer or equal
-    /// - preserves any existing `selected_for_phase2` flag until the next
-    ///   successful phase-2 run rewrites the baseline selection
+    /// - preserves any existing `selected_for_phase2` baseline until the next
+    ///   successful phase-2 run rewrites the baseline selection, including the
+    ///   snapshot timestamp chosen during that run
     /// - persists optional `rollout_slug` for rollout summary artifact naming
     /// - enqueues/advances the global phase-2 job watermark using
     ///   `source_updated_at`
@@ -904,7 +925,8 @@ WHERE kind = ? AND job_key = ?
     ///   `max(existing_last_success_watermark, completed_watermark)`
     /// - rewrites `selected_for_phase2` so only the exact selected stage-1
     ///   snapshots remain marked as part of the latest successful phase-2
-    ///   selection
+    ///   selection, and persists each selected snapshot's
+    ///   `source_updated_at` for future retained-vs-added diffing
     pub async fn mark_global_phase2_job_succeeded(
         &self,
         ownership_token: &str,
@@ -943,8 +965,10 @@ WHERE kind = ? AND job_key = ?
         sqlx::query(
             r#"
 UPDATE stage1_outputs
-SET selected_for_phase2 = 0
-WHERE selected_for_phase2 != 0
+SET
+    selected_for_phase2 = 0,
+    selected_for_phase2_source_updated_at = NULL
+WHERE selected_for_phase2 != 0 OR selected_for_phase2_source_updated_at IS NOT NULL
             "#,
         )
         .execute(&mut *tx)
@@ -954,10 +978,13 @@ WHERE selected_for_phase2 != 0
             sqlx::query(
                 r#"
 UPDATE stage1_outputs
-SET selected_for_phase2 = 1
+SET
+    selected_for_phase2 = 1,
+    selected_for_phase2_source_updated_at = ?
 WHERE thread_id = ? AND source_updated_at = ?
                 "#,
             )
+            .bind(output.source_updated_at.timestamp())
             .bind(output.thread_id.to_string())
             .bind(output.source_updated_at.timestamp())
             .execute(&mut *tx)

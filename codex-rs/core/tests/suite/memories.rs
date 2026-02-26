@@ -133,11 +133,19 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
     wait_for_phase2_success(db.as_ref(), thread_b).await?;
     let raw_memories = tokio::fs::read_to_string(memory_root.join("raw_memories.md")).await?;
     assert!(raw_memories.contains("raw memory B"));
-    assert!(!raw_memories.contains("raw memory A"));
+    assert!(raw_memories.contains("raw memory A"));
     let rollout_summaries = read_rollout_summary_bodies(&memory_root).await?;
-    assert_eq!(rollout_summaries.len(), 1);
-    assert!(rollout_summaries[0].contains("rollout summary B"));
-    assert!(!rollout_summaries[0].contains("rollout summary A"));
+    assert_eq!(rollout_summaries.len(), 2);
+    assert!(
+        rollout_summaries
+            .iter()
+            .any(|summary| summary.contains("rollout summary B"))
+    );
+    assert!(
+        rollout_summaries
+            .iter()
+            .any(|summary| summary.contains("rollout summary A"))
+    );
 
     shutdown_test_codex(&second).await?;
     Ok(())
