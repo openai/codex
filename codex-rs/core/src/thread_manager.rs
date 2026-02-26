@@ -511,7 +511,7 @@ impl ThreadManagerState {
             session_source,
             Vec::new(),
             persist_extended_history,
-            None
+            None,
         )
         .await
     }

@@ -264,7 +264,20 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
     test.submit_turn(TURN_1_PROMPT).await?;
     let _ = spawn_turn.single_request();
 
-    let child_request = child_request_log.single_request();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let child_request = loop {
+        if let Some(request) = child_request_log
+            .requests()
+            .into_iter()
+            .find(|request| request.body_contains_text(CHILD_PROMPT))
+        {
+            break request;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for forked child request");
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
     assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
     assert!(child_request.body_contains_text("seeded"));
     let Some((content, success)) =
