@@ -225,6 +225,7 @@ async fn wait_for_single_request(mock: &ResponseMock) -> ResponsesRequest {
     }
 }
 
+#[allow(clippy::expect_used)]
 fn phase2_prompt_text(request: &ResponsesRequest) -> String {
     request
         .message_input_texts("user")
