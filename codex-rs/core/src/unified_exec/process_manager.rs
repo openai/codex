@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -98,6 +99,7 @@ struct PreparedProcessHandles {
     output_closed: Arc<AtomicBool>,
     output_closed_notify: Arc<Notify>,
     cancellation_token: CancellationToken,
+    pause_state: Option<watch::Receiver<bool>>,
     command: Vec<String>,
     process_id: String,
     tty: bool,
@@ -215,6 +217,11 @@ impl UnifiedExecProcessManager {
             &output_closed,
             &output_closed_notify,
             &cancellation_token,
+            Some(
+                context
+                    .session
+                    .subscribe_out_of_band_elicitation_pause_state(),
+            ),
             deadline,
         )
         .await;
@@ -308,6 +315,7 @@ impl UnifiedExecProcessManager {
             output_closed,
             output_closed_notify,
             cancellation_token,
+            pause_state,
             command: session_command,
             process_id,
             tty,
@@ -343,6 +351,7 @@ impl UnifiedExecProcessManager {
             &output_closed,
             &output_closed_notify,
             &cancellation_token,
+            pause_state,
             deadline,
         )
         .await;
@@ -442,6 +451,10 @@ impl UnifiedExecProcessManager {
             output_closed_notify,
             cancellation_token,
         } = entry.process.output_handles();
+        let pause_state = entry
+            .session
+            .upgrade()
+            .map(|session| session.subscribe_out_of_band_elicitation_pause_state());
 
         Ok(PreparedProcessHandles {
             writer_tx: entry.process.writer_sender(),
@@ -450,6 +463,7 @@ impl UnifiedExecProcessManager {
             output_closed,
             output_closed_notify,
             cancellation_token,
+            pause_state,
             command: entry.command.clone(),
             process_id: entry.process_id.clone(),
             tty: entry.tty,
@@ -624,7 +638,8 @@ impl UnifiedExecProcessManager {
         output_closed: &Arc<AtomicBool>,
         output_closed_notify: &Arc<Notify>,
         cancellation_token: &CancellationToken,
-        deadline: Instant,
+        mut pause_state: Option<watch::Receiver<bool>>,
+        mut deadline: Instant,
     ) -> Vec<u8> {
         const POST_EXIT_CLOSE_WAIT_CAP: Duration = Duration::from_millis(50);
 
@@ -632,6 +647,12 @@ impl UnifiedExecProcessManager {
         let mut exit_signal_received = cancellation_token.is_cancelled();
         let mut post_exit_deadline: Option<Instant> = None;
         loop {
+            Self::extend_deadlines_while_paused(
+                &mut pause_state,
+                &mut deadline,
+                &mut post_exit_deadline,
+            )
+            .await;
             let drained_chunks: Vec<Vec<u8>>;
             let mut wait_for_output = None;
             {
@@ -669,6 +690,7 @@ impl UnifiedExecProcessManager {
                         _ = &mut notified => {}
                         _ = &mut closed => {}
                         _ = tokio::time::sleep(close_wait_remaining) => break,
+                        _ = Self::wait_for_pause_change(pause_state.as_ref()) => {}
                     }
                     continue;
                 }
@@ -681,6 +703,7 @@ impl UnifiedExecProcessManager {
                     _ = &mut notified => {}
                     _ = &mut exit_notified => exit_signal_received = true,
                     _ = tokio::time::sleep(remaining) => break,
+                    _ = Self::wait_for_pause_change(pause_state.as_ref()) => {}
                 }
                 continue;
             }
@@ -696,6 +719,42 @@ impl UnifiedExecProcessManager {
         }
 
         collected
+    }
+
+    async fn extend_deadlines_while_paused(
+        pause_state: &mut Option<watch::Receiver<bool>>,
+        deadline: &mut Instant,
+        post_exit_deadline: &mut Option<Instant>,
+    ) {
+        let Some(receiver) = pause_state.as_mut() else {
+            return;
+        };
+        if !*receiver.borrow() {
+            return;
+        }
+
+        let paused_at = Instant::now();
+        while *receiver.borrow() {
+            if receiver.changed().await.is_err() {
+                break;
+            }
+        }
+
+        let paused_for = paused_at.elapsed();
+        *deadline += paused_for;
+        if let Some(post_exit_deadline) = post_exit_deadline.as_mut() {
+            *post_exit_deadline += paused_for;
+        }
+    }
+
+    async fn wait_for_pause_change(pause_state: Option<&watch::Receiver<bool>>) {
+        match pause_state {
+            Some(pause_state) => {
+                let mut receiver = pause_state.clone();
+                let _ = receiver.changed().await;
+            }
+            None => std::future::pending::<()>().await,
+        }
     }
 
     fn prune_processes_if_needed(store: &mut ProcessStore) -> Option<ProcessEntry> {
