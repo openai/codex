@@ -25,14 +25,6 @@ pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> boo
     message.iter().any(is_contextual_user_fragment)
 }
 
-pub(crate) fn is_contextual_user_message(item: &ResponseItem) -> bool {
-    let ResponseItem::Message { role, content, .. } = item else {
-        return false;
-    };
-
-    role == "user" && is_contextual_user_message_content(content)
-}
-
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
     if is_contextual_user_message_content(message) {
         return None;
