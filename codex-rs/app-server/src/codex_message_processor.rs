@@ -3212,11 +3212,11 @@ impl CodexMessageProcessor {
             };
 
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
-                crate::thread_state::PendingThreadResumeRequest {
+                Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
                     rollout_path,
                     config_snapshot,
-                },
+                }),
             );
             if listener_command_tx.send(command).is_err() {
                 let err = JSONRPCErrorError {
@@ -6857,7 +6857,7 @@ async fn handle_thread_listener_command(
                 thread_state,
                 thread_watch_manager,
                 outgoing,
-                resume_request,
+                *resume_request,
             )
             .await;
         }

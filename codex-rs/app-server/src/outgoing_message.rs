@@ -266,18 +266,6 @@ impl OutgoingMessageSender {
 
         for notification in notifications_before_request {
             let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
-            if connection_ids.is_empty() {
-                if let Err(err) = self
-                    .sender
-                    .send(OutgoingEnvelope::Broadcast {
-                        message: outgoing_message,
-                    })
-                    .await
-                {
-                    warn!("failed to resend notification to client: {err:?}");
-                }
-                continue;
-            }
             for connection_id in connection_ids {
                 if let Err(err) = self
                     .sender
@@ -293,18 +281,6 @@ impl OutgoingMessageSender {
         }
 
         let outgoing_message = OutgoingMessage::Request(request);
-        if connection_ids.is_empty() {
-            if let Err(err) = self
-                .sender
-                .send(OutgoingEnvelope::Broadcast {
-                    message: outgoing_message,
-                })
-                .await
-            {
-                warn!("failed to resend request to client: {err:?}");
-            }
-            return true;
-        }
         for connection_id in connection_ids {
             if let Err(err) = self
                 .sender

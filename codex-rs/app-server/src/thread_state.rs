@@ -32,7 +32,7 @@ pub(crate) struct PendingThreadResumeRequest {
 }
 
 pub(crate) enum ThreadListenerCommand {
-    SendThreadResumeResponse(PendingThreadResumeRequest),
+    SendThreadResumeResponse(Box<PendingThreadResumeRequest>),
     RemoveRequest {
         request_id: RequestId,
         completion_tx: oneshot::Sender<()>,
