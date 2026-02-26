@@ -368,7 +368,12 @@ impl Codex {
             SessionSource::SubAgent(_) => crate::models_manager::manager::RefreshStrategy::Offline,
             _ => crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
         };
-        if config.model.is_none() {
+        if config.model.is_none()
+            || !matches!(
+                refresh_strategy,
+                crate::models_manager::manager::RefreshStrategy::Offline
+            )
+        {
             let _ = models_manager.list_models(refresh_strategy).await;
         }
         let model = models_manager
