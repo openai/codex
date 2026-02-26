@@ -85,5 +85,7 @@ pub fn all_model_presets() -> &'static Vec<ModelPreset> {
 }
 
 pub fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
-    collaboration_mode_presets::builtin_collaboration_mode_presets()
+    collaboration_mode_presets::builtin_collaboration_mode_presets(
+        collaboration_mode_presets::CollaborationModesConfig::default(),
+    )
 }

@@ -4,11 +4,13 @@ Module: runtimes
 Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
+use crate::config::Permissions;
 use crate::exec::ExecExpiration;
 use crate::path_utils;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
+use crate::skills::SkillMetadata;
 use crate::tools::sandboxing::ToolError;
 use codex_protocol::models::PermissionProfile;
 use std::collections::HashMap;
@@ -17,6 +19,21 @@ use std::path::Path;
 pub mod apply_patch;
 pub mod shell;
 pub mod unified_exec;
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum EscalationPermissions {
+    PermissionProfile(PermissionProfile),
+    Permissions(Permissions),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ExecveSessionApproval {
+    /// If this execve session approval is associated with a skill script, this
+    /// field contains metadata about the skill.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub skill: Option<SkillMetadata>,
+}
 
 /// Shared helper to construct a CommandSpec from a tokenized command line.
 /// Validates that at least a program is present.

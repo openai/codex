@@ -35,6 +35,35 @@ pub struct EscalateResponse {
     pub action: EscalateAction,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EscalationDecision<P> {
+    pub action: EscalateAction,
+    pub permissions: Option<P>,
+}
+
+impl<P> EscalationDecision<P> {
+    pub fn run() -> Self {
+        Self {
+            action: EscalateAction::Run,
+            permissions: None,
+        }
+    }
+
+    pub fn escalate(permissions: Option<P>) -> Self {
+        Self {
+            action: EscalateAction::Escalate,
+            permissions,
+        }
+    }
+
+    pub fn deny(reason: Option<String>) -> Self {
+        Self {
+            action: EscalateAction::Deny { reason },
+            permissions: None,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum EscalateAction {
     /// The command should be run directly by the client.

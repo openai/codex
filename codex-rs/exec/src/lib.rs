@@ -32,6 +32,7 @@ use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
@@ -398,6 +399,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         auth_manager.clone(),
         SessionSource::Exec,
         config.model_catalog.clone(),
+        CollaborationModesConfig {
+            default_mode_request_user_input: config
+                .features
+                .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+        },
     ));
     let default_model = thread_manager
         .get_models_manager()
