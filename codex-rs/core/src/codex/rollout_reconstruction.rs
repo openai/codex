@@ -16,7 +16,10 @@ struct HistoryCheckpoint {
 
 #[derive(Debug, Default)]
 struct ReverseHistoryCollector {
+    // Number of newest user turns that still need to be removed while scanning backwards.
     rollback_user_turns_to_skip: usize,
+    // Items already known to survive rollback because we have either consumed all rollback skips
+    // or scanned past the user message that anchors the dropped turns.
     kept_items_rev: Vec<ResponseItem>,
     // While scanning newest-to-oldest, we cannot tell whether a response item survives rollback
     // until we either hit the user message that anchors its turn or exhaust the rollback skip
@@ -24,6 +27,9 @@ struct ReverseHistoryCollector {
     // `ContextManager::drop_last_n_user_turns`, which drops everything from the Nth-last user
     // message onward but still preserves items before the first surviving user message.
     pending_items_rev: Vec<ResponseItem>,
+    // Split point inside `pending_items_rev` for the overflow case where rollback drops more user
+    // turns than exist after the current checkpoint. The suffix starting here is the buffered
+    // prefix that still survives because it occurred before the first dropped user message.
     pending_keep_start: usize,
 }
 
