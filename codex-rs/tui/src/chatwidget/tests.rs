@@ -3608,6 +3608,38 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
 }
 
 #[tokio::test]
+async fn manual_interrupt_flushes_pending_nudges() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+
+    chat.bottom_pane.set_composer_text(
+        "queued while streaming".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.pending_nudges.len(), 1);
+    assert_no_submit_op(&mut op_rx);
+
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    assert!(chat.pending_nudges.is_empty());
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "queued while streaming".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn after manual interrupt, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn enter_submits_when_plan_stream_is_not_active() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());

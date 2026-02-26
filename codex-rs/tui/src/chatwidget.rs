@@ -1828,6 +1828,7 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         let interrupted_for_pending_nudge =
             std::mem::take(&mut self.pending_nudge_interrupt_requested);
+        let had_pending_nudges = !self.pending_nudges.is_empty();
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
         if reason == TurnAbortReason::Interrupted {
@@ -1840,9 +1841,12 @@ impl ChatWidget {
             ));
         }
 
-        if interrupted_for_pending_nudge {
+        if had_pending_nudges {
             self.maybe_send_pending_nudges();
-        } else if let Some(combined) = self.drain_queued_messages_for_restore() {
+        }
+        if !interrupted_for_pending_nudge
+            && let Some(combined) = self.drain_queued_messages_for_restore()
+        {
             self.restore_user_message_to_composer(combined);
             self.refresh_pending_input_preview();
         }
