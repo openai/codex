@@ -9,6 +9,7 @@ use crate::features::Feature;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
+use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
@@ -72,14 +73,9 @@ pub(super) async fn try_run_zsh_fork(
     let sandbox_exec_request = attempt
         .env_for(spec, req.network.as_ref())
         .map_err(|err| ToolError::Codex(err.into()))?;
-    // Keep env/network/sandbox metadata from `attempt.env_for()`, but build the
-    // script from the original shell argv. `attempt.env_for()` may wrap the
-    // command with `sandbox-exec` on macOS, and passing those wrapper flags
-    // (`-p`, `-D...`) through zsh breaks the zsh-fork path before subcommand
-    // approval runs.
     let crate::sandboxing::ExecRequest {
-        command: _sandbox_command,
-        cwd: _sandbox_cwd,
+        command,
+        cwd: sandbox_cwd,
         env: sandbox_env,
         network: sandbox_network,
         expiration: _sandbox_expiration,
@@ -90,7 +86,7 @@ pub(super) async fn try_run_zsh_fork(
         justification,
         arg0,
     } = sandbox_exec_request;
-    let ParsedShellCommand { script, login } = extract_shell_script(command)?;
+    let ParsedShellCommand { script, login } = extract_shell_script(&command)?;
     let effective_timeout = Duration::from_millis(
         req.timeout_ms
             .unwrap_or(crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
@@ -99,6 +95,8 @@ pub(super) async fn try_run_zsh_fork(
         ctx.session.services.exec_policy.current().as_ref().clone(),
     ));
     let command_executor = CoreShellCommandExecutor {
+        command,
+        cwd: sandbox_cwd,
         sandbox_policy,
         sandbox,
         env: sandbox_env,
@@ -166,8 +164,11 @@ struct CoreShellActionProvider {
     stopwatch: Stopwatch,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum DecisionSource {
-    SkillScript,
+    SkillScript {
+        skill: SkillMetadata,
+    },
     PrefixRule,
     /// Often, this is `is_safe_command()`.
     UnmatchedCommandFallback,
@@ -188,6 +189,7 @@ impl CoreShellActionProvider {
         workdir: &AbsolutePathBuf,
         stopwatch: &Stopwatch,
         additional_permissions: Option<PermissionProfile>,
+        decision_source: &DecisionSource,
     ) -> anyhow::Result<ReviewDecision> {
         let command = join_program_and_argv(program, argv);
         let workdir = workdir.to_path_buf();
@@ -197,6 +199,20 @@ impl CoreShellActionProvider {
         let approval_id = Some(Uuid::new_v4().to_string());
         Ok(stopwatch
             .pause_for(async move {
+                let available_decisions = vec![
+                    Some(ReviewDecision::Approved),
+                    // Currently, ApprovedForSession is only honored for skills,
+                    // so only offer it for skill script approvals.
+                    if matches!(decision_source, DecisionSource::SkillScript { .. }) {
+                        Some(ReviewDecision::ApprovedForSession)
+                    } else {
+                        None
+                    },
+                    Some(ReviewDecision::Abort),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
                 session
                     .request_command_approval(
                         &turn,
@@ -208,6 +224,7 @@ impl CoreShellActionProvider {
                         None,
                         None,
                         additional_permissions,
+                        Some(available_decisions),
                     )
                     .await
             })
@@ -272,6 +289,7 @@ impl CoreShellActionProvider {
                             workdir,
                             &self.stopwatch,
                             additional_permissions,
+                            &decision_source,
                         )
                         .await?
                     {
@@ -287,13 +305,21 @@ impl CoreShellActionProvider {
                             // Currently, we only add session approvals for
                             // skill scripts because we are storing only the
                             // `program` whereas prefix rules may be restricted by a longer prefix.
-                            if matches!(decision_source, DecisionSource::SkillScript) {
+                            if let DecisionSource::SkillScript { skill } = decision_source {
+                                tracing::debug!(
+                                    "Adding session approval for {program:?} due to user approval of skill script {skill:?}"
+                                );
                                 self.session
                                     .services
                                     .execve_session_approvals
                                     .write()
                                     .await
-                                    .insert(program.clone());
+                                    .insert(
+                                        program.clone(),
+                                        ExecveSessionApproval {
+                                            skill: Some(skill.clone()),
+                                        },
+                                    );
                             }
 
                             if needs_escalation {
@@ -352,6 +378,33 @@ impl EscalationPolicy for CoreShellActionProvider {
             "Determining escalation action for command {program:?} with args {argv:?} in {workdir:?}"
         );
 
+        // Check to see whether `program` has an existing entry in
+        // `execve_session_approvals`. If so, we can skip policy checks and user
+        // prompts and go straight to allowing execution.
+        let approval = {
+            self.session
+                .services
+                .execve_session_approvals
+                .read()
+                .await
+                .get(program)
+                .cloned()
+        };
+        if let Some(approval) = approval {
+            tracing::debug!(
+                "Found session approval for {program:?}, allowing execution without further checks"
+            );
+            // TODO(mbolin): We need to include the permissions with the
+            // escalation decision so it can be run with the appropriate
+            // permissions.
+            let _permissions = approval
+                .skill
+                .as_ref()
+                .and_then(|s| s.permission_profile.clone());
+
+            return Ok(EscalateAction::Escalate);
+        }
+
         // In the usual case, the execve wrapper reports the command being
         // executed in `program`, so a direct skill lookup is sufficient.
         if let Some(skill) = self.find_skill(program).await {
@@ -359,32 +412,19 @@ impl EscalationPolicy for CoreShellActionProvider {
             // to skills, which means we ignore exec policy rules for those
             // scripts.
             tracing::debug!("Matched {program:?} to skill {skill:?}, prompting for approval");
-            // TODO(mbolin): We should read the permissions associated with the
-            // skill and use those specific permissions in the
-            // EscalateAction::Run case, rather than always escalating when a
-            // skill matches.
             let needs_escalation = true;
-            let is_approved_for_session = self
-                .session
-                .services
-                .execve_session_approvals
-                .read()
-                .await
-                .contains(program);
-            let decision = if is_approved_for_session {
-                Decision::Allow
-            } else {
-                Decision::Prompt
+            let decision_source = DecisionSource::SkillScript {
+                skill: skill.clone(),
             };
             return self
                 .process_decision(
-                    decision,
+                    Decision::Prompt,
                     needs_escalation,
                     program,
                     argv,
                     workdir,
                     skill.permission_profile.clone(),
-                    DecisionSource::SkillScript,
+                    decision_source,
                 )
                 .await;
         }
@@ -438,6 +478,8 @@ impl EscalationPolicy for CoreShellActionProvider {
 }
 
 struct CoreShellCommandExecutor {
+    command: Vec<String>,
+    cwd: PathBuf,
     sandbox_policy: SandboxPolicy,
     sandbox: SandboxType,
     env: HashMap<String, String>,
@@ -452,8 +494,8 @@ struct CoreShellCommandExecutor {
 impl ShellCommandExecutor for CoreShellCommandExecutor {
     async fn run(
         &self,
-        command: Vec<String>,
-        cwd: PathBuf,
+        _command: Vec<String>,
+        _cwd: PathBuf,
         env: HashMap<String, String>,
         cancel_rx: CancellationToken,
     ) -> anyhow::Result<ExecResult> {
@@ -466,8 +508,8 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
 
         let result = crate::sandboxing::execute_env(
             crate::sandboxing::ExecRequest {
-                command,
-                cwd,
+                command: self.command.clone(),
+                cwd: self.cwd.clone(),
                 env: exec_env,
                 network: self.network.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
@@ -500,19 +542,20 @@ struct ParsedShellCommand {
 }
 
 fn extract_shell_script(command: &[String]) -> Result<ParsedShellCommand, ToolError> {
-    match command {
-        [_, flag, script, ..] if flag == "-c" => Ok(ParsedShellCommand {
-            script: script.clone(),
-            login: false,
-        }),
-        [_, flag, script, ..] if flag == "-lc" => Ok(ParsedShellCommand {
-            script: script.clone(),
-            login: true,
-        }),
-        _ => Err(ToolError::Rejected(
-            "unexpected shell command format for zsh-fork execution".to_string(),
-        )),
+    // Commands reaching zsh-fork can be wrapped by environment/sandbox helpers, so
+    // we search for the first `-c`/`-lc` triple anywhere in the argv rather
+    // than assuming it is the first positional form.
+    if let Some((script, login)) = command.windows(3).find_map(|parts| match parts {
+        [_, flag, script] if flag == "-c" => Some((script.to_owned(), false)),
+        [_, flag, script] if flag == "-lc" => Some((script.to_owned(), true)),
+        _ => None,
+    }) {
+        return Ok(ParsedShellCommand { script, login });
     }
+
+    Err(ToolError::Rejected(
+        "unexpected shell command format for zsh-fork execution".to_string(),
+    ))
 }
 
 fn map_exec_result(
@@ -583,6 +626,58 @@ mod tests {
                 script: "echo hi".to_string(),
                 login: false,
             }
+        );
+    }
+
+    #[test]
+    fn extract_shell_script_supports_wrapped_command_prefixes() {
+        assert_eq!(
+            extract_shell_script(&[
+                "/usr/bin/env".into(),
+                "CODEX_EXECVE_WRAPPER=1".into(),
+                "/bin/zsh".into(),
+                "-lc".into(),
+                "echo hello".into()
+            ])
+            .unwrap(),
+            ParsedShellCommand {
+                script: "echo hello".to_string(),
+                login: true,
+            }
+        );
+
+        assert_eq!(
+            extract_shell_script(&[
+                "sandbox-exec".into(),
+                "-p".into(),
+                "sandbox_policy".into(),
+                "/bin/zsh".into(),
+                "-c".into(),
+                "pwd".into(),
+            ])
+            .unwrap(),
+            ParsedShellCommand {
+                script: "pwd".to_string(),
+                login: false,
+            }
+        );
+    }
+
+    #[test]
+    fn extract_shell_script_rejects_unsupported_shell_invocation() {
+        let err = extract_shell_script(&[
+            "sandbox-exec".into(),
+            "-fc".into(),
+            "echo not supported".into(),
+        ])
+        .unwrap_err();
+        assert!(matches!(err, super::ToolError::Rejected(_)));
+        assert_eq!(
+            match err {
+                super::ToolError::Rejected(reason) => reason,
+                _ => "".to_string(),
+            },
+            "unexpected shell command format for zsh-fork execution"
         );
     }
 

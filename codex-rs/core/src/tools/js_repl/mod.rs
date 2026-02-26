@@ -556,10 +556,7 @@ impl JsReplManager {
         turn: Arc<TurnContext>,
         thread_id: Option<ThreadId>,
     ) -> Result<KernelState, String> {
-        let node_path = resolve_node(self.node_path.as_deref()).ok_or_else(|| {
-            "Node runtime not found; install Node or set CODEX_JS_REPL_NODE_PATH".to_string()
-        })?;
-        ensure_node_version(&node_path).await?;
+        let node_path = resolve_compatible_node(self.node_path.as_deref()).await?;
 
         let kernel_path = self
             .write_kernel_script()
@@ -1319,6 +1316,14 @@ async fn ensure_node_version(node_path: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+pub(crate) async fn resolve_compatible_node(config_path: Option<&Path>) -> Result<PathBuf, String> {
+    let node_path = resolve_node(config_path).ok_or_else(|| {
+        "Node runtime not found; install Node or set CODEX_JS_REPL_NODE_PATH".to_string()
+    })?;
+    ensure_node_version(&node_path).await?;
+    Ok(node_path)
 }
 
 pub(crate) fn resolve_node(config_path: Option<&Path>) -> Option<PathBuf> {
