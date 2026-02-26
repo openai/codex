@@ -18,6 +18,11 @@ struct HistoryCheckpoint {
 struct ReverseHistoryCollector {
     rollback_user_turns_to_skip: usize,
     kept_items_rev: Vec<ResponseItem>,
+    // While scanning newest-to-oldest, we cannot tell whether a response item survives rollback
+    // until we either hit the user message that anchors its turn or exhaust the rollback skip
+    // count. These items are buffered here so reverse replay matches
+    // `ContextManager::drop_last_n_user_turns`, which drops everything from the Nth-last user
+    // message onward but still preserves items before the first surviving user message.
     pending_items_rev: Vec<ResponseItem>,
     pending_keep_start: usize,
 }
