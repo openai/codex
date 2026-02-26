@@ -1091,6 +1091,7 @@ pub async fn start_websocket_server(connections: Vec<Vec<Vec<Value>>>) -> WebSoc
 pub async fn start_websocket_server_with_headers(
     connections: Vec<WebSocketConnectionConfig>,
 ) -> WebSocketTestServer {
+    let start = std::time::Instant::now();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind websocket server");
@@ -1183,10 +1184,51 @@ pub async fn start_websocket_server_with_headers(
                     let mut log = requests.lock().unwrap();
                     if let Some(connection_log) = log.get_mut(connection_index) {
                         connection_log.push(WebSocketRequest { body });
+                        let request_index = connection_log.len() - 1;
+                        let request = &connection_log[request_index];
+                        let request_body = request.body_json();
+                        eprintln!(
+                            "[ws test server +{}ms] connection={} received request={} type={:?} role={:?} text={:?} data={:?}",
+                            start.elapsed().as_millis(),
+                            connection_index,
+                            request_index,
+                            request_body.get("type").and_then(Value::as_str),
+                            request_body
+                                .get("item")
+                                .and_then(|item| item.get("role"))
+                                .and_then(Value::as_str),
+                            request_body
+                                .get("item")
+                                .and_then(|item| item.get("content"))
+                                .and_then(Value::as_array)
+                                .and_then(|content| content.first())
+                                .and_then(|content| content.get("text"))
+                                .and_then(Value::as_str),
+                            request_body
+                                .get("item")
+                                .and_then(|item| item.get("content"))
+                                .and_then(Value::as_array)
+                                .and_then(|content| content.first())
+                                .and_then(|content| content.get("data"))
+                                .and_then(Value::as_str),
+                        );
                     }
                     request_log.notify_waiters();
                 }
 
+                eprintln!(
+                    "[ws test server +{}ms] connection={} sending batch_size={} event_types={:?} audio_data={:?}",
+                    start.elapsed().as_millis(),
+                    connection_index,
+                    request_events.len(),
+                    request_events
+                        .iter()
+                        .map(|event| event.get("type").and_then(Value::as_str))
+                        .collect::<Vec<_>>(),
+                    request_events
+                        .iter()
+                        .find_map(|event| event.get("delta").and_then(Value::as_str)),
+                );
                 for event in &request_events {
                     let Ok(payload) = serde_json::to_string(event) else {
                         continue;
