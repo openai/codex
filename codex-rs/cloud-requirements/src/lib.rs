@@ -50,7 +50,6 @@ type HmacSha256 = Hmac<Sha256>;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FetchCloudRequirementsStatus {
     BackendClientInit,
-    Parse,
     Request,
 }
 
@@ -275,7 +274,6 @@ impl CloudRequirementsService {
 
         self.fetch_with_retries(&auth, chatgpt_user_id, account_id)
             .await
-            .ok()
             .flatten()
     }
 
@@ -284,13 +282,11 @@ impl CloudRequirementsService {
         auth: &CodexAuth,
         chatgpt_user_id: Option<&str>,
         account_id: Option<&str>,
-    ) -> Result<Option<ConfigRequirementsToml>, FetchCloudRequirementsStatus> {
-        let mut last_status = FetchCloudRequirementsStatus::Request;
+    ) -> Option<Option<ConfigRequirementsToml>> {
         for attempt in 1..=CLOUD_REQUIREMENTS_MAX_ATTEMPTS {
             let contents = match self.fetcher.fetch_requirements(auth).await {
                 Ok(contents) => contents,
                 Err(status) => {
-                    last_status = status;
                     if attempt < CLOUD_REQUIREMENTS_MAX_ATTEMPTS {
                         tracing::warn!(
                             status = ?status,
@@ -309,7 +305,7 @@ impl CloudRequirementsService {
                     Ok(requirements) => requirements,
                     Err(err) => {
                         tracing::warn!(error = %err, "Failed to parse cloud requirements");
-                        return Err(FetchCloudRequirementsStatus::Parse);
+                        return None;
                     }
                 },
                 None => None,
@@ -326,10 +322,10 @@ impl CloudRequirementsService {
                 tracing::warn!(error = %err, "Failed to write cloud requirements cache");
             }
 
-            return Ok(requirements);
+            return Some(requirements);
         }
 
-        Err(last_status)
+        None
     }
 
     async fn refresh_cache_in_background(&self) {
@@ -365,12 +361,12 @@ impl CloudRequirementsService {
         let account_id = auth.get_account_id();
         let account_id = account_id.as_deref();
 
-        if let Err(status) = self
+        if self
             .fetch_with_retries(&auth, chatgpt_user_id, account_id)
             .await
+            .is_none()
         {
             tracing::warn!(
-                status = ?status,
                 path = %self.cache_path.display(),
                 "Failed to refresh cloud requirements cache from remote"
             );
