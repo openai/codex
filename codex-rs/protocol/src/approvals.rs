@@ -2,14 +2,29 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::mcp::RequestId;
+use crate::models::MacOsSeatbeltProfileExtensions;
 use crate::models::PermissionProfile;
 use crate::parse_command::ParsedCommand;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
+use crate::protocol::SandboxPolicy;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Permissions {
+    pub sandbox_policy: SandboxPolicy,
+    pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EscalationPermissions {
+    PermissionProfile(PermissionProfile),
+    Permissions(Permissions),
+}
 
 /// Proposed execpolicy change to allow commands starting with this prefix.
 ///
