@@ -559,7 +559,7 @@ mod phase2 {
     #[tokio::test]
     async fn dispatch_reclaims_stale_global_lock_and_starts_consolidation() {
         let harness = DispatchHarness::new().await;
-        harness.seed_stage1_output(100).await;
+        harness.seed_stage1_output(Utc::now().timestamp()).await;
 
         let stale_claim = harness
             .state_db
