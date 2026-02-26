@@ -219,6 +219,8 @@ pub async fn process_exec_tool_call(
             enforce_managed_network,
             network: network.as_ref(),
             sandbox_policy_cwd: sandbox_cwd,
+            #[cfg(target_os = "macos")]
+            macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
             use_linux_sandbox_bwrap,
             windows_sandbox_level,
