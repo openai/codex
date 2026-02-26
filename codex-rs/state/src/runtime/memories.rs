@@ -7,7 +7,6 @@ use crate::model::Stage1Output;
 use crate::model::Stage1OutputRow;
 use crate::model::Stage1StartupClaimParams;
 use crate::model::ThreadRow;
-use crate::model::stage1_output_from_parts;
 use crate::model::stage1_output_ref_from_parts;
 use chrono::Duration;
 use sqlx::Executor;
@@ -284,6 +283,7 @@ LIMIT ?
             r#"
 SELECT
     so.thread_id,
+    COALESCE(t.rollout_path, '') AS rollout_path,
     so.source_updated_at,
     so.raw_memory,
     so.rollout_summary,
@@ -312,15 +312,9 @@ LIMIT ?
             if row.try_get::<i64, _>("selected_for_phase2")? != 0 {
                 retained_thread_ids.push(ThreadId::try_from(thread_id.clone())?);
             }
-            selected.push(stage1_output_from_parts(
-                thread_id,
-                row.try_get("source_updated_at")?,
-                row.try_get("raw_memory")?,
-                row.try_get("rollout_summary")?,
-                row.try_get("rollout_slug")?,
-                row.try_get("cwd")?,
-                row.try_get("generated_at")?,
-            )?);
+            selected.push(Stage1Output::try_from(Stage1OutputRow::try_from_row(
+                &row,
+            )?)?);
         }
 
         let previous_rows = sqlx::query(

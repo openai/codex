@@ -3226,6 +3226,10 @@ VALUES (?, ?, ?, ?, ?)
 
         assert_eq!(selection.selected.len(), 2);
         assert_eq!(selection.selected[0].thread_id, thread_id_c);
+        assert_eq!(
+            selection.selected[0].rollout_path,
+            codex_home.join(format!("rollout-{thread_id_c}.jsonl"))
+        );
         assert_eq!(selection.selected[1].thread_id, thread_id_b);
         assert_eq!(selection.retained_thread_ids, vec![thread_id_c]);
 
@@ -3336,10 +3340,7 @@ VALUES (?, ?, ?, ?, ?)
             .expect("load phase2 input selection");
         assert_eq!(selection.selected.len(), 1);
         assert_eq!(selection.selected[0].thread_id, thread_id);
-        assert_eq!(
-            selection.selected[0].source_updated_at.timestamp(),
-            101
-        );
+        assert_eq!(selection.selected[0].source_updated_at.timestamp(), 101);
         assert!(selection.retained_thread_ids.is_empty());
         assert!(selection.removed.is_empty());
 
@@ -3462,10 +3463,7 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("load phase2 input selection");
         assert_eq!(selection.selected.len(), 1);
-        assert_eq!(
-            selection.selected[0].source_updated_at.timestamp(),
-            101
-        );
+        assert_eq!(selection.selected[0].source_updated_at.timestamp(), 101);
         assert!(selection.retained_thread_ids.is_empty());
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;

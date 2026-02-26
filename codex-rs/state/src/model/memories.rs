@@ -84,26 +84,6 @@ fn epoch_seconds_to_datetime(secs: i64) -> Result<DateTime<Utc>> {
         .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp: {secs}"))
 }
 
-pub(crate) fn stage1_output_from_parts(
-    thread_id: String,
-    source_updated_at: i64,
-    raw_memory: String,
-    rollout_summary: String,
-    rollout_slug: Option<String>,
-    cwd: String,
-    generated_at: i64,
-) -> Result<Stage1Output> {
-    Ok(Stage1Output {
-        thread_id: ThreadId::try_from(thread_id)?,
-        source_updated_at: epoch_seconds_to_datetime(source_updated_at)?,
-        raw_memory,
-        rollout_summary,
-        rollout_slug,
-        cwd: PathBuf::from(cwd),
-        generated_at: epoch_seconds_to_datetime(generated_at)?,
-    })
-}
-
 pub(crate) fn stage1_output_ref_from_parts(
     thread_id: String,
     source_updated_at: i64,
