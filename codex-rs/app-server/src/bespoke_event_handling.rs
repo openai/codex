@@ -1049,7 +1049,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ItemCompleted(completed))
                 .await;
         }
-        EventMsg::JsReplToolCallResponse(_) => {}
         EventMsg::EnteredReviewMode(review_request) => {
             let review = review_request
                 .user_facing_hint

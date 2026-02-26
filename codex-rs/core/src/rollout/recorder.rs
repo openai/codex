@@ -137,10 +137,12 @@ fn sanitize_rollout_item_for_persistence(
     item: RolloutItem,
     mode: EventPersistenceMode,
 ) -> RolloutItem {
+    if mode != EventPersistenceMode::Extended {
+        return item;
+    }
+
     match item {
-        RolloutItem::EventMsg(EventMsg::ExecCommandEnd(mut event))
-            if mode == EventPersistenceMode::Extended =>
-        {
+        RolloutItem::EventMsg(EventMsg::ExecCommandEnd(mut event)) => {
             // Persist only a bounded aggregated summary of command output.
             event.aggregated_output = truncate_text(
                 &event.aggregated_output,
@@ -151,13 +153,6 @@ fn sanitize_rollout_item_for_persistence(
             event.stderr.clear();
             event.formatted_output.clear();
             RolloutItem::EventMsg(EventMsg::ExecCommandEnd(event))
-        }
-        RolloutItem::EventMsg(EventMsg::JsReplToolCallResponse(mut event)) => {
-            if mode != EventPersistenceMode::Extended {
-                event.response = None;
-                event.error = None;
-            }
-            RolloutItem::EventMsg(EventMsg::JsReplToolCallResponse(event))
         }
         _ => item,
     }

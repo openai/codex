@@ -13,10 +13,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::JsReplToolCallPayloadKind;
-use codex_protocol::protocol::JsReplToolCallResponseEvent;
-use codex_protocol::protocol::JsReplToolCallResponseSummary;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -29,6 +25,8 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
+use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -129,6 +127,31 @@ struct ExecToolCalls {
     in_flight: usize,
     notify: Arc<Notify>,
     cancel: CancellationToken,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
+enum JsReplToolCallPayloadKind {
+    MessageContent,
+    FunctionText,
+    FunctionContentItems,
+    CustomText,
+    McpResult,
+    McpErrorResult,
+    Error,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct JsReplToolCallResponseSummary {
+    response_type: Option<String>,
+    payload_kind: Option<JsReplToolCallPayloadKind>,
+    payload_text_preview: Option<String>,
+    payload_text_length: Option<usize>,
+    payload_item_count: Option<usize>,
+    text_item_count: Option<usize>,
+    image_item_count: Option<usize>,
+    structured_content_present: Option<bool>,
+    result_is_error: Option<bool>,
 }
 
 enum KernelStreamEnd {
@@ -412,28 +435,39 @@ impl JsReplManager {
         }
     }
 
-    async fn emit_tool_call_response_event(
-        exec: &ExecContext,
+    fn log_tool_call_response(
         req: &RunToolRequest,
         ok: bool,
-        summary: JsReplToolCallResponseSummary,
-        response: Option<JsonValue>,
-        error: Option<String>,
+        summary: &JsReplToolCallResponseSummary,
+        response: Option<&JsonValue>,
+        error: Option<&str>,
     ) {
-        exec.session
-            .send_event(
-                exec.turn.as_ref(),
-                EventMsg::JsReplToolCallResponse(JsReplToolCallResponseEvent {
-                    exec_id: req.exec_id.clone(),
-                    call_id: req.id.clone(),
-                    tool_name: req.tool_name.clone(),
-                    ok,
-                    summary,
-                    response,
-                    error,
-                }),
-            )
-            .await;
+        info!(
+            exec_id = %req.exec_id,
+            tool_call_id = %req.id,
+            tool_name = %req.tool_name,
+            ok,
+            summary = ?summary,
+            "js_repl nested tool call completed"
+        );
+        if let Some(response) = response {
+            trace!(
+                exec_id = %req.exec_id,
+                tool_call_id = %req.id,
+                tool_name = %req.tool_name,
+                response_json = %response,
+                "js_repl nested tool call raw response"
+            );
+        }
+        if let Some(error) = error {
+            trace!(
+                exec_id = %req.exec_id,
+                tool_call_id = %req.id,
+                tool_name = %req.tool_name,
+                error = %error,
+                "js_repl nested tool call raw error"
+            );
+        }
     }
 
     fn summarize_text_payload(
@@ -1195,15 +1229,7 @@ impl JsReplManager {
         if is_js_repl_internal_tool(&req.tool_name) {
             let error = "js_repl cannot invoke itself".to_string();
             let summary = Self::summarize_tool_call_error(&error);
-            Self::emit_tool_call_response_event(
-                &exec,
-                &req,
-                false,
-                summary,
-                None,
-                Some(error.clone()),
-            )
-            .await;
+            Self::log_tool_call_response(&req, false, &summary, None, Some(&error));
             return RunToolResult {
                 id: req.id,
                 ok: false,
@@ -1310,15 +1336,7 @@ impl JsReplManager {
                 let summary = Self::summarize_tool_call_response(&response);
                 match serde_json::to_value(response) {
                     Ok(value) => {
-                        Self::emit_tool_call_response_event(
-                            &exec,
-                            &req,
-                            true,
-                            summary,
-                            Some(value.clone()),
-                            None,
-                        )
-                        .await;
+                        Self::log_tool_call_response(&req, true, &summary, Some(&value), None);
                         RunToolResult {
                             id: req.id,
                             ok: true,
@@ -1329,15 +1347,7 @@ impl JsReplManager {
                     Err(err) => {
                         let error = format!("failed to serialize tool output: {err}");
                         let summary = Self::summarize_tool_call_error(&error);
-                        Self::emit_tool_call_response_event(
-                            &exec,
-                            &req,
-                            false,
-                            summary,
-                            None,
-                            Some(error.clone()),
-                        )
-                        .await;
+                        Self::log_tool_call_response(&req, false, &summary, None, Some(&error));
                         RunToolResult {
                             id: req.id,
                             ok: false,
@@ -1350,15 +1360,7 @@ impl JsReplManager {
             Err(err) => {
                 let error = err.to_string();
                 let summary = Self::summarize_tool_call_error(&error);
-                Self::emit_tool_call_response_event(
-                    &exec,
-                    &req,
-                    false,
-                    summary,
-                    None,
-                    Some(error.clone()),
-                )
-                .await;
+                Self::log_tool_call_response(&req, false, &summary, None, Some(&error));
                 RunToolResult {
                     id: req.id,
                     ok: false,
@@ -1598,6 +1600,8 @@ mod tests {
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::dynamic_tools::DynamicToolSpec;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputContentItem;
+    use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::openai_models::InputModality;
     use pretty_assertions::assert_eq;
@@ -1812,6 +1816,55 @@ mod tests {
         assert!(
             !manager.exec_tool_calls.lock().await.contains_key(&exec_id),
             "reset should clear tool-call contexts after lock acquisition"
+        );
+    }
+
+    #[test]
+    fn summarize_tool_call_response_for_multimodal_function_output() {
+        let response = ResponseInputItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,abcd".to_string(),
+                },
+            ]),
+        };
+
+        let actual = JsReplManager::summarize_tool_call_response(&response);
+
+        assert_eq!(
+            actual,
+            JsReplToolCallResponseSummary {
+                response_type: Some("function_call_output".to_string()),
+                payload_kind: Some(JsReplToolCallPayloadKind::FunctionContentItems),
+                payload_text_preview: None,
+                payload_text_length: None,
+                payload_item_count: Some(1),
+                text_item_count: Some(0),
+                image_item_count: Some(1),
+                structured_content_present: None,
+                result_is_error: None,
+            }
+        );
+    }
+
+    #[test]
+    fn summarize_tool_call_error_marks_error_payload() {
+        let actual = JsReplManager::summarize_tool_call_error("tool failed");
+
+        assert_eq!(
+            actual,
+            JsReplToolCallResponseSummary {
+                response_type: None,
+                payload_kind: Some(JsReplToolCallPayloadKind::Error),
+                payload_text_preview: Some("tool failed".to_string()),
+                payload_text_length: Some("tool failed".len()),
+                payload_item_count: None,
+                text_item_count: None,
+                image_item_count: None,
+                structured_content_present: None,
+                result_is_error: None,
+            }
         );
     }
 

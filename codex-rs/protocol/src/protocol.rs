@@ -1038,12 +1038,6 @@ pub enum EventMsg {
     /// Notification that the agent attached a local image via the view_image tool.
     ViewImageToolCall(ViewImageToolCallEvent),
 
-    /// Debug event carrying a sanitized summary of a `codex.tool(...)` call inside js_repl.
-    ///
-    /// When extended rollout history is enabled, this event may also include the
-    /// exact raw response object or rejection string seen by JavaScript.
-    JsReplToolCallResponse(JsReplToolCallResponseEvent),
-
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
     RequestUserInput(RequestUserInputEvent),
@@ -2362,80 +2356,6 @@ pub struct ViewImageToolCallEvent {
     pub call_id: String,
     /// Local filesystem path provided to the tool.
     pub path: PathBuf,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum JsReplToolCallPayloadKind {
-    MessageContent,
-    FunctionText,
-    FunctionContentItems,
-    CustomText,
-    McpResult,
-    McpErrorResult,
-    Error,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct JsReplToolCallResponseSummary {
-    /// Serialized `type` field from the raw response object, when available.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub response_type: Option<String>,
-    /// High-level shape of the returned payload or rejection.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub payload_kind: Option<JsReplToolCallPayloadKind>,
-    /// Truncated preview of textual payload content, if any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub payload_text_preview: Option<String>,
-    /// Untruncated byte length of the textual payload content, if any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub payload_text_length: Option<usize>,
-    /// Number of top-level payload items when the payload is item-based.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub payload_item_count: Option<usize>,
-    /// Number of text items in a multimodal payload, when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub text_item_count: Option<usize>,
-    /// Number of image items in a multimodal payload, when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub image_item_count: Option<usize>,
-    /// Whether an MCP result included `structuredContent`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub structured_content_present: Option<bool>,
-    /// Whether the nested tool payload itself reported an error.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub result_is_error: Option<bool>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct JsReplToolCallResponseEvent {
-    /// Identifier for the parent js_repl execution request.
-    pub exec_id: String,
-    /// Identifier for the nested tool call made from js_repl.
-    pub call_id: String,
-    /// Tool name passed to `codex.tool(...)`.
-    pub tool_name: String,
-    /// Whether `codex.tool(...)` resolved (`true`) or rejected (`false`).
-    pub ok: bool,
-    /// Sanitized summary of the payload shape returned to JavaScript.
-    pub summary: JsReplToolCallResponseSummary,
-    /// Serialized response object exactly as JavaScript receives it when the call resolves.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub response: Option<Value>,
-    /// Error string exactly as JavaScript receives it when the call rejects.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
