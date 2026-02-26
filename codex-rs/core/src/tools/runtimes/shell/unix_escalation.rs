@@ -189,6 +189,7 @@ impl CoreShellActionProvider {
         workdir: &AbsolutePathBuf,
         stopwatch: &Stopwatch,
         additional_permissions: Option<PermissionProfile>,
+        decision_source: &DecisionSource,
     ) -> anyhow::Result<ReviewDecision> {
         let command = join_program_and_argv(program, argv);
         let workdir = workdir.to_path_buf();
@@ -198,6 +199,20 @@ impl CoreShellActionProvider {
         let approval_id = Some(Uuid::new_v4().to_string());
         Ok(stopwatch
             .pause_for(async move {
+                let available_decisions = vec![
+                    Some(ReviewDecision::Approved),
+                    // Currently, ApprovedForSession is only honored for skills,
+                    // so only offer it for skill script approvals.
+                    if matches!(decision_source, DecisionSource::SkillScript { .. }) {
+                        Some(ReviewDecision::ApprovedForSession)
+                    } else {
+                        None
+                    },
+                    Some(ReviewDecision::Abort),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
                 session
                     .request_command_approval(
                         &turn,
@@ -209,6 +224,7 @@ impl CoreShellActionProvider {
                         None,
                         None,
                         additional_permissions,
+                        Some(available_decisions),
                     )
                     .await
             })
@@ -273,6 +289,7 @@ impl CoreShellActionProvider {
                             workdir,
                             &self.stopwatch,
                             additional_permissions,
+                            &decision_source,
                         )
                         .await?
                     {

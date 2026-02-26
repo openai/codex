@@ -111,6 +111,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .or_else(|| req.justification.clone());
         Box::pin(async move {
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
+                let available_decisions = None;
                 session
                     .request_command_approval(
                         turn,
@@ -124,6 +125,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                             .proposed_execpolicy_amendment()
                             .cloned(),
                         req.additional_permissions.clone(),
+                        available_decisions,
                     )
                     .await
             })
