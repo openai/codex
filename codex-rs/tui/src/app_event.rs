@@ -30,6 +30,29 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RealtimeAudioDeviceKind {
+    Microphone,
+    Speaker,
+}
+
+impl RealtimeAudioDeviceKind {
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::Microphone => "Microphone",
+            Self::Speaker => "Speaker",
+        }
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn noun(self) -> &'static str {
+        match self {
+            Self::Microphone => "microphone",
+            Self::Speaker => "speaker",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WindowsSandboxEnableMode {
     Elevated,
@@ -164,6 +187,24 @@ pub(crate) enum AppEvent {
     /// Persist the selected personality to the appropriate config.
     PersistPersonalitySelection {
         personality: Personality,
+    },
+
+    /// Open the device picker for a realtime microphone or speaker.
+    OpenRealtimeAudioDeviceSelection {
+        kind: RealtimeAudioDeviceKind,
+    },
+
+    /// Persist the selected realtime microphone or speaker to top-level config.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    PersistRealtimeAudioDeviceSelection {
+        kind: RealtimeAudioDeviceKind,
+        name: Option<String>,
+    },
+
+    /// Restart the selected realtime microphone or speaker locally.
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    RestartRealtimeAudioDevice {
+        kind: RealtimeAudioDeviceKind,
     },
 
     /// Open the reasoning selection popup after picking a model.

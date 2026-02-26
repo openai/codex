@@ -390,6 +390,7 @@ pub(crate) struct ChatComposer {
     connectors_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
+    audio_device_selection_enabled: bool,
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
@@ -496,6 +497,7 @@ impl ChatComposer {
             connectors_enabled: false,
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
+            audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
@@ -582,6 +584,10 @@ impl ChatComposer {
 
     pub fn set_realtime_conversation_enabled(&mut self, enabled: bool) {
         self.realtime_conversation_enabled = enabled;
+    }
+
+    pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
+        self.audio_device_selection_enabled = enabled;
     }
 
     pub fn set_voice_transcription_enabled(&mut self, enabled: bool) {
@@ -2267,6 +2273,7 @@ impl ChatComposer {
                     self.connectors_enabled,
                     self.personality_command_enabled,
                     self.realtime_conversation_enabled,
+                    self.audio_device_selection_enabled,
                     self.windows_degraded_sandbox_active,
                 )
                 .is_some();
@@ -2467,6 +2474,7 @@ impl ChatComposer {
                 self.connectors_enabled,
                 self.personality_command_enabled,
                 self.realtime_conversation_enabled,
+                self.audio_device_selection_enabled,
                 self.windows_degraded_sandbox_active,
             )
         {
@@ -2502,6 +2510,7 @@ impl ChatComposer {
             self.connectors_enabled,
             self.personality_command_enabled,
             self.realtime_conversation_enabled,
+            self.audio_device_selection_enabled,
             self.windows_degraded_sandbox_active,
         )?;
 
@@ -3335,6 +3344,7 @@ impl ChatComposer {
             self.connectors_enabled,
             self.personality_command_enabled,
             self.realtime_conversation_enabled,
+            self.audio_device_selection_enabled,
             self.windows_degraded_sandbox_active,
         )
         .is_some();
@@ -3397,6 +3407,7 @@ impl ChatComposer {
             self.connectors_enabled,
             self.personality_command_enabled,
             self.realtime_conversation_enabled,
+            self.audio_device_selection_enabled,
             self.windows_degraded_sandbox_active,
         ) {
             return true;
@@ -3451,6 +3462,7 @@ impl ChatComposer {
                     let connectors_enabled = self.connectors_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
                     let realtime_conversation_enabled = self.realtime_conversation_enabled;
+                    let audio_device_selection_enabled = self.audio_device_selection_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
@@ -3458,6 +3470,7 @@ impl ChatComposer {
                             connectors_enabled,
                             personality_command_enabled,
                             realtime_conversation_enabled,
+                            audio_device_selection_enabled,
                             windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         },
                     );
