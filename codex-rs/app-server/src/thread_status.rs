@@ -300,8 +300,16 @@ impl ThreadWatchState {
     }
 
     fn remove_thread(&mut self, thread_id: &str) -> Option<ThreadStatusChangedNotification> {
+        let previous_status = self.status_for(thread_id);
         self.runtime_by_thread_id.remove(thread_id);
-        None
+        if previous_status.is_some() && previous_status != Some(ThreadStatus::NotLoaded) {
+            Some(ThreadStatusChangedNotification {
+                thread_id: thread_id.to_string(),
+                status: ThreadStatus::NotLoaded,
+            })
+        } else {
+            None
+        }
     }
 
     fn update_runtime<F>(
@@ -671,6 +679,15 @@ mod tests {
                 status: ThreadStatus::Active {
                     active_flags: vec![],
                 },
+            },
+        );
+
+        manager.remove_thread(INTERACTIVE_THREAD_ID).await;
+        assert_eq!(
+            recv_status_changed_notification(&mut outgoing_rx).await,
+            ThreadStatusChangedNotification {
+                thread_id: INTERACTIVE_THREAD_ID.to_string(),
+                status: ThreadStatus::NotLoaded,
             },
         );
     }

@@ -1,8 +1,11 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
+use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::InputItem;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
@@ -13,6 +16,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -120,6 +124,85 @@ async fn send_user_turn_accepts_output_schema_v1() -> Result<()> {
             "schema": output_schema,
         })
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn send_user_turn_rejects_oversized_input_v1() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let _response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let new_conv_id = mcp
+        .send_new_conversation_request(NewConversationParams {
+            ..Default::default()
+        })
+        .await?;
+    let new_conv_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
+    )
+    .await??;
+    let NewConversationResponse {
+        conversation_id, ..
+    } = to_response::<NewConversationResponse>(new_conv_resp)?;
+
+    let listener_id = mcp
+        .send_add_conversation_listener_request(AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events: false,
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(listener_id)),
+    )
+    .await??;
+
+    let oversized_input = "x".repeat(MAX_USER_INPUT_TEXT_CHARS + 1);
+    let send_turn_id = mcp
+        .send_send_user_turn_request(SendUserTurnParams {
+            conversation_id,
+            items: vec![InputItem::Text {
+                text: oversized_input.clone(),
+                text_elements: Vec::new(),
+            }],
+            cwd: codex_home.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: "mock-model".to_string(),
+            effort: Some(ReasoningEffort::Low),
+            summary: ReasoningSummary::Auto,
+            output_schema: None,
+        })
+        .await?;
+
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(send_turn_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, INVALID_PARAMS_ERROR_CODE);
+    assert_eq!(
+        err.error.message,
+        format!("Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters.")
+    );
+    let data = err.error.data.expect("expected structured error data");
+    assert_eq!(data["input_error_code"], INPUT_TOO_LARGE_ERROR_CODE);
+    assert_eq!(data["max_chars"], MAX_USER_INPUT_TEXT_CHARS);
+    assert_eq!(data["actual_chars"], oversized_input.chars().count());
 
     Ok(())
 }

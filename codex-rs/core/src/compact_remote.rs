@@ -4,7 +4,6 @@ use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::compact::InitialContextInjection;
-use crate::compact::extract_trailing_model_switch_update_for_compaction_request;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
@@ -28,8 +27,15 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    previous_user_turn_model: Option<&str>,
 ) -> CodexResult<()> {
-    run_remote_compact_task_inner(&sess, &turn_context, initial_context_injection).await?;
+    run_remote_compact_task_inner(
+        &sess,
+        &turn_context,
+        initial_context_injection,
+        previous_user_turn_model,
+    )
+    .await?;
     Ok(())
 }
 
@@ -44,16 +50,28 @@ pub(crate) async fn run_remote_compact_task(
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_compact_task_inner(&sess, &turn_context, InitialContextInjection::DoNotInject).await
+    run_remote_compact_task_inner(
+        &sess,
+        &turn_context,
+        InitialContextInjection::DoNotInject,
+        None,
+    )
+    .await
 }
 
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    previous_user_turn_model: Option<&str>,
 ) -> CodexResult<()> {
-    if let Err(err) =
-        run_remote_compact_task_inner_impl(sess, turn_context, initial_context_injection).await
+    if let Err(err) = run_remote_compact_task_inner_impl(
+        sess,
+        turn_context,
+        initial_context_injection,
+        previous_user_turn_model,
+    )
+    .await
     {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
@@ -68,15 +86,12 @@ async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    previous_user_turn_model: Option<&str>,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let mut history = sess.clone_history().await;
-    // Keep compaction prompts in-distribution: if a model-switch update was injected at the
-    // tail of history (between turns), exclude it from the compaction request payload.
-    let stripped_model_switch_item =
-        extract_trailing_model_switch_update_for_compaction_request(&mut history);
     let base_instructions = sess.get_base_instructions().await;
     let deleted_items = trim_function_call_history_to_fit_context_window(
         &mut history,
@@ -134,13 +149,9 @@ async fn run_remote_compact_task_inner_impl(
         turn_context.as_ref(),
         new_history,
         initial_context_injection,
+        previous_user_turn_model,
     )
     .await;
-    // Reattach the stripped model-switch update only after successful compaction so the model
-    // still sees the switch instructions on the next real sampling request.
-    if let Some(model_switch_item) = stripped_model_switch_item {
-        new_history.push(model_switch_item);
-    }
 
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
@@ -170,6 +181,7 @@ pub(crate) async fn process_compacted_history(
     turn_context: &TurnContext,
     mut compacted_history: Vec<ResponseItem>,
     initial_context_injection: InitialContextInjection,
+    previous_user_turn_model: Option<&str>,
 ) -> Vec<ResponseItem> {
     // Mid-turn compaction is the only path that must inject initial context above the last user
     // message in the replacement history. Pre-turn compaction instead injects context after the
@@ -178,7 +190,8 @@ pub(crate) async fn process_compacted_history(
         initial_context_injection,
         InitialContextInjection::BeforeLastUserMessage
     ) {
-        sess.build_initial_context(turn_context).await
+        sess.build_initial_context(turn_context, previous_user_turn_model)
+            .await
     } else {
         Vec::new()
     };
@@ -205,10 +218,12 @@ pub(crate) async fn process_compacted_history(
 fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } if role == "developer" => false,
-        ResponseItem::Message { role, .. } if role == "user" => matches!(
-            crate::event_mapping::parse_turn_item(item),
-            Some(TurnItem::UserMessage(_))
-        ),
+        ResponseItem::Message { role, .. } if role == "user" => {
+            matches!(
+                crate::event_mapping::parse_turn_item(item),
+                Some(TurnItem::UserMessage(_))
+            )
+        }
         ResponseItem::Message { role, .. } if role == "assistant" => true,
         ResponseItem::Message { .. } => false,
         ResponseItem::Compaction { .. } => true,

@@ -1,23 +1,25 @@
 ---
 source: core/tests/suite/model_visible_layout.rs
-assertion_line: 337
 expression: "format_labeled_requests_snapshot(\"First post-resume turn where resumed config model differs from rollout and personality changes.\",\n&[(\"Last Request Before Resume\", &initial_request),\n(\"First Request After Resume\", &resumed_request),])"
 ---
 Scenario: First post-resume turn where resumed config model differs from rollout and personality changes.
 
 ## Last Request Before Resume
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:seed resume history
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:seed resume history
 
 ## First Request After Resume
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:seed resume history
-04:message/assistant:recorded before resume
-05:message/developer:<model_switch>\nThe user was previously using a different model. Please continue the conversatio...
-06:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-07:message/developer:<PERMISSIONS_INSTRUCTIONS>
-08:message/user:resume and change personality
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:seed resume history
+03:message/assistant:recorded before resume
+04:message/developer[2]:
+    [01] <model_switch>\nThe user was previously using a different model. Please continue the conversatio...
+    [02] <PERMISSIONS_INSTRUCTIONS>
+05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+06:message/user:resume and change personality

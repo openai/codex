@@ -6,18 +6,20 @@ Scenario: Remote pre-turn auto-compaction with a context override emits the cont
 
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:USER_ONE
-04:message/assistant:REMOTE_FIRST_REPLY
-05:message/user:USER_TWO
-06:message/assistant:REMOTE_SECOND_REPLY
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:USER_ONE
+03:message/assistant:REMOTE_FIRST_REPLY
+04:message/user:USER_TWO
+05:message/assistant:REMOTE_SECOND_REPLY
 
 ## Remote Post-Compaction History Layout
 00:message/user:USER_ONE
 01:message/user:USER_TWO
 02:compaction:encrypted=true
 03:message/developer:<PERMISSIONS_INSTRUCTIONS>
-04:message/user:<AGENTS_MD>
-05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-06:message/user:USER_THREE
+04:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+05:message/user:USER_THREE

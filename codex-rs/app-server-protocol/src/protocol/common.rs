@@ -203,6 +203,10 @@ client_request_definitions! {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
     },
+    ThreadUnsubscribe => "thread/unsubscribe" {
+        params: v2::ThreadUnsubscribeParams,
+        response: v2::ThreadUnsubscribeResponse,
+    },
     ThreadSetName => "thread/name/set" {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,
@@ -711,11 +715,6 @@ server_request_definitions! {
         response: v2::ToolRequestUserInputResponse,
     },
 
-    SkillRequestApproval => "skill/requestApproval" {
-        params: v2::SkillRequestApprovalParams,
-        response: v2::SkillRequestApprovalResponse,
-    },
-
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,
@@ -822,6 +821,7 @@ server_notification_definitions! {
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
+    ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
@@ -1540,6 +1540,7 @@ mod tests {
             }),
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
+            available_decisions: None,
         };
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&params);
         assert_eq!(

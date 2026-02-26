@@ -10,8 +10,9 @@ use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalPro
 use codex_protocol::approvals::NetworkPolicyAmendment as CoreNetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction as CoreNetworkPolicyRuleAction;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::config_types::CollaborationModeMask as CoreCollaborationModeMask;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
@@ -48,6 +49,7 @@ use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RejectConfig as CoreRejectConfig;
+use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
 use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
@@ -740,7 +742,8 @@ pub struct ConfigEdit {
 pub enum CommandExecutionApprovalDecision {
     /// User approved the command.
     Accept,
-    /// User approved the command and future identical commands should run without prompting.
+    /// User approved the command and future prompts in the same session-scoped
+    /// approval cache should run without prompting.
     AcceptForSession,
     /// User approved the command, and wants to apply the proposed execpolicy amendment so future
     /// matching commands can run without prompting.
@@ -755,6 +758,27 @@ pub enum CommandExecutionApprovalDecision {
     Decline,
     /// User denied the command. The turn will also be immediately interrupted.
     Cancel,
+}
+
+impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
+    fn from(value: CoreReviewDecision) -> Self {
+        match value {
+            CoreReviewDecision::Approved => Self::Accept,
+            CoreReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment,
+            } => Self::AcceptWithExecpolicyAmendment {
+                execpolicy_amendment: proposed_execpolicy_amendment.into(),
+            },
+            CoreReviewDecision::ApprovedForSession => Self::AcceptForSession,
+            CoreReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => Self::ApplyNetworkPolicyAmendment {
+                network_policy_amendment: network_policy_amendment.into(),
+            },
+            CoreReviewDecision::Abort => Self::Cancel,
+            CoreReviewDecision::Denied => Self::Decline,
+        }
+    }
 }
 
 v2_enum_from_core! {
@@ -1409,6 +1433,30 @@ pub struct ModelListResponse {
 #[ts(export_to = "v2/")]
 pub struct CollaborationModeListParams {}
 
+/// EXPERIMENTAL - collaboration mode preset metadata for clients.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CollaborationModeMask {
+    pub name: String,
+    pub mode: Option<ModeKind>,
+    pub model: Option<String>,
+    #[serde(rename = "reasoning_effort")]
+    #[ts(rename = "reasoning_effort")]
+    pub reasoning_effort: Option<Option<ReasoningEffort>>,
+}
+
+impl From<CoreCollaborationModeMask> for CollaborationModeMask {
+    fn from(value: CoreCollaborationModeMask) -> Self {
+        Self {
+            name: value.name,
+            mode: value.mode,
+            model: value.model,
+            reasoning_effort: value.reasoning_effort,
+        }
+    }
+}
+
 /// EXPERIMENTAL - collaboration mode presets response.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1917,6 +1965,29 @@ pub struct ThreadArchiveParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadArchiveResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUnsubscribeParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUnsubscribeResponse {
+    pub status: ThreadUnsubscribeStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ThreadUnsubscribeStatus {
+    NotLoaded,
+    NotSubscribed,
+    Unsubscribed,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -2981,6 +3052,18 @@ impl From<CoreUserInput> for UserInput {
     }
 }
 
+impl UserInput {
+    pub fn text_char_count(&self) -> usize {
+        match self {
+            UserInput::Text { text, .. } => text.chars().count(),
+            UserInput::Image { .. }
+            | UserInput::LocalImage { .. }
+            | UserInput::Skill { .. }
+            | UserInput::Mention { .. } => 0,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
@@ -3057,6 +3140,19 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    DynamicToolCall {
+        id: String,
+        tool: String,
+        arguments: JsonValue,
+        status: DynamicToolCallStatus,
+        content_items: Option<Vec<DynamicToolCallOutputContentItem>>,
+        success: Option<bool>,
+        /// The duration of the dynamic tool call in milliseconds.
+        #[ts(type = "number | null")]
+        duration_ms: Option<i64>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     CollabAgentToolCall {
         /// Unique identifier for this collab tool call.
         id: String,
@@ -3105,6 +3201,7 @@ impl ThreadItem {
             | ThreadItem::CommandExecution { id, .. }
             | ThreadItem::FileChange { id, .. }
             | ThreadItem::McpToolCall { id, .. }
+            | ThreadItem::DynamicToolCall { id, .. }
             | ThreadItem::CollabAgentToolCall { id, .. }
             | ThreadItem::WebSearch { id, .. }
             | ThreadItem::ImageView { id, .. }
@@ -3285,6 +3382,15 @@ pub enum McpToolCallStatus {
     Failed,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum DynamicToolCallStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -3393,6 +3499,13 @@ pub struct ThreadArchivedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadUnarchivedNotification {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadClosedNotification {
     pub thread_id: String,
 }
 
@@ -3724,6 +3837,11 @@ pub struct CommandExecutionRequestApprovalParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
+    /// Ordered list of decisions the client may present for this prompt.
+    #[experimental("item/commandExecution/requestApproval.availableDecisions")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub available_decisions: Option<Vec<CommandExecutionApprovalDecision>>,
 }
 
 impl CommandExecutionRequestApprovalParams {
@@ -3762,29 +3880,6 @@ pub struct FileChangeRequestApprovalParams {
 #[ts(export_to = "v2/")]
 pub struct FileChangeRequestApprovalResponse {
     pub decision: FileChangeApprovalDecision,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillRequestApprovalParams {
-    pub item_id: String,
-    pub skill_name: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum SkillApprovalDecision {
-    Approve,
-    Decline,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillRequestApprovalResponse {
-    pub decision: SkillApprovalDecision,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
