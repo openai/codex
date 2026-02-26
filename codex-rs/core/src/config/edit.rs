@@ -839,6 +839,38 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_bidi_microphone(mut self, microphone: Option<&str>) -> Self {
+        let segments = vec![
+            "bidi".to_string(),
+            "audio".to_string(),
+            "microphone".to_string(),
+        ];
+        match microphone {
+            Some(microphone) => self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(microphone),
+            }),
+            None => self.edits.push(ConfigEdit::ClearPath { segments }),
+        }
+        self
+    }
+
+    pub fn set_bidi_speaker(mut self, speaker: Option<&str>) -> Self {
+        let segments = vec![
+            "bidi".to_string(),
+            "audio".to_string(),
+            "speaker".to_string(),
+        ];
+        match speaker {
+            Some(speaker) => self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(speaker),
+            }),
+            None => self.edits.push(ConfigEdit::ClearPath { segments }),
+        }
+        self
+    }
+
     pub fn clear_legacy_windows_sandbox_keys(mut self) -> Self {
         for key in [
             "experimental_windows_sandbox",
@@ -1802,6 +1834,54 @@ model_reasoning_effort = "high"
             .and_then(|tbl| tbl.get("hide_full_access_warning"))
             .and_then(toml::Value::as_bool);
         assert_eq!(notice, Some(true));
+    }
+
+    #[test]
+    fn blocking_builder_set_bidi_audio_persists_and_clears() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+
+        ConfigEditsBuilder::new(codex_home)
+            .set_bidi_microphone(Some("USB Mic"))
+            .set_bidi_speaker(Some("Desk Speakers"))
+            .apply_blocking()
+            .expect("persist bidi audio");
+
+        let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let config: TomlValue = toml::from_str(&raw).expect("parse config");
+        let bidi_audio = config
+            .get("bidi")
+            .and_then(TomlValue::as_table)
+            .and_then(|bidi| bidi.get("audio"))
+            .and_then(TomlValue::as_table)
+            .expect("bidi.audio table should exist");
+        assert_eq!(
+            bidi_audio.get("microphone").and_then(TomlValue::as_str),
+            Some("USB Mic")
+        );
+        assert_eq!(
+            bidi_audio.get("speaker").and_then(TomlValue::as_str),
+            Some("Desk Speakers")
+        );
+
+        ConfigEditsBuilder::new(codex_home)
+            .set_bidi_microphone(None)
+            .apply_blocking()
+            .expect("clear bidi microphone");
+
+        let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let config: TomlValue = toml::from_str(&raw).expect("parse config");
+        let bidi_audio = config
+            .get("bidi")
+            .and_then(TomlValue::as_table)
+            .and_then(|bidi| bidi.get("audio"))
+            .and_then(TomlValue::as_table)
+            .expect("bidi.audio table should exist");
+        assert_eq!(bidi_audio.get("microphone"), None);
+        assert_eq!(
+            bidi_audio.get("speaker").and_then(TomlValue::as_str),
+            Some("Desk Speakers")
+        );
     }
 
     #[test]

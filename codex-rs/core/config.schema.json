@@ -277,6 +277,32 @@
         }
       ]
     },
+    "BidiAudioToml": {
+      "additionalProperties": false,
+      "properties": {
+        "microphone": {
+          "type": "string"
+        },
+        "speaker": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "BidiToml": {
+      "additionalProperties": false,
+      "properties": {
+        "audio": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/BidiAudioToml"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -1540,6 +1566,15 @@
       "format": "uint64",
       "minimum": 0.0,
       "type": "integer"
+    },
+    "bidi": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/BidiToml"
+        }
+      ],
+      "default": null,
+      "description": "Machine-local bidi audio device preferences used by realtime voice."
     },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
