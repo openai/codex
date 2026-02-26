@@ -390,6 +390,10 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} --timings -- -D warnings
 
+      - name: cargo build (release)
+        if: ${{ matrix.profile == 'release' }}
+        run: cargo build --release
+
       - name: Upload Cargo timings (clippy)
         if: always()
         uses: actions/upload-artifact@v6
