@@ -34,6 +34,11 @@ struct ActiveReplaySegment {
     replacement_history_index: Option<usize>,
 }
 
+fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&str>) -> bool {
+    active_turn_id
+        .is_none_or(|turn_id| item_turn_id.is_none_or(|item_turn_id| item_turn_id == turn_id))
+}
+
 impl Session {
     pub(super) async fn reconstruct_history_from_rollout(
         &self,
@@ -108,7 +113,7 @@ impl Session {
                     // `TurnContextItem` in this same segment has already re-established it.
                     if matches!(
                         active_segment.reference_context_item,
-                        TurnReferenceContextItem::NeverSet | TurnReferenceContextItem::Cleared
+                        TurnReferenceContextItem::NeverSet
                     ) {
                         active_segment.reference_context_item = TurnReferenceContextItem::Cleared;
                     }
@@ -125,10 +130,10 @@ impl Session {
                 RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
                     // `TurnStarted` is the oldest boundary of the active reverse segment.
                     if active_segment.as_ref().is_some_and(|active_segment| {
-                        active_segment
-                            .turn_id
-                            .as_deref()
-                            .is_none_or(|turn_id| turn_id == event.turn_id)
+                        turn_ids_are_compatible(
+                            active_segment.turn_id.as_deref(),
+                            Some(event.turn_id.as_str()),
+                        )
                     }) && let Some(active_segment) = active_segment.take()
                     {
                         finalize_active_segment(
@@ -177,11 +182,10 @@ impl Session {
                         active_segment.turn_id = ctx.turn_id.clone();
                         active_segment.counts_as_user_turn = true;
                     }
-                    if active_segment.turn_id.as_deref().is_none_or(|turn_id| {
-                        ctx.turn_id
-                            .as_deref()
-                            .is_none_or(|ctx_turn_id| ctx_turn_id == turn_id)
-                    }) {
+                    if turn_ids_are_compatible(
+                        active_segment.turn_id.as_deref(),
+                        ctx.turn_id.as_deref(),
+                    ) {
                         active_segment.previous_model = Some(ctx.model.clone());
                         if matches!(
                             active_segment.reference_context_item,
