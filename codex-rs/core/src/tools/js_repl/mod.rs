@@ -11,6 +11,7 @@ use std::time::Duration;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -24,6 +25,8 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
+use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -39,6 +42,8 @@ use crate::sandboxing::SandboxPermissions;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::SandboxablePreference;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::truncate_text;
 
 pub(crate) const JS_REPL_PRAGMA_PREFIX: &str = "// codex-js-repl:";
 const KERNEL_SOURCE: &str = include_str!("kernel.js");
@@ -51,6 +56,7 @@ const JS_REPL_STDERR_TAIL_SEPARATOR: &str = " | ";
 const JS_REPL_EXEC_ID_LOG_LIMIT: usize = 8;
 const JS_REPL_MODEL_DIAG_STDERR_MAX_BYTES: usize = 1_024;
 const JS_REPL_MODEL_DIAG_ERROR_MAX_BYTES: usize = 256;
+const JS_REPL_TOOL_RESPONSE_TEXT_PREVIEW_MAX_BYTES: usize = 512;
 
 /// Per-task js_repl handle stored on the turn context.
 pub(crate) struct JsReplHandle {
@@ -121,6 +127,31 @@ struct ExecToolCalls {
     in_flight: usize,
     notify: Arc<Notify>,
     cancel: CancellationToken,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
+enum JsReplToolCallPayloadKind {
+    MessageContent,
+    FunctionText,
+    FunctionContentItems,
+    CustomText,
+    McpResult,
+    McpErrorResult,
+    Error,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct JsReplToolCallResponseSummary {
+    response_type: Option<String>,
+    payload_kind: Option<JsReplToolCallPayloadKind>,
+    payload_text_preview: Option<String>,
+    payload_text_length: Option<usize>,
+    payload_item_count: Option<usize>,
+    text_item_count: Option<usize>,
+    image_item_count: Option<usize>,
+    structured_content_present: Option<bool>,
+    result_is_error: Option<bool>,
 }
 
 enum KernelStreamEnd {
@@ -402,6 +433,198 @@ impl JsReplManager {
             state.cancel.cancel();
             state.notify.notify_waiters();
         }
+    }
+
+    fn log_tool_call_response(
+        req: &RunToolRequest,
+        ok: bool,
+        summary: &JsReplToolCallResponseSummary,
+        response: Option<&JsonValue>,
+        error: Option<&str>,
+    ) {
+        info!(
+            exec_id = %req.exec_id,
+            tool_call_id = %req.id,
+            tool_name = %req.tool_name,
+            ok,
+            summary = ?summary,
+            "js_repl nested tool call completed"
+        );
+        if let Some(response) = response {
+            trace!(
+                exec_id = %req.exec_id,
+                tool_call_id = %req.id,
+                tool_name = %req.tool_name,
+                response_json = %response,
+                "js_repl nested tool call raw response"
+            );
+        }
+        if let Some(error) = error {
+            trace!(
+                exec_id = %req.exec_id,
+                tool_call_id = %req.id,
+                tool_name = %req.tool_name,
+                error = %error,
+                "js_repl nested tool call raw error"
+            );
+        }
+    }
+
+    fn summarize_text_payload(
+        response_type: Option<&str>,
+        payload_kind: JsReplToolCallPayloadKind,
+        text: &str,
+    ) -> JsReplToolCallResponseSummary {
+        JsReplToolCallResponseSummary {
+            response_type: response_type.map(str::to_owned),
+            payload_kind: Some(payload_kind),
+            payload_text_preview: (!text.is_empty()).then(|| {
+                truncate_text(
+                    text,
+                    TruncationPolicy::Bytes(JS_REPL_TOOL_RESPONSE_TEXT_PREVIEW_MAX_BYTES),
+                )
+            }),
+            payload_text_length: Some(text.len()),
+            ..Default::default()
+        }
+    }
+
+    fn summarize_function_output_payload(
+        response_type: &str,
+        payload_kind: JsReplToolCallPayloadKind,
+        output: &FunctionCallOutputPayload,
+    ) -> JsReplToolCallResponseSummary {
+        let (payload_item_count, text_item_count, image_item_count) =
+            if let Some(items) = output.content_items() {
+                let text_item_count = items
+                    .iter()
+                    .filter(|item| matches!(item, FunctionCallOutputContentItem::InputText { .. }))
+                    .count();
+                let image_item_count = items.len().saturating_sub(text_item_count);
+                (
+                    Some(items.len()),
+                    Some(text_item_count),
+                    Some(image_item_count),
+                )
+            } else {
+                (None, None, None)
+            };
+        let payload_text = output.body.to_text();
+        JsReplToolCallResponseSummary {
+            response_type: Some(response_type.to_string()),
+            payload_kind: Some(payload_kind),
+            payload_text_preview: payload_text.as_deref().and_then(|text| {
+                (!text.is_empty()).then(|| {
+                    truncate_text(
+                        text,
+                        TruncationPolicy::Bytes(JS_REPL_TOOL_RESPONSE_TEXT_PREVIEW_MAX_BYTES),
+                    )
+                })
+            }),
+            payload_text_length: payload_text.as_ref().map(String::len),
+            payload_item_count,
+            text_item_count,
+            image_item_count,
+            ..Default::default()
+        }
+    }
+
+    fn summarize_message_payload(content: &[ContentItem]) -> JsReplToolCallResponseSummary {
+        let text_item_count = content
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    ContentItem::InputText { .. } | ContentItem::OutputText { .. }
+                )
+            })
+            .count();
+        let image_item_count = content.len().saturating_sub(text_item_count);
+        let payload_text = content
+            .iter()
+            .filter_map(|item| match item {
+                ContentItem::InputText { text } | ContentItem::OutputText { text }
+                    if !text.trim().is_empty() =>
+                {
+                    Some(text.as_str())
+                }
+                ContentItem::InputText { .. }
+                | ContentItem::InputImage { .. }
+                | ContentItem::OutputText { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        let payload_text = if payload_text.is_empty() {
+            None
+        } else {
+            Some(payload_text.join("\n"))
+        };
+        JsReplToolCallResponseSummary {
+            response_type: Some("message".to_string()),
+            payload_kind: Some(JsReplToolCallPayloadKind::MessageContent),
+            payload_text_preview: payload_text.as_deref().and_then(|text| {
+                (!text.is_empty()).then(|| {
+                    truncate_text(
+                        text,
+                        TruncationPolicy::Bytes(JS_REPL_TOOL_RESPONSE_TEXT_PREVIEW_MAX_BYTES),
+                    )
+                })
+            }),
+            payload_text_length: payload_text.as_ref().map(String::len),
+            payload_item_count: Some(content.len()),
+            text_item_count: Some(text_item_count),
+            image_item_count: Some(image_item_count),
+            ..Default::default()
+        }
+    }
+
+    fn summarize_tool_call_response(response: &ResponseInputItem) -> JsReplToolCallResponseSummary {
+        match response {
+            ResponseInputItem::Message { content, .. } => Self::summarize_message_payload(content),
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let payload_kind = if output.content_items().is_some() {
+                    JsReplToolCallPayloadKind::FunctionContentItems
+                } else {
+                    JsReplToolCallPayloadKind::FunctionText
+                };
+                Self::summarize_function_output_payload(
+                    "function_call_output",
+                    payload_kind,
+                    output,
+                )
+            }
+            ResponseInputItem::CustomToolCallOutput { output, .. } => Self::summarize_text_payload(
+                Some("custom_tool_call_output"),
+                JsReplToolCallPayloadKind::CustomText,
+                output,
+            ),
+            ResponseInputItem::McpToolCallOutput { result, .. } => match result {
+                Ok(result) => {
+                    let output = FunctionCallOutputPayload::from(result);
+                    let mut summary = Self::summarize_function_output_payload(
+                        "mcp_tool_call_output",
+                        JsReplToolCallPayloadKind::McpResult,
+                        &output,
+                    );
+                    summary.payload_item_count = Some(result.content.len());
+                    summary.structured_content_present = Some(result.structured_content.is_some());
+                    summary.result_is_error = Some(result.is_error.unwrap_or(false));
+                    summary
+                }
+                Err(error) => {
+                    let mut summary = Self::summarize_text_payload(
+                        Some("mcp_tool_call_output"),
+                        JsReplToolCallPayloadKind::McpErrorResult,
+                        error,
+                    );
+                    summary.result_is_error = Some(true);
+                    summary
+                }
+            },
+        }
+    }
+
+    fn summarize_tool_call_error(error: &str) -> JsReplToolCallResponseSummary {
+        Self::summarize_text_payload(None, JsReplToolCallPayloadKind::Error, error)
     }
 
     pub async fn reset(&self) -> Result<(), FunctionCallError> {
@@ -1004,11 +1227,14 @@ impl JsReplManager {
 
     async fn run_tool_request(exec: ExecContext, req: RunToolRequest) -> RunToolResult {
         if is_js_repl_internal_tool(&req.tool_name) {
+            let error = "js_repl cannot invoke itself".to_string();
+            let summary = Self::summarize_tool_call_error(&error);
+            Self::log_tool_call_response(&req, false, &summary, None, Some(&error));
             return RunToolResult {
                 id: req.id,
                 ok: false,
                 response: None,
-                error: Some("js_repl cannot invoke itself".to_string()),
+                error: Some(error),
             };
         }
 
@@ -1107,27 +1333,41 @@ impl JsReplManager {
                     }
                 }
 
+                let summary = Self::summarize_tool_call_response(&response);
                 match serde_json::to_value(response) {
-                    Ok(value) => RunToolResult {
-                        id: req.id,
-                        ok: true,
-                        response: Some(value),
-                        error: None,
-                    },
-                    Err(err) => RunToolResult {
-                        id: req.id,
-                        ok: false,
-                        response: None,
-                        error: Some(format!("failed to serialize tool output: {err}")),
-                    },
+                    Ok(value) => {
+                        Self::log_tool_call_response(&req, true, &summary, Some(&value), None);
+                        RunToolResult {
+                            id: req.id,
+                            ok: true,
+                            response: Some(value),
+                            error: None,
+                        }
+                    }
+                    Err(err) => {
+                        let error = format!("failed to serialize tool output: {err}");
+                        let summary = Self::summarize_tool_call_error(&error);
+                        Self::log_tool_call_response(&req, false, &summary, None, Some(&error));
+                        RunToolResult {
+                            id: req.id,
+                            ok: false,
+                            response: None,
+                            error: Some(error),
+                        }
+                    }
                 }
             }
-            Err(err) => RunToolResult {
-                id: req.id,
-                ok: false,
-                response: None,
-                error: Some(err.to_string()),
-            },
+            Err(err) => {
+                let error = err.to_string();
+                let summary = Self::summarize_tool_call_error(&error);
+                Self::log_tool_call_response(&req, false, &summary, None, Some(&error));
+                RunToolResult {
+                    id: req.id,
+                    ok: false,
+                    response: None,
+                    error: Some(error),
+                }
+            }
         }
     }
 
@@ -1360,6 +1600,8 @@ mod tests {
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::dynamic_tools::DynamicToolSpec;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputContentItem;
+    use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::openai_models::InputModality;
     use pretty_assertions::assert_eq;
@@ -1574,6 +1816,55 @@ mod tests {
         assert!(
             !manager.exec_tool_calls.lock().await.contains_key(&exec_id),
             "reset should clear tool-call contexts after lock acquisition"
+        );
+    }
+
+    #[test]
+    fn summarize_tool_call_response_for_multimodal_function_output() {
+        let response = ResponseInputItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,abcd".to_string(),
+                },
+            ]),
+        };
+
+        let actual = JsReplManager::summarize_tool_call_response(&response);
+
+        assert_eq!(
+            actual,
+            JsReplToolCallResponseSummary {
+                response_type: Some("function_call_output".to_string()),
+                payload_kind: Some(JsReplToolCallPayloadKind::FunctionContentItems),
+                payload_text_preview: None,
+                payload_text_length: None,
+                payload_item_count: Some(1),
+                text_item_count: Some(0),
+                image_item_count: Some(1),
+                structured_content_present: None,
+                result_is_error: None,
+            }
+        );
+    }
+
+    #[test]
+    fn summarize_tool_call_error_marks_error_payload() {
+        let actual = JsReplManager::summarize_tool_call_error("tool failed");
+
+        assert_eq!(
+            actual,
+            JsReplToolCallResponseSummary {
+                response_type: None,
+                payload_kind: Some(JsReplToolCallPayloadKind::Error),
+                payload_text_preview: Some("tool failed".to_string()),
+                payload_text_length: Some("tool failed".len()),
+                payload_item_count: None,
+                text_item_count: None,
+                image_item_count: None,
+                structured_content_present: None,
+                result_is_error: None,
+            }
         );
     }
 
