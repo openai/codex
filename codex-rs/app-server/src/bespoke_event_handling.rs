@@ -172,7 +172,7 @@ async fn queue_tracked_client_request_removal(
     };
 
     if listener_command_tx
-        .send(ThreadListenerCommand::RemoveRequest {
+        .send(ThreadListenerCommand::RemoveServerRequest {
             request_id,
             completion_tx,
         })

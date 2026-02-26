@@ -548,6 +548,14 @@ macro_rules! server_request_definitions {
             )*
         }
 
+        impl ServerRequest {
+            pub fn id(&self) -> &RequestId {
+                match self {
+                    $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+        }
+
         #[derive(Debug, Clone, PartialEq, JsonSchema)]
         #[allow(clippy::large_enum_variant)]
         pub enum ServerRequestPayload {
@@ -1104,6 +1112,7 @@ mod tests {
         );
 
         let payload = ServerRequestPayload::ExecCommandApproval(params);
+        assert_eq!(request.id(), &RequestId::Integer(7));
         assert_eq!(payload.request_with_id(RequestId::Integer(7)), request);
         Ok(())
     }

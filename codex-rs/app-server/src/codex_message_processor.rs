@@ -311,7 +311,6 @@ use crate::filters::source_kind_matches;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
-use crate::thread_state::server_request_id;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -6749,7 +6748,7 @@ fn pending_client_request_resolved_notification(
     request: &ServerRequest,
 ) -> Option<ServerNotification> {
     let thread_id = conversation_id.to_string();
-    let request_id = server_request_id(request).clone();
+    let request_id = request.id().clone();
     match request {
         ServerRequest::CommandExecutionRequestApproval { .. } => {
             Some(ServerNotification::CommandExecutionApprovalResolved(
@@ -6833,7 +6832,7 @@ pub(crate) async fn send_tracked_client_request(
     oneshot::Receiver<crate::outgoing_message::ClientRequestResult>,
 ) {
     let (request, receiver) = outgoing.send_request_with_server_request(request).await;
-    let request_id = server_request_id(&request).clone();
+    let request_id = request.id().clone();
     thread_state
         .lock()
         .await
@@ -6880,7 +6879,7 @@ pub(crate) async fn abort_pending_client_requests(
     for request in &requests {
         outgoing
             .resolve_request_with_error(
-                server_request_id(request).clone(),
+                request.id().clone(),
                 crate::bespoke_event_handling::tracked_client_request_turn_aborted_error(),
             )
             .await;
@@ -6910,7 +6909,7 @@ async fn handle_thread_listener_command(
             )
             .await;
         }
-        ThreadListenerCommand::RemoveRequest {
+        ThreadListenerCommand::RemoveServerRequest {
             request_id,
             completion_tx,
         } => {
@@ -7009,6 +7008,7 @@ async fn handle_pending_thread_resume_request(
         reasoning_effort,
     };
     outgoing.send_response(request_id, response).await;
+
     let (pending_requests, file_change_started) = {
         let mut state = thread_state.lock().await;
         state.add_connection(connection_id);
@@ -7017,19 +7017,18 @@ async fn handle_pending_thread_resume_request(
             state.turn_summary.file_change_started.clone(),
         )
     };
+
     for request in pending_requests {
         let notifications_before_request =
             pending_client_request_resume_notifications(&file_change_started, &request);
-        if !outgoing
-            .replay_request_to_connections_if_pending(
-                &[connection_id],
-                request,
-                notifications_before_request.as_slice(),
-            )
-            .await
-        {
-            continue;
+        for notification in notifications_before_request {
+            outgoing
+                .send_server_notification_to_connections(&[connection_id], notification.clone())
+                .await;
         }
+        outgoing
+            .replay_request_to_connections(&[connection_id], request)
+            .await;
     }
 }
 

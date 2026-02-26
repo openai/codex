@@ -64,18 +64,6 @@ struct PendingCallbackEntry {
     thread_id: Option<ThreadId>,
 }
 
-fn server_request_id(request: &ServerRequest) -> &RequestId {
-    match request {
-        ServerRequest::CommandExecutionRequestApproval { request_id, .. }
-        | ServerRequest::FileChangeRequestApproval { request_id, .. }
-        | ServerRequest::ToolRequestUserInput { request_id, .. }
-        | ServerRequest::DynamicToolCall { request_id, .. }
-        | ServerRequest::ChatgptAuthTokensRefresh { request_id, .. }
-        | ServerRequest::ApplyPatchApproval { request_id, .. }
-        | ServerRequest::ExecCommandApproval { request_id, .. } => request_id,
-    }
-}
-
 impl ThreadScopedOutgoingMessageSender {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
@@ -251,35 +239,11 @@ impl OutgoingMessageSender {
         (outgoing_message_id, rx_approve)
     }
 
-    pub(crate) async fn replay_request_to_connections_if_pending(
+    pub(crate) async fn replay_request_to_connections(
         &self,
         connection_ids: &[ConnectionId],
         request: ServerRequest,
-        notifications_before_request: &[ServerNotification],
-    ) -> bool {
-        // Hold the callback map lock until the replay is queued so an already-resolved
-        // request cannot be replayed to a resumed client.
-        let request_id_to_callback = self.request_id_to_callback.lock().await;
-        if !request_id_to_callback.contains_key(server_request_id(&request)) {
-            return false;
-        }
-
-        for notification in notifications_before_request {
-            let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
-            for connection_id in connection_ids {
-                if let Err(err) = self
-                    .sender
-                    .send(OutgoingEnvelope::ToConnection {
-                        connection_id: *connection_id,
-                        message: outgoing_message.clone(),
-                    })
-                    .await
-                {
-                    warn!("failed to resend notification to client: {err:?}");
-                }
-            }
-        }
-
+    ) {
         let outgoing_message = OutgoingMessage::Request(request);
         for connection_id in connection_ids {
             if let Err(err) = self
@@ -293,7 +257,6 @@ impl OutgoingMessageSender {
                 warn!("failed to resend request to client: {err:?}");
             }
         }
-        true
     }
 
     pub(crate) async fn notify_client_response(&self, id: RequestId, result: Result) {

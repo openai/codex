@@ -33,7 +33,7 @@ pub(crate) struct PendingThreadResumeRequest {
 
 pub(crate) enum ThreadListenerCommand {
     SendThreadResumeResponse(Box<PendingThreadResumeRequest>),
-    RemoveRequest {
+    RemoveServerRequest {
         request_id: RequestId,
         completion_tx: oneshot::Sender<()>,
     },
@@ -73,7 +73,7 @@ impl ThreadState {
     ) -> Option<ServerRequest> {
         self.pending_client_requests
             .iter()
-            .position(|request| server_request_id(request) == request_id)
+            .position(|request| request.id() == request_id)
             .map(|index| self.pending_client_requests.remove(index))
     }
 
@@ -147,18 +147,6 @@ impl ThreadState {
         if !self.current_turn_history.has_active_turn() {
             self.current_turn_history.reset();
         }
-    }
-}
-
-pub(crate) fn server_request_id(request: &ServerRequest) -> &RequestId {
-    match request {
-        ServerRequest::CommandExecutionRequestApproval { request_id, .. }
-        | ServerRequest::FileChangeRequestApproval { request_id, .. }
-        | ServerRequest::ToolRequestUserInput { request_id, .. }
-        | ServerRequest::DynamicToolCall { request_id, .. }
-        | ServerRequest::ChatgptAuthTokensRefresh { request_id, .. }
-        | ServerRequest::ApplyPatchApproval { request_id, .. }
-        | ServerRequest::ExecCommandApproval { request_id, .. } => request_id,
     }
 }
 
