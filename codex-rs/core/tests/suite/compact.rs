@@ -788,16 +788,16 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                         value.get("content").and_then(|content| content.as_array())
                 {
                     let mut normalized = value.clone();
-                    let filtered_content =
-                        content
-                            .iter()
-                            .filter(|item| {
-                                !item.get("text").and_then(|text| text.as_str()).is_some_and(
-                                    |text| text.starts_with("# AGENTS.md instructions for "),
-                                )
-                            })
-                            .cloned()
-                            .collect::<Vec<_>>();
+                    let filtered_content = content
+                        .iter()
+                        .filter(|item| {
+                            !item
+                                .get("text")
+                                .and_then(|text| text.as_str())
+                                .is_some_and(|text| text.starts_with("<agents_md>"))
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
                     if filtered_content.is_empty() {
                         return None;
                     }

@@ -18,30 +18,11 @@ use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::instructions::SkillInstructions;
-use crate::instructions::UserInstructions;
-use crate::session_prefix::is_session_prefix;
-use crate::user_shell_command::is_user_shell_command_text;
+use crate::contextual_user_message::is_contextual_user_fragment;
 use crate::web_search::web_search_action_detail;
 
 pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {
-    if let [content_item] = message
-        && (UserInstructions::is_user_instructions(content_item)
-            || SkillInstructions::is_skill_instructions(content_item))
-    {
-        return true;
-    }
-
-    message.iter().any(|content_item| match content_item {
-        ContentItem::InputText { text } => {
-            is_session_prefix(text)
-                || is_user_shell_command_text(text)
-                || UserInstructions::is_user_instructions(content_item)
-                || SkillInstructions::is_skill_instructions(content_item)
-        }
-        ContentItem::OutputText { .. } => false,
-        ContentItem::InputImage { .. } => false,
-    })
+    message.iter().any(is_contextual_user_fragment)
 }
 
 pub(crate) fn is_contextual_user_message(item: &ResponseItem) -> bool {
@@ -319,7 +300,7 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<user_instructions>test_text</user_instructions>".to_string(),
+                    text: "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>".to_string(),
                 }],
                 end_turn: None,
             phase: None,
@@ -337,7 +318,7 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
+                    text: "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>".to_string(),
                 }],
                 end_turn: None,
             phase: None,
@@ -370,7 +351,7 @@ mod tests {
                     },
                     ContentItem::InputText {
                         text:
-                            "# AGENTS.md instructions for dir\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
+                            "<agents_md>\n# AGENTS.md instructions for dir\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>\n</agents_md>"
                                 .to_string(),
                     },
                 ],

@@ -1,12 +1,12 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
-pub const USER_INSTRUCTIONS_OPEN_TAG_LEGACY: &str = "<user_instructions>";
+use crate::contextual_user_message::AGENTS_MD_FRAGMENT;
+use crate::contextual_user_message::SKILL_FRAGMENT;
+
 pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
-pub const SKILL_INSTRUCTIONS_PREFIX: &str = "<skill";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "user_instructions", rename_all = "snake_case")]
@@ -17,34 +17,17 @@ pub(crate) struct UserInstructions {
 
 impl UserInstructions {
     pub(crate) fn serialize_to_text(&self) -> String {
-        format!(
+        AGENTS_MD_FRAGMENT.wrap(format!(
             "{USER_INSTRUCTIONS_PREFIX}{directory}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>",
             directory = self.directory,
             contents = self.text
-        )
-    }
-
-    pub(crate) fn is_user_instructions(content_item: &ContentItem) -> bool {
-        if let ContentItem::InputText { text } = content_item {
-            text.starts_with(USER_INSTRUCTIONS_PREFIX)
-                || text.starts_with(USER_INSTRUCTIONS_OPEN_TAG_LEGACY)
-        } else {
-            false
-        }
+        ))
     }
 }
 
 impl From<UserInstructions> for ResponseItem {
     fn from(ui: UserInstructions) -> Self {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: ui.serialize_to_text(),
-            }],
-            end_turn: None,
-            phase: None,
-        }
+        AGENTS_MD_FRAGMENT.into_message(ui.serialize_to_text())
     }
 }
 
@@ -56,36 +39,21 @@ pub(crate) struct SkillInstructions {
     pub contents: String,
 }
 
-impl SkillInstructions {
-    pub(crate) fn is_skill_instructions(content_item: &ContentItem) -> bool {
-        if let ContentItem::InputText { text } = content_item {
-            text.starts_with(SKILL_INSTRUCTIONS_PREFIX)
-        } else {
-            false
-        }
-    }
-}
+impl SkillInstructions {}
 
 impl From<SkillInstructions> for ResponseItem {
     fn from(si: SkillInstructions) -> Self {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!(
-                    "<skill>\n<name>{}</name>\n<path>{}</path>\n{}\n</skill>",
-                    si.name, si.path, si.contents
-                ),
-            }],
-            end_turn: None,
-            phase: None,
-        }
+        SKILL_FRAGMENT.into_message(SKILL_FRAGMENT.wrap(format!(
+            "<name>{}</name>\n<path>{}</path>\n{}",
+            si.name, si.path, si.contents
+        )))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::models::ContentItem;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -108,27 +76,16 @@ mod tests {
 
         assert_eq!(
             text,
-            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
+            "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>",
         );
     }
 
     #[test]
     fn test_is_user_instructions() {
-        assert!(UserInstructions::is_user_instructions(
-            &ContentItem::InputText {
-                text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
-            }
+        assert!(AGENTS_MD_FRAGMENT.matches_text(
+            "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>"
         ));
-        assert!(UserInstructions::is_user_instructions(
-            &ContentItem::InputText {
-                text: "<user_instructions>test_text</user_instructions>".to_string(),
-            }
-        ));
-        assert!(!UserInstructions::is_user_instructions(
-            &ContentItem::InputText {
-                text: "test_text".to_string(),
-            }
-        ));
+        assert!(!AGENTS_MD_FRAGMENT.matches_text("test_text"));
     }
 
     #[test]
@@ -158,16 +115,9 @@ mod tests {
 
     #[test]
     fn test_is_skill_instructions() {
-        assert!(SkillInstructions::is_skill_instructions(
-            &ContentItem::InputText {
-                text: "<skill>\n<name>demo-skill</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
-                    .to_string(),
-            }
+        assert!(SKILL_FRAGMENT.matches_text(
+            "<skill>\n<name>demo-skill</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
         ));
-        assert!(!SkillInstructions::is_skill_instructions(
-            &ContentItem::InputText {
-                text: "regular text".to_string(),
-            }
-        ));
+        assert!(!SKILL_FRAGMENT.matches_text("regular text"));
     }
 }

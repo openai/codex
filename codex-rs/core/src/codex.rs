@@ -1428,8 +1428,11 @@ impl Session {
             .map(|(name, _)| name.clone())
             .collect();
         required_mcp_servers.sort();
-        sess.reset_mcp_startup_cancellation_token_placeholder()
-            .await;
+        {
+            let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
+            cancel_guard.cancel();
+            *cancel_guard = CancellationToken::new();
+        }
         let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
             &mcp_servers,
             config.mcp_oauth_credentials_store_mode,
@@ -1445,8 +1448,13 @@ impl Session {
             let mut manager_guard = sess.services.mcp_connection_manager.write().await;
             *manager_guard = mcp_connection_manager;
         }
-        sess.install_mcp_startup_cancellation_token(cancel_token)
-            .await;
+        {
+            let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
+            if cancel_guard.is_cancelled() {
+                cancel_token.cancel();
+            }
+            *cancel_guard = cancel_token;
+        }
         if !required_mcp_servers.is_empty() {
             let failures = sess
                 .services
@@ -3518,8 +3526,11 @@ impl Session {
             sandbox_cwd: turn_context.cwd.clone(),
             use_linux_sandbox_bwrap: turn_context.features.enabled(Feature::UseLinuxSandboxBwrap),
         };
-        self.reset_mcp_startup_cancellation_token_placeholder()
-            .await;
+        {
+            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
+            guard.cancel();
+            *guard = CancellationToken::new();
+        }
         let (refreshed_manager, cancel_token) = McpConnectionManager::new(
             &mcp_servers,
             store_mode,
@@ -3531,8 +3542,13 @@ impl Session {
             codex_apps_tools_cache_key(auth.as_ref()),
         )
         .await;
-        self.install_mcp_startup_cancellation_token(cancel_token)
-            .await;
+        {
+            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
+            if guard.is_cancelled() {
+                cancel_token.cancel();
+            }
+            *guard = cancel_token;
+        }
 
         let mut manager = self.services.mcp_connection_manager.write().await;
         *manager = refreshed_manager;
@@ -3579,20 +3595,6 @@ impl Session {
     ) {
         self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode)
             .await;
-    }
-
-    async fn reset_mcp_startup_cancellation_token_placeholder(&self) {
-        let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-        guard.cancel();
-        *guard = CancellationToken::new();
-    }
-
-    async fn install_mcp_startup_cancellation_token(&self, cancel_token: CancellationToken) {
-        let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-        if guard.is_cancelled() {
-            cancel_token.cancel();
-        }
-        *guard = cancel_token;
     }
 
     #[cfg(test)]

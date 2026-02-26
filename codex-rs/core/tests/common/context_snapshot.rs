@@ -234,7 +234,7 @@ fn canonicalize_snapshot_text(text: &str) -> String {
     if text.starts_with("<permissions instructions>") {
         return "<PERMISSIONS_INSTRUCTIONS>".to_string();
     }
-    if text.starts_with("# AGENTS.md instructions for ") {
+    if text.starts_with("<agents_md>") {
         return "<AGENTS_MD>".to_string();
     }
     if text.starts_with("<environment_context>") {
@@ -274,7 +274,7 @@ mod tests {
             "role": "user",
             "content": [{
                 "type": "input_text",
-                "text": "# AGENTS.md instructions for /tmp/example"
+                "text": "<agents_md>\n# AGENTS.md instructions for /tmp/example\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>\n</agents_md>"
             }]
         })];
 
@@ -285,7 +285,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "00:message/user:# AGENTS.md instructions for /tmp/example"
+            "00:message/user:<agents_md>\n# AGENTS.md instructions for /tmp/example\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>\n</agents_md>"
         );
     }
 
@@ -296,7 +296,7 @@ mod tests {
             "role": "user",
             "content": [{
                 "type": "input_text",
-                "text": "# AGENTS.md instructions for /tmp/example"
+                "text": "<agents_md>\n# AGENTS.md instructions for /tmp/example\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>\n</agents_md>"
             }]
         })];
 

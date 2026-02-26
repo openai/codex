@@ -30,7 +30,7 @@ async fn hierarchical_agents_appends_to_project_doc_in_user_instructions() {
     let user_messages = request.message_input_texts("user");
     let instructions = user_messages
         .iter()
-        .find(|text| text.starts_with("# AGENTS.md instructions for "))
+        .find(|text| text.starts_with("<agents_md>"))
         .expect("instructions message");
     assert!(
         instructions.contains("be nice"),
@@ -68,7 +68,7 @@ async fn hierarchical_agents_emits_when_no_project_doc() {
     let user_messages = request.message_input_texts("user");
     let instructions = user_messages
         .iter()
-        .find(|text| text.starts_with("# AGENTS.md instructions for "))
+        .find(|text| text.starts_with("<agents_md>"))
         .expect("instructions message");
     assert!(
         instructions.contains(HIERARCHICAL_AGENTS_SNIPPET),
