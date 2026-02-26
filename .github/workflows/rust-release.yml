@@ -10,12 +10,7 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Release tag to publish to WinGet
-        required: true
-        type: string
+      - "winget-test-rust-v*"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -23,7 +18,7 @@ concurrency:
 
 jobs:
   tag-check:
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -53,7 +48,7 @@ jobs:
           echo "::endgroup::"
 
   build:
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -370,7 +365,7 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   build-windows:
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') }}
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     with:
@@ -378,7 +373,7 @@ jobs:
     secrets: inherit
 
   shell-tool-mcp:
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') }}
     name: shell-tool-mcp
     needs: tag-check
     uses: ./.github/workflows/shell-tool-mcp.yml
@@ -388,7 +383,7 @@ jobs:
     secrets: inherit
 
   release:
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') }}
     needs:
       - build
       - build-windows
@@ -540,7 +535,7 @@ jobs:
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
-    if: ${{ github.event_name == 'push' && needs.release.outputs.should_publish_npm == 'true' }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') && needs.release.outputs.should_publish_npm == 'true' }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
@@ -646,7 +641,7 @@ jobs:
           done
 
   update-branch:
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') }}
     name: Update latest-alpha-cli branch
     permissions:
       contents: write
@@ -666,7 +661,7 @@ jobs:
             -F force=true
 
   winget-test:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'winget-test-rust-v') }}
     name: winget-test
     runs-on: ubuntu-latest
     permissions:
@@ -678,13 +673,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          release_tag="${{ inputs.release_tag }}"
+          release_tag="${GITHUB_REF_NAME#winget-test-}"
           if [[ ! "${release_tag}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]]; then
             echo "Invalid release tag: ${release_tag}"
             exit 1
           fi
 
           version="${release_tag#rust-v}"
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Publish to WinGet via winget-releaser
@@ -692,7 +688,7 @@ jobs:
         with:
           identifier: OpenAI.Codex
           version: ${{ steps.vars.outputs.version }}
-          release-tag: ${{ inputs.release_tag }}
+          release-tag: ${{ steps.vars.outputs.release_tag }}
           fork-user: openai-oss-forks
           installers-regex: '^codex-(?:x86_64|aarch64)-pc-windows-msvc\.exe\.zip$'
           token: ${{ secrets.WINGET_PUBLISH_PAT }}
