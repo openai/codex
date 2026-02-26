@@ -1925,19 +1925,9 @@ impl App {
             AppEvent::CodexEvent(event) => {
                 self.enqueue_primary_event(event).await?;
             }
-            AppEvent::Exit(mode) => match mode {
-                ExitMode::ShutdownFirst => {
-                    // Mark the thread we are explicitly shutting down for exit so
-                    // its shutdown completion does not trigger agent failover.
-                    self.pending_shutdown_exit_thread_id =
-                        self.active_thread_id.or(self.chat_widget.thread_id());
-                    self.chat_widget.submit_op(Op::Shutdown);
-                }
-                ExitMode::Immediate => {
-                    self.pending_shutdown_exit_thread_id = None;
-                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
-                }
-            },
+            AppEvent::Exit(mode) => {
+                return Ok(self.handle_exit_mode(mode));
+            }
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
@@ -2912,6 +2902,27 @@ impl App {
             }
         }
         Ok(AppRunControl::Continue)
+    }
+
+    fn handle_exit_mode(&mut self, mode: ExitMode) -> AppRunControl {
+        match mode {
+            ExitMode::ShutdownFirst => {
+                // Mark the thread we are explicitly shutting down for exit so
+                // its shutdown completion does not trigger agent failover.
+                self.pending_shutdown_exit_thread_id =
+                    self.active_thread_id.or(self.chat_widget.thread_id());
+                if self.chat_widget.submit_op(Op::Shutdown) {
+                    AppRunControl::Continue
+                } else {
+                    self.pending_shutdown_exit_thread_id = None;
+                    AppRunControl::Exit(ExitReason::UserRequested)
+                }
+            }
+            ExitMode::Immediate => {
+                self.pending_shutdown_exit_thread_id = None;
+                AppRunControl::Exit(ExitReason::UserRequested)
+            }
+        }
     }
 
     fn handle_codex_event_now(&mut self, event: Event) {
@@ -4701,6 +4712,34 @@ mod tests {
             Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
             Err(_) => panic!("expected shutdown op to be sent"),
         }
+    }
+
+    #[tokio::test]
+    async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+
+        let control = app.handle_exit_mode(ExitMode::ShutdownFirst);
+
+        assert_eq!(app.pending_shutdown_exit_thread_id, None);
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
+    }
+
+    #[tokio::test]
+    async fn shutdown_first_exit_waits_for_shutdown_when_submit_succeeds() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+
+        let control = app.handle_exit_mode(ExitMode::ShutdownFirst);
+
+        assert_eq!(app.pending_shutdown_exit_thread_id, Some(thread_id));
+        assert!(matches!(control, AppRunControl::Continue));
+        assert_eq!(op_rx.try_recv(), Ok(Op::Shutdown));
     }
 
     #[tokio::test]
