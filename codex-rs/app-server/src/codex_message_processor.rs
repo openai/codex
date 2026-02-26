@@ -5403,16 +5403,20 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    /// Sends the app-server refresh hint after a direct skill mutation.
+    /// Sends the direct-mutation refresh hint back to the initiating v2 client.
     ///
-    /// `skills/list` responses are cached per `cwd`, so app-server initiated
-    /// writes proactively emit the same invalidation signal that the filesystem
-    /// watcher path can later surface to connected clients.
-    async fn send_skills_updated_notification(outgoing: &Arc<OutgoingMessageSender>) {
+    /// `skills/list` responses are cached per `cwd`, so direct app-server
+    /// writes notify the caller immediately. The filesystem watcher path can
+    /// still fan the same invalidation out to other subscribed clients later.
+    async fn send_skills_updated_notification(
+        outgoing: &Arc<OutgoingMessageSender>,
+        connection_id: ConnectionId,
+    ) {
         outgoing
-            .send_server_notification(ServerNotification::SkillsUpdated(
-                SkillsUpdatedNotification::default(),
-            ))
+            .send_server_notification_to_connections(
+                &[connection_id],
+                ServerNotification::SkillsUpdated(SkillsUpdatedNotification::default()),
+            )
             .await;
     }
 
@@ -5545,7 +5549,8 @@ impl CodexMessageProcessor {
                         },
                     )
                     .await;
-                Self::send_skills_updated_notification(&self.outgoing).await;
+                Self::send_skills_updated_notification(&self.outgoing, request_id.connection_id)
+                    .await;
             }
             Err(err) => {
                 self.send_internal_error(
@@ -5580,7 +5585,8 @@ impl CodexMessageProcessor {
                         },
                     )
                     .await;
-                Self::send_skills_updated_notification(&self.outgoing).await;
+                Self::send_skills_updated_notification(&self.outgoing, request_id.connection_id)
+                    .await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -7594,6 +7600,8 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outgoing_message::OutgoingEnvelope;
+    use crate::outgoing_message::OutgoingMessage;
     use anyhow::Result;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
@@ -7622,6 +7630,29 @@ mod tests {
             input_schema: json!({"properties": {}}),
         }];
         validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[tokio::test]
+    async fn send_skills_updated_notification_targets_requesting_connection() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let connection_id = ConnectionId(7);
+
+        CodexMessageProcessor::send_skills_updated_notification(&outgoing, connection_id).await;
+
+        let envelope = rx.recv().await.expect("notification envelope");
+        match envelope {
+            OutgoingEnvelope::ToConnection {
+                connection_id: actual_connection_id,
+                message:
+                    OutgoingMessage::AppServerNotification(ServerNotification::SkillsUpdated(payload)),
+            } => {
+                assert_eq!(actual_connection_id, connection_id);
+                assert_eq!(payload, SkillsUpdatedNotification::default());
+            }
+            other => panic!("unexpected envelope: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
