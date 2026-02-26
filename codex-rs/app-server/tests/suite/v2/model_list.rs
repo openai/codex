@@ -24,6 +24,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
     Model {
         id: preset.id.clone(),
         model: preset.model.clone(),
+        upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
         upgrade_info: preset.upgrade.as_ref().map(|upgrade| ModelUpgradeInfo {
             model: upgrade.id.clone(),
             upgrade_copy: upgrade.upgrade_copy.clone(),
@@ -166,6 +167,7 @@ async fn list_models_returns_upgrade_info_metadata() -> Result<()> {
         .as_ref()
         .expect("expected upgrade info to be populated");
 
+    assert_eq!(item.upgrade.as_ref(), Some(&upgrade_info.model));
     assert!(!upgrade_info.model.is_empty());
     assert!(
         upgrade_info.upgrade_copy.is_some()

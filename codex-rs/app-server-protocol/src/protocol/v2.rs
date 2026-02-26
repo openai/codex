@@ -1395,6 +1395,7 @@ pub struct ModelListParams {
 pub struct Model {
     pub id: String,
     pub model: String,
+    pub upgrade: Option<String>,
     pub upgrade_info: Option<ModelUpgradeInfo>,
     pub display_name: String,
     pub description: String,

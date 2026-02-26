@@ -104,14 +104,13 @@ Each response yields:
   - `inputModalities` – accepted input types for the model
   - `supportsPersonality` – whether the model supports personality-specific instructions
   - `isDefault` – whether the model is recommended for most users
+  - `upgrade` – optional recommended upgrade model id
   - `upgradeInfo` – optional upgrade metadata object with:
     - `model` – recommended upgrade model id
     - `upgradeCopy` – optional display copy for the upgrade recommendation
     - `modelLink` – optional link for the upgrade recommendation
     - `migrationMarkdown` – optional markdown shown when presenting the upgrade
 - `nextCursor` – pass into the next request to continue paging (optional)
-
-Breaking change: `model.upgrade` has been removed. Clients should migrate to `model.upgradeInfo?.model`.
 
 ## Collaboration modes (experimental)
 

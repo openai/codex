@@ -25,6 +25,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
     Model {
         id: preset.id.to_string(),
         model: preset.model.to_string(),
+        upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
         upgrade_info: preset.upgrade.as_ref().map(|upgrade| ModelUpgradeInfo {
             model: upgrade.id.clone(),
             upgrade_copy: upgrade.upgrade_copy.clone(),
