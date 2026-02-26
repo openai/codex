@@ -1,5 +1,7 @@
 use super::*;
 
+// Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
+// the resume/fork hydration metadata derived from the same replay.
 #[derive(Debug)]
 pub(super) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItem>,
