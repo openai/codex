@@ -1395,7 +1395,7 @@ pub struct ModelListParams {
 pub struct Model {
     pub id: String,
     pub model: String,
-    pub upgrade: Option<String>,
+    pub upgrade_info: Option<ModelUpgradeInfo>,
     pub display_name: String,
     pub description: String,
     pub hidden: bool,
@@ -1407,6 +1407,16 @@ pub struct Model {
     pub supports_personality: bool,
     // Only one model should be marked as default.
     pub is_default: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelUpgradeInfo {
+    pub model: String,
+    pub upgrade_copy: Option<String>,
+    pub model_link: Option<String>,
+    pub migration_markdown: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
