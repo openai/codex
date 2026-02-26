@@ -463,7 +463,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "js_repl",
         stage: Stage::Experimental {
             name: "JavaScript REPL",
-            menu_description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities. Requires Node >= v24.13.1 installed.",
+            menu_description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities. Requires Node >= v22.22.0 installed.",
             announcement: "NEW: JavaScript REPL is now available in /experimental. Enable it, then start a new chat or restart Codex to use it.",
         },
         default_enabled: false,

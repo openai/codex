@@ -141,6 +141,32 @@ impl ResponsesRequest {
             .collect()
     }
 
+    /// Returns `input_text` spans grouped by `message` input for the provided role.
+    pub fn message_input_text_groups(&self, role: &str) -> Vec<Vec<String>> {
+        self.inputs_of_type("message")
+            .into_iter()
+            .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
+            .filter_map(|item| item.get("content").and_then(Value::as_array).cloned())
+            .map(|content| {
+                content
+                    .into_iter()
+                    .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
+                    .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
+                    .collect()
+            })
+            .collect()
+    }
+
+    pub fn has_message_with_input_texts(
+        &self,
+        role: &str,
+        predicate: impl Fn(&[String]) -> bool,
+    ) -> bool {
+        self.message_input_text_groups(role)
+            .iter()
+            .any(|texts| predicate(texts))
+    }
+
     /// Returns all `input_image` `image_url` spans from `message` inputs for the provided role.
     pub fn message_input_image_urls(&self, role: &str) -> Vec<String> {
         self.inputs_of_type("message")

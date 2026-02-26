@@ -1,6 +1,7 @@
 use chrono::DateTime;
 use chrono::Utc;
 use codex_core::test_support::all_model_presets;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -30,6 +31,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         base_instructions: "base instructions".to_string(),
         model_messages: None,
         supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,

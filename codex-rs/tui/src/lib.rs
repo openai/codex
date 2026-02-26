@@ -1159,7 +1159,9 @@ mod tests {
             personality: None,
             collaboration_mode: None,
             effort: config.model_reasoning_effort,
-            summary: config.model_reasoning_summary,
+            summary: config
+                .model_reasoning_summary
+                .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
             user_instructions: None,
             developer_instructions: None,
             final_output_json_schema: None,

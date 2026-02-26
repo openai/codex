@@ -4139,7 +4139,10 @@ impl ChatWidget {
             sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
             model: effective_mode.model().to_string(),
             effort: effective_mode.reasoning_effort(),
-            summary: self.config.model_reasoning_summary,
+            summary: self
+                .config
+                .model_reasoning_summary
+                .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
             final_output_json_schema: None,
             collaboration_mode,
             personality,
