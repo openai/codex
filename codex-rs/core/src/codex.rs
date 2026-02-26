@@ -2992,7 +2992,7 @@ impl Session {
         turn_context: &TurnContext,
         previous_user_turn_model: Option<&str>,
     ) -> Vec<ResponseItem> {
-        let mut developer_sections = Vec::<DeveloperInstructions>::with_capacity(8);
+        let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
         if let Some(model_switch_message) =
@@ -3001,26 +3001,27 @@ impl Session {
                 turn_context,
             )
         {
-            developer_sections.push(model_switch_message);
+            developer_sections.push(model_switch_message.into_text());
         }
-        developer_sections.push(DeveloperInstructions::from_policy(
-            turn_context.sandbox_policy.get(),
-            turn_context.approval_policy.value(),
-            self.services.exec_policy.current().as_ref(),
-            &turn_context.cwd,
-            turn_context.features.enabled(Feature::RequestPermissions),
-        ));
+        developer_sections.push(
+            DeveloperInstructions::from_policy(
+                turn_context.sandbox_policy.get(),
+                turn_context.approval_policy.value(),
+                self.services.exec_policy.current().as_ref(),
+                &turn_context.cwd,
+                turn_context.features.enabled(Feature::RequestPermissions),
+            )
+            .into_text(),
+        );
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
-            developer_sections.push(DeveloperInstructions::new(
-                developer_instructions.to_string(),
-            ));
+            developer_sections.push(developer_instructions.to_string());
         }
         // Add developer instructions for memories.
         if let Some(memory_prompt) =
             build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
             && turn_context.features.enabled(Feature::MemoryTool)
         {
-            developer_sections.push(DeveloperInstructions::new(memory_prompt));
+            developer_sections.push(memory_prompt);
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         let (collaboration_mode, base_instructions) = {
@@ -3033,7 +3034,7 @@ impl Session {
         if let Some(collab_instructions) =
             DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
         {
-            developer_sections.push(collab_instructions);
+            developer_sections.push(collab_instructions.into_text());
         }
         if self.features.enabled(Feature::Personality)
             && let Some(personality) = turn_context.personality
@@ -3048,20 +3049,21 @@ impl Session {
                         personality,
                     )
             {
-                developer_sections.push(DeveloperInstructions::personality_spec_message(
-                    personality_message,
-                ));
+                developer_sections.push(
+                    DeveloperInstructions::personality_spec_message(personality_message)
+                        .into_text(),
+                );
             }
         }
         if turn_context.features.enabled(Feature::Apps) {
-            developer_sections.push(DeveloperInstructions::new(render_apps_section()));
+            developer_sections.push(render_apps_section());
         }
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
                 turn_context.config.commit_attribution.as_deref(),
             )
         {
-            developer_sections.push(DeveloperInstructions::new(commit_message_instruction));
+            developer_sections.push(commit_message_instruction);
         }
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             contextual_user_sections.push(
@@ -8999,7 +9001,7 @@ mod tests {
                     let ContentItem::InputText { text } = content_item else {
                         return false;
                     };
-                    text.contains(crate::session_prefix::TURN_ABORTED_OPEN_TAG)
+                    text.contains(crate::contextual_user_message::TURN_ABORTED_OPEN_TAG)
                 })
             }),
             "expected a model-visible turn aborted marker in history after interrupt"

@@ -118,13 +118,7 @@ pub(crate) fn build_model_instructions_update_item(
     ))
 }
 
-pub(crate) fn build_developer_update_item(
-    update_sections: Vec<DeveloperInstructions>,
-) -> Option<ResponseItem> {
-    let text_sections = update_sections
-        .into_iter()
-        .map(DeveloperInstructions::into_text)
-        .collect();
+pub(crate) fn build_developer_update_item(text_sections: Vec<String>) -> Option<ResponseItem> {
     build_text_message("developer", text_sections)
 }
 
@@ -170,6 +164,7 @@ pub(crate) fn build_settings_update_items(
     ]
     .into_iter()
     .flatten()
+    .map(DeveloperInstructions::into_text)
     .collect();
 
     let mut items = Vec::with_capacity(2);

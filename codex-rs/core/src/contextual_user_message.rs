@@ -41,15 +41,7 @@ impl ContextualUserFragmentDefinition {
         self.start_marker
     }
 
-    pub(crate) const fn open_tag(&self) -> &'static str {
-        self.start_marker
-    }
-
     pub(crate) const fn end_marker(&self) -> &'static str {
-        self.end_marker
-    }
-
-    pub(crate) const fn close_tag(&self) -> &'static str {
         self.end_marker
     }
 
@@ -125,6 +117,14 @@ mod tests {
             text: "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
                 .to_string(),
         }));
+    }
+
+    #[test]
+    fn detects_subagent_notification_fragment_case_insensitively() {
+        assert!(
+            SUBAGENT_NOTIFICATION_FRAGMENT
+                .matches_text("<SUBAGENT_NOTIFICATION>{}</subagent_notification>")
+        );
     }
 
     #[test]

@@ -119,7 +119,7 @@ impl EnvironmentContext {
     /// </environment_context>
     /// ```
     pub fn serialize_to_xml(self) -> String {
-        let mut lines = vec![ENVIRONMENT_CONTEXT_FRAGMENT.open_tag().to_string()];
+        let mut lines = Vec::new();
         if let Some(cwd) = self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
         }
@@ -142,8 +142,7 @@ impl EnvironmentContext {
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
         }
-        lines.push(ENVIRONMENT_CONTEXT_FRAGMENT.close_tag().to_string());
-        lines.join("\n")
+        ENVIRONMENT_CONTEXT_FRAGMENT.wrap(lines.join("\n"))
     }
 }
 
