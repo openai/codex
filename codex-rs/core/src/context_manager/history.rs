@@ -551,15 +551,7 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
         return false;
     };
 
-    if role != "user" {
-        return false;
-    }
-
-    if is_contextual_user_message_content(content) {
-        return false;
-    }
-
-    true
+    role == "user" && !is_contextual_user_message_content(content)
 }
 
 fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {
