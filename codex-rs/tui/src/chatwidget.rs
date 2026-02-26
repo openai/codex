@@ -1844,7 +1844,7 @@ impl ChatWidget {
             self.maybe_send_pending_nudges();
         } else if let Some(combined) = self.drain_queued_messages_for_restore() {
             self.restore_user_message_to_composer(combined);
-            self.refresh_queued_user_messages();
+            self.refresh_pending_input_preview();
         }
 
         self.request_redraw();
@@ -3351,7 +3351,7 @@ impl ChatWidget {
         {
             if let Some(user_message) = self.queued_user_messages.pop_back() {
                 self.restore_user_message_to_composer(user_message);
-                self.refresh_queued_user_messages();
+                self.refresh_pending_input_preview();
                 self.request_redraw();
             }
             return;
@@ -3395,7 +3395,7 @@ impl ChatWidget {
                         && (self.is_plan_streaming_in_tui() || self.stream_controller.is_some());
                     if should_defer_as_pending_nudge {
                         self.pending_nudges.push_back(user_message);
-                        self.refresh_queued_user_messages();
+                        self.refresh_pending_input_preview();
                     } else if self.is_session_configured() {
                         // Submitted is only emitted when steer is enabled.
                         // Reset any reasoning header only when we are actually submitting a turn.
@@ -4006,7 +4006,7 @@ impl ChatWidget {
             || self.is_review_mode
         {
             self.queued_user_messages.push_back(user_message);
-            self.refresh_queued_user_messages();
+            self.refresh_pending_input_preview();
         } else {
             self.submit_user_message(user_message);
         }
@@ -4016,7 +4016,7 @@ impl ChatWidget {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
-            self.refresh_queued_user_messages();
+            self.refresh_pending_input_preview();
             return;
         }
 
@@ -4670,7 +4670,7 @@ impl ChatWidget {
             self.submit_user_message(user_message);
         }
         // Update the list to reflect the remaining queued messages (if any).
-        self.refresh_queued_user_messages();
+        self.refresh_pending_input_preview();
     }
 
     fn maybe_send_pending_nudges(&mut self) -> bool {
@@ -4691,12 +4691,12 @@ impl ChatWidget {
         while let Some(pending_nudge) = self.pending_nudges.pop_front() {
             self.submit_user_message(pending_nudge);
         }
-        self.refresh_queued_user_messages();
+        self.refresh_pending_input_preview();
         true
     }
 
-    /// Rebuild and update the queued user messages from the current queue.
-    fn refresh_queued_user_messages(&mut self) {
+    /// Rebuild and update the bottom-pane pending-input preview.
+    fn refresh_pending_input_preview(&mut self) {
         let messages: Vec<String> = self
             .queued_user_messages
             .iter()
@@ -4708,7 +4708,7 @@ impl ChatWidget {
             .map(|nudge| nudge.text.clone())
             .collect();
         self.bottom_pane
-            .set_queued_user_messages(messages, pending_nudges);
+            .set_pending_input_preview(messages, pending_nudges);
     }
 
     pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {

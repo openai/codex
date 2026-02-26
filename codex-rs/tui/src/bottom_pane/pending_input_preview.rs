@@ -17,7 +17,7 @@ use crate::wrapping::adaptive_wrap_lines;
 /// queued user messages to pop back into the composer. Because some terminals
 /// intercept certain modifier-key combinations, the displayed binding is
 /// configurable via [`set_edit_binding`](Self::set_edit_binding).
-pub(crate) struct QueuedUserMessages {
+pub(crate) struct PendingInputPreview {
     pub pending_nudges: Vec<String>,
     pub messages: Vec<String>,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
@@ -25,7 +25,7 @@ pub(crate) struct QueuedUserMessages {
     edit_binding: key_hint::KeyBinding,
 }
 
-impl QueuedUserMessages {
+impl PendingInputPreview {
     pub(crate) fn new() -> Self {
         Self {
             pending_nudges: Vec::new(),
@@ -97,7 +97,7 @@ impl QueuedUserMessages {
     }
 }
 
-impl Renderable for QueuedUserMessages {
+impl Renderable for PendingInputPreview {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;
@@ -119,20 +119,20 @@ mod tests {
 
     #[test]
     fn desired_height_empty() {
-        let queue = QueuedUserMessages::new();
+        let queue = PendingInputPreview::new();
         assert_eq!(queue.desired_height(40), 0);
     }
 
     #[test]
     fn desired_height_one_message() {
-        let mut queue = QueuedUserMessages::new();
+        let mut queue = PendingInputPreview::new();
         queue.messages.push("Hello, world!".to_string());
         assert_eq!(queue.desired_height(40), 2);
     }
 
     #[test]
     fn render_one_message() {
-        let mut queue = QueuedUserMessages::new();
+        let mut queue = PendingInputPreview::new();
         queue.messages.push("Hello, world!".to_string());
         let width = 40;
         let height = queue.desired_height(width);
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn render_two_messages() {
-        let mut queue = QueuedUserMessages::new();
+        let mut queue = PendingInputPreview::new();
         queue.messages.push("Hello, world!".to_string());
         queue.messages.push("This is another message".to_string());
         let width = 40;
@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn render_more_than_three_messages() {
-        let mut queue = QueuedUserMessages::new();
+        let mut queue = PendingInputPreview::new();
         queue.messages.push("Hello, world!".to_string());
         queue.messages.push("This is another message".to_string());
         queue.messages.push("This is a third message".to_string());
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn render_wrapped_message() {
-        let mut queue = QueuedUserMessages::new();
+        let mut queue = PendingInputPreview::new();
         queue
             .messages
             .push("This is a longer message that should be wrapped".to_string());
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn render_many_line_message() {
-        let mut queue = QueuedUserMessages::new();
+        let mut queue = PendingInputPreview::new();
         queue
             .messages
             .push("This is\na message\nwith many\nlines".to_string());
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn long_url_like_message_does_not_expand_into_wrapped_ellipsis_rows() {
-        let mut queue = QueuedUserMessages::new();
+        let mut queue = PendingInputPreview::new();
         queue.messages.push(
             "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/session_id=abc123def456ghi789"
                 .to_string(),
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn render_one_pending_nudge() {
-        let mut queue = QueuedUserMessages::new();
+        let mut queue = PendingInputPreview::new();
         queue.pending_nudges.push("Implement the plan.".to_string());
         let width = 48;
         let height = queue.desired_height(width);
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn render_pending_nudges_above_queued_messages() {
-        let mut queue = QueuedUserMessages::new();
+        let mut queue = PendingInputPreview::new();
         queue.pending_nudges.push("Implement the plan.".to_string());
         queue
             .pending_nudges

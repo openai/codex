@@ -1166,7 +1166,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
         text_elements: second_elements,
         mention_bindings: Vec::new(),
     });
-    chat.refresh_queued_user_messages();
+    chat.refresh_pending_input_preview();
 
     chat.bottom_pane
         .set_composer_text(existing_text, existing_elements, existing_images.clone());
@@ -1236,7 +1236,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
         text_elements: Vec::new(),
         mention_bindings: Vec::new(),
     });
-    chat.refresh_queued_user_messages();
+    chat.refresh_pending_input_preview();
 
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
@@ -3159,7 +3159,7 @@ async fn alt_up_edits_most_recent_queued_message() {
         .push_back(UserMessage::from("first queued".to_string()));
     chat.queued_user_messages
         .push_back(UserMessage::from("second queued".to_string()));
-    chat.refresh_queued_user_messages();
+    chat.refresh_pending_input_preview();
 
     // Press Alt+Up to edit the most recent (last) queued message.
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
@@ -3193,7 +3193,7 @@ async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
         .push_back(UserMessage::from("first queued".to_string()));
     chat.queued_user_messages
         .push_back(UserMessage::from("second queued".to_string()));
-    chat.refresh_queued_user_messages();
+    chat.refresh_pending_input_preview();
 
     // Press Shift+Left to edit the most recent (last) queued message.
     chat.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
@@ -6990,7 +6990,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
         .push_back(UserMessage::from("first queued".to_string()));
     chat.queued_user_messages
         .push_back(UserMessage::from("second queued".to_string()));
-    chat.refresh_queued_user_messages();
+    chat.refresh_pending_input_preview();
 
     // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
     chat.handle_codex_event(Event {
@@ -7030,7 +7030,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
         .push_back(UserMessage::from("first queued".to_string()));
     chat.queued_user_messages
         .push_back(UserMessage::from("second queued".to_string()));
-    chat.refresh_queued_user_messages();
+    chat.refresh_pending_input_preview();
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
