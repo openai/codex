@@ -10,7 +10,6 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
-      - "winget-test-rust-v*"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -18,7 +17,6 @@ concurrency:
 
 jobs:
   tag-check:
-    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -48,7 +46,6 @@ jobs:
           echo "::endgroup::"
 
   build:
-    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -365,7 +362,6 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   build-windows:
-    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') }}
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     with:
@@ -373,7 +369,6 @@ jobs:
     secrets: inherit
 
   shell-tool-mcp:
-    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') }}
     name: shell-tool-mcp
     needs: tag-check
     uses: ./.github/workflows/shell-tool-mcp.yml
@@ -383,7 +378,6 @@ jobs:
     secrets: inherit
 
   release:
-    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') }}
     needs:
       - build
       - build-windows
@@ -535,7 +529,7 @@ jobs:
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
-    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') && needs.release.outputs.should_publish_npm == 'true' }}
+    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
@@ -640,8 +634,26 @@ jobs:
             exit "${publish_status}"
           done
 
+  winget:
+    name: winget
+    needs: release
+    if: ${{ !contains(needs.release.outputs.version, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Publish to WinGet
+        uses: vedantmgoyal9/winget-releaser@19e706d4c9121098010096f9c495a70a7518b30f
+        with:
+          identifier: OpenAI.Codex
+          version: ${{ needs.release.outputs.version }}
+          release-tag: ${{ needs.release.outputs.tag }}
+          fork-user: openai-oss-forks
+          installers-regex: '^codex-(?:x86_64|aarch64)-pc-windows-msvc\.exe\.zip$'
+          token: ${{ secrets.WINGET_PUBLISH_PAT }}
+
   update-branch:
-    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'rust-v') }}
     name: Update latest-alpha-cli branch
     permissions:
       contents: write
@@ -659,36 +671,3 @@ jobs:
             -X PATCH \
             -f sha="${GITHUB_SHA}" \
             -F force=true
-
-  winget-test:
-    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'winget-test-rust-v') }}
-    name: winget-test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Validate release tag
-        id: vars
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          release_tag="${GITHUB_REF_NAME#winget-test-}"
-          if [[ ! "${release_tag}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]]; then
-            echo "Invalid release tag: ${release_tag}"
-            exit 1
-          fi
-
-          version="${release_tag#rust-v}"
-          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-
-      - name: Publish to WinGet via winget-releaser
-        uses: vedantmgoyal9/winget-releaser@19e706d4c9121098010096f9c495a70a7518b30f
-        with:
-          identifier: OpenAI.Codex
-          version: ${{ steps.vars.outputs.version }}
-          release-tag: ${{ steps.vars.outputs.release_tag }}
-          fork-user: openai-oss-forks
-          installers-regex: '^codex-(?:x86_64|aarch64)-pc-windows-msvc\.exe\.zip$'
-          token: ${{ secrets.WINGET_PUBLISH_PAT }}
