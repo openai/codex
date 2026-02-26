@@ -2020,15 +2020,6 @@
       },
       "type": "object"
     },
-    "realtime": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/RealtimeToml"
-        }
-      ],
-      "default": null,
-      "description": "Machine-local realtime audio device preferences used by realtime voice."
-    },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
       "type": "string"
