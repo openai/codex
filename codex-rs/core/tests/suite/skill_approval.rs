@@ -65,6 +65,24 @@ async fn submit_turn_with_policies(
 }
 
 fn write_skill_with_shell_script(home: &Path, name: &str, script_name: &str) -> Result<PathBuf> {
+    write_skill_with_shell_script_contents(
+        home,
+        name,
+        script_name,
+        r#"#!/bin/sh
+echo 'zsh-fork-stdout'
+echo 'zsh-fork-stderr' >&2
+"#,
+    )
+}
+
+#[cfg(unix)]
+fn write_skill_with_shell_script_contents(
+    home: &Path,
+    name: &str,
+    script_name: &str,
+    script_contents: &str,
+) -> Result<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
 
     let skill_dir = home.join("skills").join(name);
@@ -82,13 +100,7 @@ description: {name} skill
     )?;
 
     let script_path = scripts_dir.join(script_name);
-    fs::write(
-        &script_path,
-        r#"#!/bin/sh
-echo 'zsh-fork-stdout'
-echo 'zsh-fork-stderr' >&2
-"#,
-    )?;
+    fs::write(&script_path, script_contents)?;
     let mut permissions = fs::metadata(&script_path)?.permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&script_path, permissions)?;
@@ -263,6 +275,207 @@ permissions:
     assert!(
         output.contains("Execution denied: User denied execution"),
         "expected rejection marker in function_call_output: {output:?}"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> Result<()> {
+    use codex_config::Constrained;
+    use codex_protocol::protocol::ReviewDecision;
+
+    skip_if_no_network!(Ok(()));
+
+    let Some(zsh_path) = find_test_zsh_path()? else {
+        return Ok(());
+    };
+    if !supports_exec_wrapper_intercept(&zsh_path) {
+        eprintln!(
+            "skipping zsh-fork skill permissions test: zsh does not support EXEC_WRAPPER intercepts ({})",
+            zsh_path.display()
+        );
+        return Ok(());
+    }
+    let Ok(main_execve_wrapper_exe) = codex_utils_cargo_bin::cargo_bin("codex-execve-wrapper")
+    else {
+        eprintln!(
+            "skipping zsh-fork skill permissions test: unable to resolve `codex-execve-wrapper` binary"
+        );
+        return Ok(());
+    };
+
+    let outside_dir = tempfile::tempdir()?;
+    let outside_path = outside_dir.path().join("zsh-fork-skill-permissions.txt");
+    let outside_path_quoted = shlex::try_join([outside_path.to_string_lossy().as_ref()])?;
+    let script_contents = format!(
+        "#!/bin/sh\nprintf '%s' forbidden > {outside_path_quoted}\ncat {outside_path_quoted}\n"
+    );
+    let outside_path_for_hook = outside_path.clone();
+    let script_contents_for_hook = script_contents.clone();
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            let _ = fs::remove_file(&outside_path_for_hook);
+            write_skill_with_shell_script_contents(
+                home,
+                "mbolin-test-skill",
+                "sandboxed.sh",
+                &script_contents_for_hook,
+            )
+            .unwrap();
+            write_skill_metadata(
+                home,
+                "mbolin-test-skill",
+                r#"
+permissions:
+  file_system:
+    write:
+      - "./output"
+"#,
+            )
+            .unwrap();
+        })
+        .with_config(move |config| {
+            config.features.enable(Feature::ShellTool);
+            config.features.enable(Feature::ShellZshFork);
+            config.zsh_path = Some(zsh_path.clone());
+            config.main_execve_wrapper_exe = Some(main_execve_wrapper_exe);
+            config.permissions.allow_login_shell = false;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.permissions.sandbox_policy =
+                Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+        });
+    let test = builder.build(&server).await?;
+
+    let script_path = fs::canonicalize(
+        test.codex_home_path()
+            .join("skills/mbolin-test-skill/scripts/sandboxed.sh"),
+    )?;
+    let script_path_str = script_path.to_string_lossy().into_owned();
+    let command = shlex::try_join([script_path_str.as_str()])?;
+
+    let first_call_id = "zsh-fork-skill-permissions-1";
+    let first_arguments = shell_command_arguments(&command)?;
+    let first_mocks = mount_function_call_agent_response(
+        &server,
+        first_call_id,
+        &first_arguments,
+        "shell_command",
+    )
+    .await;
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let maybe_approval = wait_for_event_match(test.codex.as_ref(), |event| match event {
+        EventMsg::ExecApprovalRequest(request) => Some(Some(request.clone())),
+        EventMsg::TurnComplete(_) => Some(None),
+        _ => None,
+    })
+    .await;
+    let approval = match maybe_approval {
+        Some(approval) => approval,
+        None => panic!("expected exec approval request before completion"),
+    };
+    assert_eq!(approval.call_id, first_call_id);
+    assert_eq!(approval.command, vec![script_path_str.clone()]);
+    assert_eq!(
+        approval.additional_permissions,
+        Some(PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: None,
+                write: Some(vec![PathBuf::from("./output")]),
+            }),
+            ..Default::default()
+        })
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::ApprovedForSession,
+        })
+        .await?;
+
+    wait_for_event(test.codex.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let first_output = first_mocks
+        .completion
+        .single_request()
+        .function_call_output(first_call_id)["output"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        first_output.contains("Permission denied")
+            || first_output.contains("Operation not permitted")
+            || first_output.contains("Read-only file system")
+            || !first_output.contains("forbidden"),
+        "expected skill sandbox denial on first run, got output: {first_output:?}"
+    );
+    assert!(
+        !outside_path.exists(),
+        "first run should not write outside the approved skill sandbox"
+    );
+
+    let second_call_id = "zsh-fork-skill-permissions-2";
+    let second_arguments = shell_command_arguments(&command)?;
+    let second_mocks = mount_function_call_agent_response(
+        &server,
+        second_call_id,
+        &second_arguments,
+        "shell_command",
+    )
+    .await;
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let cached_approval = wait_for_event_match(test.codex.as_ref(), |event| match event {
+        EventMsg::ExecApprovalRequest(request) => Some(Some(request.clone())),
+        EventMsg::TurnComplete(_) => Some(None),
+        _ => None,
+    })
+    .await;
+    assert!(
+        cached_approval.is_none(),
+        "expected second run to reuse the cached session approval"
+    );
+
+    let second_output = second_mocks
+        .completion
+        .single_request()
+        .function_call_output(second_call_id)["output"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        second_output.contains("Permission denied")
+            || second_output.contains("Operation not permitted")
+            || second_output.contains("Read-only file system")
+            || !second_output.contains("forbidden"),
+        "expected cached skill approval to retain sandboxing, got output: {second_output:?}"
+    );
+    assert!(
+        !outside_path.exists(),
+        "cached session approval should not widen skill execution to full access"
     );
 
     Ok(())

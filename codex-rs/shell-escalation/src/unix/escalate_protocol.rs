@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 
+use codex_protocol::approvals::EscalationPermissions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -33,6 +34,35 @@ pub struct EscalateRequest {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct EscalateResponse {
     pub action: EscalateAction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EscalationDecision {
+    pub action: EscalateAction,
+    pub permissions: Option<EscalationPermissions>,
+}
+
+impl EscalationDecision {
+    pub fn run() -> Self {
+        Self {
+            action: EscalateAction::Run,
+            permissions: None,
+        }
+    }
+
+    pub fn escalate(permissions: Option<EscalationPermissions>) -> Self {
+        Self {
+            action: EscalateAction::Escalate,
+            permissions,
+        }
+    }
+
+    pub fn deny(reason: Option<String>) -> Self {
+        Self {
+            action: EscalateAction::Deny { reason },
+            permissions: None,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
