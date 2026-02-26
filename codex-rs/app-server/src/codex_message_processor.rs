@@ -5539,6 +5539,7 @@ impl CodexMessageProcessor {
 
         match response {
             Ok(downloaded) => {
+                let connection_id = request_id.connection_id;
                 self.thread_manager.skills_manager().clear_cache();
                 self.outgoing
                     .send_response(
@@ -5549,8 +5550,7 @@ impl CodexMessageProcessor {
                         },
                     )
                     .await;
-                Self::send_skills_updated_notification(&self.outgoing, request_id.connection_id)
-                    .await;
+                Self::send_skills_updated_notification(&self.outgoing, connection_id).await;
             }
             Err(err) => {
                 self.send_internal_error(
@@ -5576,6 +5576,7 @@ impl CodexMessageProcessor {
 
         match result {
             Ok(()) => {
+                let connection_id = request_id.connection_id;
                 self.thread_manager.skills_manager().clear_cache();
                 self.outgoing
                     .send_response(
@@ -5585,8 +5586,7 @@ impl CodexMessageProcessor {
                         },
                     )
                     .await;
-                Self::send_skills_updated_notification(&self.outgoing, request_id.connection_id)
-                    .await;
+                Self::send_skills_updated_notification(&self.outgoing, connection_id).await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
