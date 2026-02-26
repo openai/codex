@@ -349,9 +349,15 @@ async fn responses_websocket_prewarm_uses_v2_when_model_prefers_websockets_and_f
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
     assert_eq!(connection.len(), 1);
-    let prewarm = connection.first().expect("missing prewarm request").body_json();
+    let prewarm = connection
+        .first()
+        .expect("missing prewarm request")
+        .body_json();
     assert_eq!(prewarm["type"].as_str(), Some("response.create"));
-    assert_eq!(prewarm["input"], serde_json::to_value(&prompt.input).unwrap());
+    assert_eq!(
+        prewarm["input"],
+        serde_json::to_value(&prompt.input).unwrap()
+    );
 
     server.shutdown().await;
 }
