@@ -83,12 +83,11 @@ pub(crate) fn run_commit_tick(
         return CommitTickOutput::default();
     }
 
-    let output = apply_commit_tick_plan(
+    apply_commit_tick_plan(
         decision.drain_plan,
         stream_controller,
         plan_stream_controller,
     );
-    output
 }
 
 /// Builds the combined queue-pressure snapshot consumed by chunking policy.
