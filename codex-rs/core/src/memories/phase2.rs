@@ -81,7 +81,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
             return;
         }
     };
-    let raw_memories = selection.selected.iter().cloned().collect::<Vec<_>>();
+    let raw_memories = selection.selected.to_vec();
     let new_watermark = get_watermark(claim.watermark, &raw_memories);
 
     // 4. Update the file system by syncing the raw memories with the one extracted from DB at
