@@ -643,7 +643,7 @@ fn strong_emphasis() {
 fn link() {
     let text = render_markdown_text("[Link](https://example.com)");
     let expected = Text::from(Line::from_iter([
-        "Link".cyan().underlined(),
+        "Link".into(),
         " (".into(),
         "https://example.com".cyan().underlined(),
         ")".into(),
@@ -656,7 +656,7 @@ fn file_link_hides_destination() {
     let text =
         render_markdown_text("[markdown_render.rs:74](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)");
     let expected = Text::from(Line::from_iter([
-        "markdown_render.rs:74".cyan().underlined(),
+        "markdown_render.rs:74".cyan(),
         " (line 74)".into(),
     ]));
     assert_eq!(text, expected);
@@ -667,7 +667,7 @@ fn file_link_shows_line_number_from_hidden_destination() {
     let text =
         render_markdown_text("[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)");
     let expected = Text::from(Line::from_iter([
-        "markdown_render.rs".cyan().underlined(),
+        "markdown_render.rs".cyan(),
         " (line 74)".into(),
     ]));
     assert_eq!(text, expected);
@@ -679,7 +679,7 @@ fn file_link_shows_line_number_from_hash_anchor() {
         "[markdown_render.rs](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3)",
     );
     let expected = Text::from(Line::from_iter([
-        "markdown_render.rs".cyan().underlined(),
+        "markdown_render.rs".cyan(),
         " (line 74)".into(),
     ]));
     assert_eq!(text, expected);
@@ -689,7 +689,7 @@ fn file_link_shows_line_number_from_hash_anchor() {
 fn url_link_shows_destination() {
     let text = render_markdown_text("[docs](https://example.com/docs)");
     let expected = Text::from(Line::from_iter([
-        "docs".cyan().underlined(),
+        "docs".into(),
         " (".into(),
         "https://example.com/docs".cyan().underlined(),
         ")".into(),

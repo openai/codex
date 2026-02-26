@@ -90,6 +90,7 @@ struct LinkState {
     destination: String,
     show_destination: bool,
     hidden_line_number: Option<String>,
+    label_styled: bool,
 }
 
 fn should_render_link_destination(dest_url: &str) -> bool {
@@ -524,17 +525,24 @@ where
     }
 
     fn push_link(&mut self, dest_url: String) {
-        self.push_inline_style(self.styles.link);
+        let show_destination = should_render_link_destination(&dest_url);
+        let label_styled = !show_destination;
+        if label_styled {
+            self.push_inline_style(self.styles.code);
+        }
         self.link = Some(LinkState {
-            show_destination: should_render_link_destination(&dest_url),
+            show_destination,
             hidden_line_number: hidden_local_link_line_number(&dest_url),
+            label_styled,
             destination: dest_url,
         });
     }
 
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
-            self.pop_inline_style();
+            if link.label_styled {
+                self.pop_inline_style();
+            }
             if link.show_destination {
                 self.push_span(" (".into());
                 self.push_span(Span::styled(link.destination, self.styles.link));
