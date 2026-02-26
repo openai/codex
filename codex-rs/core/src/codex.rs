@@ -2971,7 +2971,8 @@ impl Session {
         state.reference_context_item()
     }
 
-    /// Persist the latest turn context snapshot only when we emit model-visible context updates.
+    /// Persist the latest turn context snapshot for the first real user turn and for
+    /// steady-state turns that emit model-visible context updates.
     ///
     /// When the reference snapshot is missing, this injects full initial context. Otherwise, it
     /// emits only settings diff items.
@@ -2988,7 +2989,10 @@ impl Session {
         turn_context: &TurnContext,
         previous_user_turn_model: Option<&str>,
     ) {
-        let reference_context_item = self.reference_context_item().await;
+        let reference_context_item = {
+            let state = self.state.lock().await;
+            state.reference_context_item()
+        };
         let should_inject_full_context = reference_context_item.is_none();
         let context_items = if should_inject_full_context {
             self.build_initial_context(turn_context, previous_user_turn_model)
@@ -3001,18 +3005,26 @@ impl Session {
                 turn_context,
             )
         };
+        let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
                 .await;
         }
+        if previous_user_turn_model.is_none()
+            || (!should_inject_full_context && !context_items.is_empty())
+        {
+            // Keep rollout TurnContext entries to:
+            // - the first real user turn (to recover `previous_model` on resume)
+            // - steady-state turns that emitted explicit context diffs
+            // Full reinjection after compaction is tracked in runtime state only; resume will
+            // conservatively fall back to a missing baseline and reinject again if needed.
+            self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
+                .await;
+        }
 
-        // Advance the diff baseline even when this turn emitted no model-visible context items.
-        // A model/context change can still matter for later turns, and resume replay must see the
-        // same latest `TurnContextItem` that runtime diffing used.
-        let turn_context_item = turn_context.to_turn_context_item();
-        self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
-            .await;
-
+        // Advance the in-memory diff baseline even when this turn emitted no model-visible
+        // context items. This keeps later runtime diffing aligned with the current turn state
+        // without forcing rollout `TurnContextItem` churn after compaction/no-op turns.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
     }
