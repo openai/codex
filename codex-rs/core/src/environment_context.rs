@@ -75,16 +75,8 @@ impl EnvironmentContext {
         } else {
             None
         };
-        let current_date = if before.current_date != after.current_date {
-            after.current_date.clone()
-        } else {
-            None
-        };
-        let timezone = if before.timezone != after.timezone {
-            after.timezone.clone()
-        } else {
-            None
-        };
+        let current_date = after.current_date.clone();
+        let timezone = after.timezone.clone();
         let network = if before_network != after_network {
             after_network
         } else {
@@ -108,8 +100,8 @@ impl EnvironmentContext {
         Self::new(
             Some(turn_context_item.cwd.clone()),
             shell.clone(),
-            turn_context_item.current_date.clone(),
-            turn_context_item.timezone.clone(),
+            None,
+            None,
             Self::network_from_turn_context_item(turn_context_item),
             None,
         )

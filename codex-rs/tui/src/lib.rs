@@ -1152,8 +1152,6 @@ mod tests {
         TurnContextItem {
             turn_id: None,
             cwd,
-            current_date: None,
-            timezone: None,
             approval_policy: config.permissions.approval_policy.value(),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             network: None,
