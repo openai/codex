@@ -24,6 +24,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_github_actions_linux_aarch64;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::skip_if_windows;
@@ -2493,6 +2494,7 @@ PY
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_runs_under_sandbox() -> Result<()> {
+    skip_if_github_actions_linux_aarch64!(Ok(()));
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_windows!(Ok(()));

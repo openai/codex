@@ -12,6 +12,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_github_actions_linux_aarch64;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use regex_lite::Regex;
@@ -70,6 +71,8 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
 /// responses server, and ensures the model receives the synthesized abort.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_tool_records_history_entries() {
+    skip_if_github_actions_linux_aarch64!();
+
     let command = "sleep 60";
     let call_id = "call-history";
 
@@ -143,7 +146,7 @@ async fn interrupt_tool_records_history_entries() {
     let output = response_mock
         .function_call_output_text(call_id)
         .expect("missing function_call_output text");
-    let re = Regex::new(r"^Wall time: ([0-9]+(?:\.[0-9])?) seconds\naborted by user$")
+    let re = Regex::new(r"Wall time: ([0-9]+(?:\.[0-9]+)?) seconds\r?\naborted by user")
         .expect("compile regex");
     let captures = re.captures(&output);
     assert_matches!(

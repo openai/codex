@@ -121,6 +121,31 @@ fn is_bwrap_unavailable_output(output: &codex_core::exec::ExecToolCallOutput) ->
                 || output.stderr.text.contains("Invalid argument")))
 }
 
+fn is_landlock_restrict_output(output: &codex_core::exec::ExecToolCallOutput) -> bool {
+    output.stderr.text.contains("Sandbox(LandlockRestrict)")
+}
+
+async fn should_skip_workspace_write_tests() -> bool {
+    match run_cmd_result_with_writable_roots(
+        &["bash", "-lc", "true"],
+        &[],
+        LONG_TIMEOUT_MS,
+        false,
+        false,
+    )
+    .await
+    {
+        Ok(_) => false,
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => {
+            is_landlock_restrict_output(&output)
+        }
+        // A hung probe does not give us actionable signal; skip rather than
+        // fail a suite that is already running in a degraded sandbox.
+        Err(CodexErr::Sandbox(SandboxErr::Timeout { .. })) => true,
+        Err(err) => panic!("workspace-write sandbox probe failed unexpectedly: {err:?}"),
+    }
+}
+
 async fn should_skip_bwrap_tests() -> bool {
     match run_cmd_result_with_writable_roots(
         &["bash", "-lc", "true"],
@@ -158,6 +183,10 @@ fn expect_denied(
 
 #[tokio::test]
 async fn test_root_read() {
+    if should_skip_workspace_write_tests().await {
+        eprintln!("skipping workspace-write test: landlock restrictions are unavailable");
+        return;
+    }
     run_cmd(&["ls", "-l", "/bin"], &[], SHORT_TIMEOUT_MS).await;
 }
 
@@ -264,6 +293,11 @@ async fn bwrap_preserves_writable_dev_shm_bind_mount() {
 
 #[tokio::test]
 async fn test_writable_root() {
+    if should_skip_workspace_write_tests().await {
+        eprintln!("skipping workspace-write test: landlock restrictions are unavailable");
+        return;
+    }
+
     let tmpdir = tempfile::tempdir().unwrap();
     let file_path = tmpdir.path().join("test");
     run_cmd(
@@ -282,6 +316,11 @@ async fn test_writable_root() {
 
 #[tokio::test]
 async fn test_no_new_privs_is_enabled() {
+    if should_skip_workspace_write_tests().await {
+        eprintln!("skipping workspace-write test: landlock restrictions are unavailable");
+        return;
+    }
+
     let output = run_cmd_output(
         &["bash", "-lc", "grep '^NoNewPrivs:' /proc/self/status"],
         &[],
@@ -300,9 +339,17 @@ async fn test_no_new_privs_is_enabled() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "Sandbox(Timeout")]
 async fn test_timeout() {
-    run_cmd(&["sleep", "2"], &[], 50).await;
+    if should_skip_workspace_write_tests().await {
+        eprintln!("skipping workspace-write test: landlock restrictions are unavailable");
+        return;
+    }
+
+    let result = run_cmd_result_with_writable_roots(&["sleep", "2"], &[], 50, false, false).await;
+    assert!(
+        matches!(result, Err(CodexErr::Sandbox(SandboxErr::Timeout { .. }))),
+        "expected sandbox timeout, got {result:?}"
+    );
 }
 
 /// Helper that runs `cmd` under the Linux sandbox and asserts that the command

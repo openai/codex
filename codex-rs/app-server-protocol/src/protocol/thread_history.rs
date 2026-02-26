@@ -1,3 +1,16 @@
+//! Reconstruct app-server turn history from persisted rollout items.
+//!
+//! This module translates the low-level rollout log into the higher-level `Turn` / `ThreadItem`
+//! structures returned by app-server APIs. The same reducer is used both for replaying stored
+//! rollouts and for incrementally rebuilding the current turn from live `EventMsg` values.
+//! Callers must feed items in recorded order; reordering lifecycle events can silently attach work
+//! to the wrong turn while still producing a superficially valid transcript.
+//!
+//! Modern rollouts persist explicit turn lifecycle events, which means replay can preserve stable
+//! turn ids. Legacy rollouts may only contain message/tool events, so replay has to synthesize
+//! turn ids while rebuilding them. Consumers that need durable turn anchors, such as turn-based
+//! `thread/fork`, should reject those synthesized ids rather than treating them as stable.
+
 use crate::protocol::v2::CollabAgentState;
 use crate::protocol::v2::CollabAgentTool;
 use crate::protocol::v2::CollabAgentToolCallStatus;
@@ -57,7 +70,10 @@ use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 /// Convert persisted [`RolloutItem`] entries into a sequence of [`Turn`] values.
 ///
 /// When available, this uses `TurnContext.turn_id` as the canonical turn id so
-/// resumed/rebuilt thread history preserves the original turn identifiers.
+/// resumed/rebuilt thread history preserves the original turn identifiers. Callers that also need
+/// to distinguish between stable and replay-synthesized turn ids should drive
+/// [`ThreadHistoryBuilder`] directly and inspect [`ThreadHistoryBuilder::has_synthetic_turn_ids`]
+/// before consuming the final turn list.
 pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
     let mut builder = ThreadHistoryBuilder::new();
     for item in items {
@@ -66,10 +82,19 @@ pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
     builder.finish()
 }
 
+/// Stateful reducer that groups rollout lifecycle items into app-server turns.
+///
+/// The builder owns the in-progress turn boundary while replay is in flight, then emits the
+/// finalized `Turn` list once all items have been applied. It also tracks whether replay had to
+/// synthesize any turn ids so app-server can share the same reduction rules for stored history
+/// and live notifications without exposing that metadata in every convenience return type.
+/// Reusing a builder across unrelated transcripts without calling [`Self::reset`] can leak late
+/// events from one transcript into the next.
 pub struct ThreadHistoryBuilder {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
     next_item_index: i64,
+    has_synthetic_turn_ids: bool,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -79,23 +104,47 @@ impl Default for ThreadHistoryBuilder {
 }
 
 impl ThreadHistoryBuilder {
+    /// Create an empty reducer with no active turn.
+    ///
+    /// The builder expects to receive the rollout from the beginning of a transcript, in order.
+    /// Starting midway through a rollout can still produce `Turn` values, but turn boundaries and
+    /// synthetic-id detection may no longer describe the actual persisted history.
     pub fn new() -> Self {
         Self {
             turns: Vec::new(),
             current_turn: None,
             next_item_index: 1,
+            has_synthetic_turn_ids: false,
         }
     }
 
+    /// Clear all accumulated turns and return the builder to its initial state.
     pub fn reset(&mut self) {
         *self = Self::new();
     }
 
-    pub fn finish(mut self) -> Vec<Turn> {
-        self.finish_current_turn();
-        self.turns
+    /// Finalize replay and return only the reconstructed turns.
+    pub fn finish(self) -> Vec<Turn> {
+        let mut this = self;
+        this.finish_current_turn();
+        this.turns
     }
 
+    /// Return whether replay had to synthesize any turn ids so far.
+    ///
+    /// This becomes true when replay encounters legacy history without explicit turn lifecycle
+    /// events and must mint replacement ids while rebuilding turns. Callers that want to use turn
+    /// ids as stable anchors should check this before trusting replayed ids.
+    pub fn has_synthetic_turn_ids(&self) -> bool {
+        self.has_synthetic_turn_ids
+    }
+
+    /// Return the current turn view without consuming the builder.
+    ///
+    /// When a turn is actively streaming, this returns that in-progress turn. Otherwise it falls
+    /// back to the most recently completed turn. This is useful for live UI updates, but a caller
+    /// that treats the result as committed persisted history can accidentally display incomplete
+    /// state after a partially applied event stream.
     pub fn active_turn_snapshot(&self) -> Option<Turn> {
         self.current_turn
             .as_ref()
@@ -103,6 +152,7 @@ impl ThreadHistoryBuilder {
             .or_else(|| self.turns.last().cloned())
     }
 
+    /// Return whether replay is currently inside an unfinished turn boundary.
     pub fn has_active_turn(&self) -> bool {
         self.current_turn.is_some()
     }
@@ -169,6 +219,12 @@ impl ThreadHistoryBuilder {
         }
     }
 
+    /// Apply one persisted rollout line to the reducer.
+    ///
+    /// Unlike [`Self::handle_event`], this accepts the outer `RolloutItem` wrapper so replay can
+    /// preserve rollback markers and explicit turn boundaries exactly as they were recorded on
+    /// disk. Feed items in file order; replaying a suffix or shuffling lines can still produce
+    /// syntactically valid turns while silently attaching items to the wrong exchange.
     pub fn handle_rollout_item(&mut self, item: &RolloutItem) {
         match item {
             RolloutItem::EventMsg(event) => self.handle_event(event),
@@ -861,8 +917,15 @@ impl ThreadHistoryBuilder {
     }
 
     fn new_turn(&mut self, id: Option<String>) -> PendingTurn {
+        let id = match id {
+            Some(id) => id,
+            None => {
+                self.has_synthetic_turn_ids = true;
+                Uuid::now_v7().to_string()
+            }
+        };
         PendingTurn {
-            id: id.unwrap_or_else(|| Uuid::now_v7().to_string()),
+            id,
             items: Vec::new(),
             error: None,
             status: TurnStatus::Completed,
@@ -950,6 +1013,10 @@ fn render_review_output_text(output: &ReviewOutputEvent) -> String {
     }
 }
 
+/// Convert core patch-apply change records into the app-server wire format.
+///
+/// The returned list is sorted by path so repeated replays of the same patch event stay stable for
+/// clients and snapshot tests.
 pub fn convert_patch_changes(
     changes: &HashMap<std::path::PathBuf, codex_protocol::protocol::FileChange>,
 ) -> Vec<FileUpdateChange> {
@@ -1196,6 +1263,66 @@ mod tests {
                 phase: None,
             }
         );
+    }
+
+    #[test]
+    fn reports_synthetic_turn_ids_for_legacy_history() {
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "legacy".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            })),
+            RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "reply".into(),
+                phase: None,
+            })),
+        ];
+
+        let mut builder = ThreadHistoryBuilder::new();
+        for item in &items {
+            builder.handle_rollout_item(item);
+        }
+
+        assert!(builder.has_synthetic_turn_ids());
+        assert_eq!(builder.finish().len(), 1);
+    }
+
+    #[test]
+    fn reports_no_synthetic_turn_ids_when_turn_boundaries_are_explicit() {
+        let turn_id = "turn-explicit";
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.to_string(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "modern".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            })),
+            RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "reply".into(),
+                phase: None,
+            })),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn_id.to_string(),
+                last_agent_message: Some("reply".into()),
+            })),
+        ];
+
+        let mut builder = ThreadHistoryBuilder::new();
+        for item in &items {
+            builder.handle_rollout_item(item);
+        }
+
+        assert!(!builder.has_synthetic_turn_ids());
+        let turns = builder.finish();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].id, turn_id);
     }
 
     #[test]

@@ -134,6 +134,7 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -2257,7 +2258,7 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let (_, thread) = match self.load_thread(&thread_id).await {
+        let (thread_id, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -2265,15 +2266,52 @@ impl CodexMessageProcessor {
             }
         };
 
+        let expected_name = name.clone();
+
         if let Err(err) = thread.submit(Op::SetThreadName { name }).await {
             self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
                 .await;
             return;
         }
 
+        if let Err(err) = self
+            .wait_for_thread_name_persisted(thread_id, &expected_name)
+            .await
+        {
+            self.send_internal_error(
+                request_id,
+                format!("failed to observe persisted thread name: {err}"),
+            )
+            .await;
+            return;
+        }
+
         self.outgoing
             .send_response(request_id, ThreadSetNameResponse {})
             .await;
+    }
+
+    async fn wait_for_thread_name_persisted(
+        &self,
+        thread_id: ThreadId,
+        expected_name: &str,
+    ) -> std::io::Result<()> {
+        let codex_home = self.config.codex_home.clone();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match find_thread_name_by_id(&codex_home, &thread_id).await? {
+                    Some(name) if name == expected_name => return Ok(()),
+                    _ => tokio::time::sleep(Duration::from_millis(10)).await,
+                }
+            }
+        })
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("timed out waiting for thread name {expected_name:?}"),
+            )
+        })?
     }
 
     async fn thread_unarchive(
@@ -3361,6 +3399,7 @@ impl CodexMessageProcessor {
         let ThreadForkParams {
             thread_id,
             path,
+            fork_after_turn_id,
             model,
             model_provider,
             cwd,
@@ -3474,21 +3513,71 @@ impl CodexMessageProcessor {
         };
 
         let fallback_model_provider = config.model_provider_id.clone();
+        let anchored_fork_history = if let Some(fork_after_turn_id) = fork_after_turn_id.as_deref()
+        {
+            let source_items = match read_rollout_items_from_rollout(rollout_path.as_path()).await {
+                Ok(items) => items,
+                Err(err) => {
+                    let (code, message) = match err.kind() {
+                        std::io::ErrorKind::NotFound => (
+                            INVALID_REQUEST_ERROR_CODE,
+                            format!("failed to load rollout `{}`: {err}", rollout_path.display()),
+                        ),
+                        _ => (
+                            INTERNAL_ERROR_CODE,
+                            format!(
+                                "failed to read rollout `{}` for thread fork: {err}",
+                                rollout_path.display()
+                            ),
+                        ),
+                    };
+                    let error = JSONRPCErrorError {
+                        code,
+                        message,
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+            match resolve_thread_fork_history_from_anchor(
+                source_items.as_slice(),
+                fork_after_turn_id,
+            ) {
+                Ok(history_items) => Some(InitialHistory::Forked(history_items)),
+                Err(message) => {
+                    self.send_invalid_request_error(request_id, message).await;
+                    return;
+                }
+            }
+        } else {
+            None
+        };
 
         let NewThread {
             thread_id,
             session_configured,
             ..
-        } = match self
-            .thread_manager
-            .fork_thread(
-                usize::MAX,
-                config,
-                rollout_path.clone(),
-                persist_extended_history,
-            )
-            .await
-        {
+        } = match if let Some(initial_history) = anchored_fork_history {
+            self.thread_manager
+                .resume_thread_with_history(
+                    config,
+                    initial_history,
+                    self.auth_manager.clone(),
+                    persist_extended_history,
+                )
+                .await
+        } else {
+            self.thread_manager
+                .fork_thread(
+                    usize::MAX,
+                    config,
+                    rollout_path.clone(),
+                    persist_extended_history,
+                )
+                .await
+        } {
             Ok(thread) => thread,
             Err(err) => {
                 let (code, message) = match err {
@@ -7082,6 +7171,112 @@ async fn sync_default_client_residency_requirement(
             error = %err,
             "failed to sync default client residency requirement after auth refresh"
         ),
+    }
+}
+
+/// Return the exact rollout prefix that should seed a turn-anchored `thread/fork`.
+///
+/// The selected turn stays in the returned history, while every later turn is removed. The helper
+/// validates that the anchor is a stable, already-materialized exchange: legacy replay-synthesized
+/// ids are rejected, the turn must not still be in progress, and the turn must include both a
+/// user message and an agent response. The cutoff uses both the next explicit `TurnStarted` event
+/// and the next user-message boundary so the fork cannot accidentally retain trailing non-user
+/// events that conceptually belong to a later turn.
+fn resolve_thread_fork_history_from_anchor(
+    rollout_items: &[RolloutItem],
+    fork_after_turn_id: &str,
+) -> Result<Vec<RolloutItem>, String> {
+    let mut history_builder = ThreadHistoryBuilder::new();
+    for item in rollout_items {
+        history_builder.handle_rollout_item(item);
+    }
+    if history_builder.has_synthetic_turn_ids() {
+        return Err(
+            "turn-based forking is not supported for legacy thread history; use full thread/fork"
+                .to_string(),
+        );
+    }
+    let turns = history_builder.finish();
+
+    let Some(target_turn_idx) = turns.iter().position(|turn| turn.id == fork_after_turn_id) else {
+        return Err(format!(
+            "fork turn not found in source thread history: {fork_after_turn_id}"
+        ));
+    };
+    let target_turn = &turns[target_turn_idx];
+    let has_user_message = target_turn
+        .items
+        .iter()
+        .any(|item| matches!(item, ThreadItem::UserMessage { .. }));
+    let has_agent_message = target_turn
+        .items
+        .iter()
+        .any(|item| matches!(item, ThreadItem::AgentMessage { .. }));
+
+    if matches!(target_turn.status, TurnStatus::InProgress) {
+        return Err("fork turn must be completed/interrupted/failed, not in progress".to_string());
+    }
+    if !has_user_message {
+        return Err("fork turn must contain a user message".to_string());
+    }
+    if !has_agent_message {
+        return Err("fork turn must contain an agent message".to_string());
+    }
+
+    let Some(next_turn) = turns.get(target_turn_idx.saturating_add(1)) else {
+        return Ok(rollout_items.to_vec());
+    };
+    let next_turn_id = next_turn.id.as_str();
+
+    let next_turn_started_idx = rollout_items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::TurnStarted(payload))
+                    if payload.turn_id == next_turn_id
+            )
+        })
+        .ok_or_else(|| {
+            format!("failed to locate boundary after fork turn: missing next turn `{next_turn_id}`")
+        })?;
+
+    let target_terminal_idx = rollout_items.iter().rposition(|item| {
+        matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::TurnComplete(payload))
+                if payload.turn_id == fork_after_turn_id
+        ) || matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::TurnAborted(payload))
+                if payload.turn_id.as_deref() == Some(fork_after_turn_id)
+        )
+    });
+
+    let next_user_boundary_idx = target_terminal_idx
+        .and_then(|terminal_idx| {
+            rollout_items
+                .iter()
+                .enumerate()
+                .skip(terminal_idx.saturating_add(1))
+                .find_map(|(idx, item)| is_user_turn_rollout_boundary(item).then_some(idx))
+        })
+        .unwrap_or(usize::MAX);
+    let cut_idx = next_turn_started_idx.min(next_user_boundary_idx);
+
+    Ok(rollout_items[..cut_idx].to_vec())
+}
+
+/// Return whether this rollout item starts a new user turn for truncation purposes.
+///
+/// Anchored forks use this as a fallback boundary when explicit turn lifecycle events are present
+/// but a later turn also emitted standalone user-message markers that should not leak into the
+/// forked prefix.
+fn is_user_turn_rollout_boundary(item: &RolloutItem) -> bool {
+    match item {
+        RolloutItem::ResponseItem(ResponseItem::Message { role, .. }) => role == "user",
+        RolloutItem::EventMsg(EventMsg::UserMessage(_)) => true,
+        _ => false,
     }
 }
 

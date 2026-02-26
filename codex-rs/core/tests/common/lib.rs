@@ -483,3 +483,28 @@ macro_rules! skip_if_windows {
         }
     }};
 }
+
+pub fn is_github_actions_linux_aarch64() -> bool {
+    cfg!(all(target_os = "linux", target_arch = "aarch64"))
+        && ::std::env::var("GITHUB_ACTIONS").is_ok()
+}
+
+#[macro_export]
+macro_rules! skip_if_github_actions_linux_aarch64 {
+    () => {{
+        if $crate::is_github_actions_linux_aarch64() {
+            println!(
+                "Skipping test because the default Linux sandbox is unavailable on GitHub Actions linux-aarch64."
+            );
+            return;
+        }
+    }};
+    ($return_value:expr $(,)?) => {{
+        if $crate::is_github_actions_linux_aarch64() {
+            println!(
+                "Skipping test because the default Linux sandbox is unavailable on GitHub Actions linux-aarch64."
+            );
+            return $return_value;
+        }
+    }};
+}
