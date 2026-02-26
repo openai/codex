@@ -61,6 +61,8 @@ mod app_backtrack;
 mod app_event;
 mod app_event_sender;
 mod ascii_animation;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+mod audio_device;
 mod bottom_pane;
 mod chatwidget;
 mod cli;
@@ -121,6 +123,7 @@ mod voice;
 mod voice {
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
+    use codex_core::config::Config;
     use codex_protocol::protocol::RealtimeAudioFrame;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -144,7 +147,7 @@ mod voice {
             Err("voice input is unavailable in this build".to_string())
         }
 
-        pub fn start_realtime(_tx: AppEventSender) -> Result<Self, String> {
+        pub fn start_realtime(_config: &Config, _tx: AppEventSender) -> Result<Self, String> {
             Err("voice input is unavailable in this build".to_string())
         }
 
@@ -184,7 +187,7 @@ mod voice {
     }
 
     impl RealtimeAudioPlayer {
-        pub(crate) fn start() -> Result<Self, String> {
+        pub(crate) fn start(_config: &Config) -> Result<Self, String> {
             Err("voice output is unavailable in this build".to_string())
         }
 

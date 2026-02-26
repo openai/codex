@@ -429,6 +429,9 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Machine-local realtime audio device preferences used by realtime voice.
+    pub realtime_audio: RealtimeAudioConfig,
+
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
     /// connection) without changing normal provider HTTP requests.
@@ -1178,6 +1181,10 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Machine-local realtime audio device preferences used by realtime voice.
+    #[serde(default)]
+    pub realtime: Option<RealtimeToml>,
+
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
     /// connection) without changing normal provider HTTP requests.
@@ -1307,6 +1314,26 @@ impl ProjectConfig {
     pub fn is_untrusted(&self) -> bool {
         matches!(self.trust_level, Some(TrustLevel::Untrusted))
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RealtimeAudioConfig {
+    pub microphone: Option<String>,
+    pub speaker: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RealtimeToml {
+    #[serde(default)]
+    pub audio: Option<RealtimeAudioToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RealtimeAudioToml {
+    pub microphone: Option<String>,
+    pub speaker: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
@@ -2150,6 +2177,13 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            realtime_audio: cfg.realtime.and_then(|realtime| realtime.audio).map_or_else(
+                RealtimeAudioConfig::default,
+                |audio| RealtimeAudioConfig {
+                    microphone: audio.microphone,
+                    speaker: audio.speaker,
+                },
+            ),
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             forced_chatgpt_workspace_id,
@@ -4767,6 +4801,7 @@ model_verbosity = "high"
                 model_verbosity: None,
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+                realtime_audio: RealtimeAudioConfig::default(),
                 experimental_realtime_ws_base_url: None,
                 experimental_realtime_ws_backend_prompt: None,
                 base_instructions: None,
@@ -4893,6 +4928,7 @@ model_verbosity = "high"
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
@@ -5017,6 +5053,7 @@ model_verbosity = "high"
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
@@ -5127,6 +5164,7 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            realtime_audio: RealtimeAudioConfig::default(),
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
@@ -5969,6 +6007,37 @@ experimental_realtime_ws_backend_prompt = "prompt from config"
             config.experimental_realtime_ws_backend_prompt.as_deref(),
             Some("prompt from config")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn realtime_audio_loads_from_config_toml() -> std::io::Result<()> {
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+[realtime.audio]
+microphone = "USB Mic"
+speaker = "Desk Speakers"
+"#,
+        )
+        .expect("TOML deserialization should succeed");
+
+        let realtime_audio = cfg
+            .realtime
+            .as_ref()
+            .and_then(|realtime| realtime.audio.as_ref())
+            .expect("realtime audio config should be present");
+        assert_eq!(realtime_audio.microphone.as_deref(), Some("USB Mic"));
+        assert_eq!(realtime_audio.speaker.as_deref(), Some("Desk Speakers"));
+
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.realtime_audio.microphone.as_deref(), Some("USB Mic"));
+        assert_eq!(config.realtime_audio.speaker.as_deref(), Some("Desk Speakers"));
         Ok(())
     }
 }

@@ -207,7 +207,7 @@ impl ChatWidget {
         {
             if self.realtime_conversation.audio_player.is_none() {
                 self.realtime_conversation.audio_player =
-                    crate::voice::RealtimeAudioPlayer::start().ok();
+                    crate::voice::RealtimeAudioPlayer::start(&self.config).ok();
             }
             if let Some(player) = &self.realtime_conversation.audio_player
                 && let Err(err) = player.enqueue_frame(frame)
@@ -231,7 +231,10 @@ impl ChatWidget {
         self.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
         self.request_redraw();
 
-        let capture = match crate::voice::VoiceCapture::start_realtime(self.app_event_tx.clone()) {
+        let capture = match crate::voice::VoiceCapture::start_realtime(
+            &self.config,
+            self.app_event_tx.clone(),
+        ) {
             Ok(capture) => capture,
             Err(err) => {
                 self.remove_transcription_placeholder(&placeholder_id);
@@ -250,7 +253,7 @@ impl ChatWidget {
         self.realtime_conversation.capture = Some(capture);
         if self.realtime_conversation.audio_player.is_none() {
             self.realtime_conversation.audio_player =
-                crate::voice::RealtimeAudioPlayer::start().ok();
+                crate::voice::RealtimeAudioPlayer::start(&self.config).ok();
         }
 
         std::thread::spawn(move || {
