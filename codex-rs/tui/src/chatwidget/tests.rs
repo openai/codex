@@ -1743,23 +1743,25 @@ async fn make_chatwidget_manual(
 // ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper
 // filters until we see a submission op.
 fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
-    while let Ok(op) = op_rx.try_recv() {
-        if matches!(op, Op::UserTurn { .. }) {
-            return op;
+    loop {
+        match op_rx.try_recv() {
+            Ok(op @ Op::UserTurn { .. }) => return op,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected a submit op but queue was empty"),
+            Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),
         }
     }
-
-    panic!("expected a submit op but queue was empty");
 }
 
 fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
-    while let Ok(op) = op_rx.try_recv() {
-        if op == Op::Interrupt {
-            return;
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::Interrupt) => return,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected an interrupt op but queue was empty"),
+            Err(TryRecvError::Disconnected) => panic!("expected interrupt op but channel closed"),
         }
     }
-
-    panic!("expected an interrupt op but queue was empty");
 }
 
 fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
