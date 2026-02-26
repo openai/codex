@@ -8,6 +8,7 @@ use codex_protocol::models::MacOsAutomationValue;
 use codex_protocol::models::MacOsPermissions;
 #[cfg(target_os = "macos")]
 use codex_protocol::models::MacOsPreferencesValue;
+use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
@@ -20,10 +21,6 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::protocol::AskForApproval;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
-#[cfg(target_os = "macos")]
-use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
-#[cfg(not(target_os = "macos"))]
-type MacOsSeatbeltProfileExtensions = ();
 
 pub(crate) fn compile_permission_profile(
     skill_dir: &Path,
