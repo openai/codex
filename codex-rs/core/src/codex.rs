@@ -8563,8 +8563,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_context_updates_and_set_reference_context_item_updates_baseline_without_emitting_diffs(
-    ) {
+    async fn record_context_updates_and_set_reference_context_item_updates_baseline_without_emitting_diffs()
+     {
         let (session, previous_context) = make_session_and_context().await;
         let next_model = if previous_context.model_info.slug == "gpt-5.1" {
             "gpt-5"
@@ -8619,8 +8619,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_context_updates_and_set_reference_context_item_persists_full_reinjection_to_rollout(
-    ) {
+    async fn record_context_updates_and_set_reference_context_item_persists_full_reinjection_to_rollout()
+     {
         let (session, previous_context) = make_session_and_context().await;
         let next_model = if previous_context.model_info.slug == "gpt-5.1" {
             "gpt-5"
