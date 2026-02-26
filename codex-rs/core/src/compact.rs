@@ -209,10 +209,7 @@ async fn run_compact_task_inner(
         InitialContextInjection::BeforeLastUserMessage
     ) {
         let initial_context = sess
-            .build_initial_context_with_previous_model(
-                turn_context.as_ref(),
-                previous_user_turn_model,
-            )
+            .build_initial_context(turn_context.as_ref(), previous_user_turn_model)
             .await;
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
@@ -463,7 +460,7 @@ mod tests {
     ) -> (Vec<ResponseItem>, Vec<ResponseItem>) {
         let (session, turn_context) = crate::codex::make_session_and_context().await;
         let initial_context = session
-            .build_initial_context_with_previous_model(&turn_context, previous_user_turn_model)
+            .build_initial_context(&turn_context, previous_user_turn_model)
             .await;
         let refreshed = crate::compact_remote::process_compacted_history(
             &session,

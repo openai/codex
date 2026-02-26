@@ -1624,7 +1624,7 @@ impl Session {
                 // TODO(ccunningham): Defer initial context insertion until the first real turn
                 // starts so it reflects the actual first-turn settings (permissions, etc.) and
                 // we do not emit model-visible "diff" updates before the first user message.
-                let items = self.build_initial_context(&turn_context).await;
+                let items = self.build_initial_context(&turn_context, None).await;
                 self.record_conversation_items(&turn_context, &items).await;
                 {
                     let mut state = self.state.lock().await;
@@ -1728,7 +1728,7 @@ impl Session {
                 }
 
                 // Append the current session's initial context after the reconstructed history.
-                let initial_context = self.build_initial_context(&turn_context).await;
+                let initial_context = self.build_initial_context(&turn_context, None).await;
                 self.record_conversation_items(&turn_context, &initial_context)
                     .await;
                 {
@@ -2862,7 +2862,7 @@ impl Session {
                     } else {
                         let user_messages = collect_user_messages(history.raw_items());
                         let rebuilt = compact::build_compacted_history(
-                            self.build_initial_context(turn_context).await,
+                            self.build_initial_context(turn_context, None).await,
                             &user_messages,
                             &compacted.message,
                         );
@@ -2988,14 +2988,6 @@ impl Session {
     }
 
     pub(crate) async fn build_initial_context(
-        &self,
-        turn_context: &TurnContext,
-    ) -> Vec<ResponseItem> {
-        self.build_initial_context_with_previous_model(turn_context, None)
-            .await
-    }
-
-    pub(crate) async fn build_initial_context_with_previous_model(
         &self,
         turn_context: &TurnContext,
         previous_user_turn_model: Option<&str>,
@@ -3139,7 +3131,7 @@ impl Session {
         let reference_context_item = self.reference_context_item().await;
         let should_inject_full_context = reference_context_item.is_none();
         let context_items = if should_inject_full_context {
-            self.build_initial_context_with_previous_model(turn_context, previous_user_turn_model)
+            self.build_initial_context(turn_context, previous_user_turn_model)
                 .await
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
@@ -7294,7 +7286,7 @@ mod tests {
         session
             .record_context_updates_and_set_reference_context_item(&turn_context, None)
             .await;
-        expected.extend(session.build_initial_context(&turn_context).await);
+        expected.extend(session.build_initial_context(&turn_context, None).await);
         let history_after_seed = session.clone_history().await;
         assert_eq!(expected, history_after_seed.raw_items());
 
@@ -7456,7 +7448,7 @@ mod tests {
         let reconstruction_turn = session.new_default_turn().await;
         expected.extend(
             session
-                .build_initial_context(reconstruction_turn.as_ref())
+                .build_initial_context(reconstruction_turn.as_ref(), None)
                 .await,
         );
         let history = session.state.lock().await.clone_history();
@@ -7499,7 +7491,7 @@ mod tests {
     async fn thread_rollback_drops_last_turn_from_history() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        let initial_context = sess.build_initial_context(tc.as_ref(), None).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -7570,7 +7562,7 @@ mod tests {
     async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        let initial_context = sess.build_initial_context(tc.as_ref(), None).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -7598,7 +7590,7 @@ mod tests {
     async fn thread_rollback_fails_when_turn_in_progress() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        let initial_context = sess.build_initial_context(tc.as_ref(), None).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -7619,7 +7611,7 @@ mod tests {
     async fn thread_rollback_fails_when_num_turns_is_zero() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
-        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        let initial_context = sess.build_initial_context(tc.as_ref(), None).await;
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
@@ -8620,7 +8612,7 @@ mod tests {
             .record_context_updates_and_set_reference_context_item(&turn_context, None)
             .await;
         let history = session.clone_history().await;
-        let initial_context = session.build_initial_context(&turn_context).await;
+        let initial_context = session.build_initial_context(&turn_context, None).await;
         assert_eq!(history.raw_items().to_vec(), initial_context);
 
         let current_context = session.reference_context_item().await;
@@ -8664,19 +8656,16 @@ mod tests {
 
         let history = session.clone_history().await;
         let mut expected_history = vec![compacted_summary];
-        expected_history.extend(session.build_initial_context(&turn_context).await);
+        expected_history.extend(session.build_initial_context(&turn_context, None).await);
         assert_eq!(history.raw_items().to_vec(), expected_history);
     }
 
     #[tokio::test]
-    async fn build_initial_context_with_previous_model_prepends_model_switch_message() {
+    async fn build_initial_context_prepends_model_switch_message() {
         let (session, turn_context) = make_session_and_context().await;
 
         let initial_context = session
-            .build_initial_context_with_previous_model(
-                &turn_context,
-                Some("previous-regular-model"),
-            )
+            .build_initial_context(&turn_context, Some("previous-regular-model"))
             .await;
 
         let ResponseItem::Message { role, content, .. } = &initial_context[0] else {
@@ -9084,7 +9073,7 @@ mod tests {
         // personality_spec) matches reconstruction.
         let reconstruction_turn = session.new_default_turn().await;
         let mut initial_context = session
-            .build_initial_context(reconstruction_turn.as_ref())
+            .build_initial_context(reconstruction_turn.as_ref(), None)
             .await;
         // Ensure personality_spec is present when Personality is enabled, so expected matches
         // what reconstruction produces (build_initial_context may omit it when baked into model).
