@@ -14,6 +14,8 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use regex_lite::Regex;
+use std::sync::LazyLock;
 
 struct MarkdownStyles {
     h1: Style,
@@ -89,7 +91,7 @@ pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>)
 struct LinkState {
     destination: String,
     show_destination: bool,
-    hidden_line_number: Option<String>,
+    hidden_location_suffix: Option<String>,
     label_styled: bool,
 }
 
@@ -97,13 +99,21 @@ fn should_render_link_destination(dest_url: &str) -> bool {
     !is_local_path_like_link(dest_url)
 }
 
-fn hidden_local_link_line_number(dest_url: &str) -> Option<String> {
+static COLON_LOCATION_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r":\d+(?::\d+)?(?:[-–]\d+(?::\d+)?)?$").expect("valid location suffix regex")
+});
+
+static HASH_LOCATION_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^L\d+(?:C\d+)?(?:-L\d+(?:C\d+)?)?$").expect("valid hash location regex")
+});
+
+fn hidden_local_link_location_suffix(dest_url: &str) -> Option<String> {
     if !is_local_path_like_link(dest_url) {
         return None;
     }
 
-    parse_hash_line_anchor(dest_url)
-        .or_else(|| parse_colon_line_suffix(dest_url))
+    parse_hash_location_suffix(dest_url)
+        .or_else(|| parse_colon_location_suffix(dest_url))
         .map(std::string::ToString::to_string)
 }
 
@@ -121,26 +131,15 @@ fn is_local_path_like_link(dest_url: &str) -> bool {
         )
 }
 
-fn parse_hash_line_anchor(dest_url: &str) -> Option<&str> {
+fn parse_hash_location_suffix(dest_url: &str) -> Option<&str> {
     let (_, fragment) = dest_url.rsplit_once('#')?;
-    let line_part = fragment.strip_prefix('L')?;
-    let line = line_part.split('C').next()?;
-    (!line.is_empty() && line.bytes().all(|b| b.is_ascii_digit())).then_some(line)
+    HASH_LOCATION_SUFFIX_RE
+        .is_match(fragment)
+        .then_some(dest_url.get(dest_url.len() - fragment.len() - 1..)?)
 }
 
-fn parse_colon_line_suffix(dest_url: &str) -> Option<&str> {
-    let (prefix, tail) = dest_url.rsplit_once(':')?;
-    if !tail.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-
-    if let Some((_, line)) = prefix.rsplit_once(':')
-        && line.bytes().all(|b| b.is_ascii_digit())
-    {
-        return Some(line);
-    }
-
-    Some(tail)
+fn parse_colon_location_suffix(dest_url: &str) -> Option<&str> {
+    COLON_LOCATION_SUFFIX_RE.find(dest_url).map(|m| m.as_str())
 }
 
 struct Writer<'a, I>
@@ -532,7 +531,7 @@ where
         }
         self.link = Some(LinkState {
             show_destination,
-            hidden_line_number: hidden_local_link_line_number(&dest_url),
+            hidden_location_suffix: hidden_local_link_location_suffix(&dest_url),
             label_styled,
             destination: dest_url,
         });
@@ -540,15 +539,20 @@ where
 
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
-            if link.label_styled {
-                self.pop_inline_style();
-            }
             if link.show_destination {
+                if link.label_styled {
+                    self.pop_inline_style();
+                }
                 self.push_span(" (".into());
                 self.push_span(Span::styled(link.destination, self.styles.link));
                 self.push_span(")".into());
-            } else if let Some(line_number) = link.hidden_line_number {
-                self.push_span(format!(" (line {line_number})").into());
+            } else if let Some(location_suffix) = link.hidden_location_suffix {
+                self.push_span(Span::styled(location_suffix, self.styles.code));
+                if link.label_styled {
+                    self.pop_inline_style();
+                }
+            } else if link.label_styled {
+                self.pop_inline_style();
             }
         }
     }

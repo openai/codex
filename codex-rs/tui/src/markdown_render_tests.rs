@@ -653,12 +653,10 @@ fn link() {
 
 #[test]
 fn file_link_hides_destination() {
-    let text =
-        render_markdown_text("[markdown_render.rs:74](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)");
-    let expected = Text::from(Line::from_iter([
-        "markdown_render.rs:74".cyan(),
-        " (line 74)".into(),
-    ]));
+    let text = render_markdown_text(
+        "[codex-rs/tui/src/markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs)",
+    );
+    let expected = Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs".cyan()]));
     assert_eq!(text, expected);
 }
 
@@ -668,7 +666,7 @@ fn file_link_shows_line_number_from_hidden_destination() {
         render_markdown_text("[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)");
     let expected = Text::from(Line::from_iter([
         "markdown_render.rs".cyan(),
-        " (line 74)".into(),
+        ":74".cyan(),
     ]));
     assert_eq!(text, expected);
 }
@@ -680,7 +678,31 @@ fn file_link_shows_line_number_from_hash_anchor() {
     );
     let expected = Text::from(Line::from_iter([
         "markdown_render.rs".cyan(),
-        " (line 74)".into(),
+        "#L74C3".cyan(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_shows_range_from_hidden_destination() {
+    let text = render_markdown_text(
+        "[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74:3-76:9)",
+    );
+    let expected = Text::from(Line::from_iter([
+        "markdown_render.rs".cyan(),
+        ":74:3-76:9".cyan(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_shows_hash_range_from_hidden_destination() {
+    let text = render_markdown_text(
+        "[markdown_render.rs](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3-L76C9)",
+    );
+    let expected = Text::from(Line::from_iter([
+        "markdown_render.rs".cyan(),
+        "#L74C3-L76C9".cyan(),
     ]));
     assert_eq!(text, expected);
 }
