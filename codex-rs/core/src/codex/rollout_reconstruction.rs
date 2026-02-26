@@ -256,15 +256,17 @@ impl Session {
             }
         }
 
+        let reference_context_item = match reference_context_item {
+            TurnReferenceContextItem::NeverSet | TurnReferenceContextItem::Cleared => None,
+            TurnReferenceContextItem::LatestSet(turn_reference_context_item) => {
+                Some(*turn_reference_context_item)
+            }
+        };
+
         RolloutReconstruction {
             history: history.raw_items().to_vec(),
             previous_model,
-            reference_context_item: match reference_context_item {
-                TurnReferenceContextItem::NeverSet | TurnReferenceContextItem::Cleared => None,
-                TurnReferenceContextItem::LatestSet(turn_reference_context_item) => {
-                    Some(*turn_reference_context_item)
-                }
-            },
+            reference_context_item,
         }
     }
 }
