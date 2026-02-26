@@ -523,6 +523,18 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         !env_texts.is_empty(),
         "expected environment context to be emitted: {env_texts:?}"
     );
+    assert!(
+        env_texts
+            .iter()
+            .any(|text| text.contains("<current_date>") && text.contains("</current_date>")),
+        "expected current_date in environment context: {env_texts:?}"
+    );
+    assert!(
+        env_texts
+            .iter()
+            .any(|text| text.contains("<timezone>") && text.contains("</timezone>")),
+        "expected timezone in environment context: {env_texts:?}"
+    );
 
     let env_count = input
         .iter()
