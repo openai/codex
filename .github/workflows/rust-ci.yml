@@ -374,7 +374,7 @@ jobs:
         if: ${{ matrix.profile == 'release' && (matrix.target == 'x86_64-pc-windows-msvc' || matrix.target == 'aarch64-pc-windows-msvc') }}
         shell: bash
         env:
-          RUSTFLAGS: ${{ matrix.target == 'aarch64-pc-windows-msvc' && '-C link-arg=/Gy' || '' }}
+          RUSTFLAGS: ${{ matrix.target == 'aarch64-pc-windows-msvc' && '-C link-arg=/arm64hazardfree' || '' }}
         run: |
           cargo build --target ${{ matrix.target }} --release --timings --bin codex --bin codex-responses-api-proxy
 
