@@ -98,7 +98,6 @@ pub struct McpServerConfig {
     /// Optional OAuth scopes to request during MCP login.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<String>>,
-    oauth_resource: None,
 
     /// Optional OAuth resource parameter to include during MCP login (RFC 8707).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,7 +146,6 @@ pub(crate) struct RawMcpServerConfig {
     pub disabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub scopes: Option<Vec<String>>,
-    oauth_resource: None,
     #[serde(default)]
     pub oauth_resource: Option<String>,
 }
