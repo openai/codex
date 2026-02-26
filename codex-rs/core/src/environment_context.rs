@@ -1,9 +1,7 @@
 use crate::codex::TurnContext;
+use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::shell::Shell;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use serde::Deserialize;
@@ -48,7 +46,6 @@ impl EnvironmentContext {
             cwd,
             network,
             subagents,
-            // should compare all fields except shell
             shell: _,
         } = other;
         self.cwd == *cwd && self.network == *network && self.subagents == *subagents
@@ -139,7 +136,7 @@ impl EnvironmentContext {
     /// </environment_context>
     /// ```
     pub fn serialize_to_xml(self) -> String {
-        let mut lines = vec![ENVIRONMENT_CONTEXT_OPEN_TAG.to_string()];
+        let mut lines = Vec::new();
         if let Some(cwd) = self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
         }
@@ -167,22 +164,13 @@ impl EnvironmentContext {
             lines.extend(subagents.lines().map(|line| format!("    {line}")));
             lines.push("  </subagents>".to_string());
         }
-        lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());
-        lines.join("\n")
+        ENVIRONMENT_CONTEXT_FRAGMENT.wrap(lines.join("\n"))
     }
 }
 
 impl From<EnvironmentContext> for ResponseItem {
     fn from(ec: EnvironmentContext) -> Self {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: ec.serialize_to_xml(),
-            }],
-            end_turn: None,
-            phase: None,
-        }
+        ENVIRONMENT_CONTEXT_FRAGMENT.into_message(ec.serialize_to_xml())
     }
 }
 

@@ -14,8 +14,6 @@ use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
-use crate::skills::SKILL_APPROVAL_DECLINED_MESSAGE;
-use crate::skills::ensure_skill_approval_for_command;
 use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -68,8 +66,6 @@ impl ShellHandler {
     ) -> ExecParams {
         ExecParams {
             command: params.command.clone(),
-            original_command: shlex::try_join(params.command.iter().map(String::as_str))
-                .unwrap_or_else(|_| params.command.join(" ")),
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
@@ -120,7 +116,6 @@ impl ShellCommandHandler {
 
         Ok(ExecParams {
             command,
-            original_command: params.command.clone(),
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
@@ -272,6 +267,13 @@ impl ToolHandler for ShellCommandHandler {
         };
 
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
+        maybe_emit_implicit_skill_invocation(
+            session.as_ref(),
+            turn.as_ref(),
+            &params.command,
+            params.workdir.as_deref(),
+        )
+        .await;
         let prefix_rule = params.prefix_rule.clone();
         let exec_params = Self::to_exec_params(
             &params,
@@ -348,28 +350,6 @@ impl ShellHandler {
                 "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
         }
-        let original_command = exec_params.original_command.as_str();
-        if !ensure_skill_approval_for_command(
-            session.as_ref(),
-            turn.as_ref(),
-            &call_id,
-            original_command,
-            exec_params.cwd.as_path(),
-        )
-        .await
-        {
-            return Err(FunctionCallError::RespondToModel(
-                SKILL_APPROVAL_DECLINED_MESSAGE.to_string(),
-            ));
-        }
-        let workdir = exec_params.cwd.to_string_lossy().into_owned();
-        maybe_emit_implicit_skill_invocation(
-            session.as_ref(),
-            turn.as_ref(),
-            original_command,
-            Some(workdir.as_str()),
-        )
-        .await;
 
         // Intercept apply_patch if present.
         if let Some(output) = intercept_apply_patch(

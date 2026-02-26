@@ -130,6 +130,12 @@ impl SkillsManager {
                 }),
         );
         let mut outcome = load_skills_from_roots(roots);
+        if !extra_user_roots.is_empty() {
+            // When extra user roots are provided, skip system skills before caching the result.
+            outcome
+                .skills
+                .retain(|skill| skill.scope != SkillScope::System);
+        }
         outcome.disabled_paths = disabled_paths_from_stack(&config_layer_stack);
         let (by_scripts_dir, by_doc_path) =
             build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());

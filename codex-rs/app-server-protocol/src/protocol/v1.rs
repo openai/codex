@@ -531,6 +531,15 @@ impl From<V1TextElement> for CoreTextElement {
     }
 }
 
+impl InputItem {
+    pub fn text_char_count(&self) -> usize {
+        match self {
+            InputItem::Text { text, .. } => text.chars().count(),
+            InputItem::Image { .. } | InputItem::LocalImage { .. } => 0,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 /// Deprecated in favor of AccountLoginCompletedNotification.

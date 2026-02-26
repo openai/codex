@@ -1,4 +1,5 @@
 use crate::config::NetworkMode;
+use crate::network_policy::BlockDecisionAuditEventArgs;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkDecisionSource;
 use crate::network_policy::NetworkPolicyDecider;
@@ -6,6 +7,7 @@ use crate::network_policy::NetworkPolicyDecision;
 use crate::network_policy::NetworkPolicyRequest;
 use crate::network_policy::NetworkPolicyRequestArgs;
 use crate::network_policy::NetworkProtocol;
+use crate::network_policy::emit_block_decision_audit_event;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
@@ -152,6 +154,15 @@ async fn handle_socks5_tcp(
     match app_state.enabled().await {
         Ok(true) => {}
         Ok(false) => {
+            emit_socks_block_decision_audit_event(
+                &app_state,
+                NetworkDecisionSource::ProxyState,
+                REASON_PROXY_DISABLED,
+                NetworkProtocol::Socks5Tcp,
+                host.as_str(),
+                port,
+                client.as_deref(),
+            );
             let details = PolicyDecisionDetails {
                 decision: NetworkPolicyDecision::Deny,
                 reason: REASON_PROXY_DISABLED,
@@ -185,6 +196,15 @@ async fn handle_socks5_tcp(
 
     match app_state.network_mode().await {
         Ok(NetworkMode::Limited) => {
+            emit_socks_block_decision_audit_event(
+                &app_state,
+                NetworkDecisionSource::ModeGuard,
+                REASON_METHOD_NOT_ALLOWED,
+                NetworkProtocol::Socks5Tcp,
+                host.as_str(),
+                port,
+                client.as_deref(),
+            );
             let details = PolicyDecisionDetails {
                 decision: NetworkPolicyDecision::Deny,
                 reason: REASON_METHOD_NOT_ALLOWED,
@@ -298,6 +318,15 @@ async fn inspect_socks5_udp(
     match state.enabled().await {
         Ok(true) => {}
         Ok(false) => {
+            emit_socks_block_decision_audit_event(
+                &state,
+                NetworkDecisionSource::ProxyState,
+                REASON_PROXY_DISABLED,
+                NetworkProtocol::Socks5Udp,
+                host.as_str(),
+                port,
+                client.as_deref(),
+            );
             let details = PolicyDecisionDetails {
                 decision: NetworkPolicyDecision::Deny,
                 reason: REASON_PROXY_DISABLED,
@@ -331,6 +360,15 @@ async fn inspect_socks5_udp(
 
     match state.network_mode().await {
         Ok(NetworkMode::Limited) => {
+            emit_socks_block_decision_audit_event(
+                &state,
+                NetworkDecisionSource::ModeGuard,
+                REASON_METHOD_NOT_ALLOWED,
+                NetworkProtocol::Socks5Udp,
+                host.as_str(),
+                port,
+                client.as_deref(),
+            );
             let details = PolicyDecisionDetails {
                 decision: NetworkPolicyDecision::Deny,
                 reason: REASON_METHOD_NOT_ALLOWED,
@@ -413,9 +451,159 @@ async fn inspect_socks5_udp(
     }
 }
 
+fn emit_socks_block_decision_audit_event(
+    state: &NetworkProxyState,
+    source: NetworkDecisionSource,
+    reason: &str,
+    protocol: NetworkProtocol,
+    host: &str,
+    port: u16,
+    client_addr: Option<&str>,
+) {
+    emit_block_decision_audit_event(
+        state,
+        BlockDecisionAuditEventArgs {
+            source,
+            reason,
+            protocol,
+            server_address: host,
+            server_port: port,
+            method: None,
+            client_addr,
+        },
+    );
+}
+
 fn policy_denied_error(reason: &str, details: &PolicyDecisionDetails<'_>) -> io::Error {
     io::Error::new(
         io::ErrorKind::PermissionDenied,
         blocked_message_with_policy(reason, details),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::NetworkMode;
+    use crate::config::NetworkProxyConfig;
+    use crate::config::NetworkProxySettings;
+    use crate::network_policy::test_support::POLICY_DECISION_EVENT_NAME;
+    use crate::network_policy::test_support::capture_events;
+    use crate::network_policy::test_support::find_event_by_name;
+    use crate::runtime::ConfigReloader;
+    use crate::runtime::ConfigState;
+    use crate::state::NetworkProxyConstraints;
+    use crate::state::build_config_state;
+    use async_trait::async_trait;
+    use pretty_assertions::assert_eq;
+    use rama_core::extensions::Extensions;
+    use rama_core::extensions::ExtensionsMut;
+    use rama_net::address::HostWithPort;
+    use rama_net::address::SocketAddress;
+    use rama_socks5::server::udp::RelayDirection;
+    use std::net::IpAddr;
+    use std::net::Ipv4Addr;
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct StaticReloader {
+        state: ConfigState,
+    }
+
+    #[async_trait]
+    impl ConfigReloader for StaticReloader {
+        async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
+            Ok(None)
+        }
+
+        async fn reload_now(&self) -> anyhow::Result<ConfigState> {
+            Ok(self.state.clone())
+        }
+
+        fn source_label(&self) -> String {
+            "static test reloader".to_string()
+        }
+    }
+
+    fn state_for_settings(network: NetworkProxySettings) -> Arc<NetworkProxyState> {
+        let config = NetworkProxyConfig { network };
+        let state = build_config_state(config, NetworkProxyConstraints::default()).unwrap();
+        let reloader = Arc::new(StaticReloader {
+            state: state.clone(),
+        });
+        Arc::new(NetworkProxyState::with_reloader(state, reloader))
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handle_socks5_tcp_emits_block_decision_for_proxy_disabled() {
+        let state = state_for_settings(NetworkProxySettings {
+            enabled: false,
+            mode: NetworkMode::Full,
+            ..NetworkProxySettings::default()
+        });
+        let mut request =
+            TcpRequest::new(HostWithPort::try_from("example.com:443").expect("valid authority"));
+        request.extensions_mut().insert(state.clone());
+
+        let (result, events) = capture_events(|| async {
+            handle_socks5_tcp(request, TcpConnector::default(), None).await
+        })
+        .await;
+        assert!(result.is_err(), "proxy-disabled request should be denied");
+
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision event");
+        assert_eq!(event.field("network.policy.scope"), Some("non_domain"));
+        assert_eq!(event.field("network.policy.decision"), Some("deny"));
+        assert_eq!(event.field("network.policy.source"), Some("proxy_state"));
+        assert_eq!(
+            event.field("network.policy.reason"),
+            Some(REASON_PROXY_DISABLED)
+        );
+        assert_eq!(
+            event.field("network.transport.protocol"),
+            Some("socks5_tcp")
+        );
+        assert_eq!(event.field("server.address"), Some("example.com"));
+        assert_eq!(event.field("server.port"), Some("443"));
+        assert_eq!(event.field("http.request.method"), Some("none"));
+        assert_eq!(event.field("client.address"), Some("unknown"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn inspect_socks5_udp_emits_block_decision_for_mode_guard_deny() {
+        let state = state_for_settings(NetworkProxySettings {
+            enabled: true,
+            mode: NetworkMode::Limited,
+            ..NetworkProxySettings::default()
+        });
+        let request = RelayRequest {
+            direction: RelayDirection::South,
+            server_address: SocketAddress::new(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)), 53),
+            payload: Default::default(),
+            extensions: Extensions::new(),
+        };
+
+        let (result, events) =
+            capture_events(|| async { inspect_socks5_udp(request, state, None).await }).await;
+        assert!(result.is_err(), "limited-mode UDP request should be denied");
+
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision event");
+        assert_eq!(event.field("network.policy.scope"), Some("non_domain"));
+        assert_eq!(event.field("network.policy.decision"), Some("deny"));
+        assert_eq!(event.field("network.policy.source"), Some("mode_guard"));
+        assert_eq!(
+            event.field("network.policy.reason"),
+            Some(REASON_METHOD_NOT_ALLOWED)
+        );
+        assert_eq!(
+            event.field("network.transport.protocol"),
+            Some("socks5_udp")
+        );
+        assert_eq!(event.field("server.address"), Some("93.184.216.34"));
+        assert_eq!(event.field("server.port"), Some("53"));
+        assert_eq!(event.field("http.request.method"), Some("none"));
+        assert_eq!(event.field("client.address"), Some("unknown"));
+    }
 }

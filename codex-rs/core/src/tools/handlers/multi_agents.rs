@@ -1,10 +1,8 @@
 use crate::agent::AgentStatus;
 use crate::agent::exceeds_thread_spawn_depth_limit;
-use crate::agent::max_thread_spawn_depth;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
-use crate::config::Constrained;
 use crate::error::CodexErr;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
@@ -18,7 +16,6 @@ use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
@@ -98,7 +95,6 @@ mod spawn {
     use crate::agent::role::apply_role_to_config;
 
     use crate::agent::exceeds_thread_spawn_depth_limit;
-    use crate::agent::max_thread_spawn_depth;
     use crate::agent::next_thread_spawn_depth;
     use std::sync::Arc;
 
@@ -131,7 +127,7 @@ mod spawn {
         let prompt = input_preview(&input_items);
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
-        let max_depth = max_thread_spawn_depth(turn.config.agent_max_spawn_depth);
+        let max_depth = turn.config.agent_max_depth;
         if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
             return Err(FunctionCallError::RespondToModel(
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
@@ -148,11 +144,8 @@ mod spawn {
                 .into(),
             )
             .await;
-        let mut config = build_agent_spawn_config(
-            &session.get_base_instructions().await,
-            turn.as_ref(),
-            child_depth,
-        )?;
+        let mut config =
+            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
         apply_role_to_config(&mut config, role_name)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
@@ -348,7 +341,7 @@ mod resume_agent {
             .await
             .unwrap_or((None, None));
         let child_depth = next_thread_spawn_depth(&turn.session_source);
-        let max_depth = max_thread_spawn_depth(turn.config.agent_max_spawn_depth);
+        let max_depth = turn.config.agent_max_depth;
         if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
             return Err(FunctionCallError::RespondToModel(
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
@@ -898,9 +891,8 @@ fn input_preview(items: &[UserInput]) -> String {
 pub(crate) fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
     turn: &TurnContext,
-    child_depth: i32,
 ) -> Result<Config, FunctionCallError> {
-    let mut config = build_agent_shared_config(turn, child_depth)?;
+    let mut config = build_agent_shared_config(turn)?;
     config.base_instructions = Some(base_instructions.text.clone());
     Ok(config)
 }
@@ -909,16 +901,14 @@ fn build_agent_resume_config(
     turn: &TurnContext,
     child_depth: i32,
 ) -> Result<Config, FunctionCallError> {
-    let mut config = build_agent_shared_config(turn, child_depth)?;
+    let mut config = build_agent_shared_config(turn)?;
+    apply_spawn_agent_overrides(&mut config, child_depth);
     // For resume, keep base instructions sourced from rollout/session metadata.
     config.base_instructions = None;
     Ok(config)
 }
 
-fn build_agent_shared_config(
-    turn: &TurnContext,
-    child_depth: i32,
-) -> Result<Config, FunctionCallError> {
+fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
     let base_config = turn.config.clone();
     let mut config = (*base_config).clone();
     config.model = Some(turn.model_info.slug.clone());
@@ -928,7 +918,6 @@ fn build_agent_shared_config(
     config.developer_instructions = turn.developer_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
-    apply_spawn_agent_overrides(&mut config, child_depth);
 
     Ok(config)
 }
@@ -937,6 +926,13 @@ fn apply_spawn_agent_runtime_overrides(
     config: &mut Config,
     turn: &TurnContext,
 ) -> Result<(), FunctionCallError> {
+    config
+        .permissions
+        .approval_policy
+        .set(turn.approval_policy.value())
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("approval_policy is invalid: {err}"))
+        })?;
     config.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     config.cwd = turn.cwd.clone();
@@ -951,9 +947,7 @@ fn apply_spawn_agent_runtime_overrides(
 }
 
 fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
-    config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    let max_depth = max_thread_spawn_depth(config.agent_max_spawn_depth);
-    if exceeds_thread_spawn_depth_limit(child_depth + 1, max_depth) {
+    if child_depth >= config.agent_max_depth {
         config.features.disable(Feature::Collab);
     }
 }
@@ -964,7 +958,6 @@ mod tests {
     use crate::AuthManager;
     use crate::CodexAuth;
     use crate::ThreadManager;
-    use crate::agent::max_thread_spawn_depth;
     use crate::built_in_model_providers;
     use crate::codex::make_session_and_context;
     use crate::config::DEFAULT_AGENT_MAX_DEPTH;
@@ -1104,8 +1097,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "No role requiring it for now"]
-    async fn spawn_agent_uses_explorer_role_and_sets_never_approval_policy() {
+    async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
         #[derive(Debug, Deserialize)]
         struct SpawnAgentResult {
             agent_id: String,
@@ -1119,6 +1111,9 @@ mod tests {
         config
             .permissions
             .approval_policy
+            .set(AskForApproval::OnRequest)
+            .expect("approval policy should be set");
+        turn.approval_policy
             .set(AskForApproval::OnRequest)
             .expect("approval policy should be set");
         turn.config = Arc::new(config);
@@ -1158,8 +1153,7 @@ mod tests {
             .expect("spawned agent thread should exist")
             .config_snapshot()
             .await;
-        assert_eq!(snapshot.model, "gpt-5.1-codex-mini");
-        assert_eq!(snapshot.approval_policy, AskForApproval::Never);
+        assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
     }
 
     #[tokio::test]
@@ -1210,6 +1204,9 @@ mod tests {
             &turn.config.permissions.sandbox_policy,
             turn.config.permissions.sandbox_policy.get().clone(),
         );
+        turn.approval_policy
+            .set(AskForApproval::OnRequest)
+            .expect("approval policy should be set");
         turn.sandbox_policy
             .set(expected_sandbox.clone())
             .expect("sandbox policy should be set");
@@ -1256,7 +1253,7 @@ mod tests {
             .config_snapshot()
             .await;
         assert_eq!(snapshot.sandbox_policy, expected_sandbox);
-        assert_eq!(snapshot.approval_policy, AskForApproval::Never);
+        assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
     }
 
     #[tokio::test]
@@ -1265,7 +1262,7 @@ mod tests {
         let manager = thread_manager();
         session.services.agent_control = manager.agent_control();
 
-        let max_depth = max_thread_spawn_depth(turn.config.agent_max_spawn_depth);
+        let max_depth = turn.config.agent_max_depth;
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
             depth: max_depth,
@@ -1696,7 +1693,7 @@ mod tests {
         let manager = thread_manager();
         session.services.agent_control = manager.agent_control();
 
-        let max_depth = max_thread_spawn_depth(turn.config.agent_max_spawn_depth);
+        let max_depth = turn.config.agent_max_depth;
         turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
             depth: max_depth,
@@ -2039,8 +2036,11 @@ mod tests {
         turn.sandbox_policy
             .set(sandbox_policy)
             .expect("sandbox policy set");
+        turn.approval_policy
+            .set(AskForApproval::OnRequest)
+            .expect("approval policy set");
 
-        let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
+        let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
         let mut expected = (*turn.config).clone();
         expected.base_instructions = Some(base_instructions.text);
         expected.model = Some(turn.model_info.slug.clone());
@@ -2055,7 +2055,7 @@ mod tests {
         expected
             .permissions
             .approval_policy
-            .set(AskForApproval::Never)
+            .set(AskForApproval::OnRequest)
             .expect("approval policy set");
         expected
             .permissions
@@ -2076,7 +2076,7 @@ mod tests {
             text: "base".to_string(),
         };
 
-        let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
+        let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
 
         assert_eq!(config.user_instructions, base_config.user_instructions);
     }
@@ -2087,6 +2087,9 @@ mod tests {
         let mut base_config = (*turn.config).clone();
         base_config.base_instructions = Some("caller-base".to_string());
         turn.config = Arc::new(base_config);
+        turn.approval_policy
+            .set(AskForApproval::OnRequest)
+            .expect("approval policy set");
 
         let config = build_agent_resume_config(&turn, 0).expect("resume config");
 
@@ -2104,7 +2107,7 @@ mod tests {
         expected
             .permissions
             .approval_policy
-            .set(AskForApproval::Never)
+            .set(AskForApproval::OnRequest)
             .expect("approval policy set");
         expected
             .permissions

@@ -38,6 +38,19 @@ const MAX_BLOCKED_EVENTS: usize = 200;
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 const NETWORK_POLICY_VIOLATION_PREFIX: &str = "CODEX_NETWORK_POLICY_VIOLATION";
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NetworkProxyAuditMetadata {
+    pub conversation_id: Option<String>,
+    pub app_version: Option<String>,
+    pub user_account_id: Option<String>,
+    pub auth_mode: Option<String>,
+    pub originator: Option<String>,
+    pub user_email: Option<String>,
+    pub terminal_type: Option<String>,
+    pub model: Option<String>,
+    pub slug: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostBlockReason {
     Denied,
@@ -187,6 +200,7 @@ pub struct NetworkProxyState {
     state: Arc<RwLock<ConfigState>>,
     reloader: Arc<dyn ConfigReloader>,
     blocked_request_observer: Arc<RwLock<Option<Arc<dyn BlockedRequestObserver>>>>,
+    audit_metadata: NetworkProxyAuditMetadata,
 }
 
 impl std::fmt::Debug for NetworkProxyState {
@@ -203,13 +217,18 @@ impl Clone for NetworkProxyState {
             state: self.state.clone(),
             reloader: self.reloader.clone(),
             blocked_request_observer: self.blocked_request_observer.clone(),
+            audit_metadata: self.audit_metadata.clone(),
         }
     }
 }
 
 impl NetworkProxyState {
     pub fn with_reloader(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {
-        Self::with_reloader_and_blocked_observer(state, reloader, None)
+        Self::with_reloader_and_audit_metadata(
+            state,
+            reloader,
+            NetworkProxyAuditMetadata::default(),
+        )
     }
 
     pub fn with_reloader_and_blocked_observer(
@@ -217,10 +236,38 @@ impl NetworkProxyState {
         reloader: Arc<dyn ConfigReloader>,
         blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
     ) -> Self {
+        Self::with_reloader_and_audit_metadata_and_blocked_observer(
+            state,
+            reloader,
+            NetworkProxyAuditMetadata::default(),
+            blocked_request_observer,
+        )
+    }
+
+    pub fn with_reloader_and_audit_metadata(
+        state: ConfigState,
+        reloader: Arc<dyn ConfigReloader>,
+        audit_metadata: NetworkProxyAuditMetadata,
+    ) -> Self {
+        Self::with_reloader_and_audit_metadata_and_blocked_observer(
+            state,
+            reloader,
+            audit_metadata,
+            None,
+        )
+    }
+
+    pub fn with_reloader_and_audit_metadata_and_blocked_observer(
+        state: ConfigState,
+        reloader: Arc<dyn ConfigReloader>,
+        audit_metadata: NetworkProxyAuditMetadata,
+        blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
+    ) -> Self {
         Self {
             state: Arc::new(RwLock::new(state)),
             reloader,
             blocked_request_observer: Arc::new(RwLock::new(blocked_request_observer)),
+            audit_metadata,
         }
     }
 
@@ -230,6 +277,10 @@ impl NetworkProxyState {
     ) {
         let mut observer = self.blocked_request_observer.write().await;
         *observer = blocked_request_observer;
+    }
+
+    pub fn audit_metadata(&self) -> &NetworkProxyAuditMetadata {
+        &self.audit_metadata
     }
 
     pub async fn current_cfg(&self) -> Result<NetworkProxyConfig> {

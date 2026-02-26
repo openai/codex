@@ -6,19 +6,22 @@ Scenario: Second turn changes cwd, approval policy, and personality while keepin
 
 ## First Request (Baseline)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/developer:<PERMISSIONS_INSTRUCTIONS>
-04:message/user:first turn
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+03:message/user:first turn
 
 ## Second Request (Turn Overrides)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/developer:<PERMISSIONS_INSTRUCTIONS>
-04:message/user:first turn
-05:message/assistant:turn one complete
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+03:message/user:first turn
+04:message/assistant:turn one complete
+05:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <personality_spec> The user has requested a new communication style. Future messages should adhe...
 06:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-07:message/developer:<PERMISSIONS_INSTRUCTIONS>
-08:message/developer:<personality_spec> The user has requested a new communication style. Future messages should adhe...
-09:message/user:second turn with context updates
+07:message/user:second turn with context updates
