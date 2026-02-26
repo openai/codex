@@ -5,7 +5,6 @@ use std::fs;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;

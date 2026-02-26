@@ -6,7 +6,6 @@ use std::sync::Arc;
 use anyhow::Result;
 use codex_core::config::types::Personality;
 use codex_core::features::Feature;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;

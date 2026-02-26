@@ -12,7 +12,6 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use codex_core::features::Feature;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;

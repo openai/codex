@@ -4,7 +4,6 @@ use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_core::features::Feature;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;

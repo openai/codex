@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use codex_core::config::ProjectConfig;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
