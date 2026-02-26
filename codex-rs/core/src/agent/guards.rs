@@ -30,7 +30,6 @@ struct ActiveAgents {
     used_agent_nicknames: HashSet<String>,
     nickname_reset_count: usize,
 }
-
 fn session_depth(session_source: &SessionSource) -> i32 {
     match session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) => *depth,

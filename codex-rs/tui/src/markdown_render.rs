@@ -85,6 +85,30 @@ pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>)
     w.text
 }
 
+#[derive(Clone, Debug)]
+struct LinkState {
+    destination: String,
+    show_destination: bool,
+}
+
+fn should_render_link_destination(dest_url: &str) -> bool {
+    !is_local_path_like_link(dest_url)
+}
+
+fn is_local_path_like_link(dest_url: &str) -> bool {
+    dest_url.starts_with("file://")
+        || dest_url.starts_with('/')
+        || dest_url.starts_with("~/")
+        || dest_url.starts_with("./")
+        || dest_url.starts_with("../")
+        || dest_url.starts_with("\\\\")
+        || matches!(
+            dest_url.as_bytes(),
+            [drive, b':', separator, ..]
+                if drive.is_ascii_alphabetic() && matches!(separator, b'/' | b'\\')
+        )
+}
+
 struct Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
@@ -95,7 +119,7 @@ where
     inline_styles: Vec<Style>,
     indent_stack: Vec<IndentContext>,
     list_indices: Vec<Option<u64>>,
-    link: Option<String>,
+    link: Option<LinkState>,
     needs_newline: bool,
     pending_marker_line: bool,
     in_paragraph: bool,
@@ -467,14 +491,21 @@ where
     }
 
     fn push_link(&mut self, dest_url: String) {
-        self.link = Some(dest_url);
+        self.push_inline_style(self.styles.link);
+        self.link = Some(LinkState {
+            show_destination: should_render_link_destination(&dest_url),
+            destination: dest_url,
+        });
     }
 
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
-            self.push_span(" (".into());
-            self.push_span(Span::styled(link, self.styles.link));
-            self.push_span(")".into());
+            self.pop_inline_style();
+            if link.show_destination {
+                self.push_span(" (".into());
+                self.push_span(Span::styled(link.destination, self.styles.link));
+                self.push_span(")".into());
+            }
         }
     }
 

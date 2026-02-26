@@ -56,6 +56,7 @@ pub static CODEX_ALIASES_TEMP_DIR: TestCodexAliasesGuard = unsafe {
 
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
+mod agent_jobs;
 mod agent_websocket;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
@@ -77,6 +78,7 @@ mod grep_files;
 mod hierarchical_agents;
 mod image_rollout;
 mod items;
+mod js_repl;
 mod json_result;
 mod list_dir;
 mod live_cli;
@@ -84,7 +86,6 @@ mod live_reload;
 mod model_info_overrides;
 mod model_overrides;
 mod model_switching;
-mod model_tools;
 mod model_visible_layout;
 mod models_cache_ttl;
 mod models_etag_responses;
@@ -99,6 +100,8 @@ mod read_file;
 mod realtime_conversation;
 mod remote_models;
 mod request_compression;
+#[cfg(not(target_os = "windows"))]
+mod request_permissions;
 mod request_user_input;
 mod resume;
 mod resume_warning;
@@ -111,7 +114,6 @@ mod seatbelt;
 mod shell_command;
 mod shell_serialization;
 mod shell_snapshot;
-mod skill_approval;
 mod skills;
 mod sqlite_state;
 mod stream_error_allows_next_turn;
