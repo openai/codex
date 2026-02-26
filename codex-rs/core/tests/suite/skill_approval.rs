@@ -235,6 +235,14 @@ permissions:
     assert_eq!(approval.call_id, tool_call_id);
     assert_eq!(approval.command, vec![script_path_str.clone()]);
     assert_eq!(
+        approval.available_decisions,
+        Some(vec![
+            ReviewDecision::Approved,
+            ReviewDecision::ApprovedForSession,
+            ReviewDecision::Abort,
+        ])
+    );
+    assert_eq!(
         approval.additional_permissions,
         Some(PermissionProfile {
             file_system: Some(FileSystemPermissions {
@@ -249,7 +257,7 @@ permissions:
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Approved,
+            decision: ReviewDecision::Denied,
         })
         .await?;
 
@@ -264,12 +272,8 @@ permissions:
         .function_call_output(tool_call_id);
     let output = call_output["output"].as_str().unwrap_or_default();
     assert!(
-        output.contains("zsh-fork-stdout"),
-        "expected stdout marker in function_call_output: {output:?}"
-    );
-    assert!(
-        output.contains("zsh-fork-stderr"),
-        "expected stderr marker in function_call_output: {output:?}"
+        output.contains("Execution denied: User denied execution"),
+        "expected rejection marker in function_call_output: {output:?}"
     );
 
     Ok(())
