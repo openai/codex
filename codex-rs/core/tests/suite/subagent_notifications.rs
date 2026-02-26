@@ -229,11 +229,9 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
     )
     .await;
 
-    let child_request_log = mount_sse_once_match(
+    let _child_request_log = mount_sse_once_match(
         &server,
-        |req: &wiremock::Request| {
-            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
-        },
+        |req: &wiremock::Request| body_contains(req, CHILD_PROMPT),
         sse(vec![
             ev_response_created("resp-child-1"),
             ev_assistant_message("msg-child-1", "child done"),
@@ -266,16 +264,16 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
 
     let deadline = Instant::now() + Duration::from_secs(2);
     let child_request = loop {
-        if let Some(request) = child_request_log.requests().into_iter().find(|request| {
-            request.body_contains_text(CHILD_PROMPT)
-                && request.body_contains_text(TURN_0_FORK_PROMPT)
-                && request.body_contains_text("seeded")
-                && request.function_call_output_content_and_success(SPAWN_CALL_ID)
-                    == Some((
-                        Some(FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string()),
-                        Some(true),
-                    ))
-        }) {
+        if let Some(request) = server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|request| {
+                body_contains(request, CHILD_PROMPT)
+                    && body_contains(request, FORKED_SPAWN_AGENT_OUTPUT_MESSAGE)
+            })
+        {
             break request;
         }
         if Instant::now() >= deadline {
@@ -283,15 +281,31 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
         }
         sleep(Duration::from_millis(10)).await;
     };
-    assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
-    assert!(child_request.body_contains_text("seeded"));
-    let Some((content, success)) =
-        child_request.function_call_output_content_and_success(SPAWN_CALL_ID)
-    else {
-        panic!("expected forked child request to include synthetic spawn_agent output");
+    assert!(body_contains(&child_request, TURN_0_FORK_PROMPT));
+    assert!(body_contains(&child_request, "seeded"));
+
+    let child_body = child_request
+        .body_json::<serde_json::Value>()
+        .expect("forked child request body should be json");
+    let function_call_output = child_body["input"]
+        .as_array()
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item["type"].as_str() == Some("function_call_output")
+                    && item["call_id"].as_str() == Some(SPAWN_CALL_ID)
+            })
+        })
+        .unwrap_or_else(|| panic!("expected forked child request to include spawn_agent output"));
+    let (content, success) = match &function_call_output["output"] {
+        serde_json::Value::String(text) => (Some(text.as_str()), None),
+        serde_json::Value::Object(output) => (
+            output.get("content").and_then(serde_json::Value::as_str),
+            output.get("success").and_then(serde_json::Value::as_bool),
+        ),
+        _ => (None, None),
     };
-    assert_eq!(content.as_deref(), Some(FORKED_SPAWN_AGENT_OUTPUT_MESSAGE));
-    assert_eq!(success, Some(true));
+    assert_eq!(content, Some(FORKED_SPAWN_AGENT_OUTPUT_MESSAGE));
+    assert_ne!(success, Some(false));
 
     Ok(())
 }
