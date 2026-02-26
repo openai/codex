@@ -9,7 +9,7 @@ pub(super) struct RolloutReconstruction {
     pub(super) reference_context_item: Option<TurnContextItem>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum TurnReferenceContextItem {
     /// No `TurnContextItem` has been seen for this replay span yet.
     ///
@@ -17,40 +17,21 @@ enum TurnReferenceContextItem {
     /// established a baseline, while `Cleared` means a baseline existed and a later compaction
     /// invalidated it. Only the latter must emit an explicit clearing segment for resume/fork
     /// hydration.
+    #[default]
     NeverSet,
     /// A previously established baseline was invalidated by later compaction.
     Cleared,
     /// The latest baseline established by this replay span.
-    LatestSet(TurnContextItem),
-}
-
-impl Default for TurnReferenceContextItem {
-    fn default() -> Self {
-        Self::NeverSet
-    }
-}
-
-#[derive(Debug)]
-struct ReplayedUserTurn {
-    previous_model: Option<String>,
-    reference_context_item: TurnReferenceContextItem,
-}
-
-#[derive(Debug)]
-enum ReplayMetadataSegment {
-    UserTurn(Box<ReplayedUserTurn>),
-    // Unexpected for modern rollouts, where compaction should normally happen inside a user turn.
-    // Keep this as a minimal legacy/incomplete-rollout fallback so later resume conservatively
-    // clears the baseline until another `TurnContextItem` re-establishes it.
-    ReferenceContextCleared,
+    LatestSet(Box<TurnContextItem>),
 }
 
 #[derive(Debug, Default)]
-struct ActiveUserTurn {
+struct ActiveReplaySegment {
     turn_id: Option<String>,
-    saw_user_message: bool,
+    counts_as_user_turn: bool,
     previous_model: Option<String>,
     reference_context_item: TurnReferenceContextItem,
+    replacement_history_index: Option<usize>,
 }
 
 impl Session {
@@ -59,52 +40,163 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
-        // Keep rollout replay eager and forward-only for now.
-        //
-        // This unifies mainline history replay with eager resume metadata hydration in one place,
-        // without yet introducing the lazy reverse-loading machinery we want later. History is
-        // rebuilt exactly as rollout recorded it, while metadata keeps only enough per-turn state
-        // to answer:
-        // - which surviving user turn last provided `previous_model`
-        // - which surviving `TurnContextItem` baseline, if any, remains after later compaction
-        let initial_context = self.build_initial_context(turn_context, None).await;
-        let mut history = ContextManager::new();
-        let mut replayed_segments = Vec::new();
-        let mut active_turn: Option<ActiveUserTurn> = None;
+        // Replay metadata should already match the shape of the future lazy reverse loader, even
+        // while history materialization still uses an eager bridge. Scan newest-to-oldest,
+        // stopping once a surviving replacement-history checkpoint and the required resume metadata
+        // are both known; then replay only that suffix forward to preserve exact history semantics.
+        let mut replay_start_index = None;
+        let mut previous_model = None;
+        let mut reference_context_item = TurnReferenceContextItem::NeverSet;
+        let mut pending_rollback_turns = 0usize;
+        let mut active_segment: Option<ActiveReplaySegment> = None;
 
-        let finalize_active_turn =
-            |replayed_segments: &mut Vec<ReplayMetadataSegment>, active_turn: ActiveUserTurn| {
-                if active_turn.saw_user_message {
-                    replayed_segments.push(ReplayMetadataSegment::UserTurn(Box::new(
-                        ReplayedUserTurn {
-                            previous_model: active_turn.previous_model,
-                            reference_context_item: active_turn.reference_context_item,
-                        },
-                    )));
-                } else if matches!(
-                    active_turn.reference_context_item,
-                    TurnReferenceContextItem::Cleared
-                ) {
-                    replayed_segments.push(ReplayMetadataSegment::ReferenceContextCleared);
+        let finalize_active_segment =
+            |active_segment: ActiveReplaySegment,
+             replay_start_index: &mut Option<usize>,
+             previous_model: &mut Option<String>,
+             reference_context_item: &mut TurnReferenceContextItem,
+             pending_rollback_turns: &mut usize| {
+                if *pending_rollback_turns > 0 {
+                    if active_segment.counts_as_user_turn {
+                        *pending_rollback_turns -= 1;
+                    }
+                    return;
+                }
+
+                if replay_start_index.is_none()
+                    && let Some(replacement_history_index) =
+                        active_segment.replacement_history_index
+                {
+                    *replay_start_index = Some(replacement_history_index);
+                }
+
+                if previous_model.is_none() && active_segment.counts_as_user_turn {
+                    *previous_model = active_segment.previous_model;
+                }
+
+                if matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
+                    && (active_segment.counts_as_user_turn
+                        || matches!(
+                            active_segment.reference_context_item,
+                            TurnReferenceContextItem::Cleared
+                        ))
+                {
+                    *reference_context_item = active_segment.reference_context_item;
                 }
             };
 
-        let drop_last_n_user_turns = |replayed_segments: &mut Vec<ReplayMetadataSegment>,
-                                      num_turns: u32| {
-            let mut remaining = usize::try_from(num_turns).unwrap_or(usize::MAX);
-            while remaining > 0 {
-                let Some(index) = replayed_segments
-                    .iter()
-                    .rposition(|segment| matches!(segment, ReplayMetadataSegment::UserTurn(_)))
-                else {
-                    break;
-                };
-                replayed_segments.remove(index);
-                remaining -= 1;
+        for (index, item) in rollout_items.iter().enumerate().rev() {
+            match item {
+                RolloutItem::Compacted(compacted) => {
+                    let active_segment =
+                        active_segment.get_or_insert_with(ActiveReplaySegment::default);
+                    if matches!(
+                        active_segment.reference_context_item,
+                        TurnReferenceContextItem::NeverSet | TurnReferenceContextItem::Cleared
+                    ) {
+                        active_segment.reference_context_item = TurnReferenceContextItem::Cleared;
+                    }
+                    if active_segment.replacement_history_index.is_none()
+                        && compacted.replacement_history.is_some()
+                    {
+                        active_segment.replacement_history_index = Some(index);
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    pending_rollback_turns = pending_rollback_turns
+                        .saturating_add(usize::try_from(rollback.num_turns).unwrap_or(usize::MAX));
+                }
+                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
+                    if active_segment.as_ref().is_some_and(|active_segment| {
+                        active_segment
+                            .turn_id
+                            .as_deref()
+                            .is_none_or(|turn_id| turn_id == event.turn_id)
+                    }) && let Some(active_segment) = active_segment.take()
+                    {
+                        finalize_active_segment(
+                            active_segment,
+                            &mut replay_start_index,
+                            &mut previous_model,
+                            &mut reference_context_item,
+                            &mut pending_rollback_turns,
+                        );
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
+                    let active_segment =
+                        active_segment.get_or_insert_with(ActiveReplaySegment::default);
+                    if active_segment.turn_id.is_none() {
+                        active_segment.turn_id = Some(event.turn_id.clone());
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
+                    if let Some(active_segment) = active_segment.as_mut() {
+                        if active_segment.turn_id.is_none()
+                            && let Some(turn_id) = &event.turn_id
+                        {
+                            active_segment.turn_id = Some(turn_id.clone());
+                        }
+                    } else if let Some(turn_id) = &event.turn_id {
+                        active_segment = Some(ActiveReplaySegment {
+                            turn_id: Some(turn_id.clone()),
+                            ..Default::default()
+                        });
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
+                    let active_segment =
+                        active_segment.get_or_insert_with(ActiveReplaySegment::default);
+                    active_segment.counts_as_user_turn = true;
+                }
+                RolloutItem::TurnContext(ctx) => {
+                    let active_segment =
+                        active_segment.get_or_insert_with(ActiveReplaySegment::default);
+                    if active_segment.turn_id.is_none() {
+                        active_segment.turn_id = ctx.turn_id.clone();
+                        active_segment.counts_as_user_turn = true;
+                    }
+                    if active_segment.turn_id.as_deref().is_none_or(|turn_id| {
+                        ctx.turn_id
+                            .as_deref()
+                            .is_none_or(|ctx_turn_id| ctx_turn_id == turn_id)
+                    }) {
+                        active_segment.previous_model = Some(ctx.model.clone());
+                        if matches!(
+                            active_segment.reference_context_item,
+                            TurnReferenceContextItem::NeverSet
+                        ) {
+                            active_segment.reference_context_item =
+                                TurnReferenceContextItem::LatestSet(Box::new(ctx.clone()));
+                        }
+                    }
+                }
+                RolloutItem::ResponseItem(_)
+                | RolloutItem::EventMsg(_)
+                | RolloutItem::SessionMeta(_) => {}
             }
-        };
 
-        for item in rollout_items {
+            if replay_start_index.is_some()
+                && previous_model.is_some()
+                && !matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
+            {
+                break;
+            }
+        }
+
+        if let Some(active_segment) = active_segment.take() {
+            finalize_active_segment(
+                active_segment,
+                &mut replay_start_index,
+                &mut previous_model,
+                &mut reference_context_item,
+                &mut pending_rollback_turns,
+            );
+        }
+
+        let initial_context = self.build_initial_context(turn_context, None).await;
+        let mut history = ContextManager::new();
+        for item in &rollout_items[replay_start_index.unwrap_or(0)..] {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
                     history.record_items(
@@ -124,139 +216,25 @@ impl Session {
                         );
                         history.replace(rebuilt);
                     }
-
-                    if let Some(active_turn) = active_turn.as_mut() {
-                        active_turn.reference_context_item = TurnReferenceContextItem::Cleared;
-                    } else {
-                        replayed_segments.push(ReplayMetadataSegment::ReferenceContextCleared);
-                    }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                     history.drop_last_n_user_turns(rollback.num_turns);
-
-                    let mut remaining = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
-                    if remaining > 0
-                        && active_turn
-                            .as_ref()
-                            .is_some_and(|active_turn| active_turn.saw_user_message)
-                    {
-                        active_turn = None;
-                        remaining -= 1;
-                    }
-                    if remaining > 0 {
-                        drop_last_n_user_turns(
-                            &mut replayed_segments,
-                            u32::try_from(remaining).unwrap_or(u32::MAX),
-                        );
-                    }
                 }
-                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
-                    if let Some(active_turn) = active_turn.take() {
-                        finalize_active_turn(&mut replayed_segments, active_turn);
-                    }
-                    active_turn = Some(ActiveUserTurn {
-                        turn_id: Some(event.turn_id.clone()),
-                        ..Default::default()
-                    });
-                }
-                RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
-                    if active_turn.as_ref().is_some_and(|active_turn| {
-                        active_turn
-                            .turn_id
-                            .as_deref()
-                            .is_none_or(|turn_id| turn_id == event.turn_id)
-                    }) && let Some(active_turn) = active_turn.take()
-                    {
-                        finalize_active_turn(&mut replayed_segments, active_turn);
-                    }
-                }
-                RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
-                    match event.turn_id.as_deref() {
-                        Some(turn_id)
-                            if active_turn.as_ref().is_some_and(|active_turn| {
-                                active_turn
-                                    .turn_id
-                                    .as_deref()
-                                    .is_none_or(|active_turn_id| active_turn_id == turn_id)
-                            }) =>
-                        {
-                            if let Some(active_turn) = active_turn.take() {
-                                finalize_active_turn(&mut replayed_segments, active_turn);
-                            }
-                        }
-                        Some(_) => {}
-                        None => {
-                            if let Some(active_turn) = active_turn.take() {
-                                finalize_active_turn(&mut replayed_segments, active_turn);
-                            }
-                        }
-                    }
-                }
-                RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
-                    if let Some(active_turn) = active_turn.as_mut() {
-                        active_turn.saw_user_message = true;
-                    }
-                }
-                RolloutItem::TurnContext(ctx) => {
-                    if let Some(active_turn) = active_turn.as_mut() {
-                        if active_turn.turn_id.as_deref().is_none_or(|turn_id| {
-                            ctx.turn_id
-                                .as_deref()
-                                .is_none_or(|ctx_turn_id| ctx_turn_id == turn_id)
-                        }) {
-                            if active_turn.previous_model.is_none() {
-                                active_turn.previous_model = Some(ctx.model.clone());
-                            }
-                            active_turn.reference_context_item =
-                                TurnReferenceContextItem::LatestSet(ctx.clone());
-                        }
-                    } else {
-                        replayed_segments.push(ReplayMetadataSegment::UserTurn(Box::new(
-                            ReplayedUserTurn {
-                                previous_model: Some(ctx.model.clone()),
-                                reference_context_item: TurnReferenceContextItem::LatestSet(
-                                    ctx.clone(),
-                                ),
-                            },
-                        )));
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(active_turn) = active_turn.take() {
-            finalize_active_turn(&mut replayed_segments, active_turn);
-        }
-
-        let mut previous_model = None;
-        let mut reference_context_item = None;
-        for segment in replayed_segments {
-            match segment {
-                ReplayMetadataSegment::UserTurn(turn) => {
-                    if let Some(turn_previous_model) = turn.previous_model {
-                        previous_model = Some(turn_previous_model);
-                    }
-                    match turn.reference_context_item {
-                        TurnReferenceContextItem::NeverSet => {}
-                        TurnReferenceContextItem::Cleared => {
-                            reference_context_item = None;
-                        }
-                        TurnReferenceContextItem::LatestSet(turn_reference_context_item) => {
-                            reference_context_item = Some(turn_reference_context_item);
-                        }
-                    }
-                }
-                ReplayMetadataSegment::ReferenceContextCleared => {
-                    reference_context_item = None;
-                }
+                RolloutItem::EventMsg(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::SessionMeta(_) => {}
             }
         }
 
         RolloutReconstruction {
             history: history.raw_items().to_vec(),
             previous_model,
-            reference_context_item,
+            reference_context_item: match reference_context_item {
+                TurnReferenceContextItem::NeverSet | TurnReferenceContextItem::Cleared => None,
+                TurnReferenceContextItem::LatestSet(turn_reference_context_item) => {
+                    Some(*turn_reference_context_item)
+                }
+            },
         }
     }
 }
