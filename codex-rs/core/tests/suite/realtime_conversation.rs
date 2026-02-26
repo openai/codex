@@ -807,17 +807,23 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
     })
     .await;
 
-    let audio_out = tokio::time::timeout(
-        Duration::from_millis(500),
-        wait_for_event_match(&test.codex, |msg| match msg {
-            EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-                payload: RealtimeEvent::AudioOut(frame),
-            }) => Some(frame.clone()),
-            _ => None,
-        }),
-    )
-    .await
-    .expect("timed out waiting for realtime audio after echoed user-role message");
+    let mirrored_request = realtime_server.wait_for_request(0, 1).await;
+    assert_eq!(
+        mirrored_request.body_json()["type"].as_str(),
+        Some("conversation.item.create")
+    );
+    assert_eq!(
+        mirrored_request.body_json()["item"]["content"][0]["text"].as_str(),
+        Some("assistant says hi")
+    );
+
+    let audio_out = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::AudioOut(frame),
+        }) => Some(frame.clone()),
+        _ => None,
+    })
+    .await;
     assert_eq!(audio_out.data, "AQID");
 
     let completion = completions

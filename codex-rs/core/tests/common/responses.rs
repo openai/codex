@@ -12,6 +12,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 use serde_json::Value;
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 use tokio::sync::oneshot;
 use tokio_tungstenite::accept_hdr_async_with_config;
 use tokio_tungstenite::tungstenite::Message;
@@ -335,6 +336,7 @@ pub struct WebSocketTestServer {
     uri: String,
     connections: Arc<Mutex<Vec<Vec<WebSocketRequest>>>>,
     handshakes: Arc<Mutex<Vec<WebSocketHandshake>>>,
+    request_log_updated: Arc<Notify>,
     shutdown: oneshot::Sender<()>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -354,6 +356,26 @@ impl WebSocketTestServer {
             panic!("expected 1 connection, got {}", connections.len());
         }
         connections.first().cloned().unwrap_or_default()
+    }
+
+    pub async fn wait_for_request(
+        &self,
+        connection_index: usize,
+        request_index: usize,
+    ) -> WebSocketRequest {
+        loop {
+            if let Some(request) = self
+                .connections
+                .lock()
+                .unwrap()
+                .get(connection_index)
+                .and_then(|connection| connection.get(request_index))
+                .cloned()
+            {
+                return request;
+            }
+            self.request_log_updated.notified().await;
+        }
     }
 
     pub fn handshakes(&self) -> Vec<WebSocketHandshake> {
@@ -1076,8 +1098,10 @@ pub async fn start_websocket_server_with_headers(
     let uri = format!("ws://{addr}");
     let connections_log = Arc::new(Mutex::new(Vec::new()));
     let handshakes_log = Arc::new(Mutex::new(Vec::new()));
+    let request_log_updated = Arc::new(Notify::new());
     let requests = Arc::clone(&connections_log);
     let handshakes = Arc::clone(&handshakes_log);
+    let request_log = Arc::clone(&request_log_updated);
     let connections = Arc::new(Mutex::new(VecDeque::from(connections)));
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
@@ -1160,6 +1184,7 @@ pub async fn start_websocket_server_with_headers(
                     if let Some(connection_log) = log.get_mut(connection_index) {
                         connection_log.push(WebSocketRequest { body });
                     }
+                    request_log.notify_waiters();
                 }
 
                 for event in &request_events {
@@ -1184,6 +1209,7 @@ pub async fn start_websocket_server_with_headers(
         uri,
         connections: connections_log,
         handshakes: handshakes_log,
+        request_log_updated,
         shutdown: shutdown_tx,
         task,
     }
