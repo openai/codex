@@ -426,6 +426,39 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_exec_pause_blocks_yield_timeout() -> anyhow::Result<()> {
+        skip_if_sandbox!(Ok(()));
+
+        let (session, turn) = test_session_and_turn().await;
+        session.set_out_of_band_elicitation_pause_state(true);
+
+        let paused_session = Arc::clone(&session);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            paused_session.set_out_of_band_elicitation_pause_state(false);
+        });
+
+        let started = tokio::time::Instant::now();
+        let response =
+            exec_command(&session, &turn, "sleep 1 && echo unified-exec-done", 250).await?;
+
+        assert!(
+            started.elapsed() >= Duration::from_secs(2),
+            "pause should block the unified exec yield timeout"
+        );
+        assert!(
+            response.output.contains("unified-exec-done"),
+            "exec_command should wait for output after the pause lifts"
+        );
+        assert!(
+            response.process_id.is_none(),
+            "completed command should not leave a background process"
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     #[ignore] // Ignored while we have a better way to test this.
     async fn requests_with_large_timeout_are_capped() -> anyhow::Result<()> {

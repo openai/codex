@@ -142,17 +142,24 @@ impl CodexThread {
             CodexErr::Fatal("out-of-band elicitation count overflowed".to_string())
         })?;
 
-        if was_zero
-            && let Err(err) = self
+        if was_zero {
+            self.codex
+                .session
+                .set_out_of_band_elicitation_pause_state(true);
+            if let Err(err) = self
                 .codex
                 .session
                 .notify_out_of_band_elicitation_pause_state(true)
                 .await
-        {
-            *guard -= 1;
-            return Err(CodexErr::Fatal(format!(
-                "failed to pause out-of-band elicitation state: {err:#}"
-            )));
+            {
+                self.codex
+                    .session
+                    .set_out_of_band_elicitation_pause_state(false);
+                *guard -= 1;
+                return Err(CodexErr::Fatal(format!(
+                    "failed to pause out-of-band elicitation state: {err:#}"
+                )));
+            }
         }
 
         Ok(*guard)
@@ -168,17 +175,24 @@ impl CodexThread {
 
         *guard -= 1;
         let now_zero = *guard == 0;
-        if now_zero
-            && let Err(err) = self
+        if now_zero {
+            self.codex
+                .session
+                .set_out_of_band_elicitation_pause_state(false);
+            if let Err(err) = self
                 .codex
                 .session
                 .notify_out_of_band_elicitation_pause_state(false)
                 .await
-        {
-            *guard += 1;
-            return Err(CodexErr::Fatal(format!(
-                "failed to resume out-of-band elicitation state: {err:#}"
-            )));
+            {
+                self.codex
+                    .session
+                    .set_out_of_band_elicitation_pause_state(true);
+                *guard += 1;
+                return Err(CodexErr::Fatal(format!(
+                    "failed to resume out-of-band elicitation state: {err:#}"
+                )));
+            }
         }
 
         Ok(*guard)

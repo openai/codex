@@ -47,3 +47,52 @@ Terminal B (while Terminal A is still streaming):
 ```bash
 cargo run --bin codex-app-server-test-client -- thread-resume <THREAD_ID>
 ```
+
+## Live Elicitation Timeout Pause Harness
+
+This harness starts or connects to a websocket `codex app-server`, prompts a
+real model to run the repo-local
+`scripts/live_elicitation_hold.sh` helper, and verifies that the turn survives a
+15 second unified-exec command even though `exec_command` normally yields after
+10 seconds.
+
+The helper script:
+
+- reads the auto-injected `CODEX_THREAD_ID`
+- calls `thread/increment_elicitation` for that thread
+- sleeps for 15 seconds
+- calls `thread/decrement_elicitation`
+
+The harness also fails if the turn starts new items before the helper script
+prints its final `[elicitation-hold] done` marker.
+
+Run it from `<reporoot>/codex-rs`:
+
+```bash
+cargo build -p codex-cli --bin codex
+cargo build -p codex-app-server-test-client
+
+cargo run -p codex-app-server-test-client -- \
+  --codex-bin ./target/debug/codex \
+  live-elicitation-timeout-pause \
+  --model gpt-5 \
+  --workspace ..
+```
+
+Notes:
+
+- Pass `--url ws://host:port` instead of `--codex-bin` to reuse an already
+  running websocket app-server.
+- The harness uses the current `codex-app-server-test-client` binary as the
+  callback client inside the helper script.
+- For ad hoc debugging, the helper RPCs are also exposed directly:
+
+```bash
+cargo run -p codex-app-server-test-client -- \
+  --url ws://127.0.0.1:4222 \
+  thread-increment-elicitation <THREAD_ID>
+
+cargo run -p codex-app-server-test-client -- \
+  --url ws://127.0.0.1:4222 \
+  thread-decrement-elicitation <THREAD_ID>
+```
