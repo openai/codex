@@ -188,15 +188,18 @@ fn worktree_destination(repo_root: &Path, codex_home: &Path, branch: &str) -> Pa
         .file_name()
         .and_then(|name| name.to_str())
         .map_or_else(|| "repo".to_string(), sanitize_for_path);
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    repo_root.to_string_lossy().hash(&mut hasher);
-    let repo_fingerprint = format!("{:016x}", hasher.finish());
+    let mut repo_hasher = std::collections::hash_map::DefaultHasher::new();
+    repo_root.to_string_lossy().hash(&mut repo_hasher);
+    let repo_fingerprint = format!("{:016x}", repo_hasher.finish());
     let sanitized_branch = sanitize_for_path(branch);
+    let mut branch_hasher = std::collections::hash_map::DefaultHasher::new();
+    branch.hash(&mut branch_hasher);
+    let branch_fingerprint = format!("{:016x}", branch_hasher.finish());
 
     codex_home
         .join("worktrees")
         .join(format!("{repo_name}-{repo_fingerprint}"))
-        .join(sanitized_branch)
+        .join(format!("{sanitized_branch}-{branch_fingerprint}"))
 }
 
 fn sanitize_for_path(value: &str) -> String {
@@ -393,6 +396,17 @@ mod tests {
         let rendered = destination.to_string_lossy();
 
         assert!(rendered.starts_with("/home/me/.codex/worktrees/repo-"));
-        assert!(rendered.ends_with("/feature-new-api"));
+        assert!(rendered.contains("/feature-new-api-"));
+    }
+
+    #[test]
+    fn worktree_destination_disambiguates_sanitization_collisions() {
+        let repo_root = Path::new("/projects/acme/repo");
+        let codex_home = Path::new("/home/me/.codex");
+
+        let slash_branch = worktree_destination(repo_root, codex_home, "feature/new-api");
+        let dash_branch = worktree_destination(repo_root, codex_home, "feature-new-api");
+
+        assert_ne!(slash_branch, dash_branch);
     }
 }
