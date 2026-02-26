@@ -33,7 +33,10 @@ impl ContextualUserFragmentDefinition {
         let starts_with_marker = trimmed
             .get(..self.start_marker.len())
             .is_some_and(|candidate| candidate.eq_ignore_ascii_case(self.start_marker));
-        let ends_with_marker = trimmed.trim_end().ends_with(self.end_marker);
+        let trimmed = trimmed.trim_end();
+        let ends_with_marker = trimmed
+            .get(trimmed.len().saturating_sub(self.end_marker.len())..)
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(self.end_marker));
         starts_with_marker && ends_with_marker
     }
 

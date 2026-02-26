@@ -285,7 +285,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "00:message/user:# AGENTS.md instructions for /tmp/example\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
+            r"00:message/user:# AGENTS.md instructions for /tmp/example\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
         );
     }
 
