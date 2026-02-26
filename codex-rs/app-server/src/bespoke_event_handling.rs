@@ -2,12 +2,12 @@ use crate::codex_message_processor::ApiVersion;
 use crate::codex_message_processor::abort_pending_client_requests;
 use crate::codex_message_processor::read_rollout_items_from_rollout;
 use crate::codex_message_processor::read_summary_from_rollout;
-use crate::codex_message_processor::send_tracked_client_request;
 use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
+use crate::thread_state::ServerRequestType;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
@@ -136,29 +136,20 @@ struct CommandExecutionCompletionItem {
     command_actions: Vec<V2ParsedCommand>,
 }
 
-const TURN_ABORTED_PENDING_REQUEST_ERROR_REASON: &str = "turnAborted";
+const TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON: &str = "turnTransition";
 
-pub(crate) fn tracked_client_request_turn_aborted_error() -> JSONRPCErrorError {
-    JSONRPCErrorError {
-        code: INVALID_REQUEST_ERROR_CODE,
-        message: "tracked client request resolved because the turn was aborted".to_string(),
-        data: Some(serde_json::json!({
-            "reason": TURN_ABORTED_PENDING_REQUEST_ERROR_REASON,
-        })),
-    }
-}
-
-fn is_tracked_client_request_turn_aborted_error(error: &JSONRPCErrorError) -> bool {
+fn is_turn_transition_tracked_request_error(error: &JSONRPCErrorError) -> bool {
     error
         .data
         .as_ref()
         .and_then(|data| data.get("reason"))
         .and_then(serde_json::Value::as_str)
-        == Some(TURN_ABORTED_PENDING_REQUEST_ERROR_REASON)
+        == Some(TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON)
 }
 
 async fn queue_tracked_client_request_removal(
     thread_state: &Arc<Mutex<ThreadState>>,
+    request_type: ServerRequestType,
     request_id: RequestId,
 ) {
     let (completion_tx, completion_rx) = oneshot::channel();
@@ -172,7 +163,8 @@ async fn queue_tracked_client_request_removal(
     };
 
     if listener_command_tx
-        .send(ThreadListenerCommand::RemoveServerRequest {
+        .send(ThreadListenerCommand::ResolveServerRequest {
+            request_type,
             request_id,
             completion_tx,
         })
@@ -208,13 +200,13 @@ pub(crate) async fn apply_bespoke_event_handling(
     } = event;
     match msg {
         EventMsg::TurnStarted(_) => {
-            abort_pending_client_requests(conversation_id, &thread_state, &outgoing).await;
+            abort_pending_client_requests(&outgoing).await;
             thread_watch_manager
                 .note_turn_started(&conversation_id.to_string())
                 .await;
         }
         EventMsg::TurnComplete(_ev) => {
-            abort_pending_client_requests(conversation_id, &thread_state, &outgoing).await;
+            abort_pending_client_requests(&outgoing).await;
             let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
@@ -367,12 +359,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                         reason,
                         grant_root,
                     };
-                    let (pending_request_id, rx) = send_tracked_client_request(
-                        &thread_state,
-                        &outgoing,
-                        ServerRequestPayload::FileChangeRequestApproval(params),
-                    )
-                    .await;
+                    let (request, rx) = outgoing
+                        .send_request_with_server_request(
+                            ServerRequestPayload::FileChangeRequestApproval(params),
+                        )
+                        .await;
+                    let pending_request_id = request.id().clone();
                     tokio::spawn(async move {
                         on_file_change_request_approval_response(
                             event_turn_id,
@@ -499,12 +491,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                         proposed_network_policy_amendments: proposed_network_policy_amendments_v2,
                         available_decisions: Some(available_decisions),
                     };
-                    let (pending_request_id, rx) = send_tracked_client_request(
-                        &thread_state,
-                        &outgoing,
-                        ServerRequestPayload::CommandExecutionRequestApproval(params),
-                    )
-                    .await;
+                    let (request, rx) = outgoing
+                        .send_request_with_server_request(
+                            ServerRequestPayload::CommandExecutionRequestApproval(params),
+                        )
+                        .await;
+                    let pending_request_id = request.id().clone();
                     tokio::spawn(async move {
                         on_command_execution_request_approval_response(
                             event_turn_id,
@@ -555,12 +547,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                     item_id: request.call_id,
                     questions,
                 };
-                let (pending_request_id, rx) = send_tracked_client_request(
-                    &thread_state,
-                    &outgoing,
-                    ServerRequestPayload::ToolRequestUserInput(params),
-                )
-                .await;
+                let (request, rx) = outgoing
+                    .send_request_with_server_request(ServerRequestPayload::ToolRequestUserInput(
+                        params,
+                    ))
+                    .await;
+                let pending_request_id = request.id().clone();
                 tokio::spawn(async move {
                     on_request_user_input_response(
                         event_turn_id,
@@ -1405,7 +1397,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
-            abort_pending_client_requests(conversation_id, &thread_state, &outgoing).await;
+            abort_pending_client_requests(&outgoing).await;
             let pending = {
                 let mut state = thread_state.lock().await;
                 std::mem::take(&mut state.pending_interrupts)
@@ -1900,14 +1892,17 @@ async fn on_request_user_input_response(
     user_input_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
-    queue_tracked_client_request_removal(&thread_state, pending_request_id).await;
+    queue_tracked_client_request_removal(
+        &thread_state,
+        ServerRequestType::ToolRequestUserInput,
+        pending_request_id,
+    )
+    .await;
     drop(user_input_guard);
     let value = match response {
         Ok(Ok(value)) => value,
+        Ok(Err(err)) if is_turn_transition_tracked_request_error(&err) => return,
         Ok(Err(err)) => {
-            if is_tracked_client_request_turn_aborted_error(&err) {
-                return;
-            }
             error!("request failed with client error: {err:?}");
             let empty = CoreRequestUserInputResponse {
                 answers: HashMap::new(),
@@ -2025,7 +2020,12 @@ async fn on_file_change_request_approval_response(
     permission_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
-    queue_tracked_client_request_removal(&thread_state, pending_request_id).await;
+    queue_tracked_client_request_removal(
+        &thread_state,
+        ServerRequestType::FileChangeRequestApproval,
+        pending_request_id,
+    )
+    .await;
     drop(permission_guard);
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {
@@ -2043,10 +2043,8 @@ async fn on_file_change_request_approval_response(
             // Only short-circuit on declines/cancels/failures.
             (decision, completion_status)
         }
+        Ok(Err(err)) if is_turn_transition_tracked_request_error(&err) => return,
         Ok(Err(err)) => {
-            if is_tracked_client_request_turn_aborted_error(&err) {
-                return;
-            }
             error!("request failed with client error: {err:?}");
             (ReviewDecision::Denied, Some(PatchApplyStatus::Failed))
         }
@@ -2095,7 +2093,12 @@ async fn on_command_execution_request_approval_response(
     permission_guard: ThreadWatchActiveGuard,
 ) {
     let response = receiver.await;
-    queue_tracked_client_request_removal(&thread_state, pending_request_id).await;
+    queue_tracked_client_request_removal(
+        &thread_state,
+        ServerRequestType::CommandExecutionRequestApproval,
+        pending_request_id,
+    )
+    .await;
     drop(permission_guard);
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {
@@ -2147,10 +2150,8 @@ async fn on_command_execution_request_approval_response(
             };
             (decision, completion_status)
         }
+        Ok(Err(err)) if is_turn_transition_tracked_request_error(&err) => return,
         Ok(Err(err)) => {
-            if is_tracked_client_request_turn_aborted_error(&err) {
-                return;
-            }
             error!("request failed with client error: {err:?}");
             (ReviewDecision::Denied, Some(CommandExecutionStatus::Failed))
         }

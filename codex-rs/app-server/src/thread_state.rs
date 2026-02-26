@@ -2,7 +2,6 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
@@ -33,10 +32,17 @@ pub(crate) struct PendingThreadResumeRequest {
 
 pub(crate) enum ThreadListenerCommand {
     SendThreadResumeResponse(Box<PendingThreadResumeRequest>),
-    RemoveServerRequest {
+    ResolveServerRequest {
         request_id: RequestId,
+        request_type: ServerRequestType,
         completion_tx: oneshot::Sender<()>,
     },
+}
+
+pub(crate) enum ServerRequestType {
+    CommandExecutionRequestApproval,
+    FileChangeRequestApproval,
+    ToolRequestUserInput,
 }
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
@@ -51,7 +57,6 @@ pub(crate) struct TurnSummary {
 pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
-    pending_client_requests: Vec<ServerRequest>,
     pub(crate) turn_summary: TurnSummary,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
@@ -63,28 +68,6 @@ pub(crate) struct ThreadState {
 }
 
 impl ThreadState {
-    pub(crate) fn add_pending_client_request(&mut self, request: ServerRequest) {
-        self.pending_client_requests.push(request);
-    }
-
-    pub(crate) fn remove_pending_client_request(
-        &mut self,
-        request_id: &RequestId,
-    ) -> Option<ServerRequest> {
-        self.pending_client_requests
-            .iter()
-            .position(|request| request.id() == request_id)
-            .map(|index| self.pending_client_requests.remove(index))
-    }
-
-    pub(crate) fn pending_client_requests(&self) -> Vec<ServerRequest> {
-        self.pending_client_requests.clone()
-    }
-
-    pub(crate) fn take_pending_client_requests(&mut self) -> Vec<ServerRequest> {
-        std::mem::take(&mut self.pending_client_requests)
-    }
-
     pub(crate) fn listener_matches(&self, conversation: &Arc<CodexThread>) -> bool {
         self.listener_thread
             .as_ref()

@@ -12,6 +12,7 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
+use crate::thread_state::ServerRequestType;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
 use chrono::DateTime;
@@ -119,7 +120,6 @@ use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
-use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
@@ -4836,7 +4836,9 @@ impl CodexMessageProcessor {
 
     async fn finalize_thread_teardown(&mut self, thread_id: ThreadId) {
         self.pending_thread_unloads.lock().await.remove(&thread_id);
-        self.outgoing.cancel_requests_for_thread(thread_id).await;
+        self.outgoing
+            .cancel_requests_for_thread(thread_id, None)
+            .await;
         self.thread_state_manager
             .remove_thread_state(thread_id)
             .await;
@@ -4897,7 +4899,9 @@ impl CodexMessageProcessor {
             self.pending_thread_unloads.lock().await.insert(thread_id);
             // Any pending app-server -> client requests for this thread can no longer be
             // answered; cancel their callbacks before shutdown/unload.
-            self.outgoing.cancel_requests_for_thread(thread_id).await;
+            self.outgoing
+                .cancel_requests_for_thread(thread_id, None)
+                .await;
             self.thread_state_manager
                 .remove_thread_state(thread_id)
                 .await;
@@ -6743,44 +6747,6 @@ impl CodexMessageProcessor {
     }
 }
 
-fn pending_client_request_resolved_notification(
-    conversation_id: ThreadId,
-    request: &ServerRequest,
-) -> Option<ServerNotification> {
-    let thread_id = conversation_id.to_string();
-    let request_id = request.id().clone();
-    match request {
-        ServerRequest::CommandExecutionRequestApproval { .. } => {
-            Some(ServerNotification::CommandExecutionApprovalResolved(
-                CommandExecutionApprovalResolvedNotification {
-                    thread_id,
-                    request_id,
-                },
-            ))
-        }
-        ServerRequest::FileChangeRequestApproval { .. } => {
-            Some(ServerNotification::FileChangeApprovalResolved(
-                FileChangeApprovalResolvedNotification {
-                    thread_id,
-                    request_id,
-                },
-            ))
-        }
-        ServerRequest::ToolRequestUserInput { .. } => {
-            Some(ServerNotification::ToolRequestUserInputResolved(
-                ToolRequestUserInputResolvedNotification {
-                    thread_id,
-                    request_id,
-                },
-            ))
-        }
-        ServerRequest::DynamicToolCall { .. }
-        | ServerRequest::ChatgptAuthTokensRefresh { .. }
-        | ServerRequest::ApplyPatchApproval { .. }
-        | ServerRequest::ExecCommandApproval { .. } => None,
-    }
-}
-
 fn pending_client_request_resume_notifications(
     file_change_started: &HashMap<String, Vec<FileUpdateChange>>,
     request: &ServerRequest,
@@ -6809,83 +6775,55 @@ fn pending_client_request_resume_notifications(
     }
 }
 
-async fn emit_pending_client_request_resolved_notifications(
-    conversation_id: ThreadId,
-    requests: Vec<ServerRequest>,
-    outgoing: ThreadScopedOutgoingMessageSender,
-) {
-    for request in requests {
-        if let Some(notification) =
-            pending_client_request_resolved_notification(conversation_id, &request)
-        {
-            outgoing.send_server_notification(notification).await;
-        }
-    }
-}
-
-pub(crate) async fn send_tracked_client_request(
-    thread_state: &Arc<Mutex<ThreadState>>,
-    outgoing: &ThreadScopedOutgoingMessageSender,
-    request: ServerRequestPayload,
-) -> (
-    RequestId,
-    oneshot::Receiver<crate::outgoing_message::ClientRequestResult>,
-) {
-    let (request, receiver) = outgoing.send_request_with_server_request(request).await;
-    let request_id = request.id().clone();
-    thread_state
-        .lock()
-        .await
-        .add_pending_client_request(request);
-    (request_id, receiver)
-}
-
-async fn remove_pending_client_request(
+async fn resolve_pending_server_request(
     conversation_id: ThreadId,
     thread_state: &Arc<Mutex<ThreadState>>,
     outgoing: &Arc<OutgoingMessageSender>,
+    request_type: ServerRequestType,
     request_id: RequestId,
 ) {
-    let (request, subscribed_connection_ids) = {
-        let mut state = thread_state.lock().await;
-        (
-            state.remove_pending_client_request(&request_id),
-            state.subscribed_connection_ids(),
-        )
-    };
-    let Some(request) = request else {
-        return;
-    };
-
+    let thread_id = conversation_id.to_string();
+    let subscribed_connection_ids = thread_state.lock().await.subscribed_connection_ids();
     let outgoing = ThreadScopedOutgoingMessageSender::new(
         outgoing.clone(),
         subscribed_connection_ids,
         conversation_id,
     );
-    emit_pending_client_request_resolved_notifications(conversation_id, vec![request], outgoing)
-        .await;
+    let notification = match request_type {
+        ServerRequestType::CommandExecutionRequestApproval => {
+            ServerNotification::CommandExecutionApprovalResolved(
+                CommandExecutionApprovalResolvedNotification {
+                    thread_id,
+                    request_id,
+                },
+            )
+        }
+        ServerRequestType::FileChangeRequestApproval => {
+            ServerNotification::FileChangeApprovalResolved(FileChangeApprovalResolvedNotification {
+                thread_id,
+                request_id,
+            })
+        }
+        ServerRequestType::ToolRequestUserInput => {
+            ServerNotification::ToolRequestUserInputResolved(
+                ToolRequestUserInputResolvedNotification {
+                    thread_id,
+                    request_id,
+                },
+            )
+        }
+    };
+    outgoing.send_server_notification(notification).await;
 }
 
-pub(crate) async fn abort_pending_client_requests(
-    conversation_id: ThreadId,
-    thread_state: &Arc<Mutex<ThreadState>>,
-    outgoing: &ThreadScopedOutgoingMessageSender,
-) {
-    let requests = { thread_state.lock().await.take_pending_client_requests() };
-    if requests.is_empty() {
-        return;
-    }
-
-    for request in &requests {
-        outgoing
-            .resolve_request_with_error(
-                request.id().clone(),
-                crate::bespoke_event_handling::tracked_client_request_turn_aborted_error(),
-            )
-            .await;
-    }
-
-    emit_pending_client_request_resolved_notifications(conversation_id, requests, outgoing.clone())
+pub(crate) async fn abort_pending_client_requests(outgoing: &ThreadScopedOutgoingMessageSender) {
+    outgoing
+        .cancel_tracked_requests_with_error(JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: "tracked client request resolved because the turn state was changed"
+                .to_string(),
+            data: Some(serde_json::json!({ "reason": "turnTransition" })),
+        })
         .await;
 }
 
@@ -6909,12 +6847,19 @@ async fn handle_thread_listener_command(
             )
             .await;
         }
-        ThreadListenerCommand::RemoveServerRequest {
+        ThreadListenerCommand::ResolveServerRequest {
+            request_type,
             request_id,
             completion_tx,
         } => {
-            remove_pending_client_request(conversation_id, thread_state, outgoing, request_id)
-                .await;
+            resolve_pending_server_request(
+                conversation_id,
+                thread_state,
+                outgoing,
+                request_type,
+                request_id,
+            )
+            .await;
             let _ = completion_tx.send(());
         }
     }
@@ -7009,13 +6954,11 @@ async fn handle_pending_thread_resume_request(
     };
     outgoing.send_response(request_id, response).await;
 
-    let (pending_requests, file_change_started) = {
+    let pending_requests = outgoing.pending_requests_for_thread(conversation_id).await;
+    let file_change_started = {
         let mut state = thread_state.lock().await;
         state.add_connection(connection_id);
-        (
-            state.pending_client_requests(),
-            state.turn_summary.file_change_started.clone(),
-        )
+        state.turn_summary.file_change_started.clone()
     };
 
     for request in pending_requests {
@@ -7026,6 +6969,7 @@ async fn handle_pending_thread_resume_request(
                 .send_server_notification_to_connections(&[connection_id], notification.clone())
                 .await;
         }
+
         outgoing
             .replay_request_to_connections(&[connection_id], request)
             .await;
@@ -7782,10 +7726,8 @@ mod tests {
     use crate::outgoing_message::OutgoingEnvelope;
     use crate::outgoing_message::OutgoingMessage;
     use anyhow::Result;
-    use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
-    use codex_app_server_protocol::ToolRequestUserInputResolvedNotification;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
     use pretty_assertions::assert_eq;
@@ -7980,7 +7922,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn aborting_tracked_request_resolves_it_immediately() -> Result<()> {
+    async fn aborting_tracked_request_clears_pending_state() -> Result<()> {
         let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
         let thread_state = Arc::new(Mutex::new(ThreadState::default()));
         let connection_id = ConnectionId(7);
@@ -7988,21 +7930,24 @@ mod tests {
 
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(8);
         let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
-        let thread_outgoing =
-            ThreadScopedOutgoingMessageSender::new(outgoing, vec![connection_id], thread_id);
+        let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing.clone(),
+            vec![connection_id],
+            thread_id,
+        );
 
-        let (request_id, client_request_rx) = send_tracked_client_request(
-            &thread_state,
-            &thread_outgoing,
-            ServerRequestPayload::ToolRequestUserInput(ToolRequestUserInputParams {
-                thread_id: thread_id.to_string(),
-                turn_id: "turn-1".to_string(),
-                item_id: "call-1".to_string(),
-                questions: vec![],
-            }),
-        )
-        .await;
-        abort_pending_client_requests(thread_id, &thread_state, &thread_outgoing).await;
+        let (request, client_request_rx) = thread_outgoing
+            .send_request_with_server_request(ServerRequestPayload::ToolRequestUserInput(
+                ToolRequestUserInputParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "call-1".to_string(),
+                    questions: vec![],
+                },
+            ))
+            .await;
+        let request_id = request.id().clone();
+        abort_pending_client_requests(&thread_outgoing).await;
 
         let request_message = outgoing_rx.recv().await.expect("request should be sent");
         let OutgoingEnvelope::ToConnection {
@@ -8025,39 +7970,16 @@ mod tests {
         let error = response.expect_err("request should be aborted during cleanup");
         assert_eq!(
             error.message,
-            "tracked client request resolved because the turn was aborted"
+            "tracked client request resolved because the turn state was changed"
         );
-        assert_eq!(error.data, Some(json!({ "reason": "turnAborted" })));
+        assert_eq!(error.data, Some(json!({ "reason": "turnTransition" })));
         assert!(
-            thread_state
-                .lock()
+            outgoing
+                .pending_requests_for_thread(thread_id)
                 .await
-                .pending_client_requests()
                 .is_empty()
         );
-
-        let resolved_message = outgoing_rx
-            .recv()
-            .await
-            .expect("approvalResolved notification should be sent");
-        let OutgoingEnvelope::ToConnection {
-            connection_id: resolved_connection_id,
-            message:
-                OutgoingMessage::AppServerNotification(
-                    ServerNotification::ToolRequestUserInputResolved(
-                        ToolRequestUserInputResolvedNotification {
-                            thread_id: resolved_thread_id,
-                            request_id: resolved_request_id,
-                        },
-                    ),
-                ),
-        } = resolved_message
-        else {
-            panic!("expected requestUserInputResolved notification");
-        };
-        assert_eq!(resolved_connection_id, connection_id);
-        assert_eq!(resolved_thread_id, thread_id.to_string());
-        assert_eq!(resolved_request_id, request_id);
+        assert!(outgoing_rx.try_recv().is_err());
         Ok(())
     }
 
