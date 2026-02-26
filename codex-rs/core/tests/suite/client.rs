@@ -12,6 +12,7 @@ use codex_core::built_in_model_providers;
 use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
 use codex_core::features::Feature;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -584,6 +585,11 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         auth_manager,
         SessionSource::Exec,
         config.model_catalog.clone(),
+        CollaborationModesConfig {
+            default_mode_request_user_input: config
+                .features
+                .enabled(Feature::DefaultModeRequestUserInput),
+        },
     );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config)

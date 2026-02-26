@@ -29,6 +29,8 @@ use crate::features::FEATURES;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::features::maybe_push_unstable_features_warning;
+#[cfg(test)]
+use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -197,7 +199,6 @@ use crate::protocol::ModelRerouteEvent;
 use crate::protocol::ModelRerouteReason;
 use crate::protocol::NetworkApprovalContext;
 use crate::protocol::Op;
-use crate::protocol::PatchApplyStatus;
 use crate::protocol::PlanDeltaEvent;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReasoningContentDeltaEvent;
@@ -1379,7 +1380,7 @@ impl Session {
             otel_manager,
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
-            execve_session_approvals: RwLock::new(HashSet::new()),
+            execve_session_approvals: RwLock::new(HashMap::new()),
             skills_manager,
             file_watcher,
             agent_control,
@@ -4818,6 +4819,15 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
+    if turn_context.config.features.enabled(Feature::SkillApproval) {
+        let _ = sess
+            .request_skill_approval(
+                turn_context.as_ref(),
+                turn_context.sub_id.clone(),
+                "test-skill".to_string(),
+            )
+            .await;
+    }
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
@@ -5809,46 +5819,80 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
             TurnItem::AgentMessage(item) => Some(agent_message_text(item)),
             _ => None,
         },
-        EventMsg::ExecCommandBegin(event) => {
-            let command = event.command.join(" ");
-            Some(format!(
-                "Exec command started: {command}\nWorking directory: {}",
-                event.cwd.display()
-            ))
-        }
-        EventMsg::PatchApplyBegin(event) => {
-            let mut files: Vec<String> = event
-                .changes
-                .keys()
-                .map(|path| path.display().to_string())
-                .collect();
-            files.sort();
-            let file_list = if files.is_empty() {
-                "none".to_string()
-            } else {
-                files.join(", ")
-            };
-            Some(format!(
-                "apply_patch started ({count} file change(s))\nFiles: {file_list}",
-                count = files.len()
-            ))
-        }
-        EventMsg::PatchApplyEnd(event) => {
-            let status = match event.status {
-                PatchApplyStatus::Completed => "completed",
-                PatchApplyStatus::Failed => "failed",
-                PatchApplyStatus::Declined => "declined",
-            };
-            let mut text = format!("apply_patch {status}");
-            if !event.stdout.is_empty() {
-                text.push_str(&format!("\nstdout:\n{}", event.stdout));
-            }
-            if !event.stderr.is_empty() {
-                text.push_str(&format!("\nstderr:\n{}", event.stderr));
-            }
-            Some(text)
-        }
-        _ => None,
+        EventMsg::Error(_)
+        | EventMsg::Warning(_)
+        | EventMsg::RealtimeConversationStarted(_)
+        | EventMsg::RealtimeConversationRealtime(_)
+        | EventMsg::RealtimeConversationClosed(_)
+        | EventMsg::ModelReroute(_)
+        | EventMsg::ContextCompacted(_)
+        | EventMsg::ThreadRolledBack(_)
+        | EventMsg::TurnStarted(_)
+        | EventMsg::TurnComplete(_)
+        | EventMsg::TokenCount(_)
+        | EventMsg::UserMessage(_)
+        | EventMsg::AgentMessageDelta(_)
+        | EventMsg::AgentReasoning(_)
+        | EventMsg::AgentReasoningDelta(_)
+        | EventMsg::AgentReasoningRawContent(_)
+        | EventMsg::AgentReasoningRawContentDelta(_)
+        | EventMsg::AgentReasoningSectionBreak(_)
+        | EventMsg::SessionConfigured(_)
+        | EventMsg::ThreadNameUpdated(_)
+        | EventMsg::McpStartupUpdate(_)
+        | EventMsg::McpStartupComplete(_)
+        | EventMsg::McpToolCallBegin(_)
+        | EventMsg::McpToolCallEnd(_)
+        | EventMsg::WebSearchBegin(_)
+        | EventMsg::WebSearchEnd(_)
+        | EventMsg::ExecCommandBegin(_)
+        | EventMsg::ExecCommandOutputDelta(_)
+        | EventMsg::TerminalInteraction(_)
+        | EventMsg::ExecCommandEnd(_)
+        | EventMsg::PatchApplyBegin(_)
+        | EventMsg::PatchApplyEnd(_)
+        | EventMsg::ViewImageToolCall(_)
+        | EventMsg::ExecApprovalRequest(_)
+        | EventMsg::RequestUserInput(_)
+        | EventMsg::DynamicToolCallRequest(_)
+        | EventMsg::DynamicToolCallResponse(_)
+        | EventMsg::SkillRequestApproval(_)
+        | EventMsg::ElicitationRequest(_)
+        | EventMsg::ApplyPatchApprovalRequest(_)
+        | EventMsg::DeprecationNotice(_)
+        | EventMsg::BackgroundEvent(_)
+        | EventMsg::UndoStarted(_)
+        | EventMsg::UndoCompleted(_)
+        | EventMsg::StreamError(_)
+        | EventMsg::TurnDiff(_)
+        | EventMsg::GetHistoryEntryResponse(_)
+        | EventMsg::McpListToolsResponse(_)
+        | EventMsg::ListCustomPromptsResponse(_)
+        | EventMsg::ListSkillsResponse(_)
+        | EventMsg::ListRemoteSkillsResponse(_)
+        | EventMsg::RemoteSkillDownloaded(_)
+        | EventMsg::SkillsUpdateAvailable
+        | EventMsg::PlanUpdate(_)
+        | EventMsg::TurnAborted(_)
+        | EventMsg::ShutdownComplete
+        | EventMsg::EnteredReviewMode(_)
+        | EventMsg::ExitedReviewMode(_)
+        | EventMsg::RawResponseItem(_)
+        | EventMsg::ItemStarted(_)
+        | EventMsg::AgentMessageContentDelta(_)
+        | EventMsg::PlanDelta(_)
+        | EventMsg::ReasoningContentDelta(_)
+        | EventMsg::ReasoningRawContentDelta(_)
+        | EventMsg::CollabAgentSpawnBegin(_)
+        | EventMsg::CollabAgentSpawnEnd(_)
+        | EventMsg::CollabAgentInteractionBegin(_)
+        | EventMsg::CollabAgentInteractionEnd(_)
+        | EventMsg::CollabWaitingBegin(_)
+        | EventMsg::CollabWaitingEnd(_)
+        | EventMsg::CollabCloseBegin(_)
+        | EventMsg::CollabCloseEnd(_)
+        | EventMsg::CollabResumeBegin(_)
+        | EventMsg::CollabResumeEnd(_) => None,
     }
 }
 
@@ -8251,6 +8295,7 @@ mod tests {
             config.codex_home.clone(),
             auth_manager.clone(),
             None,
+            CollaborationModesConfig::default(),
         ));
         let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
         let model_info =
@@ -8327,6 +8372,7 @@ mod tests {
             config.codex_home.clone(),
             auth_manager.clone(),
             None,
+            CollaborationModesConfig::default(),
         ));
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
@@ -8412,7 +8458,7 @@ mod tests {
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
-            execve_session_approvals: RwLock::new(HashSet::new()),
+            execve_session_approvals: RwLock::new(HashMap::new()),
             skills_manager,
             file_watcher,
             agent_control,
@@ -8485,6 +8531,7 @@ mod tests {
             config.codex_home.clone(),
             auth_manager.clone(),
             None,
+            CollaborationModesConfig::default(),
         ));
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
@@ -8570,7 +8617,7 @@ mod tests {
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
-            execve_session_approvals: RwLock::new(HashSet::new()),
+            execve_session_approvals: RwLock::new(HashMap::new()),
             skills_manager,
             file_watcher,
             agent_control,
@@ -9416,23 +9463,20 @@ mod tests {
 
         let timeout_ms = 1000;
         let sandbox_permissions = SandboxPermissions::RequireEscalated;
-        let command = if cfg!(windows) {
-            vec![
-                "cmd.exe".to_string(),
-                "/C".to_string(),
-                "echo hi".to_string(),
-            ]
-        } else {
-            vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "echo hi".to_string(),
-            ]
-        };
         let params = ExecParams {
-            command: command.clone(),
-            original_command: shlex::try_join(command.iter().map(String::as_str))
-                .unwrap_or_else(|_| command.join(" ")),
+            command: if cfg!(windows) {
+                vec![
+                    "cmd.exe".to_string(),
+                    "/C".to_string(),
+                    "echo hi".to_string(),
+                ]
+            } else {
+                vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "echo hi".to_string(),
+                ]
+            },
             cwd: turn_context.cwd.clone(),
             expiration: timeout_ms.into(),
             env: HashMap::new(),
@@ -9446,7 +9490,6 @@ mod tests {
         let params2 = ExecParams {
             sandbox_permissions: SandboxPermissions::UseDefault,
             command: params.command.clone(),
-            original_command: params.original_command.clone(),
             cwd: params.cwd.clone(),
             expiration: timeout_ms.into(),
             env: HashMap::new(),

@@ -49,6 +49,7 @@ use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -182,6 +183,11 @@ impl MessageProcessor {
             auth_manager.clone(),
             SessionSource::VSCode,
             config.model_catalog.clone(),
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
+                    .features
+                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+            },
         ));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
