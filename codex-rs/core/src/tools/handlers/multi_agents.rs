@@ -107,7 +107,7 @@ mod spawn {
         items: Option<Vec<UserInput>>,
         agent_type: Option<String>,
         #[serde(default)]
-        fork_mode: bool,
+        fork_context: bool,
     }
 
     #[derive(Debug, Serialize)]
@@ -171,8 +171,7 @@ mod spawn {
                     role_name,
                 )),
                 SpawnAgentOptions {
-                    fork_parent_thread: args.fork_mode,
-                    fork_parent_spawn_call_id: args.fork_mode.then(|| call_id.clone()),
+                    fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
                 },
             )
             .await

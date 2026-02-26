@@ -20,6 +20,8 @@ use tokio::time::sleep;
 use wiremock::MockServer;
 
 const SPAWN_CALL_ID: &str = "spawn-call-1";
+const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
+const TURN_0_FORK_PROMPT: &str = "seed fork context";
 const TURN_1_PROMPT: &str = "spawn a child and continue";
 const TURN_2_NO_WAIT_PROMPT: &str = "follow up without wait";
 const CHILD_PROMPT: &str = "child: do work";
@@ -191,6 +193,87 @@ async fn subagent_notification_is_included_without_wait() -> Result<()> {
 
     let turn2_requests = wait_for_requests(&turn2).await?;
     assert!(turn2_requests.iter().any(has_subagent_notification));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawned_child_receives_forked_parent_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let seed_turn = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_0_FORK_PROMPT),
+        sse(vec![
+            ev_response_created("resp-seed-1"),
+            ev_assistant_message("msg-seed-1", "seeded"),
+            ev_completed("resp-seed-1"),
+        ]),
+    )
+    .await;
+
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "fork_context": true,
+    }))?;
+    let spawn_turn = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+
+    let child_request_log = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_assistant_message("msg-child-1", "child done"),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+
+    let _turn1_followup = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-turn1-2"),
+            ev_assistant_message("msg-turn1-2", "parent done"),
+            ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Collab);
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn(TURN_0_FORK_PROMPT).await?;
+    let _ = seed_turn.single_request();
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+    let _ = spawn_turn.single_request();
+
+    let child_request = child_request_log.single_request();
+    assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
+    assert!(child_request.body_contains_text("seeded"));
+    let Some((content, success)) =
+        child_request.function_call_output_content_and_success(SPAWN_CALL_ID)
+    else {
+        panic!("expected forked child request to include synthetic spawn_agent output");
+    };
+    assert_eq!(content.as_deref(), Some(FORKED_SPAWN_AGENT_OUTPUT_MESSAGE));
+    assert_eq!(success, Some(true));
 
     Ok(())
 }

@@ -27,7 +27,6 @@ const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SpawnAgentOptions {
-    pub(crate) fork_parent_thread: bool,
     pub(crate) fork_parent_spawn_call_id: Option<String>,
 }
 
@@ -105,7 +104,7 @@ impl AgentControl {
         // The same `AgentControl` is sent to spawn the thread.
         let new_thread = match session_source {
             Some(session_source) => {
-                if options.fork_parent_thread {
+                if let Some(call_id) = options.fork_parent_spawn_call_id.as_ref() {
                     let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                         parent_thread_id,
                         ..
@@ -143,18 +142,16 @@ impl AgentControl {
                         RolloutRecorder::get_rollout_history(&rollout_path)
                             .await?
                             .get_rollout_items();
-                    if let Some(call_id) = options.fork_parent_spawn_call_id.as_ref() {
-                        let mut output = FunctionCallOutputPayload::from_text(
-                            FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string(),
-                        );
-                        output.success = Some(true);
-                        forked_rollout_items.push(RolloutItem::ResponseItem(
-                            ResponseItem::FunctionCallOutput {
-                                call_id: call_id.clone(),
-                                output,
-                            },
-                        ));
-                    }
+                    let mut output = FunctionCallOutputPayload::from_text(
+                        FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string(),
+                    );
+                    output.success = Some(true);
+                    forked_rollout_items.push(RolloutItem::ResponseItem(
+                        ResponseItem::FunctionCallOutput {
+                            call_id: call_id.clone(),
+                            output,
+                        },
+                    ));
                     let initial_history = InitialHistory::Forked(forked_rollout_items);
                     state
                         .fork_thread_with_source(
@@ -506,6 +503,7 @@ mod tests {
         })
     }
 
+    /// Returns true when any message item contains `needle` in a text span.
     fn history_contains_text(history_items: &[ResponseItem], needle: &str) -> bool {
         history_items.iter().any(|item| {
             let ResponseItem::Message { content, .. } = item else {
@@ -779,6 +777,19 @@ mod tests {
         parent_thread
             .inject_user_message_without_turn("parent seed context".to_string())
             .await;
+        let turn_context = parent_thread.codex.session.new_default_turn().await;
+        let parent_spawn_call_id = "spawn-call-history".to_string();
+        let parent_spawn_call = ResponseItem::FunctionCall {
+            id: None,
+            name: "spawn_agent".to_string(),
+            arguments: "{}".to_string(),
+            call_id: parent_spawn_call_id.clone(),
+        };
+        parent_thread
+            .codex
+            .session
+            .record_conversation_items(turn_context.as_ref(), &[parent_spawn_call])
+            .await;
         parent_thread
             .codex
             .session
@@ -798,8 +809,7 @@ mod tests {
                     agent_role: None,
                 })),
                 SpawnAgentOptions {
-                    fork_parent_thread: true,
-                    fork_parent_spawn_call_id: None,
+                    fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 },
             )
             .await
@@ -881,7 +891,6 @@ mod tests {
                     agent_role: None,
                 })),
                 SpawnAgentOptions {
-                    fork_parent_thread: true,
                     fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 },
             )
@@ -951,7 +960,6 @@ mod tests {
                     agent_role: None,
                 })),
                 SpawnAgentOptions {
-                    fork_parent_thread: true,
                     fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 },
             )
