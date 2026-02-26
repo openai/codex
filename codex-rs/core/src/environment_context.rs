@@ -100,8 +100,8 @@ impl EnvironmentContext {
         Self::new(
             Some(turn_context_item.cwd.clone()),
             shell.clone(),
-            None,
-            None,
+            turn_context_item.current_date.clone(),
+            turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
             None,
         )

@@ -725,6 +725,8 @@ impl TurnContext {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             cwd: self.cwd.clone(),
+            current_date: self.current_date.clone(),
+            timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
@@ -7280,6 +7282,8 @@ mod tests {
         let previous_context_item = TurnContextItem {
             turn_id: Some(turn_context.sub_id.clone()),
             cwd: turn_context.cwd.clone(),
+            current_date: turn_context.current_date.clone(),
+            timezone: turn_context.timezone.clone(),
             approval_policy: turn_context.approval_policy.value(),
             sandbox_policy: turn_context.sandbox_policy.get().clone(),
             network: None,
@@ -7317,6 +7321,8 @@ mod tests {
         let mut previous_context_item = TurnContextItem {
             turn_id: Some(turn_context.sub_id.clone()),
             cwd: turn_context.cwd.clone(),
+            current_date: turn_context.current_date.clone(),
+            timezone: turn_context.timezone.clone(),
             approval_policy: turn_context.approval_policy.value(),
             sandbox_policy: turn_context.sandbox_policy.get().clone(),
             network: None,
@@ -7510,6 +7516,12 @@ mod tests {
         session
             .record_context_updates_and_set_reference_context_item(&turn_context, None)
             .await;
+        let subsequent_update_items = session.build_settings_update_items(
+            Some(&turn_context.to_turn_context_item()),
+            None,
+            &turn_context,
+        );
+        expected.extend(subsequent_update_items);
         let history_after_second_seed = session.clone_history().await;
         assert_eq!(expected, history_after_second_seed.raw_items());
     }
@@ -7679,6 +7691,8 @@ mod tests {
         let previous_context_item = TurnContextItem {
             turn_id: Some(turn_context.sub_id.clone()),
             cwd: turn_context.cwd.clone(),
+            current_date: turn_context.current_date.clone(),
+            timezone: turn_context.timezone.clone(),
             approval_policy: turn_context.approval_policy.value(),
             sandbox_policy: turn_context.sandbox_policy.get().clone(),
             network: None,
