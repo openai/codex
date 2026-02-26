@@ -164,7 +164,7 @@ impl AgentControl {
                         .await?
                 } else {
                     state
-                        .spawn_new_thread_with_source(config, self.clone(), session_source, false)
+                        .spawn_new_thread_with_source(config, self.clone(), session_source, false, None)
                         .await?
                 }
             }
