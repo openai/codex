@@ -2215,6 +2215,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-sgp-proxy"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "clap",
+ "codex-process-hardening",
+ "ctor 0.6.3",
+ "futures",
+ "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "codex-shell-command"
 version = "0.0.0"
 dependencies = [

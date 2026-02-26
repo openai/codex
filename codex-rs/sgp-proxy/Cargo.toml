@@ -1,0 +1,35 @@
+[package]
+name = "codex-sgp-proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_sgp_proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-sgp-proxy"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true, features = ["tokio", "http1"] }
+bytes = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-process-hardening = { workspace = true }
+ctor = { workspace = true }
+futures = { workspace = true, features = ["std", "async-await"] }
+libc = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+zeroize = { workspace = true }

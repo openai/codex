@@ -37,6 +37,7 @@ members = [
     "protocol",
     "rmcp-client",
     "responses-api-proxy",
+    "sgp-proxy",
     "stdio-to-uds",
     "otel",
     "tui",
@@ -110,6 +111,7 @@ codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
+codex-sgp-proxy = { path = "sgp-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
