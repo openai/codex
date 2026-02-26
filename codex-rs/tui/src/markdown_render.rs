@@ -100,13 +100,19 @@ fn should_render_link_destination(dest_url: &str) -> bool {
     !is_local_path_like_link(dest_url)
 }
 
-static COLON_LOCATION_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r":\d+(?::\d+)?(?:[-–]\d+(?::\d+)?)?$").expect("valid location suffix regex")
-});
+static COLON_LOCATION_SUFFIX_RE: LazyLock<Regex> =
+    LazyLock::new(
+        || match Regex::new(r":\d+(?::\d+)?(?:[-–]\d+(?::\d+)?)?$") {
+            Ok(regex) => regex,
+            Err(error) => panic!("invalid location suffix regex: {error}"),
+        },
+    );
 
-static HASH_LOCATION_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^L\d+(?:C\d+)?(?:-L\d+(?:C\d+)?)?$").expect("valid hash location regex")
-});
+static HASH_LOCATION_SUFFIX_RE: LazyLock<Regex> =
+    LazyLock::new(|| match Regex::new(r"^L\d+(?:C\d+)?(?:-L\d+(?:C\d+)?)?$") {
+        Ok(regex) => regex,
+        Err(error) => panic!("invalid hash location regex: {error}"),
+    });
 
 fn is_local_path_like_link(dest_url: &str) -> bool {
     dest_url.starts_with("file://")
