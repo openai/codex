@@ -18,10 +18,10 @@ impl Session {
         //   2) resume/fork hydration metadata (`previous_model` and
         //      `reference_context_item`)
         //
-        // A `TurnContextItem` appears in rollout only for user turns that
-        // emit model-visible context items (during normal context updates or when
-        // mid-turn compaction reinjects full initial context). That means replay only
-        // needs to answer:
+        // A `TurnContextItem` appears in rollout for user turns that establish or advance the
+        // context-diff baseline, whether or not that turn emitted model-visible context items.
+        // Mid-turn compaction can also re-establish the baseline by reinjecting full initial
+        // context. That means replay only needs to answer:
         // - which surviving user turn last established the
         //   `reference_context_item` baseline for context diffing
         // - which `previous_model` that same turn carried

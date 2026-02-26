@@ -3004,13 +3004,17 @@ impl Session {
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
                 .await;
-            let turn_context_item = turn_context.to_turn_context_item();
-            self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
-                .await;
-
-            let mut state = self.state.lock().await;
-            state.set_reference_context_item(Some(turn_context_item));
         }
+
+        // Advance the diff baseline even when this turn emitted no model-visible context items.
+        // A model/context change can still matter for later turns, and resume replay must see the
+        // same latest `TurnContextItem` that runtime diffing used.
+        let turn_context_item = turn_context.to_turn_context_item();
+        self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
+            .await;
+
+        let mut state = self.state.lock().await;
+        state.set_reference_context_item(Some(turn_context_item));
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -8539,6 +8543,44 @@ mod tests {
         let mut expected_history = vec![compacted_summary];
         expected_history.extend(session.build_initial_context(&turn_context, None).await);
         assert_eq!(history.raw_items().to_vec(), expected_history);
+    }
+
+    #[tokio::test]
+    async fn record_context_updates_and_set_reference_context_item_updates_baseline_without_emitting_diffs(
+    ) {
+        let (session, previous_context) = make_session_and_context().await;
+        let next_model = if previous_context.model_info.slug == "gpt-5.1" {
+            "gpt-5"
+        } else {
+            "gpt-5.1"
+        };
+        let turn_context = previous_context
+            .with_model(next_model.to_string(), &session.services.models_manager)
+            .await;
+        let previous_context_item = previous_context.to_turn_context_item();
+        {
+            let mut state = session.state.lock().await;
+            state.set_reference_context_item(Some(previous_context_item.clone()));
+        }
+
+        let update_items =
+            session.build_settings_update_items(Some(&previous_context_item), None, &turn_context);
+        assert_eq!(update_items, Vec::new());
+
+        session
+            .record_context_updates_and_set_reference_context_item(&turn_context, None)
+            .await;
+
+        assert_eq!(
+            session.clone_history().await.raw_items().to_vec(),
+            Vec::new()
+        );
+        assert_eq!(
+            serde_json::to_value(session.reference_context_item().await)
+                .expect("serialize current context item"),
+            serde_json::to_value(Some(turn_context.to_turn_context_item()))
+                .expect("serialize expected context item")
+        );
     }
 
     #[tokio::test]
