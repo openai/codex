@@ -573,12 +573,18 @@ mod phase2 {
 
         phase2::run(&harness.session, Arc::clone(&harness.config)).await;
 
-        let running_claim = harness
+        let post_dispatch_claim = harness
             .state_db
             .try_claim_global_phase2_job(ThreadId::new(), 3_600)
             .await
-            .expect("claim while running");
-        pretty_assertions::assert_eq!(running_claim, Phase2JobClaimOutcome::SkippedRunning);
+            .expect("claim after stale lock dispatch");
+        assert!(
+            matches!(
+                post_dispatch_claim,
+                Phase2JobClaimOutcome::SkippedRunning | Phase2JobClaimOutcome::SkippedNotDirty
+            ),
+            "stale-lock dispatch should either keep the reclaimed job running or finish it before re-claim"
+        );
 
         let user_input_ops = harness.user_input_ops_count();
         pretty_assertions::assert_eq!(user_input_ops, 1);
