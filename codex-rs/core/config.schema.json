@@ -277,6 +277,32 @@
         }
       ]
     },
+    "RealtimeAudioToml": {
+      "additionalProperties": false,
+      "properties": {
+        "microphone": {
+          "type": "string"
+        },
+        "speaker": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RealtimeToml": {
+      "additionalProperties": false,
+      "properties": {
+        "audio": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealtimeAudioToml"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -1540,6 +1566,15 @@
       "format": "uint64",
       "minimum": 0.0,
       "type": "integer"
+    },
+    "realtime": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RealtimeToml"
+        }
+      ],
+      "default": null,
+      "description": "Machine-local realtime audio device preferences used by realtime voice."
     },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
