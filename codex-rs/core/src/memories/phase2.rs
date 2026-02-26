@@ -53,6 +53,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     };
     let root = memory_root(&config.codex_home);
     let max_raw_memories = config.memories.max_raw_memories_for_global;
+    let max_unused_days = config.memories.max_unused_days;
 
     // 1. Claim the job.
     let claim = match job::claim(session, db).await {
@@ -76,7 +77,10 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     };
 
     // 3. Query the memories
-    let selection = match db.get_phase2_input_selection(max_raw_memories).await {
+    let selection = match db
+        .get_phase2_input_selection(max_raw_memories, max_unused_days)
+        .await
+    {
         Ok(selection) => selection,
         Err(err) => {
             tracing::error!("failed to list stage1 outputs from global: {}", err);

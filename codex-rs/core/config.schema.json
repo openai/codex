@@ -630,6 +630,11 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "max_unused_days": {
+          "description": "Maximum number of days since a memory was last used before it becomes ineligible for phase 2 selection.",
+          "format": "int64",
+          "type": "integer"
+        },
         "min_rollout_idle_hours": {
           "description": "Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.",
           "format": "int64",

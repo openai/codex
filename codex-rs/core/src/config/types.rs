@@ -27,6 +27,7 @@ pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 16;
 pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
 pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 1_024;
+pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -363,6 +364,8 @@ pub struct FeedbackConfigToml {
 pub struct MemoriesToml {
     /// Maximum number of recent raw memories retained for global consolidation.
     pub max_raw_memories_for_global: Option<usize>,
+    /// Maximum number of days since a memory was last used before it becomes ineligible for phase 2 selection.
+    pub max_unused_days: Option<i64>,
     /// Maximum age of the threads used for memories.
     pub max_rollout_age_days: Option<i64>,
     /// Maximum number of rollout candidates processed per pass.
@@ -379,6 +382,7 @@ pub struct MemoriesToml {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoriesConfig {
     pub max_raw_memories_for_global: usize,
+    pub max_unused_days: i64,
     pub max_rollout_age_days: i64,
     pub max_rollouts_per_startup: usize,
     pub min_rollout_idle_hours: i64,
@@ -390,6 +394,7 @@ impl Default for MemoriesConfig {
     fn default() -> Self {
         Self {
             max_raw_memories_for_global: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+            max_unused_days: DEFAULT_MEMORIES_MAX_UNUSED_DAYS,
             max_rollout_age_days: DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS,
             max_rollouts_per_startup: DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
             min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
@@ -407,6 +412,10 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .max_raw_memories_for_global
                 .unwrap_or(defaults.max_raw_memories_for_global)
                 .min(4096),
+            max_unused_days: toml
+                .max_unused_days
+                .unwrap_or(defaults.max_unused_days)
+                .clamp(0, 365),
             max_rollout_age_days: toml
                 .max_rollout_age_days
                 .unwrap_or(defaults.max_rollout_age_days)

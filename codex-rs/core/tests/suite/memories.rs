@@ -248,7 +248,7 @@ async fn wait_for_phase2_success(
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let selection = db.get_phase2_input_selection(1).await?;
+        let selection = db.get_phase2_input_selection(1, 30).await?;
         if selection.selected.len() == 1
             && selection.selected[0].thread_id == expected_thread_id
             && selection.retained_thread_ids == vec![expected_thread_id]
