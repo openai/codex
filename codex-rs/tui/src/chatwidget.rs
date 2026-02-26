@@ -37,6 +37,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::app_event::BidiAudioDeviceKind;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+use crate::audio_device::list_bidi_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::status::RateLimitWindowDisplay;
@@ -853,6 +856,10 @@ impl ChatWidget {
     fn realtime_conversation_enabled(&self) -> bool {
         self.config.features.enabled(Feature::RealtimeConversation)
             && cfg!(not(target_os = "linux"))
+    }
+
+    fn bidi_audio_device_selection_enabled(&self) -> bool {
+        self.realtime_conversation_enabled() && cfg!(feature = "voice-input")
     }
 
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
@@ -2887,6 +2894,9 @@ impl ChatWidget {
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane
+            .set_audio_device_selection_enabled(widget.bidi_audio_device_selection_enabled());
+        widget
+            .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(true);
         widget.sync_personality_command_enabled();
@@ -3064,6 +3074,9 @@ impl ChatWidget {
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane
+            .set_audio_device_selection_enabled(widget.bidi_audio_device_selection_enabled());
+        widget
+            .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(true);
         widget.sync_personality_command_enabled();
@@ -3228,6 +3241,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
+        widget
+            .bottom_pane
+            .set_audio_device_selection_enabled(widget.bidi_audio_device_selection_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3539,6 +3555,12 @@ impl ChatWidget {
                 } else {
                     self.start_realtime_conversation();
                 }
+            }
+            SlashCommand::Audio => {
+                if !self.bidi_audio_device_selection_enabled() {
+                    return;
+                }
+                self.open_bidi_audio_popup();
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
@@ -5279,6 +5301,167 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn open_bidi_audio_popup(&mut self) {
+        let items = [
+            BidiAudioDeviceKind::Microphone,
+            BidiAudioDeviceKind::Speaker,
+        ]
+        .into_iter()
+        .map(|kind| {
+            let description = Some(format!(
+                "Current: {}",
+                self.current_bidi_audio_selection_label(kind)
+            ));
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenBidiAudioDeviceSelection { kind });
+            })];
+            SelectionItem {
+                name: kind.title().to_string(),
+                description,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            }
+        })
+        .collect();
+
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from("Realtime audio".bold()));
+        header.push(Line::from(
+            "Choose microphone and speaker for realtime voice.".dim(),
+        ));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn open_bidi_audio_device_selection(&mut self, kind: BidiAudioDeviceKind) {
+        match list_bidi_audio_device_names(kind) {
+            Ok(device_names) => {
+                self.open_bidi_audio_device_selection_with_names(kind, device_names);
+            }
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Failed to load realtime {} devices: {err}",
+                    kind.noun()
+                ));
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "linux", not(feature = "voice-input")))]
+    pub(crate) fn open_bidi_audio_device_selection(&mut self, kind: BidiAudioDeviceKind) {
+        let _ = kind;
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    fn open_bidi_audio_device_selection_with_names(
+        &mut self,
+        kind: BidiAudioDeviceKind,
+        device_names: Vec<String>,
+    ) {
+        let current_selection = self.current_bidi_audio_device_name(kind);
+        let current_available = current_selection
+            .as_deref()
+            .is_some_and(|name| device_names.iter().any(|device_name| device_name == name));
+        let mut items = vec![SelectionItem {
+            name: "System default".to_string(),
+            description: Some("Use your operating system default device.".to_string()),
+            is_current: current_selection.is_none(),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::PersistBidiAudioDeviceSelection { kind, name: None });
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+
+        if let Some(selection) = current_selection.as_deref()
+            && !current_available
+        {
+            items.push(SelectionItem {
+                name: format!("Unavailable: {selection}"),
+                description: Some("Configured device is not currently available.".to_string()),
+                is_current: true,
+                is_disabled: true,
+                disabled_reason: Some("Reconnect the device or choose another one.".to_string()),
+                ..Default::default()
+            });
+        }
+
+        items.extend(device_names.into_iter().map(|device_name| {
+            let persisted_name = device_name.clone();
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::PersistBidiAudioDeviceSelection {
+                    kind,
+                    name: Some(persisted_name.clone()),
+                });
+            })];
+            SelectionItem {
+                is_current: current_selection.as_deref() == Some(device_name.as_str()),
+                name: device_name,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            }
+        }));
+
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(format!("Select {}", kind.title()).bold()));
+        header.push(Line::from(
+            "Saved devices apply to realtime voice only.".dim(),
+        ));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn open_bidi_audio_restart_prompt(&mut self, kind: BidiAudioDeviceKind) {
+        let restart_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::RestartBidiAudioDevice { kind });
+        })];
+        let items = vec![
+            SelectionItem {
+                name: "Restart now".to_string(),
+                description: Some(format!("Restart local {} audio now.", kind.noun())),
+                actions: restart_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Apply later".to_string(),
+                description: Some(format!(
+                    "Keep the current {} until local audio starts again.",
+                    kind.noun()
+                )),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(format!("Restart {} now?", kind.title()).bold()));
+        header.push(Line::from(
+            "Configuration is saved. Restart local audio to use it immediately.".dim(),
+        ));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
         let title = title.to_string();
         let subtitle = subtitle.to_string();
@@ -6535,6 +6718,8 @@ impl ChatWidget {
             let realtime_conversation_enabled = self.realtime_conversation_enabled();
             self.bottom_pane
                 .set_realtime_conversation_enabled(realtime_conversation_enabled);
+            self.bottom_pane
+                .set_audio_device_selection_enabled(self.bidi_audio_device_selection_enabled());
             if !realtime_conversation_enabled && self.realtime_conversation.is_live() {
                 self.request_realtime_conversation_close(Some(
                     "Realtime voice mode was closed because the feature was disabled.".to_string(),
@@ -6624,6 +6809,18 @@ impl ChatWidget {
         self.config.personality = Some(personality);
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn set_bidi_audio_device(
+        &mut self,
+        kind: BidiAudioDeviceKind,
+        name: Option<String>,
+    ) {
+        match kind {
+            BidiAudioDeviceKind::Microphone => self.config.bidi_audio.microphone = name,
+            BidiAudioDeviceKind::Speaker => self.config.bidi_audio.speaker = name,
+        }
+    }
+
     /// Set the syntax theme override in the widget's config copy.
     pub(crate) fn set_tui_theme(&mut self, theme: Option<String>) {
         self.config.tui_theme = theme;
@@ -6650,6 +6847,23 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.as_deref())
             .unwrap_or_else(|| self.current_collaboration_mode.model())
+    }
+
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn realtime_conversation_is_live(&self) -> bool {
+        self.realtime_conversation.is_live()
+    }
+
+    fn current_bidi_audio_device_name(&self, kind: BidiAudioDeviceKind) -> Option<String> {
+        match kind {
+            BidiAudioDeviceKind::Microphone => self.config.bidi_audio.microphone.clone(),
+            BidiAudioDeviceKind::Speaker => self.config.bidi_audio.speaker.clone(),
+        }
+    }
+
+    fn current_bidi_audio_selection_label(&self, kind: BidiAudioDeviceKind) -> String {
+        self.current_bidi_audio_device_name(kind)
+            .unwrap_or_else(|| "System default".to_string())
     }
 
     fn sync_personality_command_enabled(&mut self) {

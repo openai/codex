@@ -3,46 +3,42 @@ use cpal::traits::DeviceTrait;
 use cpal::traits::HostTrait;
 use tracing::warn;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AudioDeviceKind {
-    Input,
-    Output,
-}
+use crate::app_event::BidiAudioDeviceKind;
 
-impl AudioDeviceKind {
-    fn noun(self) -> &'static str {
-        match self {
-            Self::Input => "input",
-            Self::Output => "output",
+pub(crate) fn list_bidi_audio_device_names(
+    kind: BidiAudioDeviceKind,
+) -> Result<Vec<String>, String> {
+    let host = cpal::default_host();
+    let mut device_names = Vec::new();
+    for device in devices(&host, kind)? {
+        let Ok(name) = device.name() else {
+            continue;
+        };
+        if !device_names.contains(&name) {
+            device_names.push(name);
         }
     }
-
-    fn configured_name(self, config: &Config) -> Option<&str> {
-        match self {
-            Self::Input => config.bidi_audio.microphone.as_deref(),
-            Self::Output => config.bidi_audio.speaker.as_deref(),
-        }
-    }
+    Ok(device_names)
 }
 
 pub(crate) fn select_configured_input_device_and_config(
     config: &Config,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
-    select_device_and_config(AudioDeviceKind::Input, config)
+    select_device_and_config(BidiAudioDeviceKind::Microphone, config)
 }
 
 pub(crate) fn select_configured_output_device_and_config(
     config: &Config,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
-    select_device_and_config(AudioDeviceKind::Output, config)
+    select_device_and_config(BidiAudioDeviceKind::Speaker, config)
 }
 
 fn select_device_and_config(
-    kind: AudioDeviceKind,
+    kind: BidiAudioDeviceKind,
     config: &Config,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
     let host = cpal::default_host();
-    let configured_name = kind.configured_name(config);
+    let configured_name = configured_name(kind, config);
     let selected = configured_name
         .and_then(|name| find_device_by_name(&host, kind, name))
         .or_else(|| {
@@ -63,9 +59,16 @@ fn select_device_and_config(
     Ok((selected, stream_config))
 }
 
+fn configured_name(kind: BidiAudioDeviceKind, config: &Config) -> Option<&str> {
+    match kind {
+        BidiAudioDeviceKind::Microphone => config.bidi_audio.microphone.as_deref(),
+        BidiAudioDeviceKind::Speaker => config.bidi_audio.speaker.as_deref(),
+    }
+}
+
 fn find_device_by_name(
     host: &cpal::Host,
-    kind: AudioDeviceKind,
+    kind: BidiAudioDeviceKind,
     name: &str,
 ) -> Option<cpal::Device> {
     let devices = devices(host, kind).ok()?;
@@ -74,49 +77,49 @@ fn find_device_by_name(
         .find(|device| device.name().ok().as_deref() == Some(name))
 }
 
-fn devices(host: &cpal::Host, kind: AudioDeviceKind) -> Result<Vec<cpal::Device>, String> {
+fn devices(host: &cpal::Host, kind: BidiAudioDeviceKind) -> Result<Vec<cpal::Device>, String> {
     match kind {
-        AudioDeviceKind::Input => host
+        BidiAudioDeviceKind::Microphone => host
             .input_devices()
             .map(|devices| devices.collect())
             .map_err(|err| format!("failed to enumerate input audio devices: {err}")),
-        AudioDeviceKind::Output => host
+        BidiAudioDeviceKind::Speaker => host
             .output_devices()
             .map(|devices| devices.collect())
             .map_err(|err| format!("failed to enumerate output audio devices: {err}")),
     }
 }
 
-fn default_device(host: &cpal::Host, kind: AudioDeviceKind) -> Option<cpal::Device> {
+fn default_device(host: &cpal::Host, kind: BidiAudioDeviceKind) -> Option<cpal::Device> {
     match kind {
-        AudioDeviceKind::Input => host.default_input_device(),
-        AudioDeviceKind::Output => host.default_output_device(),
+        BidiAudioDeviceKind::Microphone => host.default_input_device(),
+        BidiAudioDeviceKind::Speaker => host.default_output_device(),
     }
 }
 
 fn default_config(
     device: &cpal::Device,
-    kind: AudioDeviceKind,
+    kind: BidiAudioDeviceKind,
 ) -> Result<cpal::SupportedStreamConfig, String> {
     match kind {
-        AudioDeviceKind::Input => device
+        BidiAudioDeviceKind::Microphone => device
             .default_input_config()
             .map_err(|err| format!("failed to get default input config: {err}")),
-        AudioDeviceKind::Output => device
+        BidiAudioDeviceKind::Speaker => device
             .default_output_config()
             .map_err(|err| format!("failed to get default output config: {err}")),
     }
 }
 
-fn missing_device_error(kind: AudioDeviceKind, configured_name: Option<&str>) -> String {
+fn missing_device_error(kind: BidiAudioDeviceKind, configured_name: Option<&str>) -> String {
     match (kind, configured_name) {
-        (AudioDeviceKind::Input, Some(name)) => format!(
-            "configured input audio device `{name}` was unavailable and no default input audio device was found"
+        (BidiAudioDeviceKind::Microphone, Some(name)) => format!(
+            "configured microphone `{name}` was unavailable and no default input audio device was found"
         ),
-        (AudioDeviceKind::Output, Some(name)) => format!(
-            "configured output audio device `{name}` was unavailable and no default output audio device was found"
+        (BidiAudioDeviceKind::Speaker, Some(name)) => format!(
+            "configured speaker `{name}` was unavailable and no default output audio device was found"
         ),
-        (AudioDeviceKind::Input, None) => "no input audio device available".to_string(),
-        (AudioDeviceKind::Output, None) => "no output audio device available".to_string(),
+        (BidiAudioDeviceKind::Microphone, None) => "no input audio device available".to_string(),
+        (BidiAudioDeviceKind::Speaker, None) => "no output audio device available".to_string(),
     }
 }

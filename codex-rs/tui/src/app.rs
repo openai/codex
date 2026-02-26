@@ -1,5 +1,7 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+use crate::app_event::BidiAudioDeviceKind;
 use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
@@ -2013,6 +2015,9 @@ impl App {
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
             }
+            AppEvent::OpenBidiAudioDeviceSelection { kind } => {
+                self.chat_widget.open_bidi_audio_device_selection(kind);
+            }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
@@ -2437,6 +2442,57 @@ impl App {
                         }
                     }
                 }
+            }
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            AppEvent::PersistBidiAudioDeviceSelection { kind, name } => {
+                let builder = match kind {
+                    BidiAudioDeviceKind::Microphone => {
+                        ConfigEditsBuilder::new(&self.config.codex_home)
+                            .set_bidi_microphone(name.as_deref())
+                    }
+                    BidiAudioDeviceKind::Speaker => {
+                        ConfigEditsBuilder::new(&self.config.codex_home)
+                            .set_bidi_speaker(name.as_deref())
+                    }
+                };
+
+                match builder.apply().await {
+                    Ok(()) => {
+                        match kind {
+                            BidiAudioDeviceKind::Microphone => {
+                                self.config.bidi_audio.microphone = name.clone();
+                            }
+                            BidiAudioDeviceKind::Speaker => {
+                                self.config.bidi_audio.speaker = name.clone();
+                            }
+                        }
+                        self.chat_widget.set_bidi_audio_device(kind, name.clone());
+
+                        if self.chat_widget.realtime_conversation_is_live() {
+                            self.chat_widget.open_bidi_audio_restart_prompt(kind);
+                        } else {
+                            let selection = name.unwrap_or_else(|| "System default".to_string());
+                            self.chat_widget.add_info_message(
+                                format!("Realtime {} set to {selection}", kind.noun()),
+                                None,
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist bidi audio selection"
+                        );
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save realtime {}: {err}",
+                            kind.noun()
+                        ));
+                    }
+                }
+            }
+            #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+            AppEvent::RestartBidiAudioDevice { kind } => {
+                self.chat_widget.restart_bidi_audio_device(kind);
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.runtime_approval_policy_override = Some(policy);
