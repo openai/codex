@@ -756,6 +756,30 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     let body = requests_payloads[0].body_json();
     let input = body.get("input").and_then(|v| v.as_array()).unwrap();
 
+    fn strip_agents_parts_from_user_message(
+        value: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        let content = value
+            .get("content")
+            .and_then(|content| content.as_array())?;
+        let filtered_content = content
+            .iter()
+            .filter(|item| {
+                !item
+                    .get("text")
+                    .and_then(|text| text.as_str())
+                    .is_some_and(|text| text.starts_with("# AGENTS.md instructions for "))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if filtered_content.is_empty() {
+            return None;
+        }
+        let mut normalized = value.clone();
+        normalized["content"] = serde_json::Value::Array(filtered_content);
+        Some(normalized)
+    }
+
     fn normalize_inputs(values: &[serde_json::Value]) -> Vec<serde_json::Value> {
         values
             .iter()
@@ -783,26 +807,8 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                 {
                     return None;
                 }
-                if role == Some("user")
-                    && let Some(content) =
-                        value.get("content").and_then(|content| content.as_array())
-                {
-                    let mut normalized = value.clone();
-                    let filtered_content =
-                        content
-                            .iter()
-                            .filter(|item| {
-                                !item.get("text").and_then(|text| text.as_str()).is_some_and(
-                                    |text| text.starts_with("# AGENTS.md instructions for "),
-                                )
-                            })
-                            .cloned()
-                            .collect::<Vec<_>>();
-                    if filtered_content.is_empty() {
-                        return None;
-                    }
-                    normalized["content"] = serde_json::Value::Array(filtered_content);
-                    return Some(normalized);
+                if role == Some("user") {
+                    return strip_agents_parts_from_user_message(value);
                 }
                 Some(value.clone())
             })
