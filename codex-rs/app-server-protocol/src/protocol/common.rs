@@ -207,6 +207,16 @@ client_request_definitions! {
         params: v2::ThreadUnsubscribeParams,
         response: v2::ThreadUnsubscribeResponse,
     },
+    #[experimental("thread/increment_elicitation")]
+    ThreadIncrementElicitation => "thread/increment_elicitation" {
+        params: v2::ThreadIncrementElicitationParams,
+        response: v2::ThreadIncrementElicitationResponse,
+    },
+    #[experimental("thread/decrement_elicitation")]
+    ThreadDecrementElicitation => "thread/decrement_elicitation" {
+        params: v2::ThreadDecrementElicitationParams,
+        response: v2::ThreadDecrementElicitationResponse,
+    },
     ThreadSetName => "thread/name/set" {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,
