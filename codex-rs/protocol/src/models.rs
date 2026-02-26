@@ -95,6 +95,32 @@ pub enum MacOsAutomationValue {
     BundleIds(Vec<String>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum MacOsPreferencesPermission {
+    // IMPORTANT: ReadOnly needs to be the default because it's the
+    // security-sensitive default and keeps cf prefs working.
+    #[default]
+    ReadOnly,
+    ReadWrite,
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum MacOsAutomationPermission {
+    #[default]
+    None,
+    All,
+    BundleIds(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MacOsSeatbeltProfileExtensions {
+    pub macos_preferences: MacOsPreferencesPermission,
+    pub macos_automation: MacOsAutomationPermission,
+    pub macos_accessibility: bool,
+    pub macos_calendar: bool,
+}
+
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct PermissionProfile {
     pub network: Option<bool>,
