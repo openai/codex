@@ -6,8 +6,13 @@ import os
 import sys
 import shutil
 import subprocess
+import contextlib
+import http.client
+import http.server
+import threading
 from pathlib import Path
 from typing import List, Optional, Tuple
+from urllib.parse import urlsplit
 
 def _resolve_codex_cmd() -> List[str]:
     """Resolve the Codex CLI to invoke `codex sandbox windows`.
@@ -134,6 +139,68 @@ def make_symlink(link: Path, target: Path) -> bool:
     cmd = ["cmd", "/c", f'mklink /D "{link}" "{target}"']
     cp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return cp.returncode == 0 and link.exists()
+
+class _QuietHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+class _TargetHandler(_QuietHandler):
+    def do_GET(self):
+        body = b"proxy-ok"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+class _ProxyHandler(_QuietHandler):
+    def do_GET(self):
+        parsed = urlsplit(self.path)
+        if not parsed.scheme or not parsed.hostname:
+            self.send_error(400, "absolute URL required")
+            return
+        if parsed.hostname not in ("127.0.0.1", "localhost"):
+            self.send_error(403, "only loopback hosts are allowed in smoke proxy")
+            return
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        conn = None
+        try:
+            conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=2)
+            conn.request("GET", path)
+            upstream = conn.getresponse()
+            body = upstream.read()
+        except Exception as err:
+            self.send_error(502, f"proxy upstream error: {err}")
+            return
+        finally:
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    conn.close()
+        self.send_response(upstream.status, upstream.reason)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+@contextlib.contextmanager
+def start_loopback_proxy_fixture():
+    target = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _TargetHandler)
+    proxy = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _ProxyHandler)
+    target_port = target.server_address[1]
+    proxy_port = proxy.server_address[1]
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+    target_thread.start()
+    proxy_thread.start()
+    try:
+        yield target_port, proxy_port
+    finally:
+        proxy.shutdown()
+        target.shutdown()
+        proxy.server_close()
+        target.server_close()
 
 def summarize(results: List[CaseResult]) -> int:
     ok = sum(1 for r in results if r.ok)
@@ -278,7 +345,65 @@ def main() -> int:
                                "try { iwr http://neverssl.com -TimeoutSec 2 } catch { exit 1 }"], WS_ROOT)
     add("WS: iwr network blocked", rc != 0, f"rc={rc}")
 
-    # 17. RO: deny TEMP writes via PowerShell
+    # 17. WS: direct loopback blocked, proxy loopback allowed via env proxy
+    if have("curl"):
+        with start_loopback_proxy_fixture() as (target_port, proxy_port):
+            proxy_home = WS_ROOT / ".codex_proxy_smoke"
+            remove_if_exists(proxy_home)
+            proxy_home.mkdir(parents=True, exist_ok=True)
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+            proxy_env = {
+                "CODEX_HOME": str(proxy_home),
+                "HTTP_PROXY": proxy_url,
+                "http_proxy": proxy_url,
+                "ALL_PROXY": proxy_url,
+                "all_proxy": proxy_url,
+                "NO_PROXY": "",
+                "no_proxy": "",
+            }
+            proxied_cmd = [
+                "curl",
+                "--noproxy",
+                "",
+                "--connect-timeout",
+                "2",
+                "--max-time",
+                "4",
+                f"http://127.0.0.1:{target_port}/proxied",
+            ]
+            rc_proxy, out_proxy, err_proxy = run_sbx(
+                "workspace-write",
+                proxied_cmd,
+                WS_ROOT,
+                env_extra=proxy_env,
+            )
+            add(
+                "WS: loopback proxy allowed",
+                rc_proxy == 0 and "proxy-ok" in out_proxy,
+                f"rc={rc_proxy}, out={out_proxy}, err={err_proxy}",
+            )
+
+            direct_cmd = [
+                "curl",
+                "--noproxy",
+                "*",
+                "--connect-timeout",
+                "1",
+                "--max-time",
+                "2",
+                f"http://127.0.0.1:{target_port}/direct",
+            ]
+            rc_direct, _out_direct, err_direct = run_sbx(
+                "workspace-write",
+                direct_cmd,
+                WS_ROOT,
+                env_extra={"CODEX_HOME": str(proxy_home)},
+            )
+            add("WS: direct loopback blocked", rc_direct != 0, f"rc={rc_direct}, err={err_direct}")
+    else:
+        add("WS: direct/proxy loopback tests (curl missing)", True, "curl not installed")
+
+    # 18. RO: deny TEMP writes via PowerShell
     rc, out, err = run_sbx("read-only",
                            ["powershell", "-NoLogo", "-NoProfile", "-Command",
                             "Set-Content -LiteralPath $env:TEMP\\ro_tmpfail.txt -Value 'x'"], WS_ROOT)
@@ -287,21 +412,21 @@ def main() -> int:
     else:
         add("RO: TEMP write denied (PS, skipped)", True)
 
-    # 18. WS: curl version check — don't rely on stub, just succeed
+    # 19. WS: curl version check — don't rely on stub, just succeed
     if have("curl"):
         rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "curl --version"], WS_ROOT)
         add("WS: curl present (version prints)", rc == 0, f"rc={rc}, err={err}")
     else:
         add("WS: curl present (optional, skipped)", True)
 
-    # 19. Optional: ripgrep version
+    # 20. Optional: ripgrep version
     if have("rg"):
         rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "rg --version"], WS_ROOT)
         add("WS: rg --version (optional)", rc == 0, f"rc={rc}, err={err}")
     else:
         add("WS: rg --version (optional, skipped)", True)
 
-    # 20. Optional: git --version
+    # 21. Optional: git --version
     if have("git"):
         rc, out, err = run_sbx("workspace-write", ["git", "--version"], WS_ROOT)
         add("WS: git --version (optional)", rc == 0, f"rc={rc}, err={err}")

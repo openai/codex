@@ -63,6 +63,7 @@ pub fn provision_sandbox_users(
     codex_home: &Path,
     offline_username: &str,
     online_username: &str,
+    proxy_ports: &[u16],
     log: &mut File,
 ) -> Result<()> {
     ensure_sandbox_users_group(log)?;
@@ -80,6 +81,7 @@ pub fn provision_sandbox_users(
         &offline_password,
         online_username,
         &online_password,
+        proxy_ports,
     )?;
     Ok(())
 }
@@ -388,6 +390,7 @@ struct SetupMarker {
     offline_username: String,
     online_username: String,
     created_at: String,
+    proxy_ports: Vec<u16>,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
 }
@@ -398,6 +401,7 @@ fn write_secrets(
     offline_pwd: &str,
     online_user: &str,
     online_pwd: &str,
+    proxy_ports: &[u16],
 ) -> Result<()> {
     let sandbox_dir = sandbox_dir(codex_home);
     std::fs::create_dir_all(&sandbox_dir).map_err(|err| {
@@ -447,6 +451,7 @@ fn write_secrets(
         offline_username: offline_user.to_string(),
         online_username: online_user.to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
+        proxy_ports: proxy_ports.to_vec(),
         read_roots: Vec::new(),
         write_roots: Vec::new(),
     };
