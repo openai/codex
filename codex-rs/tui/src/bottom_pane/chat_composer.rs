@@ -577,6 +577,10 @@ impl ChatComposer {
         self.realtime_conversation_enabled = enabled;
     }
 
+    /// Compatibility shim for tests that still toggle the removed steer mode flag.
+    #[cfg(test)]
+    pub fn set_steer_enabled(&mut self, _enabled: bool) {}
+
     pub fn set_voice_transcription_enabled(&mut self, enabled: bool) {
         self.voice_state.transcription_enabled = enabled;
         if !enabled {
