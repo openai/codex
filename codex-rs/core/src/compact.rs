@@ -539,13 +539,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: r#"<agents_md>
-# AGENTS.md instructions for project
+                    text: r#"# AGENTS.md instructions for project
 
 <INSTRUCTIONS>
 do things
-</INSTRUCTIONS>
-</agents_md>"#
+</INSTRUCTIONS>"#
                         .to_string(),
                 }],
                 end_turn: None,
@@ -717,13 +715,11 @@ do things
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: r#"<agents_md>
-# AGENTS.md instructions for /repo
+                    text: r#"# AGENTS.md instructions for /repo
 
 <INSTRUCTIONS>
 keep me updated
-</INSTRUCTIONS>
-</agents_md>"#
+</INSTRUCTIONS>"#
                         .to_string(),
                 }],
                 end_turn: None,

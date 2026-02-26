@@ -300,7 +300,7 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>".to_string(),
+                    text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
                 }],
                 end_turn: None,
             phase: None,
@@ -318,7 +318,7 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>".to_string(),
+                    text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
                 }],
                 end_turn: None,
             phase: None,
@@ -351,7 +351,7 @@ mod tests {
                     },
                     ContentItem::InputText {
                         text:
-                            "<agents_md>\n# AGENTS.md instructions for dir\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>\n</agents_md>"
+                            "# AGENTS.md instructions for dir\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
                                 .to_string(),
                     },
                 ],

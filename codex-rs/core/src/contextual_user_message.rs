@@ -3,8 +3,8 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 
-pub(crate) const AGENTS_MD_OPEN_TAG: &str = "<agents_md>";
-pub(crate) const AGENTS_MD_CLOSE_TAG: &str = "</agents_md>";
+pub(crate) const AGENTS_MD_START_MARKER: &str = "# AGENTS.md instructions for ";
+pub(crate) const AGENTS_MD_END_MARKER: &str = "</INSTRUCTIONS>";
 pub(crate) const SKILL_OPEN_TAG: &str = "<skill>";
 pub(crate) const SKILL_CLOSE_TAG: &str = "</skill>";
 pub(crate) const USER_SHELL_COMMAND_OPEN_TAG: &str = "<user_shell_command>";
@@ -16,35 +16,45 @@ pub(crate) const SUBAGENT_NOTIFICATION_CLOSE_TAG: &str = "</subagent_notificatio
 
 #[derive(Clone, Copy)]
 pub(crate) struct ContextualUserFragmentDefinition {
-    open_tag: &'static str,
-    close_tag: &'static str,
+    start_marker: &'static str,
+    end_marker: &'static str,
 }
 
 impl ContextualUserFragmentDefinition {
-    pub(crate) const fn new(open_tag: &'static str, close_tag: &'static str) -> Self {
+    pub(crate) const fn new(start_marker: &'static str, end_marker: &'static str) -> Self {
         Self {
-            open_tag,
-            close_tag,
+            start_marker,
+            end_marker,
         }
     }
 
     pub(crate) fn matches_text(&self, text: &str) -> bool {
         let trimmed = text.trim_start();
-        trimmed
-            .get(..self.open_tag.len())
-            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(self.open_tag))
+        let starts_with_marker = trimmed
+            .get(..self.start_marker.len())
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(self.start_marker));
+        let ends_with_marker = trimmed.trim_end().ends_with(self.end_marker);
+        starts_with_marker && ends_with_marker
+    }
+
+    pub(crate) const fn start_marker(&self) -> &'static str {
+        self.start_marker
     }
 
     pub(crate) const fn open_tag(&self) -> &'static str {
-        self.open_tag
+        self.start_marker
+    }
+
+    pub(crate) const fn end_marker(&self) -> &'static str {
+        self.end_marker
     }
 
     pub(crate) const fn close_tag(&self) -> &'static str {
-        self.close_tag
+        self.end_marker
     }
 
     pub(crate) fn wrap(&self, body: String) -> String {
-        format!("{}\n{}\n{}", self.open_tag, body, self.close_tag)
+        format!("{}\n{}\n{}", self.start_marker, body, self.end_marker)
     }
 
     pub(crate) fn into_message(self, text: String) -> ResponseItem {
@@ -59,7 +69,7 @@ impl ContextualUserFragmentDefinition {
 }
 
 pub(crate) const AGENTS_MD_FRAGMENT: ContextualUserFragmentDefinition =
-    ContextualUserFragmentDefinition::new(AGENTS_MD_OPEN_TAG, AGENTS_MD_CLOSE_TAG);
+    ContextualUserFragmentDefinition::new(AGENTS_MD_START_MARKER, AGENTS_MD_END_MARKER);
 pub(crate) const ENVIRONMENT_CONTEXT_FRAGMENT: ContextualUserFragmentDefinition =
     ContextualUserFragmentDefinition::new(
         ENVIRONMENT_CONTEXT_OPEN_TAG,
@@ -112,7 +122,7 @@ mod tests {
     #[test]
     fn detects_agents_instructions_fragment() {
         assert!(is_contextual_user_fragment(&ContentItem::InputText {
-            text: "<agents_md>\n# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>\n</agents_md>"
+            text: "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
                 .to_string(),
         }));
     }

@@ -564,7 +564,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
     let items = vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
         user_input_text_msg(
-            "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>",
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
         user_input_text_msg(
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
@@ -586,7 +586,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
     let expected_prefix_and_first_turn = vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
         user_input_text_msg(
-            "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>",
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
         user_input_text_msg(
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
@@ -607,7 +607,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
     let expected_prefix_only = vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
         user_input_text_msg(
-            "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>",
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
         user_input_text_msg(
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
@@ -621,7 +621,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
     let mut history = create_history_with_items(vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
         user_input_text_msg(
-            "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>",
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
         user_input_text_msg(
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
@@ -641,7 +641,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
     let mut history = create_history_with_items(vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
         user_input_text_msg(
-            "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>",
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
         user_input_text_msg(
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",

@@ -17,11 +17,13 @@ pub(crate) struct UserInstructions {
 
 impl UserInstructions {
     pub(crate) fn serialize_to_text(&self) -> String {
-        AGENTS_MD_FRAGMENT.wrap(format!(
-            "{USER_INSTRUCTIONS_PREFIX}{directory}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>",
+        format!(
+            "{prefix}{directory}\n\n<INSTRUCTIONS>\n{contents}\n{suffix}",
+            prefix = AGENTS_MD_FRAGMENT.start_marker(),
             directory = self.directory,
-            contents = self.text
-        ))
+            contents = self.text,
+            suffix = AGENTS_MD_FRAGMENT.end_marker(),
+        )
     }
 }
 
@@ -76,14 +78,14 @@ mod tests {
 
         assert_eq!(
             text,
-            "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>",
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         );
     }
 
     #[test]
     fn test_is_user_instructions() {
         assert!(AGENTS_MD_FRAGMENT.matches_text(
-            "<agents_md>\n# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>\n</agents_md>"
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>"
         ));
         assert!(!AGENTS_MD_FRAGMENT.matches_text("test_text"));
     }
