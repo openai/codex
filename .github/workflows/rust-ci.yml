@@ -199,7 +199,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
           targets: ${{ matrix.target }}
-          components: clippy
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Use hermetic Cargo home (musl)
@@ -371,30 +370,19 @@ jobs:
           echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
           echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
-      - name: Install cargo-chef
-        if: ${{ matrix.profile == 'release' }}
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
-        with:
-          tool: cargo-chef
-          version: 0.1.71
-
-      - name: Pre-warm dependency cache (cargo-chef)
-        if: ${{ matrix.profile == 'release' }}
+      - name: cargo build (Windows release primary binaries)
+        if: ${{ matrix.profile == 'release' && (matrix.target == 'x86_64-pc-windows-msvc' || matrix.target == 'aarch64-pc-windows-msvc') }}
         shell: bash
+        env:
+          RUSTFLAGS: ${{ matrix.target == 'aarch64-pc-windows-msvc' && '-C link-arg=/Gy' || '' }}
         run: |
-          set -euo pipefail
-          RECIPE="${RUNNER_TEMP}/chef-recipe.json"
-          cargo chef prepare --recipe-path "$RECIPE"
-          cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} --release --all-features
+          cargo build --target ${{ matrix.target }} --release --timings --bin codex --bin codex-responses-api-proxy
 
-      - name: cargo clippy
-        run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} --timings -- -D warnings
-
-      - name: Upload Cargo timings (clippy)
+      - name: Upload Cargo timings (Windows release build)
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: cargo-timings-rust-ci-clippy-${{ matrix.target }}-${{ matrix.profile }}
+          name: cargo-timings-rust-ci-build-${{ matrix.target }}-${{ matrix.profile }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
