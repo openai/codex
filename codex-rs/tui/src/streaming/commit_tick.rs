@@ -87,7 +87,7 @@ pub(crate) fn run_commit_tick(
         decision.drain_plan,
         stream_controller,
         plan_stream_controller,
-    );
+    )
 }
 
 /// Builds the combined queue-pressure snapshot consumed by chunking policy.
