@@ -1754,14 +1754,13 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
 }
 
 fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
-    loop {
-        match op_rx.try_recv() {
-            Ok(Op::Interrupt) => return,
-            Ok(_) => continue,
-            Err(TryRecvError::Empty) => panic!("expected an interrupt op but queue was empty"),
-            Err(TryRecvError::Disconnected) => panic!("expected interrupt op but channel closed"),
+    while let Ok(op) = op_rx.try_recv() {
+        if op == Op::Interrupt {
+            return;
         }
     }
+
+    panic!("expected an interrupt op but queue was empty");
 }
 
 fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
