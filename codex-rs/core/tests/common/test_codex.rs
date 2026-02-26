@@ -23,6 +23,7 @@ use wiremock::MockServer;
 
 use crate::load_default_config_for_test;
 use crate::responses::WebSocketTestServer;
+use crate::responses::output_value_to_text;
 use crate::responses::start_mock_server;
 use crate::streaming_sse::StreamingSseServer;
 use crate::wait_for_event;
@@ -394,11 +395,7 @@ impl TestCodexHarness {
 
     pub async fn custom_tool_call_output(&self, call_id: &str) -> String {
         let bodies = self.request_bodies().await;
-        custom_tool_call_output(&bodies, call_id)
-            .get("output")
-            .and_then(Value::as_str)
-            .expect("output string")
-            .to_string()
+        custom_tool_call_output_text(&bodies, call_id)
     }
 
     pub async fn apply_patch_output(
@@ -433,6 +430,14 @@ fn custom_tool_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value 
     panic!("custom_tool_call_output {call_id} not found");
 }
 
+fn custom_tool_call_output_text(bodies: &[Value], call_id: &str) -> String {
+    let output = custom_tool_call_output(bodies, call_id)
+        .get("output")
+        .unwrap_or_else(|| panic!("custom_tool_call_output {call_id} missing output"));
+    output_value_to_text(output)
+        .unwrap_or_else(|| panic!("custom_tool_call_output {call_id} missing text output"))
+}
+
 fn function_call_output<'a>(bodies: &'a [Value], call_id: &str) -> &'a Value {
     for body in bodies {
         if let Some(items) = body.get("input").and_then(Value::as_array) {
@@ -454,5 +459,38 @@ pub fn test_codex() -> TestCodexBuilder {
         auth: CodexAuth::from_api_key("dummy"),
         pre_build_hooks: vec![],
         home: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn custom_tool_call_output_text_returns_output_text() {
+        let bodies = vec![json!({
+            "input": [{
+                "type": "custom_tool_call_output",
+                "call_id": "call-1",
+                "output": "hello"
+            }]
+        })];
+
+        assert_eq!(custom_tool_call_output_text(&bodies, "call-1"), "hello");
+    }
+
+    #[test]
+    #[should_panic(expected = "custom_tool_call_output call-2 missing output")]
+    fn custom_tool_call_output_text_panics_when_output_is_missing() {
+        let bodies = vec![json!({
+            "input": [{
+                "type": "custom_tool_call_output",
+                "call_id": "call-2"
+            }]
+        })];
+
+        let _ = custom_tool_call_output_text(&bodies, "call-2");
     }
 }
