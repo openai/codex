@@ -28,10 +28,13 @@ use serde::Serialize;
 use sha2::Sha256;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 use thiserror::Error;
 use tokio::fs;
+use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
@@ -46,6 +49,11 @@ const CLOUD_REQUIREMENTS_CACHE_READ_HMAC_KEYS: &[&[u8]] =
     &[CLOUD_REQUIREMENTS_CACHE_WRITE_HMAC_KEY];
 
 type HmacSha256 = Hmac<Sha256>;
+
+fn refresher_task_slot() -> &'static Mutex<Option<JoinHandle<()>>> {
+    static REFRESHER_TASK: OnceLock<Mutex<Option<JoinHandle<()>>>> = OnceLock::new();
+    REFRESHER_TASK.get_or_init(|| Mutex::new(None))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FetchCloudRequirementsStatus {
@@ -502,7 +510,15 @@ pub fn cloud_requirements_loader(
     );
     let refresh_service = service.clone();
     let task = tokio::spawn(async move { service.fetch_with_timeout().await });
-    tokio::spawn(async move { refresh_service.refresh_cache_in_background().await });
+    let refresh_task =
+        tokio::spawn(async move { refresh_service.refresh_cache_in_background().await });
+    let mut refresher_guard = refresher_task_slot().lock().unwrap_or_else(|err| {
+        tracing::warn!("cloud requirements refresher task slot was poisoned");
+        err.into_inner()
+    });
+    if let Some(existing_task) = refresher_guard.replace(refresh_task) {
+        existing_task.abort();
+    }
     CloudRequirementsLoader::new(async move {
         task.await
             .inspect_err(|err| tracing::warn!(error = %err, "Cloud requirements task failed"))

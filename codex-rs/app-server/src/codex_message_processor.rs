@@ -1451,6 +1451,17 @@ impl CodexMessageProcessor {
                 data: None,
             });
         }
+        replace_cloud_requirements_loader(
+            self.cloud_requirements.as_ref(),
+            self.auth_manager.clone(),
+            self.config.chatgpt_base_url.clone(),
+            self.config.codex_home.clone(),
+        );
+        sync_default_client_residency_requirement(
+            &self.cli_overrides,
+            self.cloud_requirements.as_ref(),
+        )
+        .await;
 
         // Reflect the current auth method after logout (likely None).
         Ok(self
