@@ -2177,13 +2177,13 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
-            realtime_audio: cfg.realtime.and_then(|realtime| realtime.audio).map_or_else(
-                RealtimeAudioConfig::default,
-                |audio| RealtimeAudioConfig {
+            realtime_audio: cfg
+                .realtime
+                .and_then(|realtime| realtime.audio)
+                .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {
                     microphone: audio.microphone,
                     speaker: audio.speaker,
-                },
-            ),
+                }),
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             forced_chatgpt_workspace_id,
@@ -6037,7 +6037,10 @@ speaker = "Desk Speakers"
         )?;
 
         assert_eq!(config.realtime_audio.microphone.as_deref(), Some("USB Mic"));
-        assert_eq!(config.realtime_audio.speaker.as_deref(), Some("Desk Speakers"));
+        assert_eq!(
+            config.realtime_audio.speaker.as_deref(),
+            Some("Desk Speakers")
+        );
         Ok(())
     }
 }
