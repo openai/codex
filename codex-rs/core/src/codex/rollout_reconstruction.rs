@@ -10,9 +10,30 @@ pub(super) struct RolloutReconstruction {
 }
 
 #[derive(Debug)]
+enum TurnReferenceContextItem {
+    /// No `TurnContextItem` has been seen for this replay span yet.
+    ///
+    /// This differs from `Cleared`: `NeverSet` means there is no evidence this turn ever
+    /// established a baseline, while `Cleared` means a baseline existed and a later compaction
+    /// invalidated it. Only the latter must emit an explicit clearing segment for resume/fork
+    /// hydration.
+    NeverSet,
+    /// A previously established baseline was invalidated by later compaction.
+    Cleared,
+    /// The latest baseline established by this replay span.
+    LatestSet(TurnContextItem),
+}
+
+impl Default for TurnReferenceContextItem {
+    fn default() -> Self {
+        Self::NeverSet
+    }
+}
+
+#[derive(Debug)]
 struct ReplayedUserTurn {
     previous_model: Option<String>,
-    reference_context_item: ReferenceContextReplayState,
+    reference_context_item: TurnReferenceContextItem,
 }
 
 #[derive(Debug)]
@@ -29,23 +50,7 @@ struct ActiveUserTurn {
     turn_id: Option<String>,
     saw_user_message: bool,
     previous_model: Option<String>,
-    reference_context_item: ReferenceContextReplayState,
-}
-
-#[derive(Debug, Default)]
-enum ReferenceContextReplayState {
-    /// No `TurnContextItem` has been seen for this replay span yet.
-    ///
-    /// This differs from `Cleared`: `NeverSet` means there is no evidence this turn ever
-    /// established a baseline, while `Cleared` means a baseline existed and a later compaction
-    /// invalidated it. Only the latter must emit an explicit clearing segment for resume/fork
-    /// hydration.
-    #[default]
-    NeverSet,
-    /// A previously established baseline was invalidated by later compaction.
-    Cleared,
-    /// The latest baseline established by this replay span.
-    LatestSet(TurnContextItem),
+    reference_context_item: TurnReferenceContextItem,
 }
 
 impl Session {
@@ -78,7 +83,7 @@ impl Session {
                     )));
                 } else if matches!(
                     active_turn.reference_context_item,
-                    ReferenceContextReplayState::Cleared
+                    TurnReferenceContextItem::Cleared
                 ) {
                     replayed_segments.push(ReplayMetadataSegment::ReferenceContextCleared);
                 }
@@ -121,7 +126,7 @@ impl Session {
                     }
 
                     if let Some(active_turn) = active_turn.as_mut() {
-                        active_turn.reference_context_item = ReferenceContextReplayState::Cleared;
+                        active_turn.reference_context_item = TurnReferenceContextItem::Cleared;
                     } else {
                         replayed_segments.push(ReplayMetadataSegment::ReferenceContextCleared);
                     }
@@ -203,13 +208,13 @@ impl Session {
                                 active_turn.previous_model = Some(ctx.model.clone());
                             }
                             active_turn.reference_context_item =
-                                ReferenceContextReplayState::LatestSet(ctx.clone());
+                                TurnReferenceContextItem::LatestSet(ctx.clone());
                         }
                     } else {
                         replayed_segments.push(ReplayMetadataSegment::UserTurn(Box::new(
                             ReplayedUserTurn {
                                 previous_model: Some(ctx.model.clone()),
-                                reference_context_item: ReferenceContextReplayState::LatestSet(
+                                reference_context_item: TurnReferenceContextItem::LatestSet(
                                     ctx.clone(),
                                 ),
                             },
@@ -233,11 +238,11 @@ impl Session {
                         previous_model = Some(turn_previous_model);
                     }
                     match turn.reference_context_item {
-                        ReferenceContextReplayState::NeverSet => {}
-                        ReferenceContextReplayState::Cleared => {
+                        TurnReferenceContextItem::NeverSet => {}
+                        TurnReferenceContextItem::Cleared => {
                             reference_context_item = None;
                         }
-                        ReferenceContextReplayState::LatestSet(turn_reference_context_item) => {
+                        TurnReferenceContextItem::LatestSet(turn_reference_context_item) => {
                             reference_context_item = Some(turn_reference_context_item);
                         }
                     }
