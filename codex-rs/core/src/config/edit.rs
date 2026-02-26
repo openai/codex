@@ -195,6 +195,11 @@ mod document_helpers {
         {
             entry["scopes"] = array_from_iter(scopes.iter().cloned());
         }
+        if let Some(resource) = &config.oauth_resource
+            && !resource.is_empty()
+        {
+            entry["oauth_resource"] = value(resource.clone());
+        }
 
         entry
     }
@@ -1441,6 +1446,7 @@ gpt-5 = "gpt-5.1"
                 enabled_tools: Some(vec!["one".to_string(), "two".to_string()]),
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
 
@@ -1465,6 +1471,7 @@ gpt-5 = "gpt-5.1"
                 enabled_tools: None,
                 disabled_tools: Some(vec!["forbidden".to_string()]),
                 scopes: None,
+                oauth_resource: Some("https://resource.example.com".to_string()),
             },
         );
 
@@ -1483,6 +1490,7 @@ bearer_token_env_var = \"TOKEN\"
 enabled = false
 startup_timeout_sec = 5.0
 disabled_tools = [\"forbidden\"]
+oauth_resource = \"https://resource.example.com\"
 
 [mcp_servers.http.http_headers]
 Z-Header = \"z\"
@@ -1532,6 +1540,7 @@ foo = { command = "cmd" }
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
 
@@ -1578,6 +1587,7 @@ foo = { command = "cmd" } # keep me
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
 
@@ -1623,6 +1633,7 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
 
@@ -1669,6 +1680,7 @@ foo = { command = "cmd" }
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
 

@@ -133,6 +133,7 @@ fn rmcp_server_config(command: String) -> McpServerConfig {
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
+        oauth_resource: None,
     }
 }
 
