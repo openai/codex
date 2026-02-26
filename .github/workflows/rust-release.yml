@@ -10,6 +10,12 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to publish to WinGet
+        required: true
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}
@@ -17,6 +23,7 @@ concurrency:
 
 jobs:
   tag-check:
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -46,6 +53,7 @@ jobs:
           echo "::endgroup::"
 
   build:
+    if: ${{ github.event_name == 'push' }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -362,6 +370,7 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   build-windows:
+    if: ${{ github.event_name == 'push' }}
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     with:
@@ -369,6 +378,7 @@ jobs:
     secrets: inherit
 
   shell-tool-mcp:
+    if: ${{ github.event_name == 'push' }}
     name: shell-tool-mcp
     needs: tag-check
     uses: ./.github/workflows/shell-tool-mcp.yml
@@ -378,6 +388,7 @@ jobs:
     secrets: inherit
 
   release:
+    if: ${{ github.event_name == 'push' }}
     needs:
       - build
       - build-windows
@@ -529,8 +540,7 @@ jobs:
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
-    # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
-    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
+    if: ${{ github.event_name == 'push' && needs.release.outputs.should_publish_npm == 'true' }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
@@ -636,6 +646,7 @@ jobs:
           done
 
   update-branch:
+    if: ${{ github.event_name == 'push' }}
     name: Update latest-alpha-cli branch
     permissions:
       contents: write
@@ -653,3 +664,35 @@ jobs:
             -X PATCH \
             -f sha="${GITHUB_SHA}" \
             -F force=true
+
+  winget-test:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    name: winget-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate release tag
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_tag="${{ inputs.release_tag }}"
+          if [[ ! "${release_tag}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]]; then
+            echo "Invalid release tag: ${release_tag}"
+            exit 1
+          fi
+
+          version="${release_tag#rust-v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to WinGet via winget-releaser
+        uses: vedantmgoyal9/winget-releaser@19e706d4c9121098010096f9c495a70a7518b30f
+        with:
+          identifier: OpenAI.Codex
+          version: ${{ steps.vars.outputs.version }}
+          release-tag: ${{ inputs.release_tag }}
+          fork-user: openai-oss-forks
+          installers-regex: '^codex-(?:x86_64|aarch64)-pc-windows-msvc\.exe\.zip$'
+          token: ${{ secrets.WINGET_PUBLISH_PAT }}
