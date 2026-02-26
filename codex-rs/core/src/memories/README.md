@@ -82,8 +82,8 @@ Selection diff behavior:
 
 - successful Phase 2 runs mark the exact stage-1 snapshots they consumed with
   `selected_for_phase2 = 1`
-- when Phase 1 regenerates a thread, its upsert clears `selected_for_phase2`
-  so refreshed outputs are treated as new snapshots
+- Phase 1 upserts preserve the previous `selected_for_phase2` baseline until
+  the next successful Phase 2 run rewrites it
 - the next Phase 2 run compares the current top-N stage-1 inputs against that
   prior snapshot selection to label inputs as `added` or `retained`
 - rows that were previously selected but still exist outside the current top-N

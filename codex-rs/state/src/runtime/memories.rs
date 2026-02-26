@@ -548,8 +548,8 @@ WHERE kind = ? AND job_key = ?
     /// - sets `status='done'` and `last_success_watermark = input_watermark`
     /// - upserts `stage1_outputs` for the thread, replacing existing output only
     ///   when `source_updated_at` is newer or equal
-    /// - clears `selected_for_phase2` on overwritten rows because the previous
-    ///   phase-2 selection referred to the older snapshot
+    /// - preserves any existing `selected_for_phase2` flag until the next
+    ///   successful phase-2 run rewrites the baseline selection
     /// - persists optional `rollout_slug` for rollout summary artifact naming
     /// - enqueues/advances the global phase-2 job watermark using
     ///   `source_updated_at`
@@ -607,8 +607,7 @@ ON CONFLICT(thread_id) DO UPDATE SET
     raw_memory = excluded.raw_memory,
     rollout_summary = excluded.rollout_summary,
     rollout_slug = excluded.rollout_slug,
-    generated_at = excluded.generated_at,
-    selected_for_phase2 = 0
+    generated_at = excluded.generated_at
 WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
             "#,
         )
