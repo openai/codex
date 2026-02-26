@@ -21,6 +21,8 @@ Install the latest Codex release directly on macOS or Linux:
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
 ```
 
+Windows direct installer support is coming soon. Until then, run Codex on Windows 11 via WSL2.
+
 You can also install with your preferred package manager:
 
 ```shell

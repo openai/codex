@@ -15,6 +15,8 @@
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
 ```
 
+Windows direct installer support is coming soon. Until then, run Codex on Windows 11 via WSL2.
+
 The direct installer downloads the latest matching GitHub Release package for macOS or Linux and
 places both `codex` and `rg` in a user-local directory.
 
