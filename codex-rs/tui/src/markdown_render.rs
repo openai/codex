@@ -600,11 +600,13 @@ where
                 let label_text = self
                     .current_line_content
                     .as_ref()
-                    .map(|line| {
-                        line.spans[link.label_start_span_idx..]
-                            .iter()
-                            .map(|span| span.content.as_ref())
-                            .collect::<String>()
+                    .and_then(|line| {
+                        line.spans.get(link.label_start_span_idx..).map(|spans| {
+                            spans
+                                .iter()
+                                .map(|span| span.content.as_ref())
+                                .collect::<String>()
+                        })
                     })
                     .unwrap_or_default();
                 if extract_location_suffix(&label_text).is_none() {

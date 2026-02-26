@@ -736,6 +736,18 @@ fn file_link_appends_hash_range_when_label_lacks_it() {
 }
 
 #[test]
+fn multiline_file_link_label_after_styled_prefix_does_not_panic() {
+    let text = render_markdown_text(
+        "**bold** plain [foo\nbar](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3)",
+    );
+    let expected = Text::from_iter([
+        Line::from_iter(["bold".bold(), " plain ".into(), "foo".cyan()]),
+        Line::from_iter(["bar".cyan(), ":74:3".cyan()]),
+    ]);
+    assert_eq!(text, expected);
+}
+
+#[test]
 fn file_link_uses_label_for_hash_range() {
     let text = render_markdown_text(
         "[markdown_render.rs#L74C3-L76C9](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3-L76C9)",
