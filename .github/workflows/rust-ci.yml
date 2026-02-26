@@ -390,9 +390,9 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} --timings -- -D warnings
 
-      - name: cargo build (release)
-        if: ${{ matrix.profile == 'release' }}
-        run: cargo build --release
+      - name: cargo build (windows arm64 release)
+        if: ${{ matrix.profile == 'release' && matrix.target == 'aarch64-pc-windows-msvc' }}
+        run: cargo build --target aarch64-pc-windows-msvc --release --timings --bin codex --bin codex-responses-api-proxy
 
       - name: Upload Cargo timings (clippy)
         if: always()
