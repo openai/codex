@@ -224,7 +224,7 @@ LEFT JOIN jobs
     ///
     /// Query behavior:
     /// - filters out rows where both `raw_memory` and `rollout_summary` are blank
-    /// - joins `threads` to include thread `cwd` and `rollout_path`
+    /// - joins `threads` to include thread `cwd`, `rollout_path`, and `git_branch`
     /// - orders by `source_updated_at DESC, thread_id DESC`
     /// - applies `LIMIT n`
     pub async fn list_stage1_outputs_for_global(
@@ -244,8 +244,9 @@ SELECT
     so.raw_memory,
     so.rollout_summary,
     so.rollout_slug,
-    so.generated_at
-     , COALESCE(t.cwd, '') AS cwd
+    so.generated_at,
+    COALESCE(t.cwd, '') AS cwd,
+    t.git_branch AS git_branch
 FROM stage1_outputs AS so
 LEFT JOIN threads AS t
     ON t.id = so.thread_id
@@ -301,9 +302,10 @@ SELECT
     so.rollout_summary,
     so.rollout_slug,
     so.generated_at,
+    COALESCE(t.cwd, '') AS cwd,
+    t.git_branch AS git_branch,
     so.selected_for_phase2,
-    so.selected_for_phase2_source_updated_at,
-    COALESCE(t.cwd, '') AS cwd
+    so.selected_for_phase2_source_updated_at
 FROM stage1_outputs AS so
 LEFT JOIN threads AS t
     ON t.id = so.thread_id
@@ -352,9 +354,10 @@ SELECT
     so.source_updated_at,
     so.raw_memory,
     so.rollout_summary,
-    so.rollout_slug
-  , so.generated_at
-  , COALESCE(t.cwd, '') AS cwd
+    so.rollout_slug,
+    so.generated_at,
+    COALESCE(t.cwd, '') AS cwd,
+    t.git_branch AS git_branch
 FROM stage1_outputs AS so
 LEFT JOIN threads AS t
     ON t.id = so.thread_id
@@ -2215,12 +2218,11 @@ WHERE kind = 'memory_stage1'
             ))
             .await
             .expect("upsert thread a");
+        let mut metadata_b =
+            test_thread_metadata(&codex_home, thread_id_b, codex_home.join("workspace-b"));
+        metadata_b.git_branch = Some("feature/stage1-b".to_string());
         runtime
-            .upsert_thread(&test_thread_metadata(
-                &codex_home,
-                thread_id_b,
-                codex_home.join("workspace-b"),
-            ))
+            .upsert_thread(&metadata_b)
             .await
             .expect("upsert thread b");
 
@@ -2279,10 +2281,12 @@ WHERE kind = 'memory_stage1'
         assert_eq!(outputs[0].rollout_summary, "summary b");
         assert_eq!(outputs[0].rollout_slug.as_deref(), Some("rollout-b"));
         assert_eq!(outputs[0].cwd, codex_home.join("workspace-b"));
+        assert_eq!(outputs[0].git_branch.as_deref(), Some("feature/stage1-b"));
         assert_eq!(outputs[1].thread_id, thread_id_a);
         assert_eq!(outputs[1].rollout_summary, "summary a");
         assert_eq!(outputs[1].rollout_slug, None);
         assert_eq!(outputs[1].cwd, codex_home.join("workspace-a"));
+        assert_eq!(outputs[1].git_branch, None);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

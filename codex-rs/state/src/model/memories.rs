@@ -18,6 +18,7 @@ pub struct Stage1Output {
     pub rollout_summary: String,
     pub rollout_slug: Option<String>,
     pub cwd: PathBuf,
+    pub git_branch: Option<String>,
     pub generated_at: DateTime<Utc>,
 }
 
@@ -45,6 +46,7 @@ pub(crate) struct Stage1OutputRow {
     rollout_summary: String,
     rollout_slug: Option<String>,
     cwd: String,
+    git_branch: Option<String>,
     generated_at: i64,
 }
 
@@ -58,6 +60,7 @@ impl Stage1OutputRow {
             rollout_summary: row.try_get("rollout_summary")?,
             rollout_slug: row.try_get("rollout_slug")?,
             cwd: row.try_get("cwd")?,
+            git_branch: row.try_get("git_branch")?,
             generated_at: row.try_get("generated_at")?,
         })
     }
@@ -75,6 +78,7 @@ impl TryFrom<Stage1OutputRow> for Stage1Output {
             rollout_summary: row.rollout_summary,
             rollout_slug: row.rollout_slug,
             cwd: PathBuf::from(row.cwd),
+            git_branch: row.git_branch,
             generated_at: epoch_seconds_to_datetime(row.generated_at)?,
         })
     }
