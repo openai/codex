@@ -59,10 +59,15 @@ Phase 2 consolidates the latest stage-1 outputs into the filesystem memory artif
 What it does:
 
 - claims a single global phase-2 job (so only one consolidation runs at a time)
-- loads a bounded set of the most recent stage-1 outputs from the state DB (the per-rollout memories produced by Phase 1, used as the consolidation input set)
+- loads a bounded set of stage-1 outputs from the state DB using phase-2 selection rules:
+  - ignore memories that have not been used within the configured recency window (`max_unused_days`)
+  - for memories never used before, fall back to `generated_at` so fresh memories can still be selected
+  - rank eligible memories by `usage_count` first, then by the most recent `last_usage` / `generated_at`
+- stores that selected set back in SQLite via `selected_for_phase2`, clearing the flag for all non-selected rows
+- logs the diff against the prior `selected_for_phase2` set so added/removed rollout summaries are visible between runs
 - computes a completion watermark from the claimed watermark + newest input timestamps
 - syncs local memory artifacts under the memories root:
-  - `raw_memories.md` (merged raw memories, latest first)
+  - `raw_memories.md` (merged raw memories in phase-2 selection order)
   - `rollout_summaries/` (one summary file per retained rollout)
 - prunes stale rollout summaries that are no longer retained
 - if there are no inputs, marks the job successful and exits

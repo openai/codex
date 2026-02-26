@@ -20,6 +20,13 @@ pub struct Stage1Output {
     pub generated_at: DateTime<Utc>,
 }
 
+/// Phase-2 memory selection result for global consolidation.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Phase2InputSelection {
+    pub selected: Vec<Stage1Output>,
+    pub previously_selected: Vec<Stage1Output>,
+}
+
 #[derive(Debug)]
 pub(crate) struct Stage1OutputRow {
     thread_id: String,

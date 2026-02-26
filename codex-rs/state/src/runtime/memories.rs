@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::Phase2InputSelection;
 use crate::model::Phase2JobClaimOutcome;
 use crate::model::Stage1JobClaim;
 use crate::model::Stage1JobClaimOutcome;
@@ -52,7 +53,9 @@ WHERE kind = ? OR kind = ?
     /// Record usage for cited stage-1 outputs.
     ///
     /// Each thread id increments `usage_count` by one and sets `last_usage` to
-    /// the current Unix timestamp. Missing rows are ignored.
+    /// the current Unix timestamp. Missing rows are ignored. When at least one
+    /// row changes, this also re-enqueues global phase 2 so usage-driven
+    /// selection changes refresh the memory artifacts.
     pub async fn record_stage1_output_usage(
         &self,
         thread_ids: &[ThreadId],
@@ -80,6 +83,10 @@ WHERE thread_id = ?
             .execute(&mut *tx)
             .await?
             .rows_affected() as usize;
+        }
+
+        if updated_rows > 0 {
+            enqueue_global_consolidation_with_executor(&mut *tx, now).await?;
         }
 
         tx.commit().await?;
@@ -212,6 +219,143 @@ LEFT JOIN jobs
         }
 
         Ok(claimed)
+    }
+
+    /// Selects the stage-1 outputs used as phase-2 consolidation input.
+    ///
+    /// Query behavior:
+    /// - snapshots the prior `selected_for_phase2 = 1` set for diff logging
+    /// - filters current candidates to rows where:
+    ///   - at least one of `raw_memory` / `rollout_summary` is non-empty
+    ///   - either:
+    ///     - usage metadata is still missing from the pre-0016 migration state,
+    ///       or
+    ///     - the fresher of `last_usage` / `generated_at` is within
+    ///       `max_unused_days`
+    /// - orders candidates by:
+    ///   - `COALESCE(usage_count, 0) DESC`
+    ///   - the fresher of `last_usage` / `generated_at` DESC
+    ///   - `source_updated_at DESC, thread_id DESC`
+    /// - applies `LIMIT max_selected`
+    /// - clears `selected_for_phase2` on all rows, then marks only the selected
+    ///   rows as `1`
+    pub async fn select_stage1_outputs_for_phase2(
+        &self,
+        max_selected: usize,
+        max_unused_days: i64,
+    ) -> anyhow::Result<Phase2InputSelection> {
+        let recency_cutoff = (Utc::now() - Duration::days(max_unused_days.max(0))).timestamp();
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+
+        let previously_selected = sqlx::query(
+            r#"
+SELECT
+    so.thread_id,
+    so.source_updated_at,
+    so.raw_memory,
+    so.rollout_summary,
+    so.rollout_slug,
+    so.generated_at,
+    COALESCE(t.cwd, '') AS cwd
+FROM stage1_outputs AS so
+LEFT JOIN threads AS t
+    ON t.id = so.thread_id
+WHERE so.selected_for_phase2 = 1
+ORDER BY
+    COALESCE(so.usage_count, 0) DESC,
+    COALESCE(so.last_usage, so.generated_at) DESC,
+    so.source_updated_at DESC,
+    so.thread_id DESC
+            "#,
+        )
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| Stage1OutputRow::try_from_row(&row).and_then(Stage1Output::try_from))
+        .collect::<Result<Vec<_>, _>>()?;
+
+        let selected = if max_selected == 0 {
+            Vec::new()
+        } else {
+            sqlx::query(
+                r#"
+SELECT
+    so.thread_id,
+    so.source_updated_at,
+    so.raw_memory,
+    so.rollout_summary,
+    so.rollout_slug,
+    so.generated_at,
+    COALESCE(t.cwd, '') AS cwd
+FROM stage1_outputs AS so
+LEFT JOIN threads AS t
+    ON t.id = so.thread_id
+WHERE
+    (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
+    AND (
+        (so.usage_count IS NULL AND so.last_usage IS NULL)
+        OR CASE
+            WHEN so.last_usage IS NULL THEN so.generated_at
+            WHEN so.generated_at > so.last_usage THEN so.generated_at
+            ELSE so.last_usage
+        END >= ?
+    )
+ORDER BY
+    COALESCE(so.usage_count, 0) DESC,
+    CASE
+        WHEN so.last_usage IS NULL THEN so.generated_at
+        WHEN so.generated_at > so.last_usage THEN so.generated_at
+        ELSE so.last_usage
+    END DESC,
+    so.source_updated_at DESC,
+    so.thread_id DESC
+LIMIT ?
+                "#,
+            )
+            .bind(recency_cutoff)
+            .bind(max_selected as i64)
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .map(|row| Stage1OutputRow::try_from_row(&row).and_then(Stage1Output::try_from))
+            .collect::<Result<Vec<_>, _>>()?
+        };
+
+        sqlx::query(
+            r#"
+UPDATE stage1_outputs
+SET selected_for_phase2 = 0
+WHERE selected_for_phase2 != 0
+            "#,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        if !selected.is_empty() {
+            for chunk in selected.chunks(900) {
+                let mut builder = QueryBuilder::<Sqlite>::new(
+                    r#"
+UPDATE stage1_outputs
+SET selected_for_phase2 = 1
+WHERE thread_id IN (
+                    "#,
+                );
+                let mut separated = builder.separated(", ");
+                for memory in chunk {
+                    separated.push_bind(memory.thread_id.to_string());
+                }
+                separated.push_unseparated(")");
+
+                builder.build().execute(&mut *tx).await?;
+            }
+        }
+
+        tx.commit().await?;
+
+        Ok(Phase2InputSelection {
+            selected,
+            previously_selected,
+        })
     }
 
     /// Lists the most recent non-empty stage-1 outputs for global consolidation.
@@ -453,6 +597,8 @@ WHERE kind = ? AND job_key = ?
     /// - sets `status='done'` and `last_success_watermark = input_watermark`
     /// - upserts `stage1_outputs` for the thread, replacing existing output only
     ///   when `source_updated_at` is newer or equal
+    /// - inserts new rows with `usage_count = 0` so "never used" is distinct
+    ///   from legacy rows that still have missing usage metadata
     /// - persists optional `rollout_slug` for rollout summary artifact naming
     /// - enqueues/advances the global phase-2 job watermark using
     ///   `source_updated_at`
@@ -503,14 +649,17 @@ INSERT INTO stage1_outputs (
     raw_memory,
     rollout_summary,
     rollout_slug,
-    generated_at
-) VALUES (?, ?, ?, ?, ?, ?)
+    generated_at,
+    usage_count
+) VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(thread_id) DO UPDATE SET
     source_updated_at = excluded.source_updated_at,
     raw_memory = excluded.raw_memory,
     rollout_summary = excluded.rollout_summary,
     rollout_slug = excluded.rollout_slug,
-    generated_at = excluded.generated_at
+    generated_at = excluded.generated_at,
+    usage_count = COALESCE(stage1_outputs.usage_count, excluded.usage_count),
+    selected_for_phase2 = 0
 WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
             "#,
         )
@@ -520,6 +669,7 @@ WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
         .bind(rollout_summary)
         .bind(rollout_slug)
         .bind(now)
+        .bind(0_i64)
         .execute(&mut *tx)
         .await?;
 

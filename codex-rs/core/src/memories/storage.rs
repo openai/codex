@@ -72,7 +72,7 @@ async fn rebuild_raw_memories_file(
         return tokio::fs::write(raw_memories_file(root), body).await;
     }
 
-    body.push_str("Merged stage-1 raw memories (latest first):\n\n");
+    body.push_str("Merged stage-1 raw memories (phase-2 selection order):\n\n");
     for memory in retained {
         writeln!(body, "## Thread `{}`", memory.thread_id).map_err(raw_memories_format_error)?;
         writeln!(

@@ -3125,6 +3125,447 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
+    async fn select_stage1_outputs_for_phase2_applies_recency_ranking_and_selection_flags() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let now = Utc::now().timestamp();
+
+        let recent_tiebreak_loser =
+            seed_stage1_output(&runtime, &codex_home, owner, "workspace-a", 100).await;
+        let recent_tiebreak_winner =
+            seed_stage1_output(&runtime, &codex_home, owner, "workspace-b", 101).await;
+        let never_used_recent =
+            seed_stage1_output(&runtime, &codex_home, owner, "workspace-c", 102).await;
+        let stale_used = seed_stage1_output(&runtime, &codex_home, owner, "workspace-d", 103).await;
+        let stale_never_used =
+            seed_stage1_output(&runtime, &codex_home, owner, "workspace-e", 104).await;
+
+        set_phase2_selection_metadata(
+            &runtime,
+            recent_tiebreak_loser,
+            Some(5),
+            Some((Utc::now() - Duration::days(10)).timestamp()),
+            now - 20,
+        )
+        .await;
+        set_phase2_selection_metadata(
+            &runtime,
+            recent_tiebreak_winner,
+            Some(5),
+            Some((Utc::now() - Duration::days(5)).timestamp()),
+            now - 10,
+        )
+        .await;
+        set_phase2_selection_metadata(
+            &runtime,
+            never_used_recent,
+            Some(0),
+            None,
+            (Utc::now() - Duration::days(2)).timestamp(),
+        )
+        .await;
+        set_phase2_selection_metadata(
+            &runtime,
+            stale_used,
+            Some(9),
+            Some((Utc::now() - Duration::days(40)).timestamp()),
+            (Utc::now() - Duration::days(40)).timestamp(),
+        )
+        .await;
+        set_phase2_selection_metadata(
+            &runtime,
+            stale_never_used,
+            Some(0),
+            None,
+            (Utc::now() - Duration::days(40)).timestamp(),
+        )
+        .await;
+
+        let selection = runtime
+            .select_stage1_outputs_for_phase2(3, 30)
+            .await
+            .expect("select stage1 outputs for phase2");
+
+        assert_eq!(selection.previously_selected, Vec::new());
+        assert_eq!(
+            selection
+                .selected
+                .iter()
+                .map(|memory| memory.thread_id)
+                .collect::<Vec<_>>(),
+            vec![
+                recent_tiebreak_winner,
+                recent_tiebreak_loser,
+                never_used_recent,
+            ]
+        );
+
+        for (thread_id, expected_flag) in [
+            (recent_tiebreak_winner, 1_i64),
+            (recent_tiebreak_loser, 1_i64),
+            (never_used_recent, 1_i64),
+            (stale_used, 0_i64),
+            (stale_never_used, 0_i64),
+        ] {
+            let row =
+                sqlx::query("SELECT selected_for_phase2 FROM stage1_outputs WHERE thread_id = ?")
+                    .bind(thread_id.to_string())
+                    .fetch_one(runtime.pool.as_ref())
+                    .await
+                    .expect("load selected_for_phase2 row");
+            assert_eq!(
+                row.try_get::<i64, _>("selected_for_phase2")
+                    .expect("selected_for_phase2"),
+                expected_flag
+            );
+        }
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn select_stage1_outputs_for_phase2_returns_previous_selection_before_replacing_it() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+
+        let memory_a = seed_stage1_output(&runtime, &codex_home, owner, "workspace-a", 100).await;
+        let memory_b = seed_stage1_output(&runtime, &codex_home, owner, "workspace-b", 101).await;
+        let memory_c = seed_stage1_output(&runtime, &codex_home, owner, "workspace-c", 102).await;
+
+        set_phase2_selection_metadata(
+            &runtime,
+            memory_a,
+            Some(3),
+            Some((Utc::now() - Duration::days(3)).timestamp()),
+            (Utc::now() - Duration::days(3)).timestamp(),
+        )
+        .await;
+        set_phase2_selection_metadata(
+            &runtime,
+            memory_b,
+            Some(2),
+            Some((Utc::now() - Duration::days(2)).timestamp()),
+            (Utc::now() - Duration::days(2)).timestamp(),
+        )
+        .await;
+        set_phase2_selection_metadata(
+            &runtime,
+            memory_c,
+            Some(1),
+            Some((Utc::now() - Duration::days(1)).timestamp()),
+            (Utc::now() - Duration::days(1)).timestamp(),
+        )
+        .await;
+
+        let first = runtime
+            .select_stage1_outputs_for_phase2(2, 30)
+            .await
+            .expect("first phase2 selection");
+        assert_eq!(first.previously_selected, Vec::new());
+        assert_eq!(
+            first
+                .selected
+                .iter()
+                .map(|memory| memory.thread_id)
+                .collect::<Vec<_>>(),
+            vec![memory_a, memory_b]
+        );
+
+        set_phase2_selection_metadata(
+            &runtime,
+            memory_c,
+            Some(4),
+            Some(Utc::now().timestamp()),
+            Utc::now().timestamp(),
+        )
+        .await;
+
+        let second = runtime
+            .select_stage1_outputs_for_phase2(2, 30)
+            .await
+            .expect("second phase2 selection");
+        assert_eq!(second.previously_selected, first.selected);
+        assert_eq!(
+            second
+                .selected
+                .iter()
+                .map(|memory| memory.thread_id)
+                .collect::<Vec<_>>(),
+            vec![memory_c, memory_a]
+        );
+
+        for (thread_id, expected_flag) in [(memory_a, 1_i64), (memory_b, 0_i64), (memory_c, 1_i64)]
+        {
+            let row =
+                sqlx::query("SELECT selected_for_phase2 FROM stage1_outputs WHERE thread_id = ?")
+                    .bind(thread_id.to_string())
+                    .fetch_one(runtime.pool.as_ref())
+                    .await
+                    .expect("load selected_for_phase2 row");
+            assert_eq!(
+                row.try_get::<i64, _>("selected_for_phase2")
+                    .expect("selected_for_phase2"),
+                expected_flag
+            );
+        }
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn select_stage1_outputs_for_phase2_batches_flag_updates_for_large_selections() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+        let generated_at = Utc::now().timestamp();
+        let mut thread_ids = Vec::new();
+
+        for idx in 0..1_000 {
+            let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+            runtime
+                .upsert_thread(&test_thread_metadata(
+                    &codex_home,
+                    thread_id,
+                    codex_home.join(format!("workspace-{idx}")),
+                ))
+                .await
+                .expect("upsert thread");
+            sqlx::query(
+                r#"
+INSERT INTO stage1_outputs (
+    thread_id,
+    source_updated_at,
+    raw_memory,
+    rollout_summary,
+    generated_at,
+    usage_count
+) VALUES (?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(thread_id.to_string())
+            .bind(generated_at + i64::from(idx))
+            .bind("raw memory")
+            .bind("rollout summary")
+            .bind(generated_at)
+            .bind(1_i64)
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("insert stage1 output");
+            thread_ids.push(thread_id);
+        }
+
+        let selection = runtime
+            .select_stage1_outputs_for_phase2(1_000, 30)
+            .await
+            .expect("select large phase2 set");
+        assert_eq!(selection.selected.len(), 1_000);
+
+        let selected_count = sqlx::query(
+            "SELECT COUNT(*) AS count FROM stage1_outputs WHERE selected_for_phase2 = 1",
+        )
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("count selected rows")
+        .try_get::<i64, _>("count")
+        .expect("selected row count");
+        assert_eq!(selected_count, 1_000);
+
+        let sample_row =
+            sqlx::query("SELECT selected_for_phase2 FROM stage1_outputs WHERE thread_id = ?")
+                .bind(thread_ids[0].to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("load sample selected row");
+        assert_eq!(
+            sample_row
+                .try_get::<i64, _>("selected_for_phase2")
+                .expect("selected_for_phase2"),
+            1
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn select_stage1_outputs_for_phase2_keeps_legacy_rows_with_missing_usage_metadata() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+        let old_generated_at = (Utc::now() - Duration::days(40)).timestamp();
+
+        let legacy_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("legacy thread id");
+        let never_used_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("never-used thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                legacy_thread_id,
+                codex_home.join("workspace-legacy"),
+            ))
+            .await
+            .expect("upsert legacy thread");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                never_used_thread_id,
+                codex_home.join("workspace-never-used"),
+            ))
+            .await
+            .expect("upsert never-used thread");
+
+        sqlx::query(
+            r#"
+INSERT INTO stage1_outputs (
+    thread_id,
+    source_updated_at,
+    raw_memory,
+    rollout_summary,
+    generated_at
+) VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(legacy_thread_id.to_string())
+        .bind(old_generated_at)
+        .bind("legacy raw memory")
+        .bind("legacy summary")
+        .bind(old_generated_at)
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("insert legacy stage1 output");
+        sqlx::query(
+            r#"
+INSERT INTO stage1_outputs (
+    thread_id,
+    source_updated_at,
+    raw_memory,
+    rollout_summary,
+    generated_at,
+    usage_count
+) VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(never_used_thread_id.to_string())
+        .bind(old_generated_at)
+        .bind("never-used raw memory")
+        .bind("never-used summary")
+        .bind(old_generated_at)
+        .bind(0_i64)
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("insert never-used stage1 output");
+
+        let selection = runtime
+            .select_stage1_outputs_for_phase2(10, 30)
+            .await
+            .expect("select phase2 outputs");
+        assert_eq!(
+            selection
+                .selected
+                .iter()
+                .map(|memory| memory.thread_id)
+                .collect::<Vec<_>>(),
+            vec![legacy_thread_id]
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn mark_stage1_job_succeeded_clears_selected_for_phase2_on_upsert() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+
+        let thread_id = seed_stage1_output(&runtime, &codex_home, owner, "workspace-a", 100).await;
+
+        let first_selection = runtime
+            .select_stage1_outputs_for_phase2(1, 30)
+            .await
+            .expect("first phase2 selection");
+        assert_eq!(first_selection.selected.len(), 1);
+        let stale_last_usage = (Utc::now() - Duration::days(40)).timestamp();
+        sqlx::query(
+            "UPDATE stage1_outputs SET usage_count = ?, last_usage = ? WHERE thread_id = ?",
+        )
+        .bind(7_i64)
+        .bind(stale_last_usage)
+        .bind(thread_id.to_string())
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("seed prior usage metadata");
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 101, 3600, 64)
+            .await
+            .expect("claim updated stage1");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    ownership_token.as_str(),
+                    101,
+                    "raw memory updated",
+                    "rollout summary updated",
+                    Some("updated-rollout"),
+                )
+                .await
+                .expect("mark updated stage1 succeeded"),
+            "updated stage1 success should persist output"
+        );
+
+        let row = sqlx::query(
+            "SELECT selected_for_phase2, source_updated_at, usage_count, last_usage FROM stage1_outputs WHERE thread_id = ?",
+        )
+        .bind(thread_id.to_string())
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("load updated stage1 row");
+        assert_eq!(
+            row.try_get::<i64, _>("selected_for_phase2")
+                .expect("selected_for_phase2"),
+            0
+        );
+        assert_eq!(
+            row.try_get::<i64, _>("source_updated_at")
+                .expect("source_updated_at"),
+            101
+        );
+        assert_eq!(
+            row.try_get::<i64, _>("usage_count").expect("usage_count"),
+            7
+        );
+        assert_eq!(
+            row.try_get::<Option<i64>, _>("last_usage")
+                .expect("last_usage"),
+            Some(stale_last_usage)
+        );
+
+        let second_selection = runtime
+            .select_stage1_outputs_for_phase2(1, 30)
+            .await
+            .expect("second phase2 selection after refresh");
+        assert_eq!(second_selection.selected.len(), 1);
+        assert_eq!(second_selection.selected[0].thread_id, thread_id);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn record_stage1_output_usage_updates_usage_metadata() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
@@ -3182,6 +3623,24 @@ VALUES (?, ?, ?, ?, ?)
                 .await
                 .expect("mark stage1 succeeded b")
         );
+        let phase2_claim = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2 after stage1 success");
+        let (phase2_token, phase2_input_watermark) = match phase2_claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected phase2 claim after stage1 success: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(phase2_token.as_str(), phase2_input_watermark)
+                .await
+                .expect("mark phase2 success after stage1"),
+            "phase2 success should clear dirty state before usage-only update"
+        );
 
         let updated_rows = runtime
             .record_stage1_output_usage(&[thread_a, thread_a, thread_b, missing])
@@ -3219,6 +3678,17 @@ VALUES (?, ?, ?, ?, ?)
         let last_usage_b = row_b.try_get::<i64, _>("last_usage").expect("last_usage b");
         assert_eq!(last_usage_a, last_usage_b);
         assert!(last_usage_a > 0);
+        let usage_only_phase2_claim = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2 after usage-only update");
+        assert!(
+            matches!(
+                usage_only_phase2_claim,
+                Phase2JobClaimOutcome::Claimed { .. }
+            ),
+            "usage updates should enqueue phase2 when selection inputs change"
+        );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -3870,6 +4340,72 @@ VALUES (?, ?, ?, ?, ?)
         assert!(rows.is_empty());
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    async fn seed_stage1_output(
+        runtime: &StateRuntime,
+        codex_home: &Path,
+        owner: ThreadId,
+        cwd_name: &str,
+        source_updated_at: i64,
+    ) -> ThreadId {
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                codex_home,
+                thread_id,
+                codex_home.join(cwd_name),
+            ))
+            .await
+            .expect("upsert thread");
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id, owner, source_updated_at, 3600, 64)
+            .await
+            .expect("claim stage1");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    ownership_token.as_str(),
+                    source_updated_at,
+                    "raw memory",
+                    "rollout summary",
+                    None,
+                )
+                .await
+                .expect("mark stage1 succeeded"),
+            "stage1 success should persist output"
+        );
+
+        thread_id
+    }
+
+    async fn set_phase2_selection_metadata(
+        runtime: &StateRuntime,
+        thread_id: ThreadId,
+        usage_count: Option<i64>,
+        last_usage: Option<i64>,
+        generated_at: i64,
+    ) {
+        sqlx::query(
+            r#"
+UPDATE stage1_outputs
+SET usage_count = ?, last_usage = ?, generated_at = ?
+WHERE thread_id = ?
+            "#,
+        )
+        .bind(usage_count)
+        .bind(last_usage)
+        .bind(generated_at)
+        .bind(thread_id.to_string())
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("update phase2 selection metadata");
     }
 
     fn test_thread_metadata(
