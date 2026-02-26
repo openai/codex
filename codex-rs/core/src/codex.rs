@@ -2991,9 +2991,26 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
+        self.build_initial_context_with_previous_model(turn_context, None)
+            .await
+    }
+
+    pub(crate) async fn build_initial_context_with_previous_model(
+        &self,
+        turn_context: &TurnContext,
+        previous_user_turn_model: Option<&str>,
+    ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<DeveloperInstructions>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
+        if let Some(model_switch_message) =
+            crate::context_manager::updates::build_model_instructions_update_item(
+                previous_user_turn_model,
+                turn_context,
+            )
+        {
+            developer_sections.push(model_switch_message);
+        }
         developer_sections.push(DeveloperInstructions::from_policy(
             turn_context.sandbox_policy.get(),
             turn_context.approval_policy.value(),
@@ -3122,22 +3139,8 @@ impl Session {
         let reference_context_item = self.reference_context_item().await;
         let should_inject_full_context = reference_context_item.is_none();
         let context_items = if should_inject_full_context {
-            let mut initial_context = self.build_initial_context(turn_context).await;
-            // Full reinjection bypasses the settings-diff path, so add the model-switch
-            // instruction explicitly when needed. Keep it before the rest of full context so
-            // model-specific guidance is read first.
-            if let Some(model_switch_item) =
-                crate::context_manager::updates::build_model_instructions_update_item(
-                    previous_user_turn_model,
-                    turn_context,
-                )
-            {
-                // TODO(ccunningham): When a model switch changes the effective personality
-                // instructions, inject the updated personality spec alongside <model_switch>
-                // here so resume/model-switch paths can avoid forcing full reinjection.
-                initial_context.insert(0, model_switch_item.into());
-            }
-            initial_context
+            self.build_initial_context_with_previous_model(turn_context, previous_user_turn_model)
+                .await
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
             self.build_settings_update_items(
@@ -5042,6 +5045,7 @@ pub(crate) async fn run_turn(
                         &sess,
                         &turn_context,
                         InitialContextInjection::BeforeLastUserMessage,
+                        previous_model.as_deref(),
                     )
                     .await
                     .is_err()
@@ -5165,7 +5169,13 @@ async fn run_pre_sampling_compact(
         .unwrap_or(i64::MAX);
     // Compact if the total usage tokens are greater than the auto compact limit
     if total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(sess, turn_context, InitialContextInjection::DoNotInject).await?;
+        run_auto_compact(
+            sess,
+            turn_context,
+            InitialContextInjection::DoNotInject,
+            None,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -5208,6 +5218,7 @@ async fn maybe_run_previous_model_inline_compact(
             sess,
             &previous_model_turn_context,
             InitialContextInjection::DoNotInject,
+            None,
         )
         .await?;
         return Ok(true);
@@ -5219,12 +5230,14 @@ async fn run_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    previous_user_turn_model: Option<&str>,
 ) -> CodexResult<()> {
     if should_use_remote_compact_task(&turn_context.provider) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
+            previous_user_turn_model,
         )
         .await?;
     } else {
@@ -5232,6 +5245,7 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             initial_context_injection,
+            previous_user_turn_model,
         )
         .await?;
     }
@@ -8652,6 +8666,27 @@ mod tests {
         let mut expected_history = vec![compacted_summary];
         expected_history.extend(session.build_initial_context(&turn_context).await);
         assert_eq!(history.raw_items().to_vec(), expected_history);
+    }
+
+    #[tokio::test]
+    async fn build_initial_context_with_previous_model_prepends_model_switch_message() {
+        let (session, turn_context) = make_session_and_context().await;
+
+        let initial_context = session
+            .build_initial_context_with_previous_model(
+                &turn_context,
+                Some("previous-regular-model"),
+            )
+            .await;
+
+        let ResponseItem::Message { role, content, .. } = &initial_context[0] else {
+            panic!("expected developer message");
+        };
+        assert_eq!(role, "developer");
+        let [ContentItem::InputText { text }, ..] = content.as_slice() else {
+            panic!("expected developer text");
+        };
+        assert!(text.contains("<model_switch>"));
     }
 
     #[tokio::test]

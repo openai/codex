@@ -54,6 +54,7 @@ pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
+    previous_user_turn_model: Option<&str>,
 ) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
@@ -62,7 +63,14 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(sess, turn_context, input, initial_context_injection).await?;
+    run_compact_task_inner(
+        sess,
+        turn_context,
+        input,
+        initial_context_injection,
+        previous_user_turn_model,
+    )
+    .await?;
     Ok(())
 }
 
@@ -82,6 +90,7 @@ pub(crate) async fn run_compact_task(
         turn_context,
         input,
         InitialContextInjection::DoNotInject,
+        None,
     )
     .await
 }
@@ -91,6 +100,7 @@ async fn run_compact_task_inner(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
+    previous_user_turn_model: Option<&str>,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -198,7 +208,12 @@ async fn run_compact_task_inner(
         initial_context_injection,
         InitialContextInjection::BeforeLastUserMessage
     ) {
-        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+        let initial_context = sess
+            .build_initial_context_with_previous_model(
+                turn_context.as_ref(),
+                previous_user_turn_model,
+            )
+            .await;
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     }
@@ -444,14 +459,18 @@ mod tests {
 
     async fn process_compacted_history_with_test_session(
         compacted_history: Vec<ResponseItem>,
+        previous_user_turn_model: Option<&str>,
     ) -> (Vec<ResponseItem>, Vec<ResponseItem>) {
         let (session, turn_context) = crate::codex::make_session_and_context().await;
-        let initial_context = session.build_initial_context(&turn_context).await;
+        let initial_context = session
+            .build_initial_context_with_previous_model(&turn_context, previous_user_turn_model)
+            .await;
         let refreshed = crate::compact_remote::process_compacted_history(
             &session,
             &turn_context,
             compacted_history,
             InitialContextInjection::BeforeLastUserMessage,
+            previous_user_turn_model,
         )
         .await;
         (refreshed, initial_context)
@@ -656,7 +675,7 @@ do things
             },
         ];
         let (refreshed, mut expected) =
-            process_compacted_history_with_test_session(compacted_history).await;
+            process_compacted_history_with_test_session(compacted_history, None).await;
         expected.push(ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -681,7 +700,7 @@ do things
             phase: None,
         }];
         let (refreshed, mut expected) =
-            process_compacted_history_with_test_session(compacted_history).await;
+            process_compacted_history_with_test_session(compacted_history, None).await;
         expected.push(ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -759,7 +778,7 @@ keep me updated
             },
         ];
         let (refreshed, mut expected) =
-            process_compacted_history_with_test_session(compacted_history).await;
+            process_compacted_history_with_test_session(compacted_history, None).await;
         expected.push(ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -805,7 +824,7 @@ keep me updated
         ];
 
         let (refreshed, initial_context) =
-            process_compacted_history_with_test_session(compacted_history).await;
+            process_compacted_history_with_test_session(compacted_history, None).await;
         let mut expected = vec![
             ResponseItem::Message {
                 id: None,
@@ -832,6 +851,46 @@ keep me updated
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: "latest user".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        });
+        assert_eq!(refreshed, expected);
+    }
+
+    #[tokio::test]
+    async fn process_compacted_history_reinjects_model_switch_message() {
+        let compacted_history = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "summary".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let (refreshed, initial_context) = process_compacted_history_with_test_session(
+            compacted_history,
+            Some("previous-regular-model"),
+        )
+        .await;
+
+        let ResponseItem::Message { role, content, .. } = &initial_context[0] else {
+            panic!("expected developer message");
+        };
+        assert_eq!(role, "developer");
+        let [ContentItem::InputText { text }, ..] = content.as_slice() else {
+            panic!("expected developer text");
+        };
+        assert!(text.contains("<model_switch>"));
+
+        let mut expected = initial_context;
+        expected.push(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "summary".to_string(),
             }],
             end_turn: None,
             phase: None,

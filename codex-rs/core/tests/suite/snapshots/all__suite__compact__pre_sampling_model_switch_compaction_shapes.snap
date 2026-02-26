@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/compact.rs
+assertion_line: 1791
 expression: "format_labeled_requests_snapshot(\"Pre-sampling compaction on model switch to a smaller context window: current behavior compacts using prior-turn history only (incoming user message excluded), and the follow-up request carries compacted history plus the new user message.\",\n&[(\"Initial Request (Previous Model)\", &requests[0]),\n(\"Pre-sampling Compaction Request\", &requests[1]),\n(\"Post-Compaction Follow-up Request (Next Model)\", &requests[2]),])"
 ---
 Scenario: Pre-sampling compaction on model switch to a smaller context window: current behavior compacts using prior-turn history only (incoming user message excluded), and the follow-up request carries compacted history plus the new user message.
@@ -25,9 +26,10 @@ Scenario: Pre-sampling compaction on model switch to a smaller context window: c
 ## Post-Compaction Follow-up Request (Next Model)
 00:message/user:before switch
 01:message/user:<COMPACTION_SUMMARY>\nPRE_SAMPLING_SUMMARY
-02:message/developer:<model_switch>\nThe user was previously using a different model....
-03:message/developer:<PERMISSIONS_INSTRUCTIONS>
-04:message/user[2]:
+02:message/developer[2]:
+    [01] <model_switch>\nThe user was previously using a different model....
+    [02] <PERMISSIONS_INSTRUCTIONS>
+03:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
-05:message/user:after switch
+04:message/user:after switch
