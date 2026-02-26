@@ -1124,7 +1124,7 @@ impl Session {
         //
         // - initialize RolloutRecorder with new or resumed session info
         // - perform default shell discovery
-        // - load history metadata
+        // - load history metadata (skipped for subagents)
         let rollout_fut = async {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>((None, None))
@@ -1141,7 +1141,16 @@ impl Session {
             }
         };
 
-        let history_meta_fut = crate::message_history::history_metadata(&config);
+        let history_meta_fut = async {
+            if matches!(
+                session_configuration.session_source,
+                SessionSource::SubAgent(_)
+            ) {
+                (0, 0)
+            } else {
+                crate::message_history::history_metadata(&config).await
+            }
+        };
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let auth_and_mcp_fut = async move {
