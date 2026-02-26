@@ -980,6 +980,7 @@ mod tests {
                 .sandbox_policy
                 .can_set(&SandboxPolicy::ExternalSandbox {
                     network_access: NetworkAccess::Restricted,
+                    deny_read_paths: vec![],
                 }),
             Err(ConstraintError::InvalidValue {
                 field_name: "sandbox_mode",

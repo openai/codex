@@ -8096,6 +8096,13 @@
         {
           "description": "Indicates the process is already in an external sandbox. Allows full disk access while honoring the provided network setting.",
           "properties": {
+            "deny_read_paths": {
+              "description": "Paths that must not be readable, even when broad read access is otherwise allowed.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
             "network_access": {
               "allOf": [
                 {
@@ -14771,6 +14778,13 @@
           },
           {
             "properties": {
+              "denyReadPaths": {
+                "default": [],
+                "items": {
+                  "$ref": "#/definitions/v2/AbsolutePathBuf"
+                },
+                "type": "array"
+              },
               "networkAccess": {
                 "allOf": [
                   {

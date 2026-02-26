@@ -259,6 +259,7 @@ mod tests {
 
         let policy = SandboxPolicy::ExternalSandbox {
             network_access: codex_protocol::protocol::NetworkAccess::Enabled,
+            deny_read_paths: vec![],
         };
 
         assert_eq!(

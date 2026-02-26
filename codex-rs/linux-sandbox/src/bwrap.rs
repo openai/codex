@@ -91,16 +91,32 @@ pub(crate) fn create_bwrap_command_args(
 ) -> Result<Vec<String>> {
     if sandbox_policy.has_full_disk_write_access() {
         return if options.network_mode == BwrapNetworkMode::FullAccess {
-            Ok(command)
+            if sandbox_policy.has_denied_read_paths() {
+                Ok(create_bwrap_flags_full_filesystem(
+                    command,
+                    sandbox_policy,
+                    options,
+                ))
+            } else {
+                Ok(command)
+            }
         } else {
-            Ok(create_bwrap_flags_full_filesystem(command, options))
+            Ok(create_bwrap_flags_full_filesystem(
+                command,
+                sandbox_policy,
+                options,
+            ))
         };
     }
 
     create_bwrap_flags(command, sandbox_policy, cwd, options)
 }
 
-fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOptions) -> Vec<String> {
+fn create_bwrap_flags_full_filesystem(
+    command: Vec<String>,
+    sandbox_policy: &SandboxPolicy,
+    options: BwrapOptions,
+) -> Vec<String> {
     let mut args = vec![
         "--new-session".to_string(),
         "--die-with-parent".to_string(),
@@ -116,6 +132,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         args.push("--proc".to_string());
         args.push("/proc".to_string());
     }
+    apply_deny_read_overlays(args.as_mut(), sandbox_policy, true, &BTreeSet::new(), &[]);
     args.push("--".to_string());
     args.extend(command);
     args
@@ -472,6 +489,39 @@ mod tests {
         .expect("create bwrap args");
 
         assert_eq!(args, command);
+    }
+
+    #[test]
+    fn full_disk_write_with_deny_read_keeps_bwrap_and_masks_paths() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let denied_file = temp_dir.path().join("secret.txt");
+        std::fs::write(&denied_file, "secret").expect("write denied file");
+        let command = vec!["/bin/true".to_string()];
+        let args = create_bwrap_command_args(
+            command.clone(),
+            &SandboxPolicy::ExternalSandbox {
+                network_access: codex_core::protocol::NetworkAccess::Enabled,
+                deny_read_paths: vec![
+                    AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute path"),
+                ],
+            },
+            Path::new("/"),
+            BwrapOptions {
+                mount_proc: true,
+                network_mode: BwrapNetworkMode::FullAccess,
+            },
+        )
+        .expect("create bwrap args");
+
+        assert_ne!(args, command);
+        assert!(args.windows(3).any(|window| {
+            window
+                == [
+                    "--ro-bind".to_string(),
+                    "/dev/null".to_string(),
+                    denied_file.to_string_lossy().to_string(),
+                ]
+        }));
     }
 
     #[test]

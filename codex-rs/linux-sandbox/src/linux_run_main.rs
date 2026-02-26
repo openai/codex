@@ -96,7 +96,10 @@ pub fn run_main() -> ! {
         exec_or_panic(command);
     }
 
-    if sandbox_policy.has_full_disk_write_access() && !allow_network_for_proxy {
+    if sandbox_policy.has_full_disk_write_access()
+        && !allow_network_for_proxy
+        && !sandbox_policy.has_denied_read_paths()
+    {
         if let Err(e) = apply_sandbox_policy_to_current_thread(
             &sandbox_policy,
             &sandbox_policy_cwd,

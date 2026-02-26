@@ -502,6 +502,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             approval_policy: Some(codex_app_server_protocol::AskForApproval::OnRequest),
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::ReadOnly {
                 access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
+                deny_read_paths: vec![],
             }),
             model: Some("mock-model".to_string()),
             effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),

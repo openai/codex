@@ -768,6 +768,8 @@ pub enum SandboxPolicy {
     ExternalSandbox {
         #[serde(default)]
         network_access: NetworkAccess,
+        #[serde(default)]
+        deny_read_paths: Vec<AbsolutePathBuf>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -800,14 +802,16 @@ impl SandboxPolicy {
                 access: access.to_core(),
                 deny_read_paths: deny_read_paths.clone(),
             },
-            SandboxPolicy::ExternalSandbox { network_access } => {
-                codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
-                    network_access: match network_access {
-                        NetworkAccess::Restricted => CoreNetworkAccess::Restricted,
-                        NetworkAccess::Enabled => CoreNetworkAccess::Enabled,
-                    },
-                }
-            }
+            SandboxPolicy::ExternalSandbox {
+                network_access,
+                deny_read_paths,
+            } => codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
+                network_access: match network_access {
+                    NetworkAccess::Restricted => CoreNetworkAccess::Restricted,
+                    NetworkAccess::Enabled => CoreNetworkAccess::Enabled,
+                },
+                deny_read_paths: deny_read_paths.clone(),
+            },
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 read_only_access,
@@ -840,14 +844,16 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 access: ReadOnlyAccess::from(access),
                 deny_read_paths,
             },
-            codex_protocol::protocol::SandboxPolicy::ExternalSandbox { network_access } => {
-                SandboxPolicy::ExternalSandbox {
-                    network_access: match network_access {
-                        CoreNetworkAccess::Restricted => NetworkAccess::Restricted,
-                        CoreNetworkAccess::Enabled => NetworkAccess::Enabled,
-                    },
-                }
-            }
+            codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
+                network_access,
+                deny_read_paths,
+            } => SandboxPolicy::ExternalSandbox {
+                network_access: match network_access {
+                    CoreNetworkAccess::Restricted => NetworkAccess::Restricted,
+                    CoreNetworkAccess::Enabled => NetworkAccess::Enabled,
+                },
+                deny_read_paths,
+            },
             codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 read_only_access,
@@ -3688,6 +3694,7 @@ mod tests {
     fn sandbox_policy_round_trips_external_sandbox_network_access() {
         let v2_policy = SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Enabled,
+            deny_read_paths: vec![],
         };
 
         let core_policy = v2_policy.to_core();
@@ -3695,6 +3702,7 @@ mod tests {
             core_policy,
             codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
                 network_access: CoreNetworkAccess::Enabled,
+                deny_read_paths: vec![],
             }
         );
 
@@ -3798,6 +3806,22 @@ mod tests {
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
+            }
+        );
+    }
+
+    #[test]
+    fn sandbox_policy_deserializes_legacy_external_sandbox_without_deny_read_paths() {
+        let policy: SandboxPolicy = serde_json::from_value(json!({
+            "type": "externalSandbox",
+            "networkAccess": "enabled"
+        }))
+        .expect("external sandbox policy should deserialize");
+        assert_eq!(
+            policy,
+            SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Enabled,
+                deny_read_paths: vec![],
             }
         );
     }

@@ -101,6 +101,7 @@ impl SandboxManager {
         windows_sandbox_level: WindowsSandboxLevel,
         has_managed_network_requirements: bool,
     ) -> SandboxType {
+        let enforce_deny_read = policy.has_denied_read_paths() && !cfg!(target_os = "windows");
         match pref {
             SandboxablePreference::Forbid => SandboxType::None,
             SandboxablePreference::Require => {
@@ -113,7 +114,7 @@ impl SandboxManager {
             }
             SandboxablePreference::Auto => match policy {
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-                    if has_managed_network_requirements {
+                    if has_managed_network_requirements || enforce_deny_read {
                         crate::safety::get_platform_sandbox(
                             windows_sandbox_level != WindowsSandboxLevel::Disabled,
                         )
@@ -273,6 +274,34 @@ mod tests {
             SandboxablePreference::Auto,
             WindowsSandboxLevel::Disabled,
             true,
+        );
+        assert_eq!(sandbox, expected);
+    }
+
+    #[test]
+    fn external_sandbox_with_deny_read_uses_platform_sandbox() {
+        let manager = SandboxManager::new();
+        let denied_path = if cfg!(windows) {
+            r"C:\secret"
+        } else {
+            "/tmp/secret"
+        };
+        let expected = if cfg!(target_os = "windows") {
+            SandboxType::None
+        } else {
+            crate::safety::get_platform_sandbox(false).unwrap_or(SandboxType::None)
+        };
+        let sandbox = manager.select_initial(
+            &SandboxPolicy::ExternalSandbox {
+                network_access: codex_protocol::protocol::NetworkAccess::Enabled,
+                deny_read_paths: vec![
+                    codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(denied_path)
+                        .expect("absolute path"),
+                ],
+            },
+            SandboxablePreference::Auto,
+            WindowsSandboxLevel::Disabled,
+            false,
         );
         assert_eq!(sandbox, expected);
     }

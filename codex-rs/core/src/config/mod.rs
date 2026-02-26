@@ -1506,9 +1506,7 @@ pub(crate) fn resolve_web_search_mode_for_turn(
 ) -> WebSearchMode {
     let preferred = web_search_mode.value();
 
-    if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
-        && preferred != WebSearchMode::Disabled
-    {
+    if sandbox_policy.behaves_like_danger_full_access() && preferred != WebSearchMode::Disabled {
         for mode in [
             WebSearchMode::Live,
             WebSearchMode::Cached,
@@ -1911,31 +1909,6 @@ impl Config {
             && !filesystem_requirements.deny_read.is_empty()
         {
             let deny_read_paths = filesystem_requirements.deny_read;
-            let requirement_source = filesystem_requirements_source.clone();
-            constrained_sandbox_policy
-                .value
-                .add_validator(move |policy| {
-                    if matches!(
-                        policy,
-                        SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
-                    ) {
-                        return Ok(());
-                    }
-
-                    let candidate = match policy {
-                        SandboxPolicy::DangerFullAccess => "danger-full-access",
-                        SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
-                        SandboxPolicy::ReadOnly { .. } => "read-only",
-                        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
-                    };
-                    Err(ConstraintError::InvalidValue {
-                        field_name: "sandbox_mode",
-                        candidate: candidate.to_string(),
-                        allowed: "[read-only, workspace-write]".to_string(),
-                        requirement_source: requirement_source.clone(),
-                    })
-                })
-                .map_err(std::io::Error::from)?;
             constrained_sandbox_policy
                 .value
                 .add_normalizer(move |mut policy| {
@@ -5698,8 +5671,8 @@ mcp_oauth_callback_url = "https://example.com/callback"
     }
 
     #[tokio::test]
-    async fn requirements_filesystem_deny_read_rejects_unsupported_sandbox_mode_changes()
-    -> std::io::Result<()> {
+    async fn requirements_filesystem_deny_read_normalizes_danger_full_access() -> std::io::Result<()>
+    {
         let codex_home = TempDir::new()?;
         let denied_path = codex_home.path().join("sensitive").join("secret.txt");
         let denied_path =
@@ -5726,20 +5699,53 @@ mcp_oauth_callback_url = "https://example.com/callback"
             .build()
             .await?;
 
-        let err = config
+        config
             .permissions
             .sandbox_policy
             .set(SandboxPolicy::DangerFullAccess)
-            .expect_err("danger-full-access should be rejected");
+            .map_err(std::io::Error::from)?;
 
         assert_eq!(
-            err,
-            ConstraintError::InvalidValue {
-                field_name: "sandbox_mode",
-                candidate: "danger-full-access".to_string(),
-                allowed: "[read-only, workspace-write]".to_string(),
-                requirement_source: crate::config_loader::RequirementSource::CloudRequirements,
+            *config.permissions.sandbox_policy.get(),
+            SandboxPolicy::ExternalSandbox {
+                network_access: crate::protocol::NetworkAccess::Enabled,
+                deny_read_paths: vec![denied_path],
             }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn normalized_external_sandbox_preserves_danger_full_access_web_search_order()
+    -> anyhow::Result<()> {
+        let web_search_mode = Constrained::new(WebSearchMode::Cached, |mode| {
+            if matches!(mode, WebSearchMode::Live | WebSearchMode::Cached) {
+                Ok(())
+            } else {
+                Err(ConstraintError::InvalidValue {
+                    field_name: "web_search_mode",
+                    candidate: mode.to_string(),
+                    allowed: "[live, cached]".to_string(),
+                    requirement_source: RequirementSource::Unknown,
+                })
+            }
+        })?;
+        let denied_path = if cfg!(windows) {
+            r"C:\deny-read"
+        } else {
+            "/tmp/deny-read"
+        };
+        let sandbox_policy = SandboxPolicy::ExternalSandbox {
+            network_access: crate::protocol::NetworkAccess::Enabled,
+            deny_read_paths: vec![
+                AbsolutePathBuf::try_from(denied_path).expect("absolute deny_read path"),
+            ],
+        };
+
+        assert_eq!(
+            resolve_web_search_mode_for_turn(&web_search_mode, &sandbox_policy),
+            WebSearchMode::Live
         );
 
         Ok(())

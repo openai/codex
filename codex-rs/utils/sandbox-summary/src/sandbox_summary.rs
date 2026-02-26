@@ -2,10 +2,13 @@ use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
 
 pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
+    if sandbox_policy.behaves_like_danger_full_access() {
+        return "danger-full-access".to_string();
+    }
+
     match sandbox_policy {
-        SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
         SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
-        SandboxPolicy::ExternalSandbox { network_access } => {
+        SandboxPolicy::ExternalSandbox { network_access, .. } => {
             let mut summary = "external-sandbox".to_string();
             if matches!(network_access, NetworkAccess::Enabled) {
                 summary.push_str(" (network access enabled)");
@@ -42,6 +45,7 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             }
             summary
         }
+        SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
     }
 }
 
@@ -55,6 +59,7 @@ mod tests {
     fn summarizes_external_sandbox_without_network_access_suffix() {
         let summary = summarize_sandbox_policy(&SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Restricted,
+            deny_read_paths: vec![],
         });
         assert_eq!(summary, "external-sandbox");
     }
@@ -63,6 +68,7 @@ mod tests {
     fn summarizes_external_sandbox_with_enabled_network() {
         let summary = summarize_sandbox_policy(&SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Enabled,
+            deny_read_paths: vec![],
         });
         assert_eq!(summary, "external-sandbox (network access enabled)");
     }

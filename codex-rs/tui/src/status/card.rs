@@ -194,20 +194,29 @@ impl StatusHistoryCell {
             .find(|(k, _)| *k == "approval")
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<unknown>".to_string());
-        let sandbox = match config.permissions.sandbox_policy.get() {
-            SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
-            SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
-            SandboxPolicy::WorkspaceWrite {
-                network_access: true,
-                ..
-            } => "workspace-write with network access".to_string(),
-            SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
-            SandboxPolicy::ExternalSandbox { network_access } => {
-                if matches!(network_access, NetworkAccess::Enabled) {
-                    "external-sandbox (network access enabled)".to_string()
-                } else {
-                    "external-sandbox".to_string()
+        let sandbox = if config
+            .permissions
+            .sandbox_policy
+            .get()
+            .behaves_like_danger_full_access()
+        {
+            "danger-full-access".to_string()
+        } else {
+            match config.permissions.sandbox_policy.get() {
+                SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
+                SandboxPolicy::WorkspaceWrite {
+                    network_access: true,
+                    ..
+                } => "workspace-write with network access".to_string(),
+                SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
+                SandboxPolicy::ExternalSandbox { network_access, .. } => {
+                    if matches!(network_access, NetworkAccess::Enabled) {
+                        "external-sandbox (network access enabled)".to_string()
+                    } else {
+                        "external-sandbox".to_string()
+                    }
                 }
+                SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
             }
         };
         let permissions = if config.permissions.approval_policy.value() == AskForApproval::OnRequest
@@ -216,7 +225,11 @@ impl StatusHistoryCell {
         {
             "Default".to_string()
         } else if config.permissions.approval_policy.value() == AskForApproval::Never
-            && *config.permissions.sandbox_policy.get() == SandboxPolicy::DangerFullAccess
+            && config
+                .permissions
+                .sandbox_policy
+                .get()
+                .behaves_like_danger_full_access()
         {
             "Full Access".to_string()
         } else {

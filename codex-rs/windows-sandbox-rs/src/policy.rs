@@ -41,6 +41,7 @@ mod tests {
         let payload = serde_json::to_string(
             &codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
                 network_access: codex_protocol::protocol::NetworkAccess::Enabled,
+                deny_read_paths: vec![],
             },
         )
         .unwrap();

@@ -149,24 +149,6 @@ impl<T: Send + Sync> Constrained<T> {
         Ok(())
     }
 
-    pub fn add_validator(
-        &mut self,
-        validator: impl Fn(&T) -> ConstraintResult<()> + Send + Sync + 'static,
-    ) -> ConstraintResult<()>
-    where
-        T: 'static,
-    {
-        let existing_validator = self.validator.clone();
-        let combined_validator: Arc<ConstraintValidator<T>> = Arc::new(move |value| {
-            existing_validator(value)?;
-            validator(value)
-        });
-
-        combined_validator(&self.value)?;
-        self.validator = combined_validator;
-        Ok(())
-    }
-
     pub fn add_normalizer(
         &mut self,
         normalizer: impl Fn(T) -> T + Send + Sync + 'static,
@@ -278,40 +260,6 @@ mod tests {
 
         constrained.set(-10)?;
         assert_eq!(constrained.value(), 0);
-
-        Ok(())
-    }
-
-    #[test]
-    fn constrained_add_validator_composes_with_existing_validator() -> anyhow::Result<()> {
-        let mut constrained = Constrained::new(1, |value| {
-            if *value > 0 {
-                Ok(())
-            } else {
-                Err(invalid_value(value.to_string(), "positive values"))
-            }
-        })?;
-
-        constrained.add_validator(|value| {
-            if *value < 10 {
-                Ok(())
-            } else {
-                Err(invalid_value(value.to_string(), "values less than 10"))
-            }
-        })?;
-
-        constrained.set(5)?;
-        assert_eq!(constrained.value(), 5);
-
-        let err = constrained
-            .set(10)
-            .expect_err("values at or above 10 should be rejected");
-        assert_eq!(err, invalid_value("10", "values less than 10"));
-
-        let err = constrained
-            .set(-1)
-            .expect_err("negative values should still be rejected");
-        assert_eq!(err, invalid_value("-1", "positive values"));
 
         Ok(())
     }

@@ -612,6 +612,13 @@
         },
         {
           "properties": {
+            "denyReadPaths": {
+              "default": [],
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
             "networkAccess": {
               "allOf": [
                 {

@@ -57,6 +57,7 @@ mod tests {
     fn returns_none_for_external_sandbox() {
         let sandbox = SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Enabled,
+            deny_read_paths: vec![],
         };
         let dirs = vec![PathBuf::from("/tmp/example")];
         assert_eq!(add_dir_warning_message(&dirs, &sandbox), None);

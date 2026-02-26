@@ -124,6 +124,7 @@ where
             // when the sandbox policy is expanded.
             writable_roots: vec![],
             read_only_access: Default::default(),
+            deny_read_paths: vec![],
             network_access: false,
             // Disable writes to temp dir because this is a test, so
             // writable_folder is likely also under /tmp and we want to be

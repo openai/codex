@@ -159,9 +159,10 @@ pub async fn process_exec_tool_call(
 ) -> Result<ExecToolCallOutput> {
     let windows_sandbox_level = params.windows_sandbox_level;
     let enforce_managed_network = params.network.is_some();
+    let enforce_deny_read = sandbox_policy.has_denied_read_paths() && !cfg!(target_os = "windows");
     let sandbox_type = match &sandbox_policy {
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-            if enforce_managed_network {
+            if enforce_managed_network || enforce_deny_read {
                 get_platform_sandbox(
                     windows_sandbox_level
                         != codex_protocol::config_types::WindowsSandboxLevel::Disabled,

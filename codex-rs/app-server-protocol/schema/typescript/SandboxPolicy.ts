@@ -20,7 +20,11 @@ deny_read_paths?: Array<AbsolutePathBuf>, } | { "type": "external-sandbox",
 /**
  * Whether the external sandbox permits outbound network traffic.
  */
-network_access: NetworkAccess, } | { "type": "workspace-write", 
+network_access: NetworkAccess, 
+/**
+ * Paths that must not be readable, even when broad read access is otherwise allowed.
+ */
+deny_read_paths?: Array<AbsolutePathBuf>, } | { "type": "workspace-write", 
 /**
  * Additional folders (beyond cwd and possibly TMPDIR) that should be
  * writable from within the sandbox.
