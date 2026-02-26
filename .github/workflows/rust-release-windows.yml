@@ -88,8 +88,6 @@ jobs:
 
       - name: Cargo build (Windows binaries)
         shell: bash
-        env:
-          RUSTFLAGS: ${{ matrix.target == 'aarch64-pc-windows-msvc' && '-C link-arg=/Gy' || '' }}
         run: |
           cargo build --target ${{ matrix.target }} --release --timings ${{ matrix.build_args }}
 
