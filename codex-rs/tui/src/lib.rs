@@ -31,8 +31,10 @@ use codex_core::find_thread_path_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_core::read_session_meta_line;
+use codex_core::state_db::get_state_db;
 use codex_core::terminal::Multiplexer;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -665,7 +667,19 @@ async fn run_ratatui_app(
                 find_thread_path_by_name_str(&config.codex_home, id_str).await?
             };
             match path {
-                Some(path) => resume_picker::SessionSelection::Fork(path),
+                Some(path) => {
+                    let thread_id =
+                        match resolve_session_thread_id(path.as_path(), is_uuid.then_some(id_str))
+                            .await
+                        {
+                            Some(thread_id) => thread_id,
+                            None => return missing_session_exit(id_str, "fork"),
+                        };
+                    resume_picker::SessionSelection::Fork(resume_picker::SessionTarget {
+                        path,
+                        thread_id,
+                    })
+                }
                 None => return missing_session_exit(id_str, "fork"),
             }
         } else if cli.fork_last {
@@ -682,11 +696,37 @@ async fn run_ratatui_app(
             )
             .await
             {
-                Ok(page) => page
-                    .items
-                    .first()
-                    .map(|it| resume_picker::SessionSelection::Fork(it.path.clone()))
-                    .unwrap_or(resume_picker::SessionSelection::StartFresh),
+                Ok(page) => match page.items.first() {
+                    Some(item) => {
+                        match resolve_session_thread_id(item.path.as_path(), None).await {
+                            Some(thread_id) => resume_picker::SessionSelection::Fork(
+                                resume_picker::SessionTarget {
+                                    path: item.path.clone(),
+                                    thread_id,
+                                },
+                            ),
+                            None => {
+                                let rollout_path = item.path.display();
+                                error!(
+                                    "Error reading session metadata from latest rollout: {rollout_path}"
+                                );
+                                restore();
+                                session_log::log_session_end();
+                                let _ = tui.terminal.clear();
+                                return Ok(AppExitInfo {
+                                    token_usage: codex_protocol::protocol::TokenUsage::default(),
+                                    thread_id: None,
+                                    thread_name: None,
+                                    update_action: None,
+                                    exit_reason: ExitReason::Fatal(format!(
+                                        "Found latest saved session at {rollout_path}, but failed to read its metadata. Run `codex fork` to choose from existing sessions."
+                                    )),
+                                });
+                            }
+                        }
+                    }
+                    None => resume_picker::SessionSelection::StartFresh,
+                },
                 Err(_) => resume_picker::SessionSelection::StartFresh,
             }
         } else if cli.fork_picker {
@@ -715,7 +755,21 @@ async fn run_ratatui_app(
             find_thread_path_by_name_str(&config.codex_home, id_str).await?
         };
         match path {
-            Some(path) => resume_picker::SessionSelection::Resume(path),
+            Some(path) => {
+                let thread_id = match resolve_session_thread_id(
+                    path.as_path(),
+                    is_uuid.then_some(id_str),
+                )
+                .await
+                {
+                    Some(thread_id) => thread_id,
+                    None => return missing_session_exit(id_str, "resume"),
+                };
+                resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
+                    path,
+                    thread_id,
+                })
+            }
             None => return missing_session_exit(id_str, "resume"),
         }
     } else if cli.resume_last {
@@ -737,7 +791,30 @@ async fn run_ratatui_app(
         )
         .await
         {
-            Ok(Some(path)) => resume_picker::SessionSelection::Resume(path),
+            Ok(Some(path)) => match resolve_session_thread_id(path.as_path(), None).await {
+                Some(thread_id) => {
+                    resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
+                        path,
+                        thread_id,
+                    })
+                }
+                None => {
+                    let rollout_path = path.display();
+                    error!("Error reading session metadata from latest rollout: {rollout_path}");
+                    restore();
+                    session_log::log_session_end();
+                    let _ = tui.terminal.clear();
+                    return Ok(AppExitInfo {
+                        token_usage: codex_protocol::protocol::TokenUsage::default(),
+                        thread_id: None,
+                        thread_name: None,
+                        update_action: None,
+                        exit_reason: ExitReason::Fatal(format!(
+                            "Found latest saved session at {rollout_path}, but failed to read its metadata. Run `codex resume` to choose from existing sessions."
+                        )),
+                    });
+                }
+            },
             _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
@@ -761,15 +838,27 @@ async fn run_ratatui_app(
 
     let current_cwd = config.cwd.clone();
     let allow_prompt = cli.cwd.is_none();
-    let action_and_path_if_resume_or_fork = match &session_selection {
-        resume_picker::SessionSelection::Resume(path) => Some((CwdPromptAction::Resume, path)),
-        resume_picker::SessionSelection::Fork(path) => Some((CwdPromptAction::Fork, path)),
+    let action_and_target_session_if_resume_or_fork = match &session_selection {
+        resume_picker::SessionSelection::Resume(target_session) => {
+            Some((CwdPromptAction::Resume, target_session))
+        }
+        resume_picker::SessionSelection::Fork(target_session) => {
+            Some((CwdPromptAction::Fork, target_session))
+        }
         _ => None,
     };
-    let fallback_cwd = match action_and_path_if_resume_or_fork {
-        Some((action, path)) => {
-            match resolve_cwd_for_resume_or_fork(&mut tui, &current_cwd, path, action, allow_prompt)
-                .await?
+    let fallback_cwd = match action_and_target_session_if_resume_or_fork {
+        Some((action, target_session)) => {
+            match resolve_cwd_for_resume_or_fork(
+                &mut tui,
+                &config,
+                &current_cwd,
+                target_session.thread_id,
+                &target_session.path,
+                action,
+                allow_prompt,
+            )
+            .await?
             {
                 ResolveCwdOutcome::Continue(cwd) => cwd,
                 ResolveCwdOutcome::Exit => {
@@ -851,12 +940,35 @@ async fn run_ratatui_app(
     app_result
 }
 
-pub(crate) async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
+pub(crate) async fn resolve_session_thread_id(
+    path: &Path,
+    id_str_if_uuid: Option<&str>,
+) -> Option<ThreadId> {
+    match id_str_if_uuid {
+        Some(id_str) => ThreadId::from_string(id_str).ok(),
+        None => read_session_meta_line(path)
+            .await
+            .ok()
+            .map(|meta_line| meta_line.meta.id),
+    }
+}
+
+pub(crate) async fn read_session_cwd(
+    config: &Config,
+    thread_id: ThreadId,
+    path: &Path,
+) -> Option<PathBuf> {
+    if let Some(state_db_ctx) = get_state_db(config, None).await
+        && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
+    {
+        return Some(metadata.cwd);
+    }
+
     // Prefer the latest TurnContext cwd so resume/fork reflects the most recent
-    // session directory (for the changed-cwd prompt). The alternative would be
-    // mutating the SessionMeta line when the session cwd changes, but the rollout
-    // is an append-only JSONL log and rewriting the head would be error-prone.
-    // When rollouts move to SQLite, we can drop this scan.
+    // session directory (for the changed-cwd prompt) when DB data is unavailable.
+    // The alternative would be mutating the SessionMeta line when the session cwd
+    // changes, but the rollout is an append-only JSONL log and rewriting the head
+    // would be error-prone.
     if let Some(cwd) = parse_latest_turn_context_cwd(path).await {
         return Some(cwd);
     }
@@ -908,12 +1020,14 @@ pub(crate) enum ResolveCwdOutcome {
 
 pub(crate) async fn resolve_cwd_for_resume_or_fork(
     tui: &mut Tui,
+    config: &Config,
     current_cwd: &Path,
+    thread_id: ThreadId,
     path: &Path,
     action: CwdPromptAction,
     allow_prompt: bool,
 ) -> color_eyre::Result<ResolveCwdOutcome> {
-    let Some(history_cwd) = read_session_cwd(path).await else {
+    let Some(history_cwd) = read_session_cwd(config, thread_id, path).await else {
         return Ok(ResolveCwdOutcome::Continue(None));
     };
     if allow_prompt && cwds_differ(current_cwd, &history_cwd) {
@@ -1071,11 +1185,14 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
+    use codex_core::features::Feature;
+    use codex_protocol::ThreadId;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
+    use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TurnContextItem;
     use serial_test::serial;
     use tempfile::TempDir;
@@ -1196,7 +1313,9 @@ mod tests {
         }
         std::fs::write(&rollout_path, text)?;
 
-        let cwd = read_session_cwd(&rollout_path).await.expect("expected cwd");
+        let cwd = read_session_cwd(&config, ThreadId::new(), &rollout_path)
+            .await
+            .expect("expected cwd");
         assert_eq!(cwd, second);
         Ok(())
     }
@@ -1236,7 +1355,9 @@ mod tests {
         }
         std::fs::write(&rollout_path, text)?;
 
-        let session_cwd = read_session_cwd(&rollout_path).await.expect("expected cwd");
+        let session_cwd = read_session_cwd(&config, ThreadId::new(), &rollout_path)
+            .await
+            .expect("expected cwd");
         assert_eq!(session_cwd, latest);
         assert!(cwds_differ(&current, &session_cwd));
         Ok(())
@@ -1341,7 +1462,7 @@ trust_level = "untrusted"
     #[tokio::test]
     async fn read_session_cwd_falls_back_to_session_meta() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let _config = build_config(&temp_dir).await?;
+        let config = build_config(&temp_dir).await?;
         let session_cwd = temp_dir.path().join("session");
         std::fs::create_dir_all(&session_cwd)?;
 
@@ -1363,8 +1484,67 @@ trust_level = "untrusted"
         );
         std::fs::write(&rollout_path, text)?;
 
-        let cwd = read_session_cwd(&rollout_path).await.expect("expected cwd");
+        let cwd = read_session_cwd(&config, ThreadId::new(), &rollout_path)
+            .await
+            .expect("expected cwd");
         assert_eq!(cwd, session_cwd);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_session_cwd_prefers_sqlite_when_thread_id_present() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.features.enable(Feature::Sqlite);
+
+        let thread_id = ThreadId::new();
+        let rollout_cwd = temp_dir.path().join("rollout-cwd");
+        let sqlite_cwd = temp_dir.path().join("sqlite-cwd");
+        std::fs::create_dir_all(&rollout_cwd)?;
+        std::fs::create_dir_all(&sqlite_cwd)?;
+
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        let rollout_line = RolloutLine {
+            timestamp: "t0".to_string(),
+            item: RolloutItem::TurnContext(build_turn_context(&config, rollout_cwd)),
+        };
+        std::fs::write(
+            &rollout_path,
+            format!(
+                "{}\n",
+                serde_json::to_string(&rollout_line).expect("serialize rollout")
+            ),
+        )?;
+
+        let runtime = codex_state::StateRuntime::init(
+            config.codex_home.clone(),
+            config.model_provider_id.clone(),
+            None,
+        )
+        .await
+        .map_err(std::io::Error::other)?;
+        runtime
+            .mark_backfill_complete(None)
+            .await
+            .map_err(std::io::Error::other)?;
+
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            rollout_path.clone(),
+            chrono::Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.cwd = sqlite_cwd.clone();
+        let metadata = builder.build(config.model_provider_id.as_str());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .map_err(std::io::Error::other)?;
+
+        let cwd = read_session_cwd(&config, thread_id, &rollout_path)
+            .await
+            .expect("expected cwd");
+        assert_eq!(cwd, sqlite_cwd);
         Ok(())
     }
 }
