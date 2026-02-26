@@ -3,6 +3,7 @@ use codex_api::ModelsClient;
 use codex_api::provider::Provider;
 use codex_api::provider::RetryConfig;
 use codex_client::ReqwestTransport;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
@@ -78,6 +79,7 @@ async fn models_client_hits_models_endpoint() {
             base_instructions: "base instructions".to_string(),
             model_messages: None,
             supports_reasoning_summaries: false,
+            default_reasoning_summary: ReasoningSummary::Auto,
             support_verbosity: false,
             default_verbosity: None,
             apply_patch_tool_type: None,

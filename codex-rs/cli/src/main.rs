@@ -808,6 +808,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     stage_width = stage_width.max(stage.len());
                     rows.push((name, stage, enabled));
                 }
+                rows.sort_unstable_by_key(|(name, _, _)| *name);
 
                 for (name, stage, enabled) in rows {
                     println!("{name:<name_width$}  {stage:<stage_width$}  {enabled}");

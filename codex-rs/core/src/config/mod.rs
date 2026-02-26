@@ -409,9 +409,9 @@ pub struct Config {
     /// global default").
     pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
 
-    /// If not "none", the value to use for `reasoning.summary` when making a
-    /// request using the Responses API.
-    pub model_reasoning_summary: ReasoningSummary,
+    /// Optional value to use for `reasoning.summary` when making a request
+    /// using the Responses API. When unset, the model catalog default is used.
+    pub model_reasoning_summary: Option<ReasoningSummary>,
 
     /// Optional override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
@@ -2138,8 +2138,7 @@ impl Config {
                 .or(cfg.plan_mode_reasoning_effort),
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
-                .or(cfg.model_reasoning_summary)
-                .unwrap_or_default(),
+                .or(cfg.model_reasoning_summary),
             model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
             model_catalog,
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
@@ -2464,6 +2463,7 @@ persistence = "none"
         let memories = r#"
 [memories]
 max_raw_memories_for_global = 512
+max_unused_days = 21
 max_rollout_age_days = 42
 max_rollouts_per_startup = 9
 min_rollout_idle_hours = 24
@@ -2475,6 +2475,7 @@ phase_2_model = "gpt-5"
         assert_eq!(
             Some(MemoriesToml {
                 max_raw_memories_for_global: Some(512),
+                max_unused_days: Some(21),
                 max_rollout_age_days: Some(42),
                 max_rollouts_per_startup: Some(9),
                 min_rollout_idle_hours: Some(24),
@@ -2494,6 +2495,7 @@ phase_2_model = "gpt-5"
             config.memories,
             MemoriesConfig {
                 max_raw_memories_for_global: 512,
+                max_unused_days: 21,
                 max_rollout_age_days: 42,
                 max_rollouts_per_startup: 9,
                 min_rollout_idle_hours: 24,
@@ -4758,7 +4760,7 @@ model_verbosity = "high"
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
                 plan_mode_reasoning_effort: None,
-                model_reasoning_summary: ReasoningSummary::Detailed,
+                model_reasoning_summary: Some(ReasoningSummary::Detailed),
                 model_supports_reasoning_summaries: None,
                 model_catalog: None,
                 model_verbosity: None,
@@ -4884,7 +4886,7 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
             plan_mode_reasoning_effort: None,
-            model_reasoning_summary: ReasoningSummary::default(),
+            model_reasoning_summary: None,
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: None,
@@ -5008,7 +5010,7 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
             plan_mode_reasoning_effort: None,
-            model_reasoning_summary: ReasoningSummary::default(),
+            model_reasoning_summary: None,
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: None,
@@ -5118,7 +5120,7 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
             plan_mode_reasoning_effort: None,
-            model_reasoning_summary: ReasoningSummary::Detailed,
+            model_reasoning_summary: Some(ReasoningSummary::Detailed),
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: Some(Verbosity::High),

@@ -563,7 +563,6 @@ fn drop_last_n_user_turns_preserves_prefix() {
 fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
     let items = vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
-        user_input_text_msg("<user_instructions>do the thing</user_instructions>"),
         user_input_text_msg(
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
@@ -586,7 +585,6 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
 
     let expected_prefix_and_first_turn = vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
-        user_input_text_msg("<user_instructions>do the thing</user_instructions>"),
         user_input_text_msg(
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
@@ -608,7 +606,6 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
 
     let expected_prefix_only = vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
-        user_input_text_msg("<user_instructions>do the thing</user_instructions>"),
         user_input_text_msg(
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
@@ -623,7 +620,6 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
 
     let mut history = create_history_with_items(vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
-        user_input_text_msg("<user_instructions>do the thing</user_instructions>"),
         user_input_text_msg(
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),
@@ -644,7 +640,6 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
 
     let mut history = create_history_with_items(vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
-        user_input_text_msg("<user_instructions>do the thing</user_instructions>"),
         user_input_text_msg(
             "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
         ),

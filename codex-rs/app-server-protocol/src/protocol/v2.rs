@@ -3052,6 +3052,18 @@ impl From<CoreUserInput> for UserInput {
     }
 }
 
+impl UserInput {
+    pub fn text_char_count(&self) -> usize {
+        match self {
+            UserInput::Text { text, .. } => text.chars().count(),
+            UserInput::Image { .. }
+            | UserInput::LocalImage { .. }
+            | UserInput::Skill { .. }
+            | UserInput::Mention { .. } => 0,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]

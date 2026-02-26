@@ -2400,6 +2400,7 @@ dependencies = [
  "codex-utils-pty",
  "codex-utils-sandbox-summary",
  "codex-utils-sleep-inhibitor",
+ "codex-utils-string",
  "codex-windows-sandbox",
  "color-eyre",
  "cpal",

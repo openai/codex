@@ -31,6 +31,7 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -74,40 +75,14 @@ fn assert_message_role(request_body: &serde_json::Value, role: &str) {
     assert_eq!(request_body["role"].as_str().unwrap(), role);
 }
 
-#[expect(clippy::expect_used)]
-fn assert_message_equals(request_body: &serde_json::Value, text: &str) {
-    let content = request_body["content"][0]["text"]
-        .as_str()
-        .expect("invalid message content");
-
-    assert_eq!(
-        content, text,
-        "expected message content '{content}' to equal '{text}'"
-    );
-}
-
-#[expect(clippy::expect_used)]
-fn assert_message_starts_with(request_body: &serde_json::Value, text: &str) {
-    let content = request_body["content"][0]["text"]
-        .as_str()
-        .expect("invalid message content");
-
-    assert!(
-        content.starts_with(text),
-        "expected message content '{content}' to start with '{text}'"
-    );
-}
-
-#[expect(clippy::expect_used)]
-fn assert_message_ends_with(request_body: &serde_json::Value, text: &str) {
-    let content = request_body["content"][0]["text"]
-        .as_str()
-        .expect("invalid message content");
-
-    assert!(
-        content.ends_with(text),
-        "expected message content '{content}' to end with '{text}'"
-    );
+#[expect(clippy::unwrap_used)]
+fn message_input_texts(item: &serde_json::Value) -> Vec<&str> {
+    item["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry.get("text").and_then(|text| text.as_str()))
+        .collect()
 }
 
 /// Writes an `auth.json` into the provided `codex_home` with the specified parameters.
@@ -305,19 +280,15 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
     let input = request_body["input"].as_array().expect("input array");
-    let messages: Vec<(String, String)> = input
-        .iter()
-        .filter_map(|item| {
-            let role = item.get("role")?.as_str()?;
-            let text = item
-                .get("content")?
-                .as_array()?
-                .first()?
-                .get("text")?
-                .as_str()?;
-            Some((role.to_string(), text.to_string()))
-        })
-        .collect();
+    let mut messages: Vec<(String, String)> = Vec::new();
+    for item in input {
+        let Some(role) = item.get("role").and_then(|role| role.as_str()) else {
+            continue;
+        };
+        for text in message_input_texts(item) {
+            messages.push((role.to_string(), text.to_string()));
+        }
+    }
     let pos_prior_user = messages
         .iter()
         .position(|(role, text)| role == "user" && text == "resumed user message")
@@ -354,8 +325,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .position(|(role, text)| {
             role == "user"
                 && text.contains("be nice")
-                && (text.starts_with("# AGENTS.md instructions for ")
-                    || text.starts_with("<user_instructions>"))
+                && (text.starts_with("# AGENTS.md instructions for "))
         })
         .expect("user instructions");
     let pos_environment = messages
@@ -664,16 +634,27 @@ async fn includes_user_instructions_message_in_request() {
     );
 
     assert_message_role(&request_body["input"][1], "user");
-    assert_message_starts_with(&request_body["input"][1], "# AGENTS.md instructions for ");
-    assert_message_ends_with(&request_body["input"][1], "</INSTRUCTIONS>");
-    let ui_text = request_body["input"][1]["content"][0]["text"]
-        .as_str()
+    let user_context_texts = message_input_texts(&request_body["input"][1]);
+    assert!(
+        user_context_texts
+            .iter()
+            .any(|text| text.starts_with("# AGENTS.md instructions for ")),
+        "expected AGENTS text in contextual user message, got {user_context_texts:?}"
+    );
+    let ui_text = user_context_texts
+        .iter()
+        .copied()
+        .find(|text| text.contains("<INSTRUCTIONS>"))
         .expect("invalid message content");
     assert!(ui_text.contains("<INSTRUCTIONS>"));
     assert!(ui_text.contains("be nice"));
-    assert_message_role(&request_body["input"][2], "user");
-    assert_message_starts_with(&request_body["input"][2], "<environment_context>");
-    assert_message_ends_with(&request_body["input"][2], "</environment_context>");
+    assert!(
+        user_context_texts
+            .iter()
+            .any(|text| text.starts_with("<environment_context>")
+                && text.ends_with("</environment_context>")),
+        "expected environment context in contextual user message, got {user_context_texts:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -727,10 +708,14 @@ async fn includes_apps_guidance_as_developer_message_when_enabled() {
             && item
                 .get("content")
                 .and_then(|value| value.as_array())
-                .and_then(|value| value.first())
-                .and_then(|value| value.get("text"))
-                .and_then(|value| value.as_str())
-                .is_some_and(|text| text.contains(apps_snippet))
+                .is_some_and(|content| {
+                    content.iter().any(|entry| {
+                        entry
+                            .get("text")
+                            .and_then(|value| value.as_str())
+                            .is_some_and(|text| text.contains(apps_snippet))
+                    })
+                })
     });
     assert!(
         has_developer_apps_guidance,
@@ -742,10 +727,14 @@ async fn includes_apps_guidance_as_developer_message_when_enabled() {
             && item
                 .get("content")
                 .and_then(|value| value.as_array())
-                .and_then(|value| value.first())
-                .and_then(|value| value.get("text"))
-                .and_then(|value| value.as_str())
-                .is_some_and(|text| text.contains(apps_snippet))
+                .is_some_and(|content| {
+                    content.iter().any(|entry| {
+                        entry
+                            .get("text")
+                            .and_then(|value| value.as_str())
+                            .is_some_and(|text| text.contains(apps_snippet))
+                    })
+                })
     });
     assert!(
         !has_user_apps_guidance,
@@ -992,7 +981,9 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: session_configured.model.clone(),
             effort: Some(ReasoningEffort::Low),
-            summary: config.model_reasoning_summary,
+            summary: config
+                .model_reasoning_summary
+                .unwrap_or(ReasoningSummary::Auto),
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,
@@ -1026,7 +1017,7 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     .await;
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.model_reasoning_summary = ReasoningSummary::Concise;
+            config.model_reasoning_summary = Some(ReasoningSummary::Concise);
         })
         .build(&server)
         .await?;
@@ -1070,7 +1061,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
     .await;
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.model_reasoning_summary = ReasoningSummary::None;
+            config.model_reasoning_summary = Some(ReasoningSummary::None);
         })
         .build(&server)
         .await?;
@@ -1091,6 +1082,60 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("summary")),
+        None
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_summary_none_overrides_model_catalog_default() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut model_catalog: ModelsResponse =
+        serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+    let model = model_catalog
+        .models
+        .iter_mut()
+        .find(|model| model.slug == "gpt-5.1")
+        .expect("gpt-5.1 exists in bundled models.json");
+    model.supports_reasoning_summaries = true;
+    model.default_reasoning_summary = ReasoningSummary::Detailed;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("gpt-5.1")
+        .with_config(move |config| {
+            config.model_reasoning_summary = Some(ReasoningSummary::None);
+            config.model_catalog = Some(model_catalog);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = resp_mock.single_request().body_json();
     pretty_assertions::assert_eq!(
         request_body
             .get("reasoning")
@@ -1283,19 +1328,42 @@ async fn includes_developer_instructions_message_in_request() {
         "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
     );
 
-    assert_message_role(&request_body["input"][1], "developer");
-    assert_message_equals(&request_body["input"][1], "be useful");
-    assert_message_role(&request_body["input"][2], "user");
-    assert_message_starts_with(&request_body["input"][2], "# AGENTS.md instructions for ");
-    assert_message_ends_with(&request_body["input"][2], "</INSTRUCTIONS>");
-    let ui_text = request_body["input"][2]["content"][0]["text"]
-        .as_str()
+    let developer_messages: Vec<&serde_json::Value> = request_body["input"]
+        .as_array()
+        .expect("input array")
+        .iter()
+        .filter(|item| item.get("role").and_then(|role| role.as_str()) == Some("developer"))
+        .collect();
+    assert!(
+        developer_messages
+            .iter()
+            .any(|item| message_input_texts(item).contains(&"be useful")),
+        "expected developer instructions in a developer message, got {:?}",
+        request_body["input"]
+    );
+
+    assert_message_role(&request_body["input"][1], "user");
+    let user_context_texts = message_input_texts(&request_body["input"][1]);
+    assert!(
+        user_context_texts
+            .iter()
+            .any(|text| text.starts_with("# AGENTS.md instructions for ")),
+        "expected AGENTS text in contextual user message, got {user_context_texts:?}"
+    );
+    let ui_text = user_context_texts
+        .iter()
+        .copied()
+        .find(|text| text.contains("<INSTRUCTIONS>"))
         .expect("invalid message content");
     assert!(ui_text.contains("<INSTRUCTIONS>"));
     assert!(ui_text.contains("be nice"));
-    assert_message_role(&request_body["input"][3], "user");
-    assert_message_starts_with(&request_body["input"][3], "<environment_context>");
-    assert_message_ends_with(&request_body["input"][3], "</environment_context>");
+    assert!(
+        user_context_texts
+            .iter()
+            .any(|text| text.starts_with("<environment_context>")
+                && text.ends_with("</environment_context>")),
+        "expected environment context in contextual user message, got {user_context_texts:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1430,7 +1498,14 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     });
 
     let mut stream = client_session
-        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
+        .stream(
+            &prompt,
+            &model_info,
+            &otel_manager,
+            effort,
+            summary.unwrap_or(ReasoningSummary::Auto),
+            None,
+        )
         .await
         .expect("responses stream to start");
 

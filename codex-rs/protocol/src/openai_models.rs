@@ -15,6 +15,7 @@ use tracing::warn;
 use ts_rs::TS;
 
 use crate::config_types::Personality;
+use crate::config_types::ReasoningSummary;
 use crate::config_types::Verbosity;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
@@ -229,6 +230,8 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_messages: Option<ModelMessages>,
     pub supports_reasoning_summaries: bool,
+    #[serde(default)]
+    pub default_reasoning_summary: ReasoningSummary,
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
@@ -496,6 +499,7 @@ mod tests {
             base_instructions: "base".to_string(),
             model_messages: spec,
             supports_reasoning_summaries: false,
+            default_reasoning_summary: ReasoningSummary::Auto,
             support_verbosity: false,
             default_verbosity: None,
             apply_patch_tool_type: None,

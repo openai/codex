@@ -38,6 +38,18 @@ pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
+const USERPROFILE_READ_ROOT_EXCLUSIONS: &[&str] = &[
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".azure",
+    ".kube",
+    ".docker",
+    ".config",
+    ".npm",
+    ".pki",
+    ".terraform.d",
+];
 
 pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox")
@@ -245,6 +257,25 @@ fn canonical_existing(paths: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
+fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
+    let entries = match std::fs::read_dir(user_profile) {
+        Ok(entries) => entries,
+        Err(_) => return vec![user_profile.to_path_buf()],
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| (entry.file_name(), entry.path()))
+        .filter(|(name, _)| {
+            let name = name.to_string_lossy();
+            !USERPROFILE_READ_ROOT_EXCLUSIONS
+                .iter()
+                .any(|excluded| name.eq_ignore_ascii_case(excluded))
+        })
+        .map(|(_, path)| path)
+        .collect()
+}
+
 pub(crate) fn gather_read_roots(command_cwd: &Path, policy: &SandboxPolicy) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
@@ -261,7 +292,7 @@ pub(crate) fn gather_read_roots(command_cwd: &Path, policy: &SandboxPolicy) -> V
         roots.push(p);
     }
     if let Ok(up) = std::env::var("USERPROFILE") {
-        roots.push(PathBuf::from(up));
+        roots.extend(profile_read_roots(Path::new(&up)));
     }
     roots.push(command_cwd.to_path_buf());
     if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
@@ -577,4 +608,45 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
             && !key.starts_with(&secrets_dir_prefix)
     });
     roots
+}
+
+#[cfg(test)]
+mod tests {
+    use super::profile_read_roots;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashSet;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    #[test]
+    fn profile_read_roots_excludes_configured_top_level_entries() {
+        let tmp = TempDir::new().expect("tempdir");
+        let user_profile = tmp.path();
+        let allowed_dir = user_profile.join("Documents");
+        let allowed_file = user_profile.join(".gitconfig");
+        let excluded_dir = user_profile.join(".ssh");
+        let excluded_case_variant = user_profile.join(".AWS");
+
+        fs::create_dir_all(&allowed_dir).expect("create allowed dir");
+        fs::write(&allowed_file, "safe").expect("create allowed file");
+        fs::create_dir_all(&excluded_dir).expect("create excluded dir");
+        fs::create_dir_all(&excluded_case_variant).expect("create excluded case variant");
+
+        let roots = profile_read_roots(user_profile);
+        let actual: HashSet<PathBuf> = roots.into_iter().collect();
+        let expected: HashSet<PathBuf> = [allowed_dir, allowed_file].into_iter().collect();
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn profile_read_roots_falls_back_to_profile_root_when_enumeration_fails() {
+        let tmp = TempDir::new().expect("tempdir");
+        let missing_profile = tmp.path().join("missing-user-profile");
+
+        let roots = profile_read_roots(&missing_profile);
+
+        assert_eq!(vec![missing_profile], roots);
+    }
 }

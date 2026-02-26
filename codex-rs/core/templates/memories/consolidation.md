@@ -106,7 +106,7 @@ Under `{{ memory_root }}/`:
     context.
   - source of rollout-level metadata needed for MEMORY.md `### rollout_summary_files`
     annotations;
-    you should be able to find `cwd` and `updated_at` there.
+    you should be able to find `cwd`, `rollout_path`, and `updated_at` there.
 - `MEMORY.md`
   - merged memories; produce a lightly clustered version if applicable
 - `rollout_summaries/*.md`
@@ -120,6 +120,27 @@ Mode selection:
   and `skills/`).
 - INCREMENTAL UPDATE: existing artifacts already exist and `raw_memories.md`
   mostly contains new additions.
+
+Incremental thread diff snapshot (computed before the current artifact sync rewrites local files):
+
+**Diff since last consolidation:**
+{{ phase2_input_selection }}
+
+Incremental update and forgetting mechanism:
+- Use the diff provided
+- Do not open raw sessions / original rollout transcripts.
+- For each added thread id, search it in `raw_memories.md`, read that raw-memory section, and
+  read the corresponding `rollout_summaries/*.md` file only when needed for stronger evidence,
+  task placement, or conflict resolution.
+- For each removed thread id, search it in `MEMORY.md` and delete only the memory supported by
+  that thread. Use `thread_id=<thread_id>` in `### rollout_summary_files` when available; if not,
+  fall back to rollout summary filenames plus the corresponding `rollout_summaries/*.md` files.
+- If a `MEMORY.md` block contains both removed and undeleted threads, do not delete the whole
+  block. Remove only the removed thread's references and thread-local learnings, preserve shared
+  or still-supported content, and split or rewrite the block only if needed to keep the undeleted
+  threads intact.
+- After `MEMORY.md` cleanup is done, revisit `memory_summary.md` and remove or rewrite stale
+  summary/index content that was only supported by removed thread ids.
 
 Outputs:
 Under `{{ memory_root }}/`:
@@ -171,7 +192,7 @@ Required task-oriented body shape (strict):
 ## Task 1: <task description, outcome>
 
 ### rollout_summary_files
-- <rollout_summaries/file1.md> (cwd=<path>, updated_at=<timestamp>, thread_id=<thread_id>, <optional status/usefulness note>)
+- <rollout_summaries/file1.md> (cwd=<path>, rollout_path=<path>, updated_at=<timestamp>, thread_id=<thread_id>, <optional status/usefulness note>)
 
 ### keywords
 
@@ -236,7 +257,8 @@ Schema rules (strict):
   - Every `## Task <n>` section must include `### rollout_summary_files`, `### keywords`,
     and `### learnings`.
   - `### rollout_summary_files` must be task-local (not a block-wide catch-all list).
-  - Each rollout annotation must include `cwd=<path>` and `updated_at=<timestamp>`.
+  - Each rollout annotation must include `cwd=<path>`, `rollout_path=<path>`, and
+    `updated_at=<timestamp>`.
     If missing from a rollout summary, recover them from `raw_memories.md`.
   - Major learnings should be traceable to rollout summaries listed in the same task section.
   - Order rollout references by freshness and practical usefulness.
@@ -497,27 +519,42 @@ WORKFLOW
      conflicting task families until MEMORY blocks are richer and more useful than raw memories
 
 3) INCREMENTAL UPDATE behavior:
-   - Treat `raw_memories.md` as the primary source of NEW signal.
-   - Read existing memory files first for continuity.
+   - Read existing `MEMORY.md` and `memory_summary.md` first for continuity and to locate
+     existing references that may need surgical cleanup.
+   - Use the injected thread-diff snapshot as the first routing pass:
+     - added thread ids = ingestion queue
+     - removed thread ids = forgetting / stale-cleanup queue
    - Build an index of rollout references already present in existing `MEMORY.md` before
      scanning raw memories so you can route net-new evidence into the right blocks.
-   - Compute net-new candidates from the raw-memory inventory (threads / rollout summaries /
-     updated evidence not already represented in `MEMORY.md`).
+   - Work in this order:
+     1. For newly added thread ids, search them in `raw_memories.md`, read those sections, and
+        open the corresponding `rollout_summaries/*.md` files when necessary.
+     2. Route the new signal into existing `MEMORY.md` blocks or create new ones when needed.
+     3. For removed thread ids, search `MEMORY.md` and surgically delete or rewrite only the
+        unsupported thread-local memory.
+     4. If a block mixes removed and undeleted threads, preserve the undeleted-thread content;
+        split or rewrite the block if that is the cleanest way to delete only the removed part.
+     5. After `MEMORY.md` is correct, revisit `memory_summary.md` and remove or rewrite stale
+        summary/index content that no longer has undeleted support.
    - Integrate new signal into existing artifacts by:
-     - scanning new raw memories in recency order and identifying which existing blocks they should update
+     - scanning the newly added raw-memory entries in recency order and identifying which existing blocks they should update
      - updating existing knowledge with better/newer evidence
      - updating stale or contradicting guidance
+     - pruning or downgrading memory whose only provenance comes from removed thread ids
      - expanding terse old blocks when new summaries/raw memories make the task family clearer
      - doing light clustering and merging if needed
      - refreshing `MEMORY.md` top-of-file ordering so recent high-utility task families stay easy to find
      - rebuilding the `memory_summary.md` recent active window (last 3 memory days) from current `updated_at` coverage
      - updating existing skills or adding new skills only when there is clear new reusable procedure
-     - update `memory_summary.md` last to reflect the final state of the memory folder
+     - updating `memory_summary.md` last to reflect the final state of the memory folder
    - Minimize churn in incremental mode: if an existing `MEMORY.md` block or `## What's in Memory`
      topic still reflects the current evidence and points to the same task family / retrieval
      target, keep its wording, label, and relative order mostly stable. Rewrite/reorder/rename/
      split/merge only when fixing a real problem (staleness, ambiguity, schema drift, wrong
      boundaries) or when meaningful new evidence materially improves retrieval clarity/searchability.
+   - Spend most of your deep-dive budget on newly added thread ids and on mixed blocks touched by
+     removed thread ids. Do not re-read unchanged older threads unless you need them for
+     conflict resolution, clustering, or provenance repair.
 
 4) Evidence deep-dive rule (both modes):
    - `raw_memories.md` is the routing layer, not always the final authority for detail.
@@ -528,6 +565,9 @@ WORKFLOW
    - When a task family is important, ambiguous, or duplicated across multiple rollouts,
      open the relevant `rollout_summaries/*.md` files and extract richer procedural detail,
      validation signals, and user feedback before finalizing `MEMORY.md`.
+   - When deleting stale memory from a mixed block, use the relevant rollout summaries to decide
+     which details are uniquely supported by removed threads versus still supported by undeleted
+     threads.
    - Use `updated_at` and validation strength together to resolve stale/conflicting notes.
 
 5) For both modes, update `MEMORY.md` after skill updates:
@@ -541,6 +581,8 @@ WORKFLOW
 7) Final pass:
   - remove duplication in memory_summary, skills/, and MEMORY.md
   - remove stale or low-signal blocks that are less likely to be useful in the future
+  - remove or rewrite blocks/task sections whose supporting rollout references point only to
+    removed thread ids or missing rollout summary files
   - run a global rollout-reference audit on final `MEMORY.md` and fix accidental duplicate
     entries / redundant repetition, while preserving intentional multi-task or multi-block
     reuse when it adds distinct task-local value
@@ -559,16 +601,3 @@ WORKFLOW
 
 You should dive deep and make sure you didn't miss any important information that might
 be useful for future agents; do not be superficial.
-
-============================================================
-SEARCH / REVIEW COMMANDS (RG-FIRST)
-============================================================
-
-Use `rg` for fast retrieval while consolidating:
-
-- Search durable notes:
-  `rg -n -i "<pattern>" "{{ memory_root }}/MEMORY.md"`
-- Search across memory tree:
-  `rg -n -i "<pattern>" "{{ memory_root }}" | head -n 100`
-- Locate rollout summary files:
-  `rg --files "{{ memory_root }}/rollout_summaries" | head -n 400`
