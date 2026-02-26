@@ -186,6 +186,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
+use codex_cloud_requirements::stop_cloud_requirements_refresher;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
@@ -1451,17 +1452,7 @@ impl CodexMessageProcessor {
                 data: None,
             });
         }
-        replace_cloud_requirements_loader(
-            self.cloud_requirements.as_ref(),
-            self.auth_manager.clone(),
-            self.config.chatgpt_base_url.clone(),
-            self.config.codex_home.clone(),
-        );
-        sync_default_client_residency_requirement(
-            &self.cli_overrides,
-            self.cloud_requirements.as_ref(),
-        )
-        .await;
+        stop_cloud_requirements_refresher();
 
         // Reflect the current auth method after logout (likely None).
         Ok(self

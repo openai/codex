@@ -55,6 +55,16 @@ fn refresher_task_slot() -> &'static Mutex<Option<JoinHandle<()>>> {
     REFRESHER_TASK.get_or_init(|| Mutex::new(None))
 }
 
+pub fn stop_cloud_requirements_refresher() {
+    let mut refresher_guard = refresher_task_slot().lock().unwrap_or_else(|err| {
+        tracing::warn!("cloud requirements refresher task slot was poisoned");
+        err.into_inner()
+    });
+    if let Some(existing_task) = refresher_guard.take() {
+        existing_task.abort();
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FetchCloudRequirementsStatus {
     BackendClientInit,
