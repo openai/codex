@@ -73,14 +73,19 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     };
 
     // 3. Query the memories
-    let raw_memories = match db.list_stage1_outputs_for_global(max_raw_memories).await {
-        Ok(memories) => memories,
+    let selection = match db.get_phase2_input_selection(max_raw_memories).await {
+        Ok(selection) => selection,
         Err(err) => {
             tracing::error!("failed to list stage1 outputs from global: {}", err);
             job::failed(session, db, &claim, "failed_load_stage1_outputs").await;
             return;
         }
     };
+    let raw_memories = selection
+        .selected
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
     let new_watermark = get_watermark(claim.watermark, &raw_memories);
 
     // 4. Update the file system by syncing the raw memories with the one extracted from DB at
@@ -103,12 +108,20 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     }
     if raw_memories.is_empty() {
         // We check only after sync of the file system.
-        job::succeed(session, db, &claim, new_watermark, "succeeded_no_input").await;
+        job::succeed(
+            session,
+            db,
+            &claim,
+            new_watermark,
+            &[],
+            "succeeded_no_input",
+        )
+        .await;
         return;
     }
 
     // 5. Spawn the agent
-    let prompt = agent::get_prompt(config);
+    let prompt = agent::get_prompt(config, &selection);
     let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
     let thread_id = match session
         .services
@@ -129,6 +142,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         session,
         claim,
         new_watermark,
+        raw_memories.clone(),
         thread_id,
         phase_two_e2e_timer,
     );
@@ -205,6 +219,7 @@ mod job {
         db: &StateRuntime,
         claim: &Claim,
         completion_watermark: i64,
+        selected_outputs: &[codex_state::Stage1Output],
         reason: &'static str,
     ) {
         session.services.otel_manager.counter(
@@ -213,7 +228,7 @@ mod job {
             &[("status", reason)],
         );
         let _ = db
-            .mark_global_phase2_job_succeeded(&claim.token, completion_watermark)
+            .mark_global_phase2_job_succeeded(&claim.token, completion_watermark, selected_outputs)
             .await;
     }
 }
@@ -266,9 +281,12 @@ mod agent {
         Some(agent_config)
     }
 
-    pub(super) fn get_prompt(config: Arc<Config>) -> Vec<UserInput> {
+    pub(super) fn get_prompt(
+        config: Arc<Config>,
+        selection: &codex_state::Phase2InputSelection,
+    ) -> Vec<UserInput> {
         let root = memory_root(&config.codex_home);
-        let prompt = build_consolidation_prompt(&root);
+        let prompt = build_consolidation_prompt(&root, selection);
         vec![UserInput::Text {
             text: prompt,
             text_elements: vec![],
@@ -280,6 +298,7 @@ mod agent {
         session: &Arc<Session>,
         claim: Claim,
         new_watermark: i64,
+        selected_outputs: Vec<codex_state::Stage1Output>,
         thread_id: ThreadId,
         phase_two_e2e_timer: Option<codex_otel::Timer>,
     ) {
@@ -316,7 +335,15 @@ mod agent {
                 if let Some(token_usage) = agent_control.get_total_token_usage(thread_id).await {
                     emit_token_usage_metrics(&session, &token_usage);
                 }
-                job::succeed(&session, &db, &claim, new_watermark, "succeeded").await;
+                job::succeed(
+                    &session,
+                    &db,
+                    &claim,
+                    new_watermark,
+                    &selected_outputs,
+                    "succeeded",
+                )
+                .await;
             } else {
                 job::failed(&session, &db, &claim, "failed_agent").await;
             }

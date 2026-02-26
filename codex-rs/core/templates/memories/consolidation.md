@@ -96,6 +96,9 @@ Phase 2 has two operating styles:
 - INIT phase: first-time build of Phase 2 artifacts.
 - INCREMENTAL UPDATE: integrate new memory into existing artifacts.
 
+Phase 1 input diff for this run:
+{{ phase2_input_selection }}
+
 Primary inputs (always read these, if exists):
 Under `{{ memory_root }}/`:
 - `raw_memories.md`
