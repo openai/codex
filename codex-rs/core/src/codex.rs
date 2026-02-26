@@ -754,7 +754,7 @@ pub(crate) struct SessionConfiguration {
     provider: ModelProviderInfo,
 
     collaboration_mode: CollaborationMode,
-    model_reasoning_summary: ReasoningSummaryConfig,
+    model_reasoning_summary: Option<ReasoningSummaryConfig>,
 
     /// Developer instructions that supplement the base instructions.
     developer_instructions: Option<String>,
@@ -824,7 +824,7 @@ impl SessionConfiguration {
             next_configuration.collaboration_mode = collaboration_mode;
         }
         if let Some(summary) = updates.reasoning_summary {
-            next_configuration.model_reasoning_summary = summary;
+            next_configuration.model_reasoning_summary = Some(summary);
         }
         if let Some(personality) = updates.personality {
             next_configuration.personality = Some(personality);
@@ -985,7 +985,9 @@ impl Session {
         skills_outcome: Arc<SkillLoadOutcome>,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
-        let reasoning_summary = session_configuration.model_reasoning_summary;
+        let reasoning_summary = session_configuration
+            .model_reasoning_summary
+            .unwrap_or(model_info.default_reasoning_summary);
         let otel_manager = otel_manager.clone().with_model(
             session_configuration.collaboration_mode.model(),
             model_info.slug.as_str(),
@@ -1262,7 +1264,7 @@ impl Session {
         otel_manager.conversation_starts(
             config.model_provider.name.as_str(),
             session_configuration.collaboration_mode.reasoning_effort(),
-            config.model_reasoning_summary,
+            config.model_reasoning_summary.unwrap_or(ReasoningSummaryConfig::Auto),
             config.model_context_window,
             config.model_auto_compact_token_limit,
             config.permissions.approval_policy.value(),
@@ -4615,7 +4617,9 @@ async fn spawn_review_thread(
     let provider_for_context = provider.clone();
     let otel_manager_for_context = otel_manager.clone();
     let reasoning_effort = per_turn_config.model_reasoning_effort;
-    let reasoning_summary = per_turn_config.model_reasoning_summary;
+    let reasoning_summary = per_turn_config
+        .model_reasoning_summary
+        .unwrap_or(model_info.default_reasoning_summary);
     let session_source = parent_turn_context.session_source.clone();
 
     let per_turn_config = Arc::new(per_turn_config);
