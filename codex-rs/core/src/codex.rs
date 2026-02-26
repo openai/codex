@@ -7516,14 +7516,11 @@ mod tests {
         session
             .record_context_updates_and_set_reference_context_item(&turn_context, None)
             .await;
-        let subsequent_update_items = session.build_settings_update_items(
-            Some(&turn_context.to_turn_context_item()),
-            None,
-            &turn_context,
-        );
-        expected.extend(subsequent_update_items);
         let history_after_second_seed = session.clone_history().await;
-        assert_eq!(expected, history_after_second_seed.raw_items());
+        assert_eq!(
+            history_after_seed.raw_items(),
+            history_after_second_seed.raw_items()
+        );
     }
 
     #[tokio::test]
