@@ -1540,6 +1540,7 @@ impl CodexClient {
             additional_permissions,
             proposed_execpolicy_amendment,
             proposed_network_policy_amendments,
+            available_decisions,
         } = params;
 
         println!(
@@ -1553,6 +1554,9 @@ impl CodexClient {
         }
         if let Some(network_approval_context) = network_approval_context.as_ref() {
             println!("< network approval context: {network_approval_context:?}");
+        }
+        if let Some(available_decisions) = available_decisions.as_ref() {
+            println!("< available decisions: {available_decisions:?}");
         }
         if let Some(command) = command.as_deref() {
             println!("< command: {command}");

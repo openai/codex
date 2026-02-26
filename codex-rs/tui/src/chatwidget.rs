@@ -2568,13 +2568,13 @@ impl ChatWidget {
             .unwrap_or_else(|_| ev.command.join(" "));
         self.notify(Notification::ExecApprovalRequested { command });
 
+        let available_decisions = ev.effective_available_decisions();
         let request = ApprovalRequest::Exec {
             id: ev.effective_approval_id(),
             command: ev.command,
             reason: ev.reason,
+            available_decisions,
             network_approval_context: ev.network_approval_context,
-            proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
-            proposed_network_policy_amendments: ev.proposed_network_policy_amendments,
             additional_permissions: ev.additional_permissions,
         };
         self.bottom_pane

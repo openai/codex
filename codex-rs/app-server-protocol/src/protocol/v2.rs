@@ -49,6 +49,7 @@ use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RejectConfig as CoreRejectConfig;
+use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
 use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
@@ -741,7 +742,8 @@ pub struct ConfigEdit {
 pub enum CommandExecutionApprovalDecision {
     /// User approved the command.
     Accept,
-    /// User approved the command and future identical commands should run without prompting.
+    /// User approved the command and future prompts in the same session-scoped
+    /// approval cache should run without prompting.
     AcceptForSession,
     /// User approved the command, and wants to apply the proposed execpolicy amendment so future
     /// matching commands can run without prompting.
@@ -756,6 +758,27 @@ pub enum CommandExecutionApprovalDecision {
     Decline,
     /// User denied the command. The turn will also be immediately interrupted.
     Cancel,
+}
+
+impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
+    fn from(value: CoreReviewDecision) -> Self {
+        match value {
+            CoreReviewDecision::Approved => Self::Accept,
+            CoreReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment,
+            } => Self::AcceptWithExecpolicyAmendment {
+                execpolicy_amendment: proposed_execpolicy_amendment.into(),
+            },
+            CoreReviewDecision::ApprovedForSession => Self::AcceptForSession,
+            CoreReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => Self::ApplyNetworkPolicyAmendment {
+                network_policy_amendment: network_policy_amendment.into(),
+            },
+            CoreReviewDecision::Abort => Self::Cancel,
+            CoreReviewDecision::Denied => Self::Decline,
+        }
+    }
 }
 
 v2_enum_from_core! {
@@ -3802,6 +3825,11 @@ pub struct CommandExecutionRequestApprovalParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
+    /// Ordered list of decisions the client may present for this prompt.
+    #[experimental("item/commandExecution/requestApproval.availableDecisions")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub available_decisions: Option<Vec<CommandExecutionApprovalDecision>>,
 }
 
 impl CommandExecutionRequestApprovalParams {
