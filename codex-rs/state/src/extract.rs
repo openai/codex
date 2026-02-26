@@ -56,7 +56,9 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
 }
 
 fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem) {
-    metadata.cwd = turn_ctx.cwd.clone();
+    if metadata.cwd.as_os_str().is_empty() {
+        metadata.cwd = turn_ctx.cwd.clone();
+    }
     metadata.sandbox_policy = enum_to_string(&turn_ctx.sandbox_policy);
     metadata.approval_mode = enum_to_string(&turn_ctx.approval_policy);
 }
@@ -125,10 +127,17 @@ mod tests {
     use chrono::DateTime;
     use chrono::Utc;
     use codex_protocol::ThreadId;
+    use codex_protocol::config_types::ReasoningSummary;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::TurnContextItem;
     use codex_protocol::protocol::USER_MESSAGE_BEGIN;
     use codex_protocol::protocol::UserMessageEvent;
 
@@ -207,6 +216,93 @@ mod tests {
 
         assert_eq!(metadata.first_user_message, None);
         assert_eq!(metadata.title, "");
+    }
+
+    #[test]
+    fn turn_context_does_not_override_session_cwd() {
+        let mut metadata = metadata_for_test();
+        metadata.cwd = PathBuf::new();
+        let thread_id = metadata.id;
+
+        apply_rollout_item(
+            &mut metadata,
+            &RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    id: thread_id,
+                    forked_from_id: Some(
+                        ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id"),
+                    ),
+                    timestamp: "2026-02-26T00:00:00.000Z".to_string(),
+                    cwd: PathBuf::from("/child/worktree"),
+                    originator: "codex_cli_rs".to_string(),
+                    cli_version: "0.0.0".to_string(),
+                    source: SessionSource::Cli,
+                    agent_nickname: None,
+                    agent_role: None,
+                    model_provider: Some("openai".to_string()),
+                    base_instructions: None,
+                    dynamic_tools: None,
+                },
+                git: None,
+            }),
+            "test-provider",
+        );
+        apply_rollout_item(
+            &mut metadata,
+            &RolloutItem::TurnContext(TurnContextItem {
+                turn_id: Some("turn-1".to_string()),
+                cwd: PathBuf::from("/parent/workspace"),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::DangerFullAccess,
+                network: None,
+                model: "gpt-5".to_string(),
+                personality: None,
+                collaboration_mode: None,
+                effort: None,
+                summary: ReasoningSummary::Auto,
+                user_instructions: None,
+                developer_instructions: None,
+                final_output_json_schema: None,
+                truncation_policy: None,
+            }),
+            "test-provider",
+        );
+
+        assert_eq!(metadata.cwd, PathBuf::from("/child/worktree"));
+        assert_eq!(
+            metadata.sandbox_policy,
+            super::enum_to_string(&SandboxPolicy::DangerFullAccess)
+        );
+        assert_eq!(metadata.approval_mode, "never");
+    }
+
+    #[test]
+    fn turn_context_sets_cwd_when_session_cwd_missing() {
+        let mut metadata = metadata_for_test();
+        metadata.cwd = PathBuf::new();
+
+        apply_rollout_item(
+            &mut metadata,
+            &RolloutItem::TurnContext(TurnContextItem {
+                turn_id: Some("turn-1".to_string()),
+                cwd: PathBuf::from("/fallback/workspace"),
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                network: None,
+                model: "gpt-5".to_string(),
+                personality: None,
+                collaboration_mode: None,
+                effort: None,
+                summary: ReasoningSummary::Auto,
+                user_instructions: None,
+                developer_instructions: None,
+                final_output_json_schema: None,
+                truncation_policy: None,
+            }),
+            "test-provider",
+        );
+
+        assert_eq!(metadata.cwd, PathBuf::from("/fallback/workspace"));
     }
 
     fn metadata_for_test() -> ThreadMetadata {
