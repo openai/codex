@@ -661,9 +661,10 @@ fn file_link_hides_destination() {
 }
 
 #[test]
-fn file_link_shows_line_number_from_hidden_destination() {
-    let text =
-        render_markdown_text("[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)");
+fn file_link_appends_line_number_when_label_lacks_it() {
+    let text = render_markdown_text(
+        "[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)",
+    );
     let expected = Text::from(Line::from_iter([
         "markdown_render.rs".cyan(),
         ":74".cyan(),
@@ -672,7 +673,16 @@ fn file_link_shows_line_number_from_hidden_destination() {
 }
 
 #[test]
-fn file_link_shows_line_number_from_hash_anchor() {
+fn file_link_uses_label_for_line_number() {
+    let text = render_markdown_text(
+        "[markdown_render.rs:74](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)",
+    );
+    let expected = Text::from(Line::from_iter(["markdown_render.rs:74".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_appends_hash_anchor_when_label_lacks_it() {
     let text = render_markdown_text(
         "[markdown_render.rs](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3)",
     );
@@ -684,7 +694,16 @@ fn file_link_shows_line_number_from_hash_anchor() {
 }
 
 #[test]
-fn file_link_shows_range_from_hidden_destination() {
+fn file_link_uses_label_for_hash_anchor() {
+    let text = render_markdown_text(
+        "[markdown_render.rs#L74C3](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3)",
+    );
+    let expected = Text::from(Line::from_iter(["markdown_render.rs#L74C3".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_appends_range_when_label_lacks_it() {
     let text = render_markdown_text(
         "[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74:3-76:9)",
     );
@@ -696,7 +715,16 @@ fn file_link_shows_range_from_hidden_destination() {
 }
 
 #[test]
-fn file_link_shows_hash_range_from_hidden_destination() {
+fn file_link_uses_label_for_range() {
+    let text = render_markdown_text(
+        "[markdown_render.rs:74:3-76:9](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74:3-76:9)",
+    );
+    let expected = Text::from(Line::from_iter(["markdown_render.rs:74:3-76:9".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_appends_hash_range_when_label_lacks_it() {
     let text = render_markdown_text(
         "[markdown_render.rs](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3-L76C9)",
     );
@@ -704,6 +732,15 @@ fn file_link_shows_hash_range_from_hidden_destination() {
         "markdown_render.rs".cyan(),
         "#L74C3-L76C9".cyan(),
     ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_uses_label_for_hash_range() {
+    let text = render_markdown_text(
+        "[markdown_render.rs#L74C3-L76C9](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3-L76C9)",
+    );
+    let expected = Text::from(Line::from_iter(["markdown_render.rs#L74C3-L76C9".cyan()]));
     assert_eq!(text, expected);
 }
 
@@ -722,7 +759,7 @@ fn url_link_shows_destination() {
 #[test]
 fn markdown_render_file_link_snapshot() {
     let text = render_markdown_text(
-        "See [markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74).",
+        "See [markdown_render.rs:74](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74).",
     );
     let rendered = text
         .lines

@@ -92,6 +92,7 @@ struct LinkState {
     destination: String,
     show_destination: bool,
     hidden_location_suffix: Option<String>,
+    label_start_span_idx: usize,
     label_styled: bool,
 }
 
@@ -107,16 +108,6 @@ static HASH_LOCATION_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^L\d+(?:C\d+)?(?:-L\d+(?:C\d+)?)?$").expect("valid hash location regex")
 });
 
-fn hidden_local_link_location_suffix(dest_url: &str) -> Option<String> {
-    if !is_local_path_like_link(dest_url) {
-        return None;
-    }
-
-    parse_hash_location_suffix(dest_url)
-        .or_else(|| parse_colon_location_suffix(dest_url))
-        .map(std::string::ToString::to_string)
-}
-
 fn is_local_path_like_link(dest_url: &str) -> bool {
     dest_url.starts_with("file://")
         || dest_url.starts_with('/')
@@ -131,15 +122,27 @@ fn is_local_path_like_link(dest_url: &str) -> bool {
         )
 }
 
-fn parse_hash_location_suffix(dest_url: &str) -> Option<&str> {
-    let (_, fragment) = dest_url.rsplit_once('#')?;
-    HASH_LOCATION_SUFFIX_RE
-        .is_match(fragment)
-        .then_some(dest_url.get(dest_url.len() - fragment.len() - 1..)?)
+fn hidden_local_link_location_suffix(dest_url: &str) -> Option<String> {
+    if !is_local_path_like_link(dest_url) {
+        return None;
+    }
+
+    extract_location_suffix(dest_url).map(std::string::ToString::to_string)
 }
 
-fn parse_colon_location_suffix(dest_url: &str) -> Option<&str> {
-    COLON_LOCATION_SUFFIX_RE.find(dest_url).map(|m| m.as_str())
+fn extract_location_suffix(text: &str) -> Option<&str> {
+    parse_hash_location_suffix(text).or_else(|| parse_colon_location_suffix(text))
+}
+
+fn parse_hash_location_suffix(text: &str) -> Option<&str> {
+    let (_, fragment) = text.rsplit_once('#')?;
+    HASH_LOCATION_SUFFIX_RE
+        .is_match(fragment)
+        .then_some(text.get(text.len() - fragment.len() - 1..)?)
+}
+
+fn parse_colon_location_suffix(text: &str) -> Option<&str> {
+    COLON_LOCATION_SUFFIX_RE.find(text).map(|m| m.as_str())
 }
 
 struct Writer<'a, I>
@@ -526,12 +529,18 @@ where
     fn push_link(&mut self, dest_url: String) {
         let show_destination = should_render_link_destination(&dest_url);
         let label_styled = !show_destination;
+        let label_start_span_idx = self
+            .current_line_content
+            .as_ref()
+            .map(|line| line.spans.len())
+            .unwrap_or(0);
         if label_styled {
             self.push_inline_style(self.styles.code);
         }
         self.link = Some(LinkState {
             show_destination,
             hidden_location_suffix: hidden_local_link_location_suffix(&dest_url),
+            label_start_span_idx,
             label_styled,
             destination: dest_url,
         });
@@ -546,8 +555,20 @@ where
                 self.push_span(" (".into());
                 self.push_span(Span::styled(link.destination, self.styles.link));
                 self.push_span(")".into());
-            } else if let Some(location_suffix) = link.hidden_location_suffix {
-                self.push_span(Span::styled(location_suffix, self.styles.code));
+            } else if let Some(location_suffix) = link.hidden_location_suffix.as_deref() {
+                let label_text = self
+                    .current_line_content
+                    .as_ref()
+                    .map(|line| {
+                        line.spans[link.label_start_span_idx..]
+                            .iter()
+                            .map(|span| span.content.as_ref())
+                            .collect::<String>()
+                    })
+                    .unwrap_or_default();
+                if extract_location_suffix(&label_text).is_none() {
+                    self.push_span(Span::styled(location_suffix.to_string(), self.styles.code));
+                }
                 if link.label_styled {
                     self.pop_inline_style();
                 }
