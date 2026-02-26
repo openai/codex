@@ -31,8 +31,8 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
-use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
@@ -993,7 +993,9 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: session_configured.model.clone(),
             effort: Some(ReasoningEffort::Low),
-            summary: config.model_reasoning_summary.unwrap_or(ReasoningSummary::Auto),
+            summary: config
+                .model_reasoning_summary
+                .unwrap_or(ReasoningSummary::Auto),
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,
@@ -1127,7 +1129,7 @@ async fn reasoning_summary_none_overrides_model_catalog_default() -> anyhow::Res
         .with_model("gpt-5.1")
         .with_config(move |config| {
             config.model_reasoning_summary = Some(ReasoningSummary::None);
-            config.model_catalog = Some(model_catalog.clone());
+            config.model_catalog = Some(model_catalog);
         })
         .build(&server)
         .await?;
