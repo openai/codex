@@ -8,6 +8,7 @@ use crate::memories::metrics;
 use crate::memories::phase_two;
 use crate::memories::prompts::build_consolidation_prompt;
 use crate::memories::storage::rebuild_raw_memories_file_from_memories;
+use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
 use codex_config::Constrained;
 use codex_protocol::ThreadId;
@@ -17,8 +18,10 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
+use codex_state::Stage1Output;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -73,21 +76,24 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     };
 
     // 3. Query the memories
-    let raw_memories = match db.list_stage1_outputs_for_global(max_raw_memories).await {
-        Ok(memories) => memories,
+    let selection = match db.get_phase2_input_selection(max_raw_memories).await {
+        Ok(selection) => selection,
         Err(err) => {
             tracing::error!("failed to list stage1 outputs from global: {}", err);
             job::failed(session, db, &claim, "failed_load_stage1_outputs").await;
             return;
         }
     };
+    let raw_memories = selection.selected.to_vec();
+    let artifact_memories = artifact_memories_for_phase2(&selection);
     let new_watermark = get_watermark(claim.watermark, &raw_memories);
 
     // 4. Update the file system by syncing the raw memories with the one extracted from DB at
     //    step 3
     // [`rollout_summaries/`]
     if let Err(err) =
-        sync_rollout_summaries_from_memories(&root, &raw_memories, max_raw_memories).await
+        sync_rollout_summaries_from_memories(&root, &artifact_memories, artifact_memories.len())
+            .await
     {
         tracing::error!("failed syncing local memory artifacts for global consolidation: {err}");
         job::failed(session, db, &claim, "failed_sync_artifacts").await;
@@ -95,7 +101,8 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     }
     // [`raw_memories.md`]
     if let Err(err) =
-        rebuild_raw_memories_file_from_memories(&root, &raw_memories, max_raw_memories).await
+        rebuild_raw_memories_file_from_memories(&root, &artifact_memories, artifact_memories.len())
+            .await
     {
         tracing::error!("failed syncing local memory artifacts for global consolidation: {err}");
         job::failed(session, db, &claim, "failed_rebuild_raw_memories").await;
@@ -103,12 +110,20 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     }
     if raw_memories.is_empty() {
         // We check only after sync of the file system.
-        job::succeed(session, db, &claim, new_watermark, "succeeded_no_input").await;
+        job::succeed(
+            session,
+            db,
+            &claim,
+            new_watermark,
+            &[],
+            "succeeded_no_input",
+        )
+        .await;
         return;
     }
 
     // 5. Spawn the agent
-    let prompt = agent::get_prompt(config);
+    let prompt = agent::get_prompt(config, &selection);
     let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
     let thread_id = match session
         .services
@@ -129,6 +144,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         session,
         claim,
         new_watermark,
+        raw_memories.clone(),
         thread_id,
         phase_two_e2e_timer,
     );
@@ -138,6 +154,22 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         input: raw_memories.len() as i64,
     };
     emit_metrics(session, counters);
+}
+
+fn artifact_memories_for_phase2(
+    selection: &codex_state::Phase2InputSelection,
+) -> Vec<Stage1Output> {
+    let mut seen = HashSet::new();
+    let mut memories = selection.selected.clone();
+    for memory in &selection.selected {
+        seen.insert(rollout_summary_file_stem(memory));
+    }
+    for memory in &selection.previous_selected {
+        if seen.insert(rollout_summary_file_stem(memory)) {
+            memories.push(memory.clone());
+        }
+    }
+    memories
 }
 
 mod job {
@@ -205,6 +237,7 @@ mod job {
         db: &StateRuntime,
         claim: &Claim,
         completion_watermark: i64,
+        selected_outputs: &[codex_state::Stage1Output],
         reason: &'static str,
     ) {
         session.services.otel_manager.counter(
@@ -213,7 +246,7 @@ mod job {
             &[("status", reason)],
         );
         let _ = db
-            .mark_global_phase2_job_succeeded(&claim.token, completion_watermark)
+            .mark_global_phase2_job_succeeded(&claim.token, completion_watermark, selected_outputs)
             .await;
     }
 }
@@ -266,9 +299,12 @@ mod agent {
         Some(agent_config)
     }
 
-    pub(super) fn get_prompt(config: Arc<Config>) -> Vec<UserInput> {
+    pub(super) fn get_prompt(
+        config: Arc<Config>,
+        selection: &codex_state::Phase2InputSelection,
+    ) -> Vec<UserInput> {
         let root = memory_root(&config.codex_home);
-        let prompt = build_consolidation_prompt(&root);
+        let prompt = build_consolidation_prompt(&root, selection);
         vec![UserInput::Text {
             text: prompt,
             text_elements: vec![],
@@ -280,6 +316,7 @@ mod agent {
         session: &Arc<Session>,
         claim: Claim,
         new_watermark: i64,
+        selected_outputs: Vec<codex_state::Stage1Output>,
         thread_id: ThreadId,
         phase_two_e2e_timer: Option<codex_otel::Timer>,
     ) {
@@ -316,7 +353,15 @@ mod agent {
                 if let Some(token_usage) = agent_control.get_total_token_usage(thread_id).await {
                     emit_token_usage_metrics(&session, &token_usage);
                 }
-                job::succeed(&session, &db, &claim, new_watermark, "succeeded").await;
+                job::succeed(
+                    &session,
+                    &db,
+                    &claim,
+                    new_watermark,
+                    &selected_outputs,
+                    "succeeded",
+                )
+                .await;
             } else {
                 job::failed(&session, &db, &claim, "failed_agent").await;
             }

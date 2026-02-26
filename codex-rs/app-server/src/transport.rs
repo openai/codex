@@ -6,6 +6,7 @@ use crate::outgoing_message::OutgoingError;
 use crate::outgoing_message::OutgoingMessage;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::ServerRequest;
 use futures::SinkExt;
 use futures::StreamExt;
 use owo_colors::OwoColorize;
@@ -66,12 +67,6 @@ fn print_websocket_startup_banner(addr: SocketAddr) {
             "  {note_label} this is a raw WS server; consider running behind TLS/auth for real remote use"
         );
     }
-}
-
-#[allow(clippy::print_stderr)]
-fn print_websocket_connection(peer_addr: SocketAddr) {
-    let connected_label = colorize("websocket client connected from", Style::new().dimmed());
-    eprintln!("{connected_label} {peer_addr}");
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,6 +145,7 @@ pub(crate) enum TransportEvent {
 
 pub(crate) struct ConnectionState {
     pub(crate) outbound_initialized: Arc<AtomicBool>,
+    pub(crate) outbound_experimental_api_enabled: Arc<AtomicBool>,
     pub(crate) outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     pub(crate) session: ConnectionSessionState,
 }
@@ -157,10 +153,12 @@ pub(crate) struct ConnectionState {
 impl ConnectionState {
     pub(crate) fn new(
         outbound_initialized: Arc<AtomicBool>,
+        outbound_experimental_api_enabled: Arc<AtomicBool>,
         outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     ) -> Self {
         Self {
             outbound_initialized,
+            outbound_experimental_api_enabled,
             outbound_opted_out_notification_methods,
             session: ConnectionSessionState::default(),
         }
@@ -169,6 +167,7 @@ impl ConnectionState {
 
 pub(crate) struct OutboundConnectionState {
     pub(crate) initialized: Arc<AtomicBool>,
+    pub(crate) experimental_api_enabled: Arc<AtomicBool>,
     pub(crate) opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     pub(crate) writer: mpsc::Sender<OutgoingMessage>,
     disconnect_sender: Option<CancellationToken>,
@@ -178,11 +177,13 @@ impl OutboundConnectionState {
     pub(crate) fn new(
         writer: mpsc::Sender<OutgoingMessage>,
         initialized: Arc<AtomicBool>,
+        experimental_api_enabled: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
         disconnect_sender: Option<CancellationToken>,
     ) -> Self {
         Self {
             initialized,
+            experimental_api_enabled,
             opted_out_notification_methods,
             writer,
             disconnect_sender,
@@ -193,7 +194,7 @@ impl OutboundConnectionState {
         self.disconnect_sender.is_some()
     }
 
-    fn request_disconnect(&self) {
+    pub(crate) fn request_disconnect(&self) {
         if let Some(disconnect_sender) = &self.disconnect_sender {
             disconnect_sender.cancel();
         }
@@ -271,6 +272,7 @@ pub(crate) async fn start_stdio_connection(
 pub(crate) async fn start_websocket_acceptor(
     bind_address: SocketAddr,
     transport_event_tx: mpsc::Sender<TransportEvent>,
+    shutdown_token: CancellationToken,
 ) -> IoResult<JoinHandle<()>> {
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
@@ -280,23 +282,31 @@ pub(crate) async fn start_websocket_acceptor(
     let connection_counter = Arc::new(AtomicU64::new(1));
     Ok(tokio::spawn(async move {
         loop {
-            match listener.accept().await {
-                Ok((stream, peer_addr)) => {
-                    print_websocket_connection(peer_addr);
-                    let connection_id =
-                        ConnectionId(connection_counter.fetch_add(1, Ordering::Relaxed));
-                    let transport_event_tx_for_connection = transport_event_tx.clone();
-                    tokio::spawn(async move {
-                        run_websocket_connection(
-                            connection_id,
-                            stream,
-                            transport_event_tx_for_connection,
-                        )
-                        .await;
-                    });
+            tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    info!("websocket acceptor shutting down");
+                    break;
                 }
-                Err(err) => {
-                    error!("failed to accept websocket connection: {err}");
+                accept_result = listener.accept() => {
+                    match accept_result {
+                        Ok((stream, peer_addr)) => {
+                            info!(%peer_addr, "websocket client connected");
+                            let connection_id =
+                                ConnectionId(connection_counter.fetch_add(1, Ordering::Relaxed));
+                            let transport_event_tx_for_connection = transport_event_tx.clone();
+                            tokio::spawn(async move {
+                                run_websocket_connection(
+                                    connection_id,
+                                    stream,
+                                    transport_event_tx_for_connection,
+                                )
+                                .await;
+                            });
+                        }
+                        Err(err) => {
+                            error!("failed to accept websocket connection: {err}");
+                        }
+                    }
                 }
             }
         }
@@ -574,6 +584,7 @@ async fn send_message_to_connection(
         warn!("dropping message for disconnected connection: {connection_id:?}");
         return false;
     };
+    let message = filter_outgoing_message_for_connection(connection_state, message);
     if should_skip_notification_for_connection(connection_state, &message) {
         return false;
     }
@@ -596,6 +607,30 @@ async fn send_message_to_connection(
         disconnect_connection(connections, connection_id)
     } else {
         false
+    }
+}
+
+fn filter_outgoing_message_for_connection(
+    connection_state: &OutboundConnectionState,
+    message: OutgoingMessage,
+) -> OutgoingMessage {
+    let experimental_api_enabled = connection_state
+        .experimental_api_enabled
+        .load(Ordering::Acquire);
+    match message {
+        OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
+            request_id,
+            mut params,
+        }) => {
+            if !experimental_api_enabled {
+                params.strip_experimental_fields();
+            }
+            OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
+                request_id,
+                params,
+            })
+        }
+        _ => message,
     }
 }
 
@@ -638,6 +673,7 @@ mod tests {
     use crate::error_code::OVERLOADED_ERROR_CODE;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::path::PathBuf;
     use tokio::time::Duration;
     use tokio::time::timeout;
 
@@ -877,6 +913,7 @@ mod tests {
             OutboundConnectionState::new(
                 writer_tx,
                 initialized,
+                Arc::new(AtomicBool::new(true)),
                 opted_out_notification_methods,
                 None,
             ),
@@ -903,6 +940,140 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn command_execution_request_approval_strips_experimental_fields_without_capability() {
+        let connection_id = ConnectionId(8);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(RwLock::new(HashSet::new())),
+                None,
+            ),
+        );
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
+                    request_id: codex_app_server_protocol::RequestId::Integer(1),
+                    params: codex_app_server_protocol::CommandExecutionRequestApprovalParams {
+                        thread_id: "thr_123".to_string(),
+                        turn_id: "turn_123".to_string(),
+                        item_id: "call_123".to_string(),
+                        approval_id: None,
+                        reason: Some("Need extra read access".to_string()),
+                        network_approval_context: None,
+                        command: Some("cat file".to_string()),
+                        cwd: Some(PathBuf::from("/tmp")),
+                        command_actions: None,
+                        additional_permissions: Some(
+                            codex_app_server_protocol::AdditionalPermissionProfile {
+                                network: None,
+                                file_system: Some(
+                                    codex_app_server_protocol::AdditionalFileSystemPermissions {
+                                        read: Some(vec![PathBuf::from("/tmp/allowed")]),
+                                        write: None,
+                                    },
+                                ),
+                                macos: None,
+                            },
+                        ),
+                        proposed_execpolicy_amendment: None,
+                        proposed_network_policy_amendments: None,
+                        available_decisions: None,
+                    },
+                }),
+            },
+        )
+        .await;
+
+        let message = writer_rx
+            .recv()
+            .await
+            .expect("request should be delivered to the connection");
+        let json = serde_json::to_value(message).expect("request should serialize");
+        assert_eq!(json["params"].get("additionalPermissions"), None);
+    }
+
+    #[tokio::test]
+    async fn command_execution_request_approval_keeps_experimental_fields_with_capability() {
+        let connection_id = ConnectionId(9);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(RwLock::new(HashSet::new())),
+                None,
+            ),
+        );
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
+                    request_id: codex_app_server_protocol::RequestId::Integer(1),
+                    params: codex_app_server_protocol::CommandExecutionRequestApprovalParams {
+                        thread_id: "thr_123".to_string(),
+                        turn_id: "turn_123".to_string(),
+                        item_id: "call_123".to_string(),
+                        approval_id: None,
+                        reason: Some("Need extra read access".to_string()),
+                        network_approval_context: None,
+                        command: Some("cat file".to_string()),
+                        cwd: Some(PathBuf::from("/tmp")),
+                        command_actions: None,
+                        additional_permissions: Some(
+                            codex_app_server_protocol::AdditionalPermissionProfile {
+                                network: None,
+                                file_system: Some(
+                                    codex_app_server_protocol::AdditionalFileSystemPermissions {
+                                        read: Some(vec![PathBuf::from("/tmp/allowed")]),
+                                        write: None,
+                                    },
+                                ),
+                                macos: None,
+                            },
+                        ),
+                        proposed_execpolicy_amendment: None,
+                        proposed_network_policy_amendments: None,
+                        available_decisions: None,
+                    },
+                }),
+            },
+        )
+        .await;
+
+        let message = writer_rx
+            .recv()
+            .await
+            .expect("request should be delivered to the connection");
+        let json = serde_json::to_value(message).expect("request should serialize");
+        assert_eq!(
+            json["params"]["additionalPermissions"],
+            json!({
+                "network": null,
+                "fileSystem": {
+                    "read": ["/tmp/allowed"],
+                    "write": null,
+                },
+                "macos": null,
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn broadcast_does_not_block_on_slow_connection() {
         let fast_connection_id = ConnectionId(1);
         let slow_connection_id = ConnectionId(2);
@@ -918,6 +1089,7 @@ mod tests {
             OutboundConnectionState::new(
                 fast_writer_tx,
                 Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
                 Some(fast_disconnect_token.clone()),
             ),
@@ -926,6 +1098,7 @@ mod tests {
             slow_connection_id,
             OutboundConnectionState::new(
                 slow_writer_tx.clone(),
+                Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
                 Some(slow_disconnect_token.clone()),
@@ -1002,6 +1175,7 @@ mod tests {
             connection_id,
             OutboundConnectionState::new(
                 writer_tx,
+                Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
                 None,

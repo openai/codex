@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 
 use codex_utils_image::load_and_resize_to_fit;
 use serde::Deserialize;
@@ -35,11 +36,85 @@ pub enum SandboxPermissions {
     UseDefault,
     /// Request to run outside the sandbox
     RequireEscalated,
+    /// Request to run in the sandbox with additional per-command permissions.
+    WithAdditionalPermissions,
 }
 
 impl SandboxPermissions {
+    /// True if SandboxPermissions requires full unsandboxed execution (i.e. RequireEscalated)
     pub fn requires_escalated_permissions(self) -> bool {
         matches!(self, SandboxPermissions::RequireEscalated)
+    }
+
+    /// True if SandboxPermissions requires permissions beyond UseDefault
+    pub fn requires_additional_permissions(self) -> bool {
+        !matches!(self, SandboxPermissions::UseDefault)
+    }
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct FileSystemPermissions {
+    pub read: Option<Vec<PathBuf>>,
+    pub write: Option<Vec<PathBuf>>,
+}
+
+impl FileSystemPermissions {
+    pub fn is_empty(&self) -> bool {
+        self.read.is_none() && self.write.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct MacOsPermissions {
+    pub preferences: Option<MacOsPreferencesValue>,
+    pub automations: Option<MacOsAutomationValue>,
+    pub accessibility: Option<bool>,
+    pub calendar: Option<bool>,
+}
+
+impl MacOsPermissions {
+    pub fn is_empty(&self) -> bool {
+        self.preferences.is_none()
+            && self.automations.is_none()
+            && self.accessibility.is_none()
+            && self.calendar.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum MacOsPreferencesValue {
+    Bool(bool),
+    Mode(String),
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum MacOsAutomationValue {
+    Bool(bool),
+    BundleIds(Vec<String>),
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct PermissionProfile {
+    pub network: Option<bool>,
+    pub file_system: Option<FileSystemPermissions>,
+    pub macos: Option<MacOsPermissions>,
+}
+
+impl PermissionProfile {
+    pub fn is_empty(&self) -> bool {
+        self.network.is_none()
+            && self
+                .file_system
+                .as_ref()
+                .map(FileSystemPermissions::is_empty)
+                .unwrap_or(true)
+            && self
+                .macos
+                .as_ref()
+                .map(MacOsPermissions::is_empty)
+                .unwrap_or(true)
     }
 }
 
@@ -227,6 +302,8 @@ const APPROVAL_POLICY_ON_FAILURE: &str =
     include_str!("prompts/permissions/approval_policy/on_failure.md");
 const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
     include_str!("prompts/permissions/approval_policy/on_request_rule.md");
+const APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION: &str =
+    include_str!("prompts/permissions/approval_policy/on_request_rule_request_permission.md");
 
 const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
     include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
@@ -239,16 +316,25 @@ impl DeveloperInstructions {
         Self { text: text.into() }
     }
 
-    pub fn from(approval_policy: AskForApproval, exec_policy: &Policy) -> DeveloperInstructions {
+    pub fn from(
+        approval_policy: AskForApproval,
+        exec_policy: &Policy,
+        request_permission_enabled: bool,
+    ) -> DeveloperInstructions {
         let on_request_instructions = || {
+            let on_request_rule = if request_permission_enabled {
+                APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION
+            } else {
+                APPROVAL_POLICY_ON_REQUEST_RULE
+            };
             let command_prefixes = format_allow_prefixes(exec_policy.get_allowed_prefixes());
             match command_prefixes {
                 Some(prefixes) => {
                     format!(
-                        "{APPROVAL_POLICY_ON_REQUEST_RULE}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
+                        "{on_request_rule}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
                     )
                 }
-                None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
+                None => on_request_rule.to_string(),
             }
         };
         let text = match approval_policy {
@@ -306,6 +392,7 @@ impl DeveloperInstructions {
         approval_policy: AskForApproval,
         exec_policy: &Policy,
         cwd: &Path,
+        request_permission_enabled: bool,
     ) -> Self {
         let network_access = if sandbox_policy.has_full_network_access() {
             NetworkAccess::Enabled
@@ -329,6 +416,7 @@ impl DeveloperInstructions {
             approval_policy,
             exec_policy,
             writable_roots,
+            request_permission_enabled,
         )
     }
 
@@ -352,6 +440,7 @@ impl DeveloperInstructions {
         approval_policy: AskForApproval,
         exec_policy: &Policy,
         writable_roots: Option<Vec<WritableRoot>>,
+        request_permission_enabled: bool,
     ) -> Self {
         let start_tag = DeveloperInstructions::new("<permissions instructions>");
         let end_tag = DeveloperInstructions::new("</permissions instructions>");
@@ -360,7 +449,11 @@ impl DeveloperInstructions {
                 sandbox_mode,
                 network_access,
             ))
-            .concat(DeveloperInstructions::from(approval_policy, exec_policy))
+            .concat(DeveloperInstructions::from(
+                approval_policy,
+                exec_policy,
+                request_permission_enabled,
+            ))
             .concat(DeveloperInstructions::from_writable_roots(writable_roots))
             .concat(end_tag)
     }
@@ -757,6 +850,9 @@ pub struct ShellToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub prefix_rule: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub additional_permissions: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -780,6 +876,9 @@ pub struct ShellCommandToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub prefix_rule: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub additional_permissions: Option<PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -1205,6 +1304,7 @@ mod tests {
             AskForApproval::OnRequest,
             &Policy::empty(),
             None,
+            false,
         );
 
         let text = instructions.into_text();
@@ -1233,6 +1333,7 @@ mod tests {
             AskForApproval::UnlessTrusted,
             &Policy::empty(),
             &PathBuf::from("/tmp"),
+            false,
         );
         let text = instructions.into_text();
         assert!(text.contains("Network access is enabled."));
@@ -1254,12 +1355,29 @@ mod tests {
             AskForApproval::OnRequest,
             &exec_policy,
             None,
+            false,
         );
 
         let text = instructions.into_text();
         assert!(text.contains("prefix_rule"));
         assert!(text.contains("Approved command prefixes"));
         assert!(text.contains(r#"["git", "pull"]"#));
+    }
+
+    #[test]
+    fn includes_request_permission_rule_instructions_for_on_request_when_enabled() {
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            AskForApproval::OnRequest,
+            &Policy::empty(),
+            None,
+            true,
+        );
+
+        let text = instructions.into_text();
+        assert!(text.contains("with_additional_permissions"));
+        assert!(text.contains("additional_permissions"));
     }
 
     #[test]
@@ -1572,6 +1690,7 @@ mod tests {
                 timeout_ms: Some(1000),
                 sandbox_permissions: None,
                 prefix_rule: None,
+                additional_permissions: None,
                 justification: None,
             },
             params

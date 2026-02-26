@@ -51,6 +51,9 @@ pub(crate) enum AppEvent {
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
 
+    /// Recompute the list of inactive threads that still need approval.
+    RefreshPendingThreadApprovals,
+
     /// Start a new session.
     NewSession,
 

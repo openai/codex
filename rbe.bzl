@@ -3,11 +3,11 @@ def _rbe_platform_repo_impl(rctx):
     if arch in ["x86_64", "amd64"]:
         cpu = "x86_64"
         exec_arch = "amd64"
-        image_sha = "8c9ff94187ea7c08a31e9a81f5fe8046ea3972a6768983c955c4079fa30567fb"
+        image_sha = "0a8e56bfaa3b2e5279db0d3bb2d62b44ba5e5d63a37d97eb8790f49da570af70"
     elif arch in ["aarch64", "arm64"]:
         cpu = "aarch64"
         exec_arch = "arm64"
-        image_sha = "ad9506086215fccfc66ed8d2be87847324be56790ae6a1964c241c28b77ef141"
+        image_sha = "136487cc4b7cf6f1021816ca18ed00896daed98404ea91dc4d6dd9e9d1cf9564"
     else:
         fail("Unsupported host arch for rbe platform: {}".format(arch))
 

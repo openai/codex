@@ -59,6 +59,7 @@ pub(crate) async fn run_codex_thread_interactive(
         parent_session.services.agent_control.clone(),
         Vec::new(),
         false,
+        None,
     )
     .await?;
     let codex = Arc::new(codex);
@@ -320,6 +321,8 @@ async fn handle_exec_approval(
         reason,
         network_approval_context,
         proposed_execpolicy_amendment,
+        additional_permissions,
+        available_decisions,
         ..
     } = event;
     // Race approval with cancellation and timeout to avoid hangs.
@@ -332,6 +335,8 @@ async fn handle_exec_approval(
         reason,
         network_approval_context,
         proposed_execpolicy_amendment,
+        additional_permissions,
+        available_decisions,
     );
     let decision = await_approval_with_cancel(
         approval_fut,

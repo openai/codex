@@ -14,6 +14,7 @@ mod runtime;
 pub use model::LogEntry;
 pub use model::LogQuery;
 pub use model::LogRow;
+pub use model::Phase2InputSelection;
 pub use model::Phase2JobClaimOutcome;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
@@ -22,6 +23,13 @@ pub use runtime::StateRuntime;
 ///
 /// Most consumers should prefer [`StateRuntime`].
 pub use extract::apply_rollout_item;
+pub use model::AgentJob;
+pub use model::AgentJobCreateParams;
+pub use model::AgentJobItem;
+pub use model::AgentJobItemCreateParams;
+pub use model::AgentJobItemStatus;
+pub use model::AgentJobProgress;
+pub use model::AgentJobStatus;
 pub use model::Anchor;
 pub use model::BackfillState;
 pub use model::BackfillStats;
@@ -31,12 +39,16 @@ pub use model::SortKey;
 pub use model::Stage1JobClaim;
 pub use model::Stage1JobClaimOutcome;
 pub use model::Stage1Output;
+pub use model::Stage1OutputRef;
 pub use model::Stage1StartupClaimParams;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
 pub use runtime::state_db_filename;
 pub use runtime::state_db_path;
+
+/// Environment variable for overriding the SQLite state database home directory.
+pub const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
 
 pub const STATE_DB_FILENAME: &str = "state";
 pub const STATE_DB_VERSION: u32 = 5;

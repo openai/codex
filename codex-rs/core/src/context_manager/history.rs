@@ -1,14 +1,11 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
-use crate::instructions::SkillInstructions;
-use crate::instructions::UserInstructions;
-use crate::session_prefix::is_session_prefix;
+use crate::event_mapping::is_contextual_user_message_content;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count_i64;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
-use crate::user_shell_command::is_user_shell_command_text;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -421,9 +418,9 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
 
 /// Approximate model-visible byte cost for one image input.
 ///
-/// The estimator later converts bytes to tokens using a 4-bytes/token heuristic,
-/// so 340 bytes is approximately 85 tokens.
-const IMAGE_BYTES_ESTIMATE: i64 = 340;
+/// The estimator later converts bytes to tokens using a 4-bytes/token heuristic
+/// with ceiling division, so 7,373 bytes maps to approximately 1,844 tokens.
+const IMAGE_BYTES_ESTIMATE: i64 = 7373;
 
 pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {
@@ -554,33 +551,7 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
         return false;
     };
 
-    if role != "user" {
-        return false;
-    }
-
-    if UserInstructions::is_user_instructions(content)
-        || SkillInstructions::is_skill_instructions(content)
-    {
-        return false;
-    }
-
-    for content_item in content {
-        match content_item {
-            ContentItem::InputText { text } => {
-                if is_session_prefix(text) || is_user_shell_command_text(text) {
-                    return false;
-                }
-            }
-            ContentItem::OutputText { text } => {
-                if is_session_prefix(text) {
-                    return false;
-                }
-            }
-            ContentItem::InputImage { .. } => {}
-        }
-    }
-
-    true
+    role == "user" && !is_contextual_user_message_content(content)
 }
 
 fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {

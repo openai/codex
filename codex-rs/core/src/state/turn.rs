@@ -11,7 +11,6 @@ use tokio_util::task::AbortOnDropHandle;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::request_user_input::RequestUserInputResponse;
-use codex_protocol::skill_approval::SkillApprovalResponse;
 use tokio::sync::oneshot;
 
 use crate::codex::TurnContext;
@@ -72,7 +71,6 @@ impl ActiveTurn {
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
-    pending_skill_approvals: HashMap<String, oneshot::Sender<SkillApprovalResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
 }
@@ -96,7 +94,6 @@ impl TurnState {
     pub(crate) fn clear_pending(&mut self) {
         self.pending_approvals.clear();
         self.pending_user_input.clear();
-        self.pending_skill_approvals.clear();
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
     }
@@ -122,21 +119,6 @@ impl TurnState {
         tx: oneshot::Sender<DynamicToolResponse>,
     ) -> Option<oneshot::Sender<DynamicToolResponse>> {
         self.pending_dynamic_tools.insert(key, tx)
-    }
-
-    pub(crate) fn insert_pending_skill_approval(
-        &mut self,
-        key: String,
-        tx: oneshot::Sender<SkillApprovalResponse>,
-    ) -> Option<oneshot::Sender<SkillApprovalResponse>> {
-        self.pending_skill_approvals.insert(key, tx)
-    }
-
-    pub(crate) fn remove_pending_skill_approval(
-        &mut self,
-        key: &str,
-    ) -> Option<oneshot::Sender<SkillApprovalResponse>> {
-        self.pending_skill_approvals.remove(key)
     }
 
     pub(crate) fn remove_pending_dynamic_tool(

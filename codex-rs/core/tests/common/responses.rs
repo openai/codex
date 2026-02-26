@@ -141,6 +141,32 @@ impl ResponsesRequest {
             .collect()
     }
 
+    /// Returns `input_text` spans grouped by `message` input for the provided role.
+    pub fn message_input_text_groups(&self, role: &str) -> Vec<Vec<String>> {
+        self.inputs_of_type("message")
+            .into_iter()
+            .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
+            .filter_map(|item| item.get("content").and_then(Value::as_array).cloned())
+            .map(|content| {
+                content
+                    .into_iter()
+                    .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
+                    .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
+                    .collect()
+            })
+            .collect()
+    }
+
+    pub fn has_message_with_input_texts(
+        &self,
+        role: &str,
+        predicate: impl Fn(&[String]) -> bool,
+    ) -> bool {
+        self.message_input_text_groups(role)
+            .iter()
+            .any(|texts| predicate(texts))
+    }
+
     /// Returns all `input_image` `image_url` spans from `message` inputs for the provided role.
     pub fn message_input_image_urls(&self, role: &str) -> Vec<String> {
         self.inputs_of_type("message")
@@ -300,8 +326,8 @@ pub struct WebSocketConnectionConfig {
     pub response_headers: Vec<(String, String)>,
     /// Optional delay inserted before accepting the websocket handshake.
     ///
-    /// Tests use this to force startup preconnect into an in-flight state so first-turn adoption
-    /// paths can be exercised deterministically.
+    /// Tests use this to force websocket setup into an in-flight state so first-turn warmup paths
+    /// can be exercised deterministically.
     pub accept_delay: Option<Duration>,
 }
 
@@ -337,7 +363,7 @@ impl WebSocketTestServer {
     /// Waits until at least `expected` websocket handshakes have been observed or timeout elapses.
     ///
     /// Uses a short bounded polling interval so tests can deterministically wait for background
-    /// preconnect activity without busy-spinning.
+    /// websocket activity without busy-spinning.
     pub async fn wait_for_handshakes(&self, expected: usize, timeout: Duration) -> bool {
         if self.handshakes.lock().unwrap().len() >= expected {
             return true;

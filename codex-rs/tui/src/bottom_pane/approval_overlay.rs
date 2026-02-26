@@ -18,10 +18,11 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use codex_core::features::Features;
 use codex_protocol::mcp::RequestId;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ElicitationAction;
-use codex_protocol::protocol::ExecPolicyAmendment;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkApprovalContext;
+use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use crossterm::event::KeyCode;
@@ -43,8 +44,9 @@ pub(crate) enum ApprovalRequest {
         id: String,
         command: Vec<String>,
         reason: Option<String>,
+        available_decisions: Vec<ReviewDecision>,
         network_approval_context: Option<NetworkApprovalContext>,
-        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+        additional_permissions: Option<PermissionProfile>,
     },
     ApplyPatch {
         id: String,
@@ -62,7 +64,6 @@ pub(crate) enum ApprovalRequest {
 /// Modal overlay asking the user to approve or deny one or more requests.
 pub(crate) struct ApprovalOverlay {
     current_request: Option<ApprovalRequest>,
-    current_variant: Option<ApprovalVariant>,
     queue: Vec<ApprovalRequest>,
     app_event_tx: AppEventSender,
     list: ListSelectionView,
@@ -76,7 +77,6 @@ impl ApprovalOverlay {
     pub fn new(request: ApprovalRequest, app_event_tx: AppEventSender, features: Features) -> Self {
         let mut view = Self {
             current_request: None,
-            current_variant: None,
             queue: Vec::new(),
             app_event_tx: app_event_tx.clone(),
             list: ListSelectionView::new(Default::default(), app_event_tx),
@@ -94,29 +94,30 @@ impl ApprovalOverlay {
     }
 
     fn set_current(&mut self, request: ApprovalRequest) {
-        self.current_request = Some(request.clone());
-        let ApprovalRequestState { variant, header } = ApprovalRequestState::from(request);
-        self.current_variant = Some(variant.clone());
         self.current_complete = false;
-        let (options, params) = Self::build_options(variant, header, &self.features);
+        let header = build_header(&request);
+        let (options, params) = Self::build_options(&request, header, &self.features);
+        self.current_request = Some(request);
         self.options = options;
         self.list = ListSelectionView::new(params, self.app_event_tx.clone());
     }
 
     fn build_options(
-        variant: ApprovalVariant,
+        request: &ApprovalRequest,
         header: Box<dyn Renderable>,
         _features: &Features,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
-        let (options, title) = match &variant {
-            ApprovalVariant::Exec {
+        let (options, title) = match request {
+            ApprovalRequest::Exec {
+                available_decisions,
                 network_approval_context,
-                proposed_execpolicy_amendment,
+                additional_permissions,
                 ..
             } => (
                 exec_options(
-                    proposed_execpolicy_amendment.clone(),
+                    available_decisions,
                     network_approval_context.as_ref(),
+                    additional_permissions.as_ref(),
                 ),
                 network_approval_context.as_ref().map_or_else(
                     || "Would you like to run the following command?".to_string(),
@@ -128,11 +129,11 @@ impl ApprovalOverlay {
                     },
                 ),
             ),
-            ApprovalVariant::ApplyPatch { .. } => (
+            ApprovalRequest::ApplyPatch { .. } => (
                 patch_options(),
                 "Would you like to make the following edits?".to_string(),
             ),
-            ApprovalVariant::McpElicitation { server_name, .. } => (
+            ApprovalRequest::McpElicitation { server_name, .. } => (
                 elicitation_options(),
                 format!("{server_name} needs your approval."),
             ),
@@ -179,18 +180,19 @@ impl ApprovalOverlay {
         let Some(option) = self.options.get(actual_idx) else {
             return;
         };
-        if let Some(variant) = self.current_variant.as_ref() {
-            match (variant, &option.decision) {
-                (ApprovalVariant::Exec { id, command, .. }, ApprovalDecision::Review(decision)) => {
+        if let Some(request) = self.current_request.as_ref() {
+            match (request, &option.decision) {
+                (ApprovalRequest::Exec { id, command, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_exec_decision(id, command, decision.clone());
                 }
-                (ApprovalVariant::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
+                (ApprovalRequest::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_patch_decision(id, decision.clone());
                 }
                 (
-                    ApprovalVariant::McpElicitation {
+                    ApprovalRequest::McpElicitation {
                         server_name,
                         request_id,
+                        ..
                     },
                     ApprovalDecision::McpElicitation(decision),
                 ) => {
@@ -291,18 +293,19 @@ impl BottomPaneView for ApprovalOverlay {
             return CancellationEvent::Handled;
         }
         if !self.current_complete
-            && let Some(variant) = self.current_variant.as_ref()
+            && let Some(request) = self.current_request.as_ref()
         {
-            match &variant {
-                ApprovalVariant::Exec { id, command, .. } => {
+            match request {
+                ApprovalRequest::Exec { id, command, .. } => {
                     self.handle_exec_decision(id, command, ReviewDecision::Abort);
                 }
-                ApprovalVariant::ApplyPatch { id, .. } => {
+                ApprovalRequest::ApplyPatch { id, .. } => {
                     self.handle_patch_decision(id, ReviewDecision::Abort);
                 }
-                ApprovalVariant::McpElicitation {
+                ApprovalRequest::McpElicitation {
                     server_name,
                     request_id,
+                    ..
                 } => {
                     self.handle_elicitation_decision(
                         server_name,
@@ -344,104 +347,75 @@ impl Renderable for ApprovalOverlay {
     }
 }
 
-struct ApprovalRequestState {
-    variant: ApprovalVariant,
-    header: Box<dyn Renderable>,
-}
-
-impl From<ApprovalRequest> for ApprovalRequestState {
-    fn from(value: ApprovalRequest) -> Self {
-        match value {
-            ApprovalRequest::Exec {
-                id,
-                command,
-                reason,
-                network_approval_context,
-                proposed_execpolicy_amendment,
-            } => {
-                let mut header: Vec<Line<'static>> = Vec::new();
-                if let Some(reason) = reason {
-                    header.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
-                    header.push(Line::from(""));
-                }
-                if network_approval_context.is_none() {
-                    let full_cmd = strip_bash_lc_and_escape(&command);
-                    let mut full_cmd_lines = highlight_bash_to_lines(&full_cmd);
-                    if let Some(first) = full_cmd_lines.first_mut() {
-                        first.spans.insert(0, Span::from("$ "));
-                    }
-                    header.extend(full_cmd_lines);
-                }
-                Self {
-                    variant: ApprovalVariant::Exec {
-                        id,
-                        command,
-                        network_approval_context,
-                        proposed_execpolicy_amendment,
-                    },
-                    header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
-                }
+fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
+    match request {
+        ApprovalRequest::Exec {
+            reason,
+            command,
+            network_approval_context,
+            additional_permissions,
+            ..
+        } => {
+            let mut header: Vec<Line<'static>> = Vec::new();
+            if let Some(reason) = reason {
+                header.push(Line::from(vec!["Reason: ".into(), reason.clone().italic()]));
+                header.push(Line::from(""));
             }
-            ApprovalRequest::ApplyPatch {
-                id,
-                reason,
-                cwd,
-                changes,
-            } => {
-                let mut header: Vec<Box<dyn Renderable>> = Vec::new();
-                if let Some(reason) = reason
-                    && !reason.is_empty()
-                {
-                    header.push(Box::new(
-                        Paragraph::new(Line::from_iter(["Reason: ".into(), reason.italic()]))
-                            .wrap(Wrap { trim: false }),
-                    ));
-                    header.push(Box::new(Line::from("")));
-                }
-                header.push(DiffSummary::new(changes, cwd).into());
-                Self {
-                    variant: ApprovalVariant::ApplyPatch { id },
-                    header: Box::new(ColumnRenderable::with(header)),
-                }
+            if let Some(additional_permissions) = additional_permissions
+                && let Some(rule_line) = format_additional_permissions_rule(additional_permissions)
+            {
+                header.push(Line::from(vec![
+                    "Permission rule: ".into(),
+                    rule_line.cyan(),
+                ]));
+                header.push(Line::from(""));
             }
-            ApprovalRequest::McpElicitation {
-                server_name,
-                request_id,
-                message,
-            } => {
-                let header = Paragraph::new(vec![
-                    Line::from(vec!["Server: ".into(), server_name.clone().bold()]),
-                    Line::from(""),
-                    Line::from(message),
-                ])
-                .wrap(Wrap { trim: false });
-                Self {
-                    variant: ApprovalVariant::McpElicitation {
-                        server_name,
-                        request_id,
-                    },
-                    header: Box::new(header),
-                }
+            let full_cmd = strip_bash_lc_and_escape(command);
+            let mut full_cmd_lines = highlight_bash_to_lines(&full_cmd);
+            if let Some(first) = full_cmd_lines.first_mut() {
+                first.spans.insert(0, Span::from("$ "));
             }
+            if network_approval_context.is_none() {
+                header.extend(full_cmd_lines);
+            }
+            Box::new(Paragraph::new(header).wrap(Wrap { trim: false }))
+        }
+        ApprovalRequest::ApplyPatch {
+            reason,
+            cwd,
+            changes,
+            ..
+        } => {
+            let mut header: Vec<Box<dyn Renderable>> = Vec::new();
+            if let Some(reason) = reason
+                && !reason.is_empty()
+            {
+                header.push(Box::new(
+                    Paragraph::new(Line::from_iter([
+                        "Reason: ".into(),
+                        reason.clone().italic(),
+                    ]))
+                    .wrap(Wrap { trim: false }),
+                ));
+                header.push(Box::new(Line::from("")));
+            }
+            header.push(DiffSummary::new(changes.clone(), cwd.clone()).into());
+            Box::new(ColumnRenderable::with(header))
+        }
+        ApprovalRequest::McpElicitation {
+            server_name,
+            message,
+            ..
+        } => {
+            let header = Paragraph::new(vec![
+                Line::from(vec!["Server: ".into(), server_name.clone().bold()]),
+                Line::from(""),
+                Line::from(message.clone()),
+            ])
+            .wrap(Wrap { trim: false });
+            Box::new(header)
         }
     }
-}
-
-#[derive(Clone)]
-enum ApprovalVariant {
-    Exec {
-        id: String,
-        command: Vec<String>,
-        network_approval_context: Option<NetworkApprovalContext>,
-        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
-    },
-    ApplyPatch {
-        id: String,
-    },
-    McpElicitation {
-        server_name: String,
-        request_id: RequestId,
-    },
 }
 
 #[derive(Clone)]
@@ -467,63 +441,123 @@ impl ApprovalOption {
 }
 
 fn exec_options(
-    proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+    available_decisions: &[ReviewDecision],
     network_approval_context: Option<&NetworkApprovalContext>,
+    additional_permissions: Option<&PermissionProfile>,
 ) -> Vec<ApprovalOption> {
-    if network_approval_context.is_some() {
-        return vec![
-            ApprovalOption {
-                label: "Yes, just this once".to_string(),
+    available_decisions
+        .iter()
+        .filter_map(|decision| match decision {
+            ReviewDecision::Approved => Some(ApprovalOption {
+                label: if network_approval_context.is_some() {
+                    "Yes, just this once".to_string()
+                } else {
+                    "Yes, proceed".to_string()
+                },
                 decision: ApprovalDecision::Review(ReviewDecision::Approved),
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
-            },
-            ApprovalOption {
-                label: "Yes, and allow this host for this session".to_string(),
+            }),
+            ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment,
+            } => {
+                let rendered_prefix =
+                    strip_bash_lc_and_escape(proposed_execpolicy_amendment.command());
+                if rendered_prefix.contains('\n') || rendered_prefix.contains('\r') {
+                    return None;
+                }
+
+                Some(ApprovalOption {
+                    label: format!(
+                        "Yes, and don't ask again for commands that start with `{rendered_prefix}`"
+                    ),
+                    decision: ApprovalDecision::Review(
+                        ReviewDecision::ApprovedExecpolicyAmendment {
+                            proposed_execpolicy_amendment: proposed_execpolicy_amendment.clone(),
+                        },
+                    ),
+                    display_shortcut: None,
+                    additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
+                })
+            }
+            ReviewDecision::ApprovedForSession => Some(ApprovalOption {
+                label: if network_approval_context.is_some() {
+                    "Yes, and allow this host for this conversation".to_string()
+                } else if additional_permissions.is_some() {
+                    "Yes, and allow these permissions for this session".to_string()
+                } else {
+                    "Yes, and don't ask again for this command in this session".to_string()
+                },
                 decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
-            },
-            ApprovalOption {
+            }),
+            ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => {
+                let (label, shortcut) = match network_policy_amendment.action {
+                    NetworkPolicyRuleAction::Allow => (
+                        "Yes, and allow this host in the future".to_string(),
+                        KeyCode::Char('p'),
+                    ),
+                    NetworkPolicyRuleAction::Deny => (
+                        "No, and block this host in the future".to_string(),
+                        KeyCode::Char('d'),
+                    ),
+                };
+                Some(ApprovalOption {
+                    label,
+                    decision: ApprovalDecision::Review(ReviewDecision::NetworkPolicyAmendment {
+                        network_policy_amendment: network_policy_amendment.clone(),
+                    }),
+                    display_shortcut: None,
+                    additional_shortcuts: vec![key_hint::plain(shortcut)],
+                })
+            }
+            ReviewDecision::Denied => Some(ApprovalOption {
+                label: "No, continue without running it".to_string(),
+                decision: ApprovalDecision::Review(ReviewDecision::Denied),
+                display_shortcut: None,
+                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('d'))],
+            }),
+            ReviewDecision::Abort => Some(ApprovalOption {
                 label: "No, and tell Codex what to do differently".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Abort),
                 display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
-            },
-        ];
+            }),
+        })
+        .collect()
+}
+
+fn format_additional_permissions_rule(
+    additional_permissions: &PermissionProfile,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(file_system) = additional_permissions.file_system.as_ref() {
+        if let Some(read) = file_system.read.as_ref() {
+            let reads = read
+                .iter()
+                .map(|path| format!("`{}`", path.display()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!("read {reads}"));
+        }
+        if let Some(write) = file_system.write.as_ref() {
+            let writes = write
+                .iter()
+                .map(|path| format!("`{}`", path.display()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!("write {writes}"));
+        }
     }
 
-    vec![ApprovalOption {
-        label: "Yes, proceed".to_string(),
-        decision: ApprovalDecision::Review(ReviewDecision::Approved),
-        display_shortcut: None,
-        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
-    }]
-    .into_iter()
-    .chain(proposed_execpolicy_amendment.and_then(|prefix| {
-        let rendered_prefix = strip_bash_lc_and_escape(prefix.command());
-        if rendered_prefix.contains('\n') || rendered_prefix.contains('\r') {
-            return None;
-        }
-
-        Some(ApprovalOption {
-            label: format!(
-                "Yes, and don't ask again for commands that start with `{rendered_prefix}`"
-            ),
-            decision: ApprovalDecision::Review(ReviewDecision::ApprovedExecpolicyAmendment {
-                proposed_execpolicy_amendment: prefix,
-            }),
-            display_shortcut: None,
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
-        })
-    }))
-    .chain([ApprovalOption {
-        label: "No, and tell Codex what to do differently".to_string(),
-        decision: ApprovalDecision::Review(ReviewDecision::Abort),
-        display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
-        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
-    }])
-    .collect()
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("; "))
+    }
 }
 
 fn patch_options() -> Vec<ApprovalOption> {
@@ -576,17 +610,38 @@ fn elicitation_options() -> Vec<ApprovalOption> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use codex_protocol::models::FileSystemPermissions;
+    use codex_protocol::protocol::ExecPolicyAmendment;
     use codex_protocol::protocol::NetworkApprovalProtocol;
+    use codex_protocol::protocol::NetworkPolicyAmendment;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn render_overlay_lines(view: &ApprovalOverlay, width: u16) -> String {
+        let height = view.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        view.render(Rect::new(0, 0, width, height), &mut buf);
+        (0..buf.area.height)
+            .map(|row| {
+                (0..buf.area.width)
+                    .map(|col| buf[(col, row)].symbol().to_string())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             id: "test".to_string(),
             command: vec!["echo".to_string(), "hi".to_string()],
             reason: Some("reason".to_string()),
+            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
-            proposed_execpolicy_amendment: None,
+            additional_permissions: None,
         }
     }
 
@@ -628,10 +683,17 @@ mod tests {
                 id: "test".to_string(),
                 command: vec!["echo".to_string()],
                 reason: None,
+                available_decisions: vec![
+                    ReviewDecision::Approved,
+                    ReviewDecision::ApprovedExecpolicyAmendment {
+                        proposed_execpolicy_amendment: ExecPolicyAmendment::new(vec![
+                            "echo".to_string(),
+                        ]),
+                    },
+                    ReviewDecision::Abort,
+                ],
                 network_approval_context: None,
-                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                    "echo".to_string(),
-                ])),
+                additional_permissions: None,
             },
             tx,
             Features::with_defaults(),
@@ -659,6 +721,43 @@ mod tests {
     }
 
     #[test]
+    fn network_deny_forever_shortcut_is_not_bound() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(
+            ApprovalRequest::Exec {
+                id: "test".to_string(),
+                command: vec!["curl".to_string(), "https://example.com".to_string()],
+                reason: None,
+                available_decisions: vec![
+                    ReviewDecision::Approved,
+                    ReviewDecision::ApprovedForSession,
+                    ReviewDecision::NetworkPolicyAmendment {
+                        network_policy_amendment: NetworkPolicyAmendment {
+                            host: "example.com".to_string(),
+                            action: NetworkPolicyRuleAction::Allow,
+                        },
+                    },
+                    ReviewDecision::Abort,
+                ],
+                network_approval_context: Some(NetworkApprovalContext {
+                    host: "example.com".to_string(),
+                    protocol: NetworkApprovalProtocol::Https,
+                }),
+                additional_permissions: None,
+            },
+            tx,
+            Features::with_defaults(),
+        );
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected approval event emitted for hidden network deny shortcut"
+        );
+    }
+
+    #[test]
     fn header_includes_command_snippet() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
@@ -667,8 +766,9 @@ mod tests {
             id: "test".into(),
             command,
             reason: None,
+            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
-            proposed_execpolicy_amendment: None,
+            additional_permissions: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
@@ -697,8 +797,19 @@ mod tests {
             protocol: NetworkApprovalProtocol::Https,
         };
         let options = exec_options(
-            Some(ExecPolicyAmendment::new(vec!["curl".to_string()])),
+            &[
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment: NetworkPolicyAmendment {
+                        host: "example.com".to_string(),
+                        action: NetworkPolicyRuleAction::Allow,
+                    },
+                },
+                ReviewDecision::Abort,
+            ],
             Some(&network_context),
+            None,
         );
 
         let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
@@ -706,9 +817,123 @@ mod tests {
             labels,
             vec![
                 "Yes, just this once".to_string(),
-                "Yes, and allow this host for this session".to_string(),
+                "Yes, and allow this host for this conversation".to_string(),
+                "Yes, and allow this host in the future".to_string(),
                 "No, and tell Codex what to do differently".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn generic_exec_options_can_offer_allow_for_session() {
+        let options = exec_options(
+            &[
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::Abort,
+            ],
+            None,
+            None,
+        );
+
+        let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Yes, proceed".to_string(),
+                "Yes, and don't ask again for this command in this session".to_string(),
+                "No, and tell Codex what to do differently".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn additional_permissions_exec_options_hide_execpolicy_amendment() {
+        let additional_permissions = PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![PathBuf::from("/tmp/readme.txt")]),
+                write: Some(vec![PathBuf::from("/tmp/out.txt")]),
+            }),
+            ..Default::default()
+        };
+        let options = exec_options(
+            &[ReviewDecision::Approved, ReviewDecision::Abort],
+            None,
+            Some(&additional_permissions),
+        );
+
+        let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Yes, proceed".to_string(),
+                "No, and tell Codex what to do differently".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn additional_permissions_prompt_shows_permission_rule_line() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let exec_request = ApprovalRequest::Exec {
+            id: "test".into(),
+            command: vec!["cat".into(), "/tmp/readme.txt".into()],
+            reason: None,
+            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
+            network_approval_context: None,
+            additional_permissions: Some(PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![PathBuf::from("/tmp/readme.txt")]),
+                    write: Some(vec![PathBuf::from("/tmp/out.txt")]),
+                }),
+                ..Default::default()
+            }),
+        };
+
+        let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 120, view.desired_height(120)));
+        view.render(Rect::new(0, 0, 120, view.desired_height(120)), &mut buf);
+
+        let rendered: Vec<String> = (0..buf.area.height)
+            .map(|row| {
+                (0..buf.area.width)
+                    .map(|col| buf[(col, row)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("Permission rule:")),
+            "expected permission-rule line, got {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn additional_permissions_prompt_snapshot() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let exec_request = ApprovalRequest::Exec {
+            id: "test".into(),
+            command: vec!["cat".into(), "/tmp/readme.txt".into()],
+            reason: Some("need filesystem access".into()),
+            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
+            network_approval_context: None,
+            additional_permissions: Some(PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![PathBuf::from("/tmp/readme.txt")]),
+                    write: Some(vec![PathBuf::from("/tmp/out.txt")]),
+                }),
+                ..Default::default()
+            }),
+        };
+
+        let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
+        assert_snapshot!(
+            "approval_overlay_additional_permissions_prompt",
+            render_overlay_lines(&view, 120)
         );
     }
 
@@ -720,16 +945,28 @@ mod tests {
             id: "test".into(),
             command: vec!["curl".into(), "https://example.com".into()],
             reason: Some("network request blocked".into()),
+            available_decisions: vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment: NetworkPolicyAmendment {
+                        host: "example.com".to_string(),
+                        action: NetworkPolicyRuleAction::Allow,
+                    },
+                },
+                ReviewDecision::Abort,
+            ],
             network_approval_context: Some(NetworkApprovalContext {
                 host: "example.com".to_string(),
                 protocol: NetworkApprovalProtocol::Https,
             }),
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec!["curl".into()])),
+            additional_permissions: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
         let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(100)));
         view.render(Rect::new(0, 0, 100, view.desired_height(100)), &mut buf);
+        assert_snapshot!("network_exec_prompt", format!("{buf:?}"));
 
         let rendered: Vec<String> = (0..buf.area.height)
             .map(|row| {

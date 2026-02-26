@@ -19,10 +19,10 @@ pub(crate) fn build_implicit_skill_path_indexes(
     let mut by_scripts_dir = HashMap::new();
     let mut by_skill_doc_path = HashMap::new();
     for skill in skills {
-        let skill_doc_path = normalize_path(skill.path.as_path());
+        let skill_doc_path = normalize_path(skill.path_to_skills_md.as_path());
         by_skill_doc_path.insert(skill_doc_path, skill.clone());
 
-        if let Some(skill_dir) = skill.path.parent() {
+        if let Some(skill_dir) = skill.path_to_skills_md.parent() {
             let scripts_dir = normalize_path(&skill_dir.join("scripts"));
             by_scripts_dir.insert(scripts_dir, skill);
         }
@@ -70,7 +70,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     let invocation = SkillInvocation {
         skill_name: candidate.name,
         skill_scope: candidate.scope,
-        skill_path: candidate.path,
+        skill_path: candidate.path_to_skills_md,
         invocation_type: InvocationType::Implicit,
     };
     let skill_scope = match invocation.skill_scope {
@@ -252,8 +252,9 @@ mod tests {
             interface: None,
             dependencies: None,
             policy: None,
+            permission_profile: None,
             permissions: None,
-            path: skill_doc_path,
+            path_to_skills_md: skill_doc_path,
             scope: codex_protocol::protocol::SkillScope::User,
         }
     }

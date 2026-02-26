@@ -26,11 +26,13 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -45,6 +47,7 @@ pub struct UnifiedExecRequest {
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<PermissionProfile>,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
 }
@@ -55,6 +58,7 @@ pub struct UnifiedExecApprovalKey {
     pub cwd: PathBuf,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<PermissionProfile>,
 }
 
 pub struct UnifiedExecRuntime<'a> {
@@ -86,6 +90,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             cwd: req.cwd.clone(),
             tty: req.tty,
             sandbox_permissions: req.sandbox_permissions,
+            additional_permissions: req.additional_permissions.clone(),
         }]
     }
 
@@ -106,6 +111,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .or_else(|| req.justification.clone());
         Box::pin(async move {
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
+                let available_decisions = None;
                 session
                     .request_command_approval(
                         turn,
@@ -118,6 +124,8 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
+                        req.additional_permissions.clone(),
+                        available_decisions,
                     )
                     .await
             })
@@ -133,19 +141,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
-        if req.sandbox_permissions.requires_escalated_permissions()
-            || matches!(
-                req.exec_approval_requirement,
-                ExecApprovalRequirement::Skip {
-                    bypass_sandbox: true,
-                    ..
-                }
-            )
-        {
-            SandboxOverride::BypassSandboxFirstAttempt
-        } else {
-            SandboxOverride::NoOverride
-        }
+        sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
     }
 }
 
@@ -194,6 +190,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             &env,
             ExecExpiration::DefaultTimeout,
             req.sandbox_permissions,
+            req.additional_permissions.clone(),
             req.justification.clone(),
         )
         .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;

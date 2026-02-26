@@ -14,6 +14,12 @@ codex_rust_crate(
     ) + [
         "//codex-rs:node-version.txt",
     ],
+    rustc_env = {
+        # Askama resolves template paths relative to CARGO_MANIFEST_DIR. In
+        # Bazel, the Cargo-provided absolute source path points outside the
+        # sandbox, so keep the manifest root anchored inside the execroot.
+        "CARGO_MANIFEST_DIR": "codex-rs/core",
+    },
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
         "models.json",
