@@ -1,11 +1,8 @@
 [target.'cfg(all(windows, target_env = "msvc"))']
-rustflags = [
-    "-C",
-    "link-arg=/STACK:8388608",
-    "-C",
-    "llvm-args=-function-sections",
-]
+rustflags = ["-C", "link-arg=/STACK:8388608"]
 
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/STACK:8388608", "-C", "link-arg=/arm64hazardfree"]
 
 [target.'cfg(all(windows, target_env = "gnu"))']
 rustflags = ["-C", "link-arg=-Wl,--stack,8388608"]
