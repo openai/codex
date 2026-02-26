@@ -39,6 +39,8 @@ use crate::wrapping::adaptive_wrap_lines;
 use base64::Engine;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
+use codex_core::mcp::effective_mcp_servers;
+use codex_core::plugins::PluginsManager;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
@@ -1710,7 +1712,9 @@ pub(crate) fn new_mcp_tools_output(
         lines.push("".into());
     }
 
-    let mut servers: Vec<_> = config.mcp_servers.iter().collect();
+    let plugins_manager = PluginsManager::new(config.codex_home.clone());
+    let effective_servers = effective_mcp_servers(config, None, &plugins_manager);
+    let mut servers: Vec<_> = effective_servers.iter().collect();
     servers.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     for (server, cfg) in servers {

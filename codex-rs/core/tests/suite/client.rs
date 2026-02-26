@@ -957,6 +957,93 @@ async fn skills_append_to_instructions() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_skills_append_to_instructions() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let plugin_root = codex_home.path().join("plugins/sample");
+    let skill_dir = plugin_root.join("skills/sample-search");
+    std::fs::create_dir_all(skill_dir.as_path()).expect("create plugin skill dir");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    )
+    .expect("write plugin manifest");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\ndescription: inspect sample data\n---\n\n# body\n",
+    )
+    .expect("write plugin skill");
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            "[plugins.sample]\nenabled = true\npath = \"{}\"\n",
+            plugin_root.display()
+        ),
+    )
+    .expect("write config");
+
+    let codex_home_path = codex_home.path().to_path_buf();
+    let mut builder = test_codex()
+        .with_home(codex_home.clone())
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(move |config| {
+            config.cwd = codex_home_path;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_message_role(&request_body["input"][0], "developer");
+
+    assert_message_role(&request_body["input"][1], "user");
+    let instructions_text = request_body["input"][1]["content"][0]["text"]
+        .as_str()
+        .expect("instructions text");
+    assert!(
+        instructions_text.contains("## Skills"),
+        "expected skills section present"
+    );
+    assert!(
+        instructions_text.contains("sample:sample-search: inspect sample data"),
+        "expected namespaced plugin skill summary"
+    );
+    let expected_path = normalize_path(skill_dir.join("SKILL.md")).unwrap();
+    let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
+    assert!(
+        instructions_text.contains(&expected_path_str),
+        "expected path {expected_path_str} in instructions"
+    );
+    let _codex_home_guard = codex_home;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;

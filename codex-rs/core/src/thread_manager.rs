@@ -13,6 +13,7 @@ use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
+use crate::plugins::PluginsManager;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
@@ -68,7 +69,11 @@ impl Drop for TempCodexHomeGuard {
     }
 }
 
-fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -> Arc<FileWatcher> {
+fn build_file_watcher(
+    codex_home: PathBuf,
+    skills_manager: Arc<SkillsManager>,
+    plugins_manager: Arc<PluginsManager>,
+) -> Arc<FileWatcher> {
     if should_use_test_thread_manager_behavior()
         && let Ok(handle) = Handle::try_current()
         && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
@@ -89,12 +94,14 @@ fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -
 
     let mut rx = file_watcher.subscribe();
     let skills_manager = Arc::clone(&skills_manager);
+    let plugins_manager = Arc::clone(&plugins_manager);
     if let Ok(handle) = Handle::try_current() {
         handle.spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(FileWatcherEvent::SkillsChanged { .. }) => {
                         skills_manager.clear_cache();
+                        plugins_manager.clear_cache();
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
@@ -132,6 +139,7 @@ pub(crate) struct ThreadManagerState {
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     skills_manager: Arc<SkillsManager>,
+    plugins_manager: Arc<PluginsManager>,
     file_watcher: Arc<FileWatcher>,
     session_source: SessionSource,
     // Captures submitted ops for testing purpose when test mode is enabled.
@@ -147,8 +155,16 @@ impl ThreadManager {
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
-        let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
-        let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
+        let skills_manager = Arc::new(SkillsManager::new(
+            codex_home.clone(),
+            Arc::clone(&plugins_manager),
+        ));
+        let file_watcher = build_file_watcher(
+            codex_home.clone(),
+            Arc::clone(&skills_manager),
+            Arc::clone(&plugins_manager),
+        );
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -160,6 +176,7 @@ impl ThreadManager {
                     collaboration_modes_config,
                 )),
                 skills_manager,
+                plugins_manager,
                 file_watcher,
                 auth_manager,
                 session_source,
@@ -199,8 +216,16 @@ impl ThreadManager {
         set_thread_manager_test_mode_for_tests(true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
-        let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
-        let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
+        let skills_manager = Arc::new(SkillsManager::new(
+            codex_home.clone(),
+            Arc::clone(&plugins_manager),
+        ));
+        let file_watcher = build_file_watcher(
+            codex_home.clone(),
+            Arc::clone(&skills_manager),
+            Arc::clone(&plugins_manager),
+        );
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -211,6 +236,7 @@ impl ThreadManager {
                     provider,
                 )),
                 skills_manager,
+                plugins_manager,
                 file_watcher,
                 auth_manager,
                 session_source: SessionSource::Exec,
@@ -227,6 +253,10 @@ impl ThreadManager {
 
     pub fn skills_manager(&self) -> Arc<SkillsManager> {
         self.state.skills_manager.clone()
+    }
+
+    pub fn plugins_manager(&self) -> Arc<PluginsManager> {
+        self.state.plugins_manager.clone()
     }
 
     pub fn subscribe_file_watcher(&self) -> broadcast::Receiver<FileWatcherEvent> {
@@ -565,6 +595,7 @@ impl ThreadManagerState {
             auth_manager,
             Arc::clone(&self.models_manager),
             Arc::clone(&self.skills_manager),
+            Arc::clone(&self.plugins_manager),
             Arc::clone(&self.file_watcher),
             initial_history,
             session_source,

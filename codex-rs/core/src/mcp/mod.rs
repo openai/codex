@@ -25,6 +25,7 @@ use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::SandboxState;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
+use crate::plugins::PluginsManager;
 
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
@@ -160,12 +161,26 @@ pub(crate) fn with_codex_apps_mcp(
     servers
 }
 
-pub(crate) fn effective_mcp_servers(
+pub fn configured_mcp_servers(
+    config: &Config,
+    plugins_manager: &PluginsManager,
+) -> HashMap<String, McpServerConfig> {
+    let loaded_plugins = plugins_manager.plugins_for_config(config);
+    let mut servers = config.mcp_servers.get().clone();
+    for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
+        servers.entry(name).or_insert(plugin_server);
+    }
+    servers
+}
+
+pub fn effective_mcp_servers(
     config: &Config,
     auth: Option<&CodexAuth>,
+    plugins_manager: &PluginsManager,
 ) -> HashMap<String, McpServerConfig> {
+    let servers = configured_mcp_servers(config, plugins_manager);
     with_codex_apps_mcp(
-        config.mcp_servers.get().clone(),
+        servers,
         config.features.enabled(Feature::Apps),
         auth,
         config,
@@ -179,7 +194,8 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         config.cli_auth_credentials_store_mode,
     );
     let auth = auth_manager.auth().await;
-    let mcp_servers = effective_mcp_servers(config, auth.as_ref());
+    let plugins_manager = PluginsManager::new(config.codex_home.clone());
+    let mcp_servers = effective_mcp_servers(config, auth.as_ref(), &plugins_manager);
     if mcp_servers.is_empty() {
         return McpListToolsResponseEvent {
             tools: HashMap::new(),
@@ -366,7 +382,16 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CONFIG_TOML_FILE;
+    use crate::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
+    use std::fs;
+    use std::path::Path;
+
+    fn write_file(path: &Path, contents: &str) {
+        fs::create_dir_all(path.parent().expect("file should have a parent")).unwrap();
+        fs::write(path, contents).unwrap();
+    }
 
     fn make_tool(name: &str) -> Tool {
         Tool {
@@ -541,5 +566,87 @@ mod tests {
 
         let expected_url = format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}");
         assert_eq!(url, &expected_url);
+    }
+
+    #[tokio::test]
+    async fn effective_mcp_servers_include_plugins_without_overriding_user_config() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let plugin_root = codex_home.path().join("plugin-sample");
+        write_file(
+            &plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"sample"}"#,
+        );
+        write_file(
+            &plugin_root.join(".mcp.json"),
+            r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://plugin.example/mcp"
+    },
+    "docs": {
+      "type": "http",
+      "url": "https://docs.example/mcp"
+    }
+  }
+}"#,
+        );
+        write_file(
+            &codex_home.path().join(CONFIG_TOML_FILE),
+            &format!(
+                "[plugins.sample]\npath = \"{}\"\nenabled = true\n",
+                plugin_root.display()
+            ),
+        );
+
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config should load");
+
+        let mut configured_servers = config.mcp_servers.get().clone();
+        configured_servers.insert(
+            "sample".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://user.example/mcp".to_string(),
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+            },
+        );
+        config
+            .mcp_servers
+            .set(configured_servers)
+            .expect("test config should accept MCP servers");
+
+        let plugins_manager = PluginsManager::new(config.codex_home.clone());
+        let effective = effective_mcp_servers(&config, None, &plugins_manager);
+
+        let sample = effective.get("sample").expect("user server should exist");
+        let docs = effective.get("docs").expect("plugin server should exist");
+
+        match &sample.transport {
+            McpServerTransportConfig::StreamableHttp { url, .. } => {
+                assert_eq!(url, "https://user.example/mcp");
+            }
+            other => panic!("expected streamable http transport, got {other:?}"),
+        }
+        match &docs.transport {
+            McpServerTransportConfig::StreamableHttp { url, .. } => {
+                assert_eq!(url, "https://docs.example/mcp");
+            }
+            other => panic!("expected streamable http transport, got {other:?}"),
+        }
     }
 }
