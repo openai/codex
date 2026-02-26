@@ -266,11 +266,16 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
 
     let deadline = Instant::now() + Duration::from_secs(2);
     let child_request = loop {
-        if let Some(request) = child_request_log
-            .requests()
-            .into_iter()
-            .find(|request| request.body_contains_text(CHILD_PROMPT))
-        {
+        if let Some(request) = child_request_log.requests().into_iter().find(|request| {
+            request.body_contains_text(CHILD_PROMPT)
+                && request.body_contains_text(TURN_0_FORK_PROMPT)
+                && request.body_contains_text("seeded")
+                && request.function_call_output_content_and_success(SPAWN_CALL_ID)
+                    == Some((
+                        Some(FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string()),
+                        Some(true),
+                    ))
+        }) {
             break request;
         }
         if Instant::now() >= deadline {
