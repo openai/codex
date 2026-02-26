@@ -660,6 +660,29 @@ fn file_link_hides_destination() {
 }
 
 #[test]
+fn file_link_shows_line_number_from_hidden_destination() {
+    let text =
+        render_markdown_text("[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)");
+    let expected = Text::from(Line::from_iter([
+        "markdown_render.rs".cyan().underlined(),
+        " (line 74)".into(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_shows_line_number_from_hash_anchor() {
+    let text = render_markdown_text(
+        "[markdown_render.rs](file:///Users/example/code/codex/codex-rs/tui/src/markdown_render.rs#L74C3)",
+    );
+    let expected = Text::from(Line::from_iter([
+        "markdown_render.rs".cyan().underlined(),
+        " (line 74)".into(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
 fn url_link_shows_destination() {
     let text = render_markdown_text("[docs](https://example.com/docs)");
     let expected = Text::from(Line::from_iter([
@@ -674,7 +697,7 @@ fn url_link_shows_destination() {
 #[test]
 fn markdown_render_file_link_snapshot() {
     let text = render_markdown_text(
-        "See [markdown_render.rs:74](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74).",
+        "See [markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74).",
     );
     let rendered = text
         .lines

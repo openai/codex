@@ -89,10 +89,22 @@ pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>)
 struct LinkState {
     destination: String,
     show_destination: bool,
+    hidden_line_number: Option<String>,
+    label_start_span_idx: usize,
 }
 
 fn should_render_link_destination(dest_url: &str) -> bool {
     !is_local_path_like_link(dest_url)
+}
+
+fn hidden_local_link_line_number(dest_url: &str) -> Option<String> {
+    if !is_local_path_like_link(dest_url) {
+        return None;
+    }
+
+    parse_hash_line_anchor(dest_url)
+        .or_else(|| parse_colon_line_suffix(dest_url))
+        .map(std::string::ToString::to_string)
 }
 
 fn is_local_path_like_link(dest_url: &str) -> bool {
@@ -107,6 +119,37 @@ fn is_local_path_like_link(dest_url: &str) -> bool {
             [drive, b':', separator, ..]
                 if drive.is_ascii_alphabetic() && matches!(separator, b'/' | b'\\')
         )
+}
+
+fn parse_hash_line_anchor(dest_url: &str) -> Option<&str> {
+    let (_, fragment) = dest_url.rsplit_once('#')?;
+    let line_part = fragment.strip_prefix('L')?;
+    let line = line_part.split('C').next()?;
+    (!line.is_empty() && line.bytes().all(|b| b.is_ascii_digit())).then_some(line)
+}
+
+fn parse_colon_line_suffix(dest_url: &str) -> Option<&str> {
+    let (prefix, tail) = dest_url.rsplit_once(':')?;
+    if !tail.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+
+    if let Some((_, line)) = prefix.rsplit_once(':')
+        && line.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Some(line);
+    }
+
+    Some(tail)
+}
+
+fn label_already_mentions_line(label_text: &str, line_number: &str) -> bool {
+    if label_text.contains(&format!("(line {line_number})")) {
+        return true;
+    }
+
+    parse_hash_line_anchor(label_text).or_else(|| parse_colon_line_suffix(label_text))
+        == Some(line_number)
 }
 
 struct Writer<'a, I>
@@ -492,19 +535,40 @@ where
 
     fn push_link(&mut self, dest_url: String) {
         self.push_inline_style(self.styles.link);
+        let label_start_span_idx = self
+            .current_line_content
+            .as_ref()
+            .map(|line| line.spans.len())
+            .unwrap_or(0);
         self.link = Some(LinkState {
             show_destination: should_render_link_destination(&dest_url),
+            hidden_line_number: hidden_local_link_line_number(&dest_url),
+            label_start_span_idx,
             destination: dest_url,
         });
     }
 
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
+            let visible_label_text = self
+                .current_line_content
+                .as_ref()
+                .map(|line| {
+                    line.spans[link.label_start_span_idx..]
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .unwrap_or_default();
             self.pop_inline_style();
             if link.show_destination {
                 self.push_span(" (".into());
                 self.push_span(Span::styled(link.destination, self.styles.link));
                 self.push_span(")".into());
+            } else if let Some(line_number) = link.hidden_line_number
+                && !label_already_mentions_line(&visible_label_text, &line_number)
+            {
+                self.push_span(format!(" (line {line_number})").into());
             }
         }
     }
