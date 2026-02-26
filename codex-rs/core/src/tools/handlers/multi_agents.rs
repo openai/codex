@@ -914,7 +914,7 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallE
     config.model = Some(turn.model_info.slug.clone());
     config.model_provider = turn.provider.clone();
     config.model_reasoning_effort = turn.reasoning_effort;
-    config.model_reasoning_summary = turn.reasoning_summary;
+    config.model_reasoning_summary = Some(turn.reasoning_summary);
     config.developer_instructions = turn.developer_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
@@ -2046,7 +2046,7 @@ mod tests {
         expected.model = Some(turn.model_info.slug.clone());
         expected.model_provider = turn.provider.clone();
         expected.model_reasoning_effort = turn.reasoning_effort;
-        expected.model_reasoning_summary = turn.reasoning_summary;
+        expected.model_reasoning_summary = Some(turn.reasoning_summary);
         expected.developer_instructions = turn.developer_instructions.clone();
         expected.compact_prompt = turn.compact_prompt.clone();
         expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
@@ -2098,7 +2098,7 @@ mod tests {
         expected.model = Some(turn.model_info.slug.clone());
         expected.model_provider = turn.provider.clone();
         expected.model_reasoning_effort = turn.reasoning_effort;
-        expected.model_reasoning_summary = turn.reasoning_summary;
+        expected.model_reasoning_summary = Some(turn.reasoning_summary);
         expected.developer_instructions = turn.developer_instructions.clone();
         expected.compact_prompt = turn.compact_prompt.clone();
         expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
