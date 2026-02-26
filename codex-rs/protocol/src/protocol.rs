@@ -1976,7 +1976,7 @@ impl SessionSource {
                 agent_nickname.clone()
             }
             SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
-                Some("morpheus".to_string())
+                Some("Morpheus".to_string())
             }
             _ => None,
         }
