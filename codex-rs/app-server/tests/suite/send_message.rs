@@ -3,6 +3,8 @@ use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
+use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
+use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
 use codex_app_server_protocol::InputItem;
@@ -38,7 +40,6 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
 #[tokio::test]
 async fn test_send_message_success() -> Result<()> {
@@ -328,7 +329,7 @@ async fn test_send_message_rejects_oversized_input() -> Result<()> {
         format!("Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters.")
     );
     let data = err.error.data.expect("expected structured error data");
-    assert_eq!(data["input_error_code"], "input_too_large");
+    assert_eq!(data["input_error_code"], INPUT_TOO_LARGE_ERROR_CODE);
     assert_eq!(data["max_chars"], MAX_USER_INPUT_TEXT_CHARS);
     assert_eq!(data["actual_chars"], oversized_input.chars().count());
 

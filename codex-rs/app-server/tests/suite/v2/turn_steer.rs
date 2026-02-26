@@ -6,6 +6,8 @@ use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
+use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
+use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -22,7 +24,6 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
 #[tokio::test]
 async fn turn_steer_requires_active_turn() -> Result<()> {
@@ -162,7 +163,7 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
         .error
         .data
         .expect("expected structured error data");
-    assert_eq!(data["input_error_code"], "input_too_large");
+    assert_eq!(data["input_error_code"], INPUT_TOO_LARGE_ERROR_CODE);
     assert_eq!(data["max_chars"], MAX_USER_INPUT_TEXT_CHARS);
     assert_eq!(data["actual_chars"], oversized_input.chars().count());
 

@@ -1,4 +1,5 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
+use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
@@ -287,7 +288,6 @@ use crate::thread_state::ThreadStateManager;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
-const INPUT_TOO_LARGE_ERROR_CODE: &str = "input_too_large";
 
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,

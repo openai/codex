@@ -9,6 +9,8 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
+use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
+use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -61,7 +63,6 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const TEST_ORIGINATOR: &str = "codex_vscode";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
-const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
 #[tokio::test]
 async fn turn_start_sends_originator_header() -> Result<()> {
@@ -344,7 +345,7 @@ async fn turn_start_rejects_combined_oversized_text_input() -> Result<()> {
         format!("Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters.")
     );
     let data = err.error.data.expect("expected structured error data");
-    assert_eq!(data["input_error_code"], "input_too_large");
+    assert_eq!(data["input_error_code"], INPUT_TOO_LARGE_ERROR_CODE);
     assert_eq!(data["max_chars"], MAX_USER_INPUT_TEXT_CHARS);
     assert_eq!(data["actual_chars"], actual_chars);
 
