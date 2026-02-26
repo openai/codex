@@ -26,6 +26,7 @@ codex-utils-string = { workspace = true }
 codex-api = { workspace = true }
 codex-protocol = { workspace = true }
 eventsource-stream = { workspace = true }
+gethostname = { workspace = true }
 opentelemetry = { workspace = true, features = ["logs", "metrics", "trace"] }
 opentelemetry-appender-tracing = { workspace = true }
 opentelemetry-otlp = { workspace = true, features = [

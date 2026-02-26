@@ -65,6 +65,7 @@ mod bottom_pane;
 mod chatwidget;
 mod cli;
 mod clipboard_paste;
+mod clipboard_text;
 mod collaboration_modes;
 mod color;
 pub mod custom_terminal;
@@ -120,6 +121,7 @@ mod voice;
 mod voice {
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
+    use codex_protocol::protocol::RealtimeAudioFrame;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
@@ -135,8 +137,14 @@ mod voice {
 
     pub(crate) struct RecordingMeterState;
 
+    pub(crate) struct RealtimeAudioPlayer;
+
     impl VoiceCapture {
         pub fn start() -> Result<Self, String> {
+            Err("voice input is unavailable in this build".to_string())
+        }
+
+        pub fn start_realtime(_tx: AppEventSender) -> Result<Self, String> {
             Err("voice input is unavailable in this build".to_string())
         }
 
@@ -175,6 +183,18 @@ mod voice {
         }
     }
 
+    impl RealtimeAudioPlayer {
+        pub(crate) fn start() -> Result<Self, String> {
+            Err("voice output is unavailable in this build".to_string())
+        }
+
+        pub(crate) fn enqueue_frame(&self, _frame: &RealtimeAudioFrame) -> Result<(), String> {
+            Err("voice output is unavailable in this build".to_string())
+        }
+
+        pub(crate) fn clear(&self) {}
+    }
+
     pub fn transcribe_async(
         id: String,
         _audio: RecordedAudio,
@@ -196,15 +216,13 @@ use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
 pub use cli::Cli;
+use codex_arg0::Arg0DispatchPaths;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
-pub async fn run_main(
-    mut cli: Cli,
-    codex_linux_sandbox_exe: Option<PathBuf>,
-) -> std::io::Result<AppExitInfo> {
+pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::Result<AppExitInfo> {
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
@@ -353,7 +371,8 @@ pub async fn run_main(
         cwd,
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
-        codex_linux_sandbox_exe,
+        codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
+        main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         show_raw_agent_reasoning: cli.oss.then_some(true),
         additional_writable_roots: additional_dirs,
         ..Default::default()
@@ -659,6 +678,7 @@ async fn run_ratatui_app(
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 &config.model_provider_id,
+                None,
             )
             .await
             {

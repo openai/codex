@@ -20,6 +20,7 @@ use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::WindowsSandboxLevel;
 use crate::custom_prompts::CustomPrompt;
+use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
@@ -40,6 +41,7 @@ use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::request_user_input::RequestUserInputResponse;
+use crate::skill_approval::SkillApprovalResponse;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
@@ -57,7 +59,10 @@ pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
 pub use crate::approvals::NetworkApprovalContext;
 pub use crate::approvals::NetworkApprovalProtocol;
+pub use crate::approvals::NetworkPolicyAmendment;
+pub use crate::approvals::NetworkPolicyRuleAction;
 pub use crate::request_user_input::RequestUserInputEvent;
+pub use crate::skill_approval::SkillRequestApprovalEvent;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -289,6 +294,14 @@ pub enum Op {
         id: String,
         /// Tool output payload.
         response: DynamicToolResponse,
+    },
+
+    /// Resolve a skill approval request.
+    SkillApproval {
+        /// Item id for the in-flight request.
+        id: String,
+        /// User decision.
+        response: SkillApprovalResponse,
     },
 
     /// Append an entry to the persistent cross-session message history.
@@ -1041,6 +1054,10 @@ pub enum EventMsg {
 
     DynamicToolCallRequest(DynamicToolCallRequest),
 
+    DynamicToolCallResponse(DynamicToolCallResponseEvent),
+
+    SkillRequestApproval(SkillRequestApprovalEvent),
+
     ElicitationRequest(ElicitationRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
@@ -1765,6 +1782,27 @@ pub struct McpToolCallEndEvent {
     pub duration: Duration,
     /// Result of the tool call. Note this could be an error.
     pub result: Result<CallToolResult, String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
+pub struct DynamicToolCallResponseEvent {
+    /// Identifier for the corresponding DynamicToolCallRequest.
+    pub call_id: String,
+    /// Turn ID that this dynamic tool call belongs to.
+    pub turn_id: String,
+    /// Dynamic tool name.
+    pub tool: String,
+    /// Dynamic tool call arguments.
+    pub arguments: serde_json::Value,
+    /// Dynamic tool response content items.
+    pub content_items: Vec<DynamicToolCallOutputContentItem>,
+    /// Whether the tool call succeeded.
+    pub success: bool,
+    /// Optional error text when the tool call failed before producing a response.
+    pub error: Option<String>,
+    /// The duration of the dynamic tool call.
+    #[ts(type = "string")]
+    pub duration: Duration,
 }
 
 impl McpToolCallEndEvent {
@@ -2756,6 +2794,12 @@ pub enum ReviewDecision {
     /// remainder of the session.
     ApprovedForSession,
 
+    /// User chose to persist a network policy rule (allow/deny) for future
+    /// requests to the same host.
+    NetworkPolicyAmendment {
+        network_policy_amendment: NetworkPolicyAmendment,
+    },
+
     /// User has denied this command and the agent should not execute it, but
     /// it should continue the session and try something else.
     #[default]
@@ -2774,6 +2818,12 @@ impl ReviewDecision {
             ReviewDecision::Approved => "approved",
             ReviewDecision::ApprovedExecpolicyAmendment { .. } => "approved_with_amendment",
             ReviewDecision::ApprovedForSession => "approved_for_session",
+            ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => match network_policy_amendment.action {
+                NetworkPolicyRuleAction::Allow => "approved_with_network_policy_allow",
+                NetworkPolicyRuleAction::Deny => "denied_with_network_policy_deny",
+            },
             ReviewDecision::Denied => "denied",
             ReviewDecision::Abort => "abort",
         }

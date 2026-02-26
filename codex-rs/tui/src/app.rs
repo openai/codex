@@ -47,6 +47,7 @@ use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -103,6 +104,10 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
+
+mod pending_interactive_replay;
+
+use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -252,6 +257,7 @@ struct ThreadEventStore {
     session_configured: Option<Event>,
     buffer: VecDeque<Event>,
     user_message_ids: HashSet<String>,
+    pending_interactive_replay: PendingInteractiveReplayState,
     capacity: usize,
     active: bool,
 }
@@ -262,6 +268,7 @@ impl ThreadEventStore {
             session_configured: None,
             buffer: VecDeque::new(),
             user_message_ids: HashSet::new(),
+            pending_interactive_replay: PendingInteractiveReplayState::default(),
             capacity,
             active: false,
         }
@@ -274,6 +281,7 @@ impl ThreadEventStore {
     }
 
     fn push_event(&mut self, event: Event) {
+        self.pending_interactive_replay.note_event(&event);
         match &event.msg {
             EventMsg::SessionConfigured(_) => {
                 self.session_configured = Some(event);
@@ -308,18 +316,46 @@ impl ThreadEventStore {
         self.buffer.push_back(event);
         if self.buffer.len() > self.capacity
             && let Some(removed) = self.buffer.pop_front()
-            && matches!(removed.msg, EventMsg::UserMessage(_))
-            && !removed.id.is_empty()
         {
-            self.user_message_ids.remove(&removed.id);
+            self.pending_interactive_replay.note_evicted_event(&removed);
+            if matches!(removed.msg, EventMsg::UserMessage(_)) && !removed.id.is_empty() {
+                self.user_message_ids.remove(&removed.id);
+            }
         }
     }
 
     fn snapshot(&self) -> ThreadEventSnapshot {
         ThreadEventSnapshot {
             session_configured: self.session_configured.clone(),
-            events: self.buffer.iter().cloned().collect(),
+            // Thread switches replay buffered events into a rebuilt ChatWidget. Only replay
+            // interactive prompts that are still pending, or answered approvals/input will reappear.
+            events: self
+                .buffer
+                .iter()
+                .filter(|event| {
+                    self.pending_interactive_replay
+                        .should_replay_snapshot_event(event)
+                })
+                .cloned()
+                .collect(),
         }
+    }
+
+    fn note_outbound_op(&mut self, op: &Op) {
+        self.pending_interactive_replay.note_outbound_op(op);
+    }
+
+    fn op_can_change_pending_replay_state(op: &Op) -> bool {
+        PendingInteractiveReplayState::op_can_change_state(op)
+    }
+
+    fn event_can_change_pending_thread_approvals(event: &Event) -> bool {
+        PendingInteractiveReplayState::event_can_change_pending_thread_approvals(event)
+    }
+
+    fn has_pending_thread_approvals(&self) -> bool {
+        self.pending_interactive_replay
+            .has_pending_thread_approvals()
     }
 }
 
@@ -704,6 +740,15 @@ impl App {
         self.clear_ui_header_lines_with_version(width, CODEX_CLI_VERSION)
     }
 
+    fn queue_clear_ui_header(&mut self, tui: &mut tui::Tui) {
+        let width = tui.terminal.last_known_screen_size.width;
+        let header_lines = self.clear_ui_header_lines(width);
+        if !header_lines.is_empty() {
+            tui.insert_history_lines(header_lines);
+            self.has_emitted_history_lines = true;
+        }
+    }
+
     fn clear_terminal_ui(&mut self, tui: &mut tui::Tui, redraw_header: bool) -> Result<()> {
         let is_alt_screen_active = tui.is_alt_screen_active();
 
@@ -728,14 +773,18 @@ impl App {
         self.has_emitted_history_lines = false;
 
         if redraw_header {
-            let width = tui.terminal.last_known_screen_size.width;
-            let header_lines = self.clear_ui_header_lines(width);
-            if !header_lines.is_empty() {
-                tui.insert_history_lines(header_lines);
-                self.has_emitted_history_lines = true;
-            }
+            self.queue_clear_ui_header(tui);
         }
         Ok(())
+    }
+
+    fn reset_app_ui_state_after_clear(&mut self) {
+        self.overlay = None;
+        self.transcript_cells.clear();
+        self.deferred_history_lines.clear();
+        self.has_emitted_history_lines = false;
+        self.backtrack = BacktrackState::default();
+        self.backtrack_render_pending = false;
     }
 
     async fn shutdown_current_thread(&mut self) {
@@ -773,6 +822,7 @@ impl App {
         };
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = receiver;
+        self.refresh_pending_thread_approvals().await;
     }
 
     async fn store_active_thread_receiver(&mut self) {
@@ -806,9 +856,80 @@ impl App {
             self.set_thread_active(active_id, false).await;
         }
         self.active_thread_rx = None;
+        self.refresh_pending_thread_approvals().await;
+    }
+
+    async fn note_active_thread_outbound_op(&mut self, op: &Op) {
+        if !ThreadEventStore::op_can_change_pending_replay_state(op) {
+            return;
+        }
+        let Some(thread_id) = self.active_thread_id else {
+            return;
+        };
+        let Some(channel) = self.thread_event_channels.get(&thread_id) else {
+            return;
+        };
+        let mut store = channel.store.lock().await;
+        store.note_outbound_op(op);
+    }
+
+    async fn refresh_pending_thread_approvals(&mut self) {
+        let channels: Vec<(ThreadId, Arc<Mutex<ThreadEventStore>>)> = self
+            .thread_event_channels
+            .iter()
+            .map(|(thread_id, channel)| (*thread_id, Arc::clone(&channel.store)))
+            .collect();
+
+        let mut pending_thread_ids = Vec::new();
+        for (thread_id, store) in channels {
+            if Some(thread_id) == self.active_thread_id {
+                continue;
+            }
+
+            let store = store.lock().await;
+            if store.has_pending_thread_approvals() {
+                pending_thread_ids.push(thread_id);
+            }
+        }
+
+        pending_thread_ids.sort_by_key(ThreadId::to_string);
+
+        let threads = pending_thread_ids
+            .into_iter()
+            .map(|thread_id| {
+                let is_primary = self.primary_thread_id == Some(thread_id);
+                let fallback_label = if is_primary {
+                    "Main [default]".to_string()
+                } else {
+                    let thread_id = thread_id.to_string();
+                    let short_id: String = thread_id.chars().take(8).collect();
+                    format!("Agent ({short_id})")
+                };
+                if let Some(entry) = self.agent_picker_threads.get(&thread_id) {
+                    let label = format_agent_picker_item_name(
+                        entry.agent_nickname.as_deref(),
+                        entry.agent_role.as_deref(),
+                        is_primary,
+                    );
+                    if label == "Agent" {
+                        let thread_id = thread_id.to_string();
+                        let short_id: String = thread_id.chars().take(8).collect();
+                        format!("{label} ({short_id})")
+                    } else {
+                        label
+                    }
+                } else {
+                    fallback_label
+                }
+            })
+            .collect();
+
+        self.chat_widget.set_pending_thread_approvals(threads);
     }
 
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
+        let refresh_pending_thread_approvals =
+            ThreadEventStore::event_can_change_pending_thread_approvals(&event);
         let (sender, store) = {
             let channel = self.ensure_thread_channel(thread_id);
             (channel.sender.clone(), Arc::clone(&channel.store))
@@ -837,6 +958,9 @@ impl App {
                     tracing::warn!("thread {thread_id} event channel closed");
                 }
             }
+        }
+        if refresh_pending_thread_approvals {
+            self.refresh_pending_thread_approvals().await;
         }
         Ok(())
     }
@@ -1016,6 +1140,7 @@ impl App {
             );
         }
         self.drain_active_thread_events(tui).await?;
+        self.refresh_pending_thread_approvals().await;
 
         Ok(())
     }
@@ -1039,6 +1164,7 @@ impl App {
         self.active_thread_rx = None;
         self.primary_thread_id = None;
         self.pending_primary_events.clear();
+        self.chat_widget.set_pending_thread_approvals(Vec::new());
     }
 
     async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
@@ -1194,6 +1320,11 @@ impl App {
             auth_manager.clone(),
             SessionSource::Cli,
             config.model_catalog.clone(),
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
+                    .features
+                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+            },
         ));
         let mut model = thread_manager
             .get_models_manager()
@@ -1576,12 +1707,7 @@ impl App {
             }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, false)?;
-                self.overlay = None;
-                self.transcript_cells.clear();
-                self.deferred_history_lines.clear();
-                self.has_emitted_history_lines = false;
-                self.backtrack = BacktrackState::default();
-                self.backtrack_render_pending = false;
+                self.reset_app_ui_state_after_clear();
 
                 self.start_fresh_session_with_summary_hint(tui).await;
             }
@@ -1816,7 +1942,13 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
-                self.chat_widget.submit_op(op);
+                let replay_state_op =
+                    ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
+                let submitted = self.chat_widget.submit_op(op);
+                if submitted && let Some(op) = replay_state_op.as_ref() {
+                    self.note_active_thread_outbound_op(op).await;
+                    self.refresh_pending_thread_approvals().await;
+                }
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
@@ -2562,6 +2694,9 @@ impl App {
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker().await;
             }
+            AppEvent::RefreshPendingThreadApprovals => {
+                self.refresh_pending_thread_approvals().await;
+            }
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, thread_id).await?;
             }
@@ -2901,6 +3036,7 @@ impl App {
             ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
         let sender = channel.sender.clone();
         let store = Arc::clone(&channel.store);
+        let app_event_tx = self.app_event_tx.clone();
         self.thread_event_channels.insert(thread_id, channel);
         tokio::spawn(async move {
             loop {
@@ -2911,11 +3047,16 @@ impl App {
                         break;
                     }
                 };
+                let refresh_pending_thread_approvals =
+                    ThreadEventStore::event_can_change_pending_thread_approvals(&event);
                 let should_send = {
                     let mut guard = store.lock().await;
                     guard.push_event(event.clone());
                     guard.active
                 };
+                if refresh_pending_thread_approvals {
+                    app_event_tx.send(AppEvent::RefreshPendingThreadApprovals);
+                }
                 if should_send && let Err(err) = sender.send(event).await {
                     tracing::debug!("external thread {thread_id} channel closed: {err}");
                     break;
@@ -3065,6 +3206,25 @@ impl App {
                 let _ = tui.enter_alt_screen();
                 self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
+            }
+            KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if !self.chat_widget.can_run_ctrl_l_clear_now() {
+                    return;
+                }
+                if let Err(err) = self.clear_terminal_ui(tui, false) {
+                    tracing::warn!(error = %err, "failed to clear terminal UI");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to clear terminal UI: {err}"));
+                } else {
+                    self.reset_app_ui_state_after_clear();
+                    self.queue_clear_ui_header(tui);
+                    tui.frame_requester().schedule_frame();
+                }
             }
             KeyEvent {
                 code: KeyCode::Char('g'),
@@ -3379,6 +3539,63 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn refresh_pending_thread_approvals_only_lists_inactive_threads() {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("valid thread");
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.thread_event_channels
+            .insert(main_thread_id, ThreadEventChannel::new(1));
+
+        let agent_channel = ThreadEventChannel::new(1);
+        {
+            let mut store = agent_channel.store.lock().await;
+            store.push_event(Event {
+                id: "ev-1".to_string(),
+                msg: EventMsg::ExecApprovalRequest(
+                    codex_protocol::protocol::ExecApprovalRequestEvent {
+                        call_id: "call-1".to_string(),
+                        approval_id: None,
+                        turn_id: "turn-1".to_string(),
+                        command: vec!["echo".to_string(), "hi".to_string()],
+                        cwd: PathBuf::from("/tmp"),
+                        reason: None,
+                        network_approval_context: None,
+                        proposed_execpolicy_amendment: None,
+                        proposed_network_policy_amendments: None,
+                        additional_permissions: None,
+                        parsed_cmd: Vec::new(),
+                    },
+                ),
+            });
+        }
+        app.thread_event_channels
+            .insert(agent_thread_id, agent_channel);
+        app.agent_picker_threads.insert(
+            agent_thread_id,
+            AgentPickerThreadEntry {
+                agent_nickname: Some("Robie".to_string()),
+                agent_role: Some("explorer".to_string()),
+                is_closed: false,
+            },
+        );
+
+        app.refresh_pending_thread_approvals().await;
+        assert_eq!(
+            app.chat_widget.pending_thread_approvals(),
+            &["Robie [explorer]".to_string()]
+        );
+
+        app.active_thread_id = Some(agent_thread_id);
+        app.refresh_pending_thread_approvals().await;
+        assert!(app.chat_widget.pending_thread_approvals().is_empty());
+    }
+
     #[test]
     fn agent_picker_item_name_snapshot() {
         let thread_id =
@@ -3493,8 +3710,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn clear_ui_after_long_transcript_snapshots_fresh_header_only() {
+    async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
         let mut app = make_test_app().await;
         app.config.cwd = PathBuf::from("/tmp/project");
         app.chat_widget.set_model("gpt-test");
@@ -3599,6 +3815,18 @@ mod tests {
             !rendered.contains("Bracken Ferry"),
             "clear header should not replay prior conversation turns"
         );
+        rendered
+    }
+
+    #[tokio::test]
+    async fn clear_ui_after_long_transcript_snapshots_fresh_header_only() {
+        let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
+        assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
+    }
+
+    #[tokio::test]
+    async fn ctrl_l_clear_ui_after_long_transcript_reuses_clear_header_snapshot() {
+        let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
         assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
     }
 
@@ -3878,7 +4106,7 @@ mod tests {
             .await
             .expect("config");
 
-        let available_models = all_model_presets();
+        let mut available_models = all_model_presets();
         let current = available_models
             .iter()
             .find(|preset| preset.model == "gpt-5.1-codex")
@@ -3890,6 +4118,13 @@ mod tests {
         );
 
         let upgrade = current.upgrade.as_ref().expect("upgrade configured");
+        // Test "hidden current model still prompts" even if bundled
+        // catalog data changes the target model's picker visibility.
+        available_models
+            .iter_mut()
+            .find(|preset| preset.model == upgrade.id)
+            .expect("upgrade target present")
+            .show_in_picker = true;
         assert!(
             should_show_model_migration_prompt(
                 &current.model,
@@ -4465,6 +4700,59 @@ mod tests {
             Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
             Err(_) => panic!("expected shutdown op to be sent"),
         }
+    }
+
+    #[tokio::test]
+    async fn clear_only_ui_reset_preserves_chat_session_state() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("keep me".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+        app.chat_widget
+            .apply_external_edit("draft prompt".to_string());
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: "old message".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>];
+        app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+        app.deferred_history_lines = vec![Line::from("stale buffered line")];
+        app.has_emitted_history_lines = true;
+        app.backtrack.primed = true;
+        app.backtrack.overlay_preview_active = true;
+        app.backtrack.nth_user_message = 0;
+        app.backtrack_render_pending = true;
+
+        app.reset_app_ui_state_after_clear();
+
+        assert!(app.overlay.is_none());
+        assert!(app.transcript_cells.is_empty());
+        assert!(app.deferred_history_lines.is_empty());
+        assert!(!app.has_emitted_history_lines);
+        assert!(!app.backtrack.primed);
+        assert!(!app.backtrack.overlay_preview_active);
+        assert!(app.backtrack.pending_rollback.is_none());
+        assert!(!app.backtrack_render_pending);
+        assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
     }
 
     #[tokio::test]
