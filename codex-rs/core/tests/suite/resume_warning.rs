@@ -35,7 +35,9 @@ fn resume_history(
         personality: None,
         collaboration_mode: None,
         effort: config.model_reasoning_effort,
-        summary: config.model_reasoning_summary.unwrap_or(ReasoningSummary::Auto),
+        summary: config
+            .model_reasoning_summary
+            .unwrap_or(ReasoningSummary::Auto),
         user_instructions: None,
         developer_instructions: None,
         final_output_json_schema: None,

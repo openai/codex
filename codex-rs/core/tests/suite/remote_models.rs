@@ -175,7 +175,9 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: requested_model.to_string(),
             effort: None,
-            summary: config.model_reasoning_summary.unwrap_or(ReasoningSummary::Auto),
+            summary: config
+                .model_reasoning_summary
+                .unwrap_or(ReasoningSummary::Auto),
             collaboration_mode: None,
             personality: None,
         })
@@ -227,7 +229,9 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: requested_model.to_string(),
             effort: None,
-            summary: config.model_reasoning_summary.unwrap_or(ReasoningSummary::Auto),
+            summary: config
+                .model_reasoning_summary
+                .unwrap_or(ReasoningSummary::Auto),
             collaboration_mode: None,
             personality: None,
         })

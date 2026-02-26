@@ -1264,7 +1264,9 @@ impl Session {
         otel_manager.conversation_starts(
             config.model_provider.name.as_str(),
             session_configuration.collaboration_mode.reasoning_effort(),
-            config.model_reasoning_summary.unwrap_or(ReasoningSummaryConfig::Auto),
+            config
+                .model_reasoning_summary
+                .unwrap_or(ReasoningSummaryConfig::Auto),
             config.model_context_window,
             config.model_auto_compact_token_limit,
             config.permissions.approval_policy.value(),
