@@ -4,6 +4,7 @@ Module: runtimes
 Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
+use crate::config::Permissions;
 use crate::exec::ExecExpiration;
 use crate::path_utils;
 use crate::sandboxing::CommandSpec;
@@ -18,6 +19,13 @@ use std::path::Path;
 pub mod apply_patch;
 pub mod shell;
 pub mod unified_exec;
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum EscalationPermissions {
+    PermissionProfile(PermissionProfile),
+    Permissions(Permissions),
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ExecveSessionApproval {
