@@ -23,7 +23,7 @@ use tokio::time::sleep_until;
 use tracing::warn;
 
 use crate::config::Config;
-use crate::skills::loader::skill_roots_from_layer_stack_with_agents;
+use crate::skills::loader::skill_roots;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileWatcherEvent {
@@ -145,7 +145,7 @@ impl FileWatcher {
 
     pub(crate) fn register_config(self: &Arc<Self>, config: &Config) -> WatchRegistration {
         let deduped_roots: HashSet<PathBuf> =
-            skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd)
+            skill_roots(&config.config_layer_stack, &config.cwd, Vec::new())
                 .into_iter()
                 .map(|root| root.path)
                 .collect();

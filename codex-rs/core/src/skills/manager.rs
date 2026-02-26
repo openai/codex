@@ -18,26 +18,29 @@ use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
+use crate::plugins::PluginsManager;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::build_implicit_skill_path_indexes;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
-use crate::skills::loader::skill_roots_from_layer_stack_with_agents;
+use crate::skills::loader::skill_roots;
 use crate::skills::system::install_system_skills;
 
 pub struct SkillsManager {
     codex_home: PathBuf,
+    plugins_manager: Arc<PluginsManager>,
     cache_by_cwd: RwLock<HashMap<PathBuf, SkillLoadOutcome>>,
 }
 
 impl SkillsManager {
-    pub fn new(codex_home: PathBuf) -> Self {
+    pub fn new(codex_home: PathBuf, plugins_manager: Arc<PluginsManager>) -> Self {
         if let Err(err) = install_system_skills(&codex_home) {
             tracing::error!("failed to install system skills: {err}");
         }
 
         Self {
             codex_home,
+            plugins_manager,
             cache_by_cwd: RwLock::new(HashMap::new()),
         }
     }
@@ -50,14 +53,14 @@ impl SkillsManager {
             return outcome;
         }
 
-        let roots =
-            skill_roots_from_layer_stack_with_agents(&config.config_layer_stack, &config.cwd);
-        let mut outcome = load_skills_from_roots(roots);
-        outcome.disabled_paths = disabled_paths_from_stack(&config.config_layer_stack);
-        let (by_scripts_dir, by_doc_path) =
-            build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
-        outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
-        outcome.implicit_skills_by_doc_path = Arc::new(by_doc_path);
+        let loaded_plugins = self.plugins_manager.plugins_for_config(config);
+        let roots = skill_roots(
+            &config.config_layer_stack,
+            &config.cwd,
+            loaded_plugins.effective_skill_roots(),
+        );
+        let outcome =
+            finalize_skill_outcome(load_skills_from_roots(roots), &config.config_layer_stack);
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -121,7 +124,15 @@ impl SkillsManager {
             }
         };
 
-        let mut roots = skill_roots_from_layer_stack_with_agents(&config_layer_stack, cwd);
+        let loaded_plugins = self
+            .plugins_manager
+            .plugins_for_cwd(cwd, force_reload)
+            .await;
+        let mut roots = skill_roots(
+            &config_layer_stack,
+            cwd,
+            loaded_plugins.effective_skill_roots(),
+        );
         roots.extend(
             normalized_extra_user_roots
                 .iter()
@@ -138,11 +149,7 @@ impl SkillsManager {
                 .skills
                 .retain(|skill| skill.scope != SkillScope::System);
         }
-        outcome.disabled_paths = disabled_paths_from_stack(&config_layer_stack);
-        let (by_scripts_dir, by_doc_path) =
-            build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
-        outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
-        outcome.implicit_skills_by_doc_path = Arc::new(by_doc_path);
+        let outcome = finalize_skill_outcome(outcome, &config_layer_stack);
         let mut cache = match self.cache_by_cwd.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -210,6 +217,18 @@ fn disabled_paths_from_stack(
     disabled
 }
 
+fn finalize_skill_outcome(
+    mut outcome: SkillLoadOutcome,
+    config_layer_stack: &crate::config_loader::ConfigLayerStack,
+) -> SkillLoadOutcome {
+    outcome.disabled_paths = disabled_paths_from_stack(config_layer_stack);
+    let (by_scripts_dir, by_doc_path) =
+        build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
+    outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
+    outcome.implicit_skills_by_doc_path = Arc::new(by_doc_path);
+    outcome
+}
+
 fn normalize_override_path(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -232,6 +251,7 @@ mod tests {
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirementsToml;
+    use crate::plugins::PluginsManager;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
@@ -259,7 +279,8 @@ mod tests {
             .await
             .expect("defaults for test should always succeed");
 
-        let skills_manager = SkillsManager::new(codex_home.path().to_path_buf());
+        let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+        let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager);
 
         write_user_skill(&codex_home, "a", "skill-a", "from a");
         let outcome1 = skills_manager.skills_for_config(&cfg);
@@ -292,7 +313,8 @@ mod tests {
             .await
             .expect("defaults for test should always succeed");
 
-        let skills_manager = SkillsManager::new(codex_home.path().to_path_buf());
+        let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+        let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager);
         let _ = skills_manager.skills_for_config(&config);
 
         write_user_skill(&extra_root, "x", "extra-skill", "from extra root");
@@ -335,7 +357,8 @@ mod tests {
             .await
             .expect("defaults for test should always succeed");
 
-        let skills_manager = SkillsManager::new(codex_home.path().to_path_buf());
+        let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+        let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager);
         let _ = skills_manager.skills_for_config(&config);
 
         write_user_skill(&extra_root_a, "x", "extra-skill-a", "from extra root a");
