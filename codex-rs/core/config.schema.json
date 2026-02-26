@@ -1186,20 +1186,6 @@
       },
       "type": "object"
     },
-    "RealtimeToml": {
-      "additionalProperties": false,
-      "properties": {
-        "audio": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/RealtimeAudioToml"
-            }
-          ],
-          "default": null
-        }
-      },
-      "type": "object"
-    },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
       "enum": [
@@ -1560,6 +1546,15 @@
       ],
       "default": null,
       "description": "Settings for app-specific controls."
+    },
+    "audio": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RealtimeAudioToml"
+        }
+      ],
+      "default": null,
+      "description": "Machine-local realtime audio device preferences used by realtime voice."
     },
     "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",

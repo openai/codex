@@ -840,11 +840,7 @@ impl ConfigEditsBuilder {
     }
 
     pub fn set_realtime_microphone(mut self, microphone: Option<&str>) -> Self {
-        let segments = vec![
-            "realtime".to_string(),
-            "audio".to_string(),
-            "microphone".to_string(),
-        ];
+        let segments = vec!["audio".to_string(), "microphone".to_string()];
         match microphone {
             Some(microphone) => self.edits.push(ConfigEdit::SetPath {
                 segments,
@@ -856,11 +852,7 @@ impl ConfigEditsBuilder {
     }
 
     pub fn set_realtime_speaker(mut self, speaker: Option<&str>) -> Self {
-        let segments = vec![
-            "realtime".to_string(),
-            "audio".to_string(),
-            "speaker".to_string(),
-        ];
+        let segments = vec!["audio".to_string(), "speaker".to_string()];
         match speaker {
             Some(speaker) => self.edits.push(ConfigEdit::SetPath {
                 segments,
@@ -1850,11 +1842,9 @@ model_reasoning_effort = "high"
         let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         let config: TomlValue = toml::from_str(&raw).expect("parse config");
         let realtime_audio = config
-            .get("realtime")
+            .get("audio")
             .and_then(TomlValue::as_table)
-            .and_then(|realtime| realtime.get("audio"))
-            .and_then(TomlValue::as_table)
-            .expect("realtime.audio table should exist");
+            .expect("audio table should exist");
         assert_eq!(
             realtime_audio.get("microphone").and_then(TomlValue::as_str),
             Some("USB Mic")
@@ -1872,11 +1862,9 @@ model_reasoning_effort = "high"
         let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         let config: TomlValue = toml::from_str(&raw).expect("parse config");
         let realtime_audio = config
-            .get("realtime")
+            .get("audio")
             .and_then(TomlValue::as_table)
-            .and_then(|realtime| realtime.get("audio"))
-            .and_then(TomlValue::as_table)
-            .expect("realtime.audio table should exist");
+            .expect("audio table should exist");
         assert_eq!(realtime_audio.get("microphone"), None);
         assert_eq!(
             realtime_audio.get("speaker").and_then(TomlValue::as_str),

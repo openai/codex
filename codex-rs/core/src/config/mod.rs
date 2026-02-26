@@ -1183,7 +1183,7 @@ pub struct ConfigToml {
 
     /// Machine-local realtime audio device preferences used by realtime voice.
     #[serde(default)]
-    pub realtime: Option<RealtimeToml>,
+    pub audio: Option<RealtimeAudioToml>,
 
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
@@ -1320,13 +1320,6 @@ impl ProjectConfig {
 pub struct RealtimeAudioConfig {
     pub microphone: Option<String>,
     pub speaker: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct RealtimeToml {
-    #[serde(default)]
-    pub audio: Option<RealtimeAudioToml>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -2178,8 +2171,7 @@ impl Config {
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             realtime_audio: cfg
-                .realtime
-                .and_then(|realtime| realtime.audio)
+                .audio
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {
                     microphone: audio.microphone,
                     speaker: audio.speaker,
@@ -6014,7 +6006,7 @@ experimental_realtime_ws_backend_prompt = "prompt from config"
     fn realtime_audio_loads_from_config_toml() -> std::io::Result<()> {
         let cfg: ConfigToml = toml::from_str(
             r#"
-[realtime.audio]
+[audio]
 microphone = "USB Mic"
 speaker = "Desk Speakers"
 "#,
@@ -6022,9 +6014,8 @@ speaker = "Desk Speakers"
         .expect("TOML deserialization should succeed");
 
         let realtime_audio = cfg
-            .realtime
+            .audio
             .as_ref()
-            .and_then(|realtime| realtime.audio.as_ref())
             .expect("realtime audio config should be present");
         assert_eq!(realtime_audio.microphone.as_deref(), Some("USB Mic"));
         assert_eq!(realtime_audio.speaker.as_deref(), Some("Desk Speakers"));
