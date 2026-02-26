@@ -13,7 +13,7 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> RolloutReconstruction {
-        // Replay rollout items once and compute two things in lockstep:
+        // Replay rollout items once and compute two things:
         //   1) reconstructed conversation history (via `ContextManager`)
         //   2) resume/fork hydration metadata (`previous_model` and
         //      `reference_context_item`)
@@ -37,7 +37,11 @@ impl Session {
         // - history: drop user turns from reconstructed response items
         // - metadata segments: drop the same number of surviving user-turn segments
         //
-        // This keeps history reconstruction and resume/fork hydration on the same replay.
+        // History replay must stay forward because `Compacted { replacement_history: None }`
+        // rebuilds from the current history snapshot. Resume metadata resolution, however, is
+        // intentionally tail-oriented: once we have finalized metadata segments in rollout order,
+        // we scan them newest-to-oldest. That keeps the metadata rules easy to migrate to a
+        // future reverse rollout reader without changing the forward history replay above.
         #[derive(Debug)]
         struct ActiveRolloutTurn {
             turn_id: String,
@@ -212,20 +216,24 @@ impl Session {
 
         let mut previous_model = None;
         let mut reference_context_item = None;
-        for segment in replayed_segments {
+        let mut reference_context_item_cleared = false;
+        for segment in replayed_segments.iter().rev() {
             match segment {
                 RolloutReplayMetaSegment::ReferenceContextCleared => {
-                    reference_context_item = None;
+                    reference_context_item_cleared = true;
                 }
                 RolloutReplayMetaSegment::UserTurn(turn) => {
-                    if let Some(turn_previous_model) = turn.previous_model {
-                        previous_model = Some(turn_previous_model);
-                    }
                     if turn.cleared_reference_context_item {
-                        reference_context_item = None;
+                        reference_context_item_cleared = true;
                     }
-                    if let Some(turn_reference_context_item) = turn.reference_context_item {
-                        reference_context_item = Some(turn_reference_context_item);
+                    if !reference_context_item_cleared
+                        && let Some(turn_reference_context_item) = &turn.reference_context_item
+                    {
+                        reference_context_item = Some(turn_reference_context_item.clone());
+                    }
+                    if let Some(turn_previous_model) = &turn.previous_model {
+                        previous_model = Some(turn_previous_model.clone());
+                        break;
                     }
                 }
             }
