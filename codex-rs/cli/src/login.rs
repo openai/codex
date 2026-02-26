@@ -237,7 +237,11 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 }
             },
             AuthMode::Chatgpt => {
-                eprintln!("Logged in using ChatGPT");
+                if let Some(email) = auth.get_account_email() {
+                    eprintln!("Logged in using ChatGPT ({email})");
+                } else {
+                    eprintln!("Logged in using ChatGPT");
+                }
                 std::process::exit(0);
             }
         },
