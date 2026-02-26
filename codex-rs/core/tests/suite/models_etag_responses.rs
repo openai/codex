@@ -106,7 +106,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

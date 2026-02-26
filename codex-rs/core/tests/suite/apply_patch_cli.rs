@@ -312,7 +312,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -907,7 +907,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -987,7 +987,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1137,7 +1137,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1200,7 +1200,7 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1271,7 +1271,7 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1342,7 +1342,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

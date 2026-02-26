@@ -751,8 +751,8 @@ async fn enter_with_only_remote_images_submits_user_turn() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let items = match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => items,
+    let (items, summary) = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, summary, .. } => (items, summary),
         other => panic!("expected Op::UserTurn, got {other:?}"),
     };
     assert_eq!(
@@ -761,6 +761,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
             image_url: remote_url.clone(),
         }]
     );
+    assert_eq!(summary, None);
     assert!(chat.remote_image_urls().is_empty());
 
     let mut user_cell = None;

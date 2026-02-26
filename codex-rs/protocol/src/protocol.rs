@@ -185,7 +185,11 @@ pub enum Op {
         effort: Option<ReasoningEffortConfig>,
 
         /// Will only be honored if the model is configured to use reasoning.
-        summary: ReasoningSummaryConfig,
+        ///
+        /// When omitted, the session keeps the current setting (which allows core to
+        /// fall back to the selected model's default on new sessions).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<ReasoningSummaryConfig>,
         // The JSON schema to use for the final assistant message
         final_output_json_schema: Option<Value>,
 

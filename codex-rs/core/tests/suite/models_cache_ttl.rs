@@ -99,7 +99,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: test.session_configured.model.clone(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

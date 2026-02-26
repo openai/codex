@@ -5160,7 +5160,7 @@ impl CodexMessageProcessor {
                 sandbox_policy,
                 model,
                 effort,
-                summary,
+                summary: Some(summary),
                 final_output_json_schema: output_schema,
                 collaboration_mode: None,
                 personality: None,

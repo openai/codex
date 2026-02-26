@@ -56,7 +56,7 @@ async fn submit_turn_with_policies(
             sandbox_policy,
             model: test.session_configured.model.clone(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

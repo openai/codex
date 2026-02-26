@@ -46,7 +46,7 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -361,7 +361,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

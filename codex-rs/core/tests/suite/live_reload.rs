@@ -65,7 +65,7 @@ async fn submit_skill_turn(test: &TestCodex, skill_path: PathBuf, prompt: &str) 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

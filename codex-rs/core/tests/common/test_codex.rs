@@ -300,7 +300,7 @@ impl TestCodex {
                 sandbox_policy,
                 model: session_model,
                 effort: None,
-                summary: ReasoningSummary::Auto,
+                summary: None,
                 collaboration_mode: None,
                 personality: None,
             })

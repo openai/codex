@@ -55,7 +55,7 @@ async fn submit_user_turn(
             sandbox_policy,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode,
             personality: None,
         })
@@ -134,7 +134,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

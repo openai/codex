@@ -377,7 +377,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_sandbox_policy = config.permissions.sandbox_policy.get();
     let default_effort = config.model_reasoning_effort;
-    let default_summary = config.model_reasoning_summary;
 
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
@@ -560,8 +559,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
                     sandbox_policy: default_sandbox_policy.clone(),
                     model: default_model,
                     effort: default_effort,
-                    summary: default_summary
-                        .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
+                    summary: None,
                     final_output_json_schema: output_schema,
                     collaboration_mode: None,
                     personality: None,

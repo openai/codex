@@ -122,7 +122,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -144,7 +144,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
         })
@@ -221,7 +221,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -243,7 +243,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -348,7 +348,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: resumed.session_configured.model.clone(),
             effort: resumed.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
         })

@@ -981,9 +981,11 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: session_configured.model.clone(),
             effort: Some(ReasoningEffort::Low),
-            summary: config
-                .model_reasoning_summary
-                .unwrap_or(ReasoningSummary::Auto),
+            summary: Some(
+                config
+                    .model_reasoning_summary
+                    .unwrap_or(ReasoningSummary::Auto),
+            ),
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,

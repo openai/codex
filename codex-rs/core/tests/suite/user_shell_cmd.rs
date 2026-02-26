@@ -178,7 +178,7 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: fixture.session_configured.model.clone(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
             collaboration_mode: None,
             personality: None,
         })

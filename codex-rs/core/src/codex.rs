@@ -3924,7 +3924,7 @@ mod handlers {
                         sandbox_policy: Some(sandbox_policy),
                         windows_sandbox_level: None,
                         collaboration_mode,
-                        reasoning_summary: Some(summary),
+                        reasoning_summary: summary,
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
                     },
