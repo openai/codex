@@ -688,7 +688,7 @@ fn file_link_appends_hash_anchor_when_label_lacks_it() {
     );
     let expected = Text::from(Line::from_iter([
         "markdown_render.rs".cyan(),
-        "#L74C3".cyan(),
+        ":74:3".cyan(),
     ]));
     assert_eq!(text, expected);
 }
@@ -730,7 +730,7 @@ fn file_link_appends_hash_range_when_label_lacks_it() {
     );
     let expected = Text::from(Line::from_iter([
         "markdown_render.rs".cyan(),
-        "#L74C3-L76C9".cyan(),
+        ":74:3-76:9".cyan(),
     ]));
     assert_eq!(text, expected);
 }
