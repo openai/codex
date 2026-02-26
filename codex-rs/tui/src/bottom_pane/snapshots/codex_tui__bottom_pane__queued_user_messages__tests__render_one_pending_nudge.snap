@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/queued_user_messages.rs
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 48, height: 1 },
+    content: [
+        "  ! pending nudge: Implement the plan.          ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 38, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
