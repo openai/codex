@@ -291,8 +291,7 @@ impl CloudRequirementsService {
         }
 
         self.fetch_with_retries(&auth, chatgpt_user_id, account_id)
-            .await
-            .flatten()
+            .await?
     }
 
     async fn fetch_with_retries(
