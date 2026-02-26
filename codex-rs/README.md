@@ -59,7 +59,7 @@ Use `--worktree` to run Codex in a dedicated linked worktree:
 
 ```shell
 # prompt + explicit branch
-codex "fix auth timeout handling" --worktree feature/auth-timeout
+codex "fix auth timeout handling" --worktree=feature/auth-timeout
 
 # explicit branch without an initial prompt
 codex --worktree=feature/auth-timeout
