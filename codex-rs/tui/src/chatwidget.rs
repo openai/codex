@@ -2764,7 +2764,7 @@ impl ChatWidget {
             .and_then(|mask| mask.model.clone())
             .unwrap_or_else(|| model_for_header.clone());
         let fallback_default = Settings {
-            model: header_model.clone(),
+            model: header_model,
             reasoning_effort: None,
             developer_instructions: None,
         };
@@ -2940,7 +2940,7 @@ impl ChatWidget {
             .and_then(|mask| mask.model.clone())
             .unwrap_or_else(|| model_for_header.clone());
         let fallback_default = Settings {
-            model: header_model.clone(),
+            model: header_model,
             reasoning_effort: None,
             developer_instructions: None,
         };
@@ -3108,7 +3108,7 @@ impl ChatWidget {
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
         let fallback_default = Settings {
-            model: header_model.clone(),
+            model: header_model,
             reasoning_effort: None,
             developer_instructions: None,
         };
