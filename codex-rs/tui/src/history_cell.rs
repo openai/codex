@@ -96,6 +96,11 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     /// Returns the logical lines for the main chat viewport.
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
+    /// Returns whether this cell renders any visible display lines when width is unconstrained.
+    fn has_visible_display_lines(&self) -> bool {
+        !self.display_lines(u16::MAX).is_empty()
+    }
+
     /// Returns the number of viewport rows needed to render this cell.
     ///
     /// The default delegates to `Paragraph::line_count` with
@@ -1047,6 +1052,7 @@ fn session_info_body_parts(
     let mut parts: Vec<Box<dyn HistoryCell>> = Vec::new();
 
     if is_first_event {
+        // Help lines below the header (new copy and list)
         let help_lines: Vec<Line<'static>> = vec![
             "  To get started, describe a task or try one of these commands:"
                 .dim()
@@ -1078,6 +1084,7 @@ fn session_info_body_parts(
                 " - review any changes and find issues".dim(),
             ]),
         ];
+
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
         if config.show_tooltips
