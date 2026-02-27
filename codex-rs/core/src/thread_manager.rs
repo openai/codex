@@ -11,6 +11,7 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
+use crate::mcp::McpManager;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
@@ -69,11 +70,7 @@ impl Drop for TempCodexHomeGuard {
     }
 }
 
-fn build_file_watcher(
-    codex_home: PathBuf,
-    skills_manager: Arc<SkillsManager>,
-    plugins_manager: Arc<PluginsManager>,
-) -> Arc<FileWatcher> {
+fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -> Arc<FileWatcher> {
     if should_use_test_thread_manager_behavior()
         && let Ok(handle) = Handle::try_current()
         && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
@@ -94,14 +91,12 @@ fn build_file_watcher(
 
     let mut rx = file_watcher.subscribe();
     let skills_manager = Arc::clone(&skills_manager);
-    let plugins_manager = Arc::clone(&plugins_manager);
     if let Ok(handle) = Handle::try_current() {
         handle.spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(FileWatcherEvent::SkillsChanged { .. }) => {
                         skills_manager.clear_cache();
-                        plugins_manager.clear_cache();
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
@@ -140,6 +135,7 @@ pub(crate) struct ThreadManagerState {
     models_manager: Arc<ModelsManager>,
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
+    mcp_manager: Arc<McpManager>,
     file_watcher: Arc<FileWatcher>,
     session_source: SessionSource,
     // Captures submitted ops for testing purpose when test mode is enabled.
@@ -156,15 +152,12 @@ impl ThreadManager {
     ) -> Self {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new(
             codex_home.clone(),
             Arc::clone(&plugins_manager),
         ));
-        let file_watcher = build_file_watcher(
-            codex_home.clone(),
-            Arc::clone(&skills_manager),
-            Arc::clone(&plugins_manager),
-        );
+        let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -177,6 +170,7 @@ impl ThreadManager {
                 )),
                 skills_manager,
                 plugins_manager,
+                mcp_manager,
                 file_watcher,
                 auth_manager,
                 session_source,
@@ -217,15 +211,12 @@ impl ThreadManager {
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new(
             codex_home.clone(),
             Arc::clone(&plugins_manager),
         ));
-        let file_watcher = build_file_watcher(
-            codex_home.clone(),
-            Arc::clone(&skills_manager),
-            Arc::clone(&plugins_manager),
-        );
+        let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -237,6 +228,7 @@ impl ThreadManager {
                 )),
                 skills_manager,
                 plugins_manager,
+                mcp_manager,
                 file_watcher,
                 auth_manager,
                 session_source: SessionSource::Exec,
@@ -257,6 +249,10 @@ impl ThreadManager {
 
     pub fn plugins_manager(&self) -> Arc<PluginsManager> {
         self.state.plugins_manager.clone()
+    }
+
+    pub fn mcp_manager(&self) -> Arc<McpManager> {
+        self.state.mcp_manager.clone()
     }
 
     pub fn subscribe_file_watcher(&self) -> broadcast::Receiver<FileWatcherEvent> {
@@ -587,7 +583,9 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
     ) -> CodexResult<NewThread> {
-        let watch_registration = self.file_watcher.register_config(&config);
+        let watch_registration = self
+            .file_watcher
+            .register_config(&config, self.skills_manager.as_ref());
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
@@ -596,6 +594,7 @@ impl ThreadManagerState {
             Arc::clone(&self.models_manager),
             Arc::clone(&self.skills_manager),
             Arc::clone(&self.plugins_manager),
+            Arc::clone(&self.mcp_manager),
             Arc::clone(&self.file_watcher),
             initial_history,
             session_source,

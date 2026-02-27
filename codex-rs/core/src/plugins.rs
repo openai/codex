@@ -1,11 +1,15 @@
 use crate::config::Config;
+use crate::config::ConfigToml;
+use crate::config::profile::ConfigProfile;
 use crate::config::types::McpServerConfig;
 use crate::config::types::PluginConfig;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use crate::features::Feature;
+use crate::features::FeatureOverrides;
+use crate::features::Features;
 use serde::Deserialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
@@ -70,84 +74,136 @@ impl PluginLoadOutcome {
 
 pub struct PluginsManager {
     codex_home: PathBuf,
-    cache_by_cwd: RwLock<HashMap<PathBuf, PluginLoadOutcome>>,
+    cache: RwLock<Option<PluginLoadOutcome>>,
 }
 
 impl PluginsManager {
     pub fn new(codex_home: PathBuf) -> Self {
         Self {
             codex_home,
-            cache_by_cwd: RwLock::new(HashMap::new()),
+            cache: RwLock::new(None),
         }
     }
 
     pub fn plugins_for_config(&self, config: &Config) -> PluginLoadOutcome {
-        let cwd = &config.cwd;
-        if let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
+        if !config.features.enabled(Feature::Plugins) {
+            let mut cache = match self.cache.write() {
+                Ok(cache) => cache,
+                Err(err) => err.into_inner(),
+            };
+            *cache = Some(PluginLoadOutcome::default());
+            return PluginLoadOutcome::default();
+        }
+
+        if let Some(outcome) = self.cached_outcome() {
             return outcome;
         }
 
         let outcome = load_plugins_from_layer_stack(&config.config_layer_stack);
-        let mut cache = match self.cache_by_cwd.write() {
+        for plugin in outcome
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.error.is_some())
+        {
+            if let Some(error) = plugin.error.as_deref() {
+                warn!(
+                    plugin = plugin.config_name,
+                    path = %plugin.root.display(),
+                    "failed to load plugin: {error}"
+                );
+            }
+        }
+        let mut cache = match self.cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        cache.insert(cwd.to_path_buf(), outcome.clone());
+        *cache = Some(outcome.clone());
         outcome
     }
 
-    pub async fn plugins_for_cwd(&self, cwd: &Path, force_reload: bool) -> PluginLoadOutcome {
-        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
+    pub async fn plugins(&self, force_reload: bool) -> PluginLoadOutcome {
+        let config_layer_stack = match load_global_plugin_config_layers(&self.codex_home).await {
+            Ok(config_layer_stack) => config_layer_stack,
+            Err(err) => {
+                warn!("failed to load global config layers for plugin loading: {err}");
+                return PluginLoadOutcome::default();
+            }
+        };
+
+        if !plugins_feature_enabled_from_stack(&config_layer_stack) {
+            let mut cache = match self.cache.write() {
+                Ok(cache) => cache,
+                Err(err) => err.into_inner(),
+            };
+            *cache = Some(PluginLoadOutcome::default());
+            return PluginLoadOutcome::default();
+        }
+
+        if !force_reload && let Some(outcome) = self.cached_outcome() {
             return outcome;
         }
 
-        let cwd_abs = match AbsolutePathBuf::try_from(cwd) {
-            Ok(cwd_abs) => cwd_abs,
-            Err(err) => {
-                warn!("failed to resolve cwd for plugin loading: {err}");
-                return PluginLoadOutcome::default();
-            }
-        };
-
-        let config_layer_stack = match load_config_layers_state(
-            &self.codex_home,
-            Some(cwd_abs),
-            &[],
-            LoaderOverrides::default(),
-            CloudRequirementsLoader::default(),
-        )
-        .await
-        {
-            Ok(config_layer_stack) => config_layer_stack,
-            Err(err) => {
-                warn!("failed to load config layers for plugin loading: {err}");
-                return PluginLoadOutcome::default();
-            }
-        };
-
         let outcome = load_plugins_from_layer_stack(&config_layer_stack);
-        let mut cache = match self.cache_by_cwd.write() {
+        for plugin in outcome
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.error.is_some())
+        {
+            if let Some(error) = plugin.error.as_deref() {
+                warn!(
+                    plugin = plugin.config_name,
+                    path = %plugin.root.display(),
+                    "failed to load plugin: {error}"
+                );
+            }
+        }
+        let mut cache = match self.cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        cache.insert(cwd.to_path_buf(), outcome.clone());
+        *cache = Some(outcome.clone());
         outcome
     }
 
     pub fn clear_cache(&self) {
-        let mut cache = match self.cache_by_cwd.write() {
+        let mut cache = match self.cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        cache.clear();
+        *cache = None;
     }
 
-    fn cached_outcome_for_cwd(&self, cwd: &Path) -> Option<PluginLoadOutcome> {
-        match self.cache_by_cwd.read() {
-            Ok(cache) => cache.get(cwd).cloned(),
-            Err(err) => err.into_inner().get(cwd).cloned(),
+    fn cached_outcome(&self) -> Option<PluginLoadOutcome> {
+        match self.cache.read() {
+            Ok(cache) => cache.clone(),
+            Err(err) => err.into_inner().clone(),
         }
     }
+}
+
+fn plugins_feature_enabled_from_stack(config_layer_stack: &ConfigLayerStack) -> bool {
+    let effective_config = config_layer_stack.effective_config();
+    let Ok(config_toml) = effective_config.try_into::<ConfigToml>() else {
+        warn!("failed to deserialize config when checking plugin feature flag");
+        return false;
+    };
+    let config_profile = config_toml
+        .get_config_profile(config_toml.profile.clone())
+        .unwrap_or_else(|_| ConfigProfile::default());
+    let features =
+        Features::from_config(&config_toml, &config_profile, FeatureOverrides::default());
+    features.enabled(Feature::Plugins)
+}
+
+async fn load_global_plugin_config_layers(codex_home: &Path) -> std::io::Result<ConfigLayerStack> {
+    load_config_layers_state(
+        codex_home,
+        None,
+        &[],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -415,10 +471,39 @@ mod tests {
     use crate::config::types::McpServerTransportConfig;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+    use toml::Value;
 
     fn write_file(path: &Path, contents: &str) {
         fs::create_dir_all(path.parent().expect("file should have a parent")).unwrap();
         fs::write(path, contents).unwrap();
+    }
+
+    fn plugin_config_toml(
+        plugin_root: &Path,
+        enabled: bool,
+        plugins_feature_enabled: bool,
+    ) -> String {
+        let mut root = toml::map::Map::new();
+
+        let mut features = toml::map::Map::new();
+        features.insert(
+            "plugins".to_string(),
+            Value::Boolean(plugins_feature_enabled),
+        );
+        root.insert("features".to_string(), Value::Table(features));
+
+        let mut plugin = toml::map::Map::new();
+        plugin.insert(
+            "path".to_string(),
+            Value::String(plugin_root.display().to_string()),
+        );
+        plugin.insert("enabled".to_string(), Value::Boolean(enabled));
+
+        let mut plugins = toml::map::Map::new();
+        plugins.insert("sample".to_string(), Value::Table(plugin));
+        root.insert("plugins".to_string(), Value::Table(plugins));
+
+        toml::to_string(&Value::Table(root)).expect("plugin test config should serialize")
     }
 
     async fn load_plugins_from_config(config_toml: &str, codex_home: &Path) -> PluginLoadOutcome {
@@ -428,7 +513,7 @@ mod tests {
             .build()
             .await
             .expect("config should load");
-        load_plugins_from_layer_stack(&config.config_layer_stack)
+        PluginsManager::new(codex_home.to_path_buf()).plugins_for_config(&config)
     }
 
     #[tokio::test]
@@ -461,10 +546,7 @@ mod tests {
         );
 
         let outcome = load_plugins_from_config(
-            &format!(
-                "[plugins.sample]\npath = \"{}\"\nenabled = true\n",
-                plugin_root.display()
-            ),
+            &plugin_config_toml(&plugin_root, true, true),
             codex_home.path(),
         )
         .await;
@@ -494,6 +576,7 @@ mod tests {
                         enabled_tools: None,
                         disabled_tools: None,
                         scopes: None,
+                        oauth_resource: None,
                     },
                 )]),
                 error: None,
@@ -528,10 +611,7 @@ mod tests {
         );
 
         let outcome = load_plugins_from_config(
-            &format!(
-                "[plugins.sample]\npath = \"{}\"\nenabled = false\n",
-                plugin_root.display()
-            ),
+            &plugin_config_toml(&plugin_root, false, true),
             codex_home.path(),
         )
         .await;
@@ -568,5 +648,28 @@ mod tests {
             plugin_namespace_for_skill_path(&skill_path),
             Some("sample".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn load_plugins_returns_empty_when_feature_disabled() {
+        let codex_home = TempDir::new().unwrap();
+        let plugin_root = codex_home.path().join("plugin-sample");
+
+        write_file(
+            &plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"sample"}"#,
+        );
+        write_file(
+            &plugin_root.join("skills/sample-search/SKILL.md"),
+            "---\nname: sample-search\ndescription: search sample data\n---\n",
+        );
+
+        let outcome = load_plugins_from_config(
+            &plugin_config_toml(&plugin_root, true, false),
+            codex_home.path(),
+        )
+        .await;
+
+        assert_eq!(outcome, PluginLoadOutcome::default());
     }
 }

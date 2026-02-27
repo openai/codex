@@ -13,7 +13,6 @@ use tracing::warn;
 
 use super::auth::McpOAuthLoginSupport;
 use super::auth::oauth_login_support;
-use super::effective_mcp_servers;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
@@ -254,11 +253,10 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     // Refresh from the effective merged MCP map (global + repo + managed) and
     // overlay the updated global servers so we don't drop repo-scoped servers.
     let auth = sess.services.auth_manager.auth().await;
-    let mut refresh_servers = effective_mcp_servers(
-        config,
-        auth.as_ref(),
-        sess.services.plugins_manager.as_ref(),
-    );
+    let mut refresh_servers = sess
+        .services
+        .mcp_manager
+        .effective_servers(config, auth.as_ref());
     for (name, server_config) in &servers {
         refresh_servers
             .entry(name.clone())

@@ -5,6 +5,7 @@ pub(crate) use skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_channel::unbounded;
@@ -161,7 +162,29 @@ pub(crate) fn with_codex_apps_mcp(
     servers
 }
 
-pub fn configured_mcp_servers(
+pub struct McpManager {
+    plugins_manager: Arc<PluginsManager>,
+}
+
+impl McpManager {
+    pub fn new(plugins_manager: Arc<PluginsManager>) -> Self {
+        Self { plugins_manager }
+    }
+
+    pub fn configured_servers(&self, config: &Config) -> HashMap<String, McpServerConfig> {
+        configured_mcp_servers(config, self.plugins_manager.as_ref())
+    }
+
+    pub fn effective_servers(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+    ) -> HashMap<String, McpServerConfig> {
+        effective_mcp_servers(config, auth, self.plugins_manager.as_ref())
+    }
+}
+
+fn configured_mcp_servers(
     config: &Config,
     plugins_manager: &PluginsManager,
 ) -> HashMap<String, McpServerConfig> {
@@ -173,7 +196,7 @@ pub fn configured_mcp_servers(
     servers
 }
 
-pub fn effective_mcp_servers(
+fn effective_mcp_servers(
     config: &Config,
     auth: Option<&CodexAuth>,
     plugins_manager: &PluginsManager,
@@ -194,8 +217,8 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         config.cli_auth_credentials_store_mode,
     );
     let auth = auth_manager.auth().await;
-    let plugins_manager = PluginsManager::new(config.codex_home.clone());
-    let mcp_servers = effective_mcp_servers(config, auth.as_ref(), &plugins_manager);
+    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
+    let mcp_servers = mcp_manager.effective_servers(config, auth.as_ref());
     if mcp_servers.is_empty() {
         return McpListToolsResponseEvent {
             tools: HashMap::new(),
@@ -387,10 +410,32 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
+    use toml::Value;
 
     fn write_file(path: &Path, contents: &str) {
         fs::create_dir_all(path.parent().expect("file should have a parent")).unwrap();
         fs::write(path, contents).unwrap();
+    }
+
+    fn plugin_config_toml(plugin_root: &Path) -> String {
+        let mut root = toml::map::Map::new();
+
+        let mut features = toml::map::Map::new();
+        features.insert("plugins".to_string(), Value::Boolean(true));
+        root.insert("features".to_string(), Value::Table(features));
+
+        let mut plugin = toml::map::Map::new();
+        plugin.insert(
+            "path".to_string(),
+            Value::String(plugin_root.display().to_string()),
+        );
+        plugin.insert("enabled".to_string(), Value::Boolean(true));
+
+        let mut plugins = toml::map::Map::new();
+        plugins.insert("sample".to_string(), Value::Table(plugin));
+        root.insert("plugins".to_string(), Value::Table(plugins));
+
+        toml::to_string(&Value::Table(root)).expect("plugin test config should serialize")
     }
 
     fn make_tool(name: &str) -> Tool {
@@ -593,10 +638,7 @@ mod tests {
         );
         write_file(
             &codex_home.path().join(CONFIG_TOML_FILE),
-            &format!(
-                "[plugins.sample]\npath = \"{}\"\nenabled = true\n",
-                plugin_root.display()
-            ),
+            &plugin_config_toml(&plugin_root),
         );
 
         let mut config = ConfigBuilder::default()
@@ -623,6 +665,7 @@ mod tests {
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
+                oauth_resource: None,
             },
         );
         config
@@ -630,8 +673,8 @@ mod tests {
             .set(configured_servers)
             .expect("test config should accept MCP servers");
 
-        let plugins_manager = PluginsManager::new(config.codex_home.clone());
-        let effective = effective_mcp_servers(&config, None, &plugins_manager);
+        let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
+        let effective = mcp_manager.effective_servers(&config, None);
 
         let sample = effective.get("sample").expect("user server should exist");
         let docs = effective.get("docs").expect("plugin server should exist");
