@@ -1010,11 +1010,11 @@ fn format_file_change_diff(change: &codex_protocol::protocol::FileChange) -> Str
 }
 
 fn upsert_turn_item(items: &mut Vec<ThreadItem>, item: ThreadItem) {
-    if let Some(existing_item) = items
-        .iter_mut()
-        .find(|existing_item| existing_item.id() == item.id())
+    if let Some(index) = items
+        .iter()
+        .rposition(|existing_item| existing_item.id() == item.id())
     {
-        *existing_item = item;
+        items[index] = item;
         return;
     }
     items.push(item);
