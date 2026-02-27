@@ -256,29 +256,36 @@ fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<Stri
         properties.insert(
             "additional_permissions".to_string(),
             JsonSchema::Object {
-                properties: BTreeMap::from([
-                    (
-                        "fs_read".to_string(),
-                        JsonSchema::Array {
-                            items: Box::new(JsonSchema::String { description: None }),
-                            description: Some(
-                                "Additional filesystem paths to grant read access for this command."
-                                    .to_string(),
+                properties: BTreeMap::from([(
+                    "file_system".to_string(),
+                    JsonSchema::Object {
+                        properties: BTreeMap::from([
+                            (
+                                "read".to_string(),
+                                JsonSchema::Array {
+                                    items: Box::new(JsonSchema::String { description: None }),
+                                    description: Some(
+                                        "Additional filesystem paths to grant read access for this command."
+                                            .to_string(),
+                                    ),
+                                },
                             ),
-                        },
-                    ),
-                    (
-                        "fs_write".to_string(),
-                        JsonSchema::Array {
-                            items: Box::new(JsonSchema::String { description: None }),
-                            description: Some(
-                                "Additional filesystem paths to grant write access for this command."
-                                    .to_string(),
+                            (
+                                "write".to_string(),
+                                JsonSchema::Array {
+                                    items: Box::new(JsonSchema::String { description: None }),
+                                    description: Some(
+                                        "Additional filesystem paths to grant write access for this command."
+                                            .to_string(),
+                                    ),
+                                },
                             ),
-                        },
-                    ),
-                ]),
-                required: None,
+                        ]),
+                        required: None,
+                        additional_properties: Some(false.into()),
+                    },
+                )]),
+                required: Some(vec!["file_system".to_string()]),
                 additional_properties: Some(false.into()),
             },
         );

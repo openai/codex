@@ -24,7 +24,8 @@ use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::AdditionalPermissions;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -41,7 +42,7 @@ pub struct CommandSpec {
     pub env: HashMap<String, String>,
     pub expiration: ExecExpiration,
     pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<AdditionalPermissions>,
+    pub additional_permissions: Option<PermissionProfile>,
     pub justification: Option<String>,
 }
 
@@ -95,14 +96,24 @@ pub(crate) enum SandboxTransformError {
 }
 
 pub(crate) fn normalize_additional_permissions(
-    additional_permissions: AdditionalPermissions,
+    additional_permissions: PermissionProfile,
     command_cwd: &Path,
-) -> Result<AdditionalPermissions, String> {
-    let fs_read =
-        normalize_permission_paths(additional_permissions.fs_read, command_cwd, "fs_read")?;
-    let fs_write =
-        normalize_permission_paths(additional_permissions.fs_write, command_cwd, "fs_write")?;
-    Ok(AdditionalPermissions { fs_read, fs_write })
+) -> Result<PermissionProfile, String> {
+    let Some(file_system) = additional_permissions.file_system else {
+        return Ok(PermissionProfile::default());
+    };
+    let read = file_system
+        .read
+        .map(|paths| normalize_permission_paths(paths, command_cwd, "file_system.read"))
+        .transpose()?;
+    let write = file_system
+        .write
+        .map(|paths| normalize_permission_paths(paths, command_cwd, "file_system.write"))
+        .transpose()?;
+    Ok(PermissionProfile {
+        file_system: Some(FileSystemPermissions { read, write }),
+        ..Default::default()
+    })
 }
 
 fn normalize_permission_paths(
@@ -162,7 +173,7 @@ fn dedup_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
 }
 
 fn additional_permission_roots(
-    additional_permissions: &AdditionalPermissions,
+    additional_permissions: &PermissionProfile,
 ) -> Result<(Vec<AbsolutePathBuf>, Vec<AbsolutePathBuf>), SandboxTransformError> {
     let to_abs = |paths: &[PathBuf]| {
         let mut out = Vec::with_capacity(paths.len());
@@ -179,8 +190,20 @@ fn additional_permission_roots(
     };
 
     Ok((
-        to_abs(&additional_permissions.fs_read)?,
-        to_abs(&additional_permissions.fs_write)?,
+        to_abs(
+            additional_permissions
+                .file_system
+                .as_ref()
+                .and_then(|file_system| file_system.read.as_deref())
+                .unwrap_or_default(),
+        )?,
+        to_abs(
+            additional_permissions
+                .file_system
+                .as_ref()
+                .and_then(|file_system| file_system.write.as_deref())
+                .unwrap_or_default(),
+        )?,
     ))
 }
 
@@ -206,7 +229,7 @@ fn merge_read_only_access_with_additional_reads(
 
 fn sandbox_policy_with_additional_permissions(
     sandbox_policy: &SandboxPolicy,
-    additional_permissions: &AdditionalPermissions,
+    additional_permissions: &PermissionProfile,
 ) -> Result<SandboxPolicy, SandboxTransformError> {
     if additional_permissions.is_empty() {
         return Ok(sandbox_policy.clone());
