@@ -13,6 +13,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -25,6 +26,13 @@ use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+
+fn absolute_path(path: &Path) -> AbsolutePathBuf {
+    match AbsolutePathBuf::try_from(path) {
+        Ok(path) => path,
+        Err(err) => panic!("absolute path: {err}"),
+    }
+}
 
 fn write_skill_metadata(home: &Path, name: &str, contents: &str) -> Result<()> {
     let metadata_dir = home.join("skills").join(name).join("agents");
@@ -330,8 +338,14 @@ permissions:
         approval.additional_permissions,
         Some(PermissionProfile {
             file_system: Some(FileSystemPermissions {
-                read: Some(vec![PathBuf::from("./data")]),
-                write: Some(vec![PathBuf::from("./output")]),
+                read: Some(vec![absolute_path(
+                    &test.codex_home_path().join("skills/mbolin-test-skill/data"),
+                )]),
+                write: Some(vec![absolute_path(
+                    &test
+                        .codex_home_path()
+                        .join("skills/mbolin-test-skill/output"),
+                )]),
             }),
             ..Default::default()
         })
@@ -590,7 +604,7 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
         Some(PermissionProfile {
             file_system: Some(FileSystemPermissions {
                 read: None,
-                write: Some(vec![allowed_dir.clone()]),
+                write: Some(vec![absolute_path(&allowed_dir)]),
             }),
             ..Default::default()
         })

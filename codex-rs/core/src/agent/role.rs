@@ -187,23 +187,24 @@ Rules:
                         config_file: None,
                     }
                 ),
-                (
-                    "awaiter".to_string(),
-                    AgentRoleConfig {
-                        description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that will take some very long time.
-This includes, but not only:
-* testing
-* monitoring of a long running process
-* explicit ask to wait for something
-
-Rules:
-- When an awaiter is running, you can work on something else. If you need to wait for its completion, use the largest possible timeout.
-- Be patient with the `awaiter`.
-- Do not use an awaiter for every compilation/test if it won't take time. Only use if for long running commands.
-- Close the awaiter when you're done with it."#.to_string()),
-                        config_file: Some("awaiter.toml".to_string().parse().unwrap_or_default()),
-                    }
-                )
+                // Awaiter is temp removed
+//                 (
+//                     "awaiter".to_string(),
+//                     AgentRoleConfig {
+//                         description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that will take some very long time.
+// This includes, but not only:
+// * testing
+// * monitoring of a long running process
+// * explicit ask to wait for something
+//
+// Rules:
+// - When an awaiter is running, you can work on something else. If you need to wait for its completion, use the largest possible timeout.
+// - Be patient with the `awaiter`.
+// - Do not use an awaiter for every compilation/test if it won't take time. Only use if for long running commands.
+// - Close the awaiter when you're done with it."#.to_string()),
+//                         config_file: Some("awaiter.toml".to_string().parse().unwrap_or_default()),
+//                     }
+//                 )
             ])
         });
         &CONFIG

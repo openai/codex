@@ -812,8 +812,8 @@ impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalFileSystemPermissions {
-    pub read: Option<Vec<PathBuf>>,
-    pub write: Option<Vec<PathBuf>>,
+    pub read: Option<Vec<AbsolutePathBuf>>,
+    pub write: Option<Vec<AbsolutePathBuf>>,
 }
 
 impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
@@ -4168,6 +4168,37 @@ mod tests {
             "/readable"
         };
         AbsolutePathBuf::from_absolute_path(path).expect("path must be absolute")
+    }
+
+    #[test]
+    fn command_execution_request_approval_rejects_relative_additional_permission_paths() {
+        let err = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
+            "threadId": "thr_123",
+            "turnId": "turn_123",
+            "itemId": "call_123",
+            "command": "cat file",
+            "cwd": "/tmp",
+            "commandActions": null,
+            "reason": null,
+            "networkApprovalContext": null,
+            "additionalPermissions": {
+                "network": null,
+                "fileSystem": {
+                    "read": ["relative/path"],
+                    "write": null
+                },
+                "macos": null
+            },
+            "proposedExecpolicyAmendment": null,
+            "proposedNetworkPolicyAmendments": null,
+            "availableDecisions": null
+        }))
+        .expect_err("relative additional permission paths should fail");
+        assert!(
+            err.to_string()
+                .contains("AbsolutePathBuf deserialized without a base path"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
