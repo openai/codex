@@ -266,15 +266,12 @@ pub const DEFAULT_OLLAMA_PORT: u16 = 11434;
 
 pub const LMSTUDIO_OSS_PROVIDER_ID: &str = "lmstudio";
 pub const OLLAMA_OSS_PROVIDER_ID: &str = "ollama";
+pub const AVIAN_PROVIDER_ID: &str = "avian";
 
 /// Built-in default provider list.
 pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
 
-    // We do not want to be in the business of adjucating which third-party
-    // providers are bundled with Codex CLI, so we only include the OpenAI and
-    // open source ("oss") providers by default. Users are encouraged to add to
-    // `model_providers` in config.toml to add their own providers.
     [
         ("openai", P::create_openai_provider()),
         (
@@ -285,10 +282,37 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
             LMSTUDIO_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_LMSTUDIO_PORT, WireApi::Responses),
         ),
+        (AVIAN_PROVIDER_ID, create_avian_provider()),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect()
+}
+
+/// Avian LLM provider (https://avian.io).
+///
+/// Avian provides access to frontier open-source models (DeepSeek, Kimi, GLM,
+/// MiniMax) through an OpenAI Responses-compatible API. Authentication is via
+/// the `AVIAN_API_KEY` environment variable.
+pub fn create_avian_provider() -> ModelProviderInfo {
+    ModelProviderInfo {
+        name: "Avian".into(),
+        base_url: Some("https://api.avian.io/v1".into()),
+        env_key: Some("AVIAN_API_KEY".into()),
+        env_key_instructions: Some(
+            "Sign up at https://avian.io and create an API key in your dashboard.".into(),
+        ),
+        experimental_bearer_token: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    }
 }
 
 pub fn create_oss_provider(default_provider_port: u16, wire_api: WireApi) -> ModelProviderInfo {
@@ -424,6 +448,52 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
         assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn test_deserialize_avian_model_provider_toml() {
+        let avian_provider_toml = r#"
+name = "Avian"
+base_url = "https://api.avian.io/v1"
+env_key = "AVIAN_API_KEY"
+env_key_instructions = "Sign up at https://avian.io and create an API key in your dashboard."
+        "#;
+        let expected_provider = ModelProviderInfo {
+            name: "Avian".into(),
+            base_url: Some("https://api.avian.io/v1".into()),
+            env_key: Some("AVIAN_API_KEY".into()),
+            env_key_instructions: Some(
+                "Sign up at https://avian.io and create an API key in your dashboard.".into(),
+            ),
+            experimental_bearer_token: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+
+        let provider: ModelProviderInfo = toml::from_str(avian_provider_toml).unwrap();
+        assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn test_avian_provider_is_in_built_in_providers() {
+        let providers = built_in_model_providers();
+        let avian = providers.get(AVIAN_PROVIDER_ID);
+        assert!(avian.is_some(), "Avian provider should be in built-in providers");
+        let avian = avian.unwrap();
+        assert_eq!(avian.name, "Avian");
+        assert_eq!(
+            avian.base_url.as_deref(),
+            Some("https://api.avian.io/v1")
+        );
+        assert_eq!(avian.env_key.as_deref(), Some("AVIAN_API_KEY"));
+        assert!(!avian.requires_openai_auth);
     }
 
     #[test]
