@@ -304,7 +304,7 @@ impl CloudRequirementsService {
         self.fetch_with_retries(&auth, chatgpt_user_id, account_id)
             .await
             .ok_or_else(|| {
-                let message = "could not load required cloud configuration; check your network connection and try again";
+                let message = "unable to load required cloud configuration. Please check your network and try again.";
                 tracing::error!(
                     path = %self.cache_path.display(),
                     "{message}"
