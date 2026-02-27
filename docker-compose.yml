@@ -1,0 +1,19 @@
+services:
+  codex-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: codex-dev:local
+    working_dir: /workspace/codex
+    volumes:
+      - ./:/workspace/codex
+      - ./.cache/codex-home:/home/ubuntu/.codex
+      - cargo-registry:/home/ubuntu/.cargo/registry
+      - cargo-git:/home/ubuntu/.cargo/git
+      - rustup-home:/home/ubuntu/.rustup
+    command: ["/bin/bash"]
+
+volumes:
+  cargo-registry:
+  cargo-git:
+  rustup-home:

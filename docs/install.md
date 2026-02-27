@@ -49,6 +49,45 @@ just test
 cargo test --all-features
 ```
 
+### Build from source in Docker
+
+If you want a reproducible build/test environment without installing Rust or native dev packages on your host:
+
+```bash
+git clone https://github.com/openai/codex.git
+cd codex
+make setup
+make test_and_run
+```
+
+This command:
+
+- builds the dev container image and warms Rust dependencies once,
+- runs `codex-cli` tests in the container,
+- builds the CLI binary in the container,
+- runs Codex in the container.
+
+Run Codex with:
+
+```bash
+make run
+```
+
+For iterative development:
+
+```bash
+make test            # test only
+make build           # build only (no tests)
+make run             # build + run
+make test_and_run    # test + build + run
+make shell           # optional interactive shell in the container
+```
+
+When launching Codex via `make run` or `make test_and_run` in this Docker workflow, choose
+**Sign in with Device Code** at first login, since Codex is running in an isolated container environment.
+Authentication state is persisted under `./.cache/codex-home` (ignored by git), so you should not need
+to sign in every run.
+
 ## Tracing / verbose logging
 
 Codex is written in Rust, so it honors the `RUST_LOG` environment variable to configure its logging behavior.

@@ -1,0 +1,10 @@
+.git
+.github
+.codex
+**/target
+**/node_modules
+**/.next
+**/.cache
+dist
+build
+tmp
