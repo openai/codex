@@ -1,0 +1,12 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+╭───────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)                              │
+│                                                       │
+│ model:     gpt-5   /model to change                   │
+│ directory: ~/.codex/worktrees/22b2/codex/codex-rs/tui │
+╰───────────────────────────────────────────────────────╯
+
+  Tip: Model just became available

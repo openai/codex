@@ -75,6 +75,18 @@ pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
     }
 }
 
+pub fn model_availability_nux_count_edit(model_slug: &str, count: u32) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec![
+            "tui".to_string(),
+            "model_availability_nux".to_string(),
+            "shown_count".to_string(),
+            model_slug.to_string(),
+        ],
+        value: value(i64::from(count)),
+    }
+}
+
 // TODO(jif) move to a dedicated file
 mod document_helpers {
     use crate::config::types::McpServerConfig;
@@ -799,6 +811,12 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_model_availability_nux_count(mut self, model_slug: &str, count: u32) -> Self {
+        self.edits
+            .push(model_availability_nux_count_edit(model_slug, count));
+        self
+    }
+
     pub fn replace_mcp_servers(mut self, servers: &BTreeMap<String, McpServerConfig>) -> Self {
         self.edits
             .push(ConfigEdit::ReplaceMcpServers(servers.clone()));
@@ -961,6 +979,24 @@ model_reasoning_effort = "high"
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents, "enabled = true\n");
+    }
+
+    #[test]
+    fn set_model_availability_nux_count_writes_shown_count() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+
+        ConfigEditsBuilder::new(codex_home)
+            .set_model_availability_nux_count("gpt-foo", 4)
+            .apply_blocking()
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[tui.model_availability_nux.shown_count]
+gpt-foo = 4
+"#;
+        assert_eq!(contents, expected);
     }
 
     #[test]
