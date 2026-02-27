@@ -16,6 +16,8 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use codex_execpolicy::Decision;
+use codex_execpolicy::Evaluation;
+use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -431,6 +433,12 @@ impl CoreShellActionProvider {
     }
 }
 
+// Shell-wrapper parsing is weaker than direct exec interception because it can
+// only see the script text, not the final resolved executable path. Keep it
+// disabled by default so path-sensitive rules rely on the later authoritative
+// execve interception.
+const ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING: bool = false;
+
 #[async_trait::async_trait]
 impl EscalationPolicy for CoreShellActionProvider {
     async fn determine_action(
@@ -493,28 +501,17 @@ impl EscalationPolicy for CoreShellActionProvider {
                 .await;
         }
 
-        let command = join_program_and_argv(program, argv);
-        let (commands, used_complex_parsing) =
-            if let Some(commands) = parse_shell_lc_plain_commands(&command) {
-                (commands, false)
-            } else if let Some(single_command) = parse_shell_lc_single_command_prefix(&command) {
-                (vec![single_command], true)
-            } else {
-                (vec![command.clone()], false)
-            };
-
-        let fallback = |cmd: &[String]| {
-            crate::exec_policy::render_decision_for_unmatched_command(
-                self.approval_policy,
-                &self.sandbox_policy,
-                cmd,
-                self.sandbox_permissions,
-                used_complex_parsing,
-            )
-        };
         let evaluation = {
             let policy = self.policy.read().await;
-            policy.check_multiple(commands.iter(), &fallback)
+            evaluate_intercepted_exec_policy(
+                &policy,
+                program,
+                argv,
+                self.approval_policy,
+                &self.sandbox_policy,
+                self.sandbox_permissions,
+                ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
+            )
         };
         // When true, means the Evaluation was due to *.rules, not the
         // fallback function.
@@ -528,16 +525,20 @@ impl EscalationPolicy for CoreShellActionProvider {
         } else {
             DecisionSource::UnmatchedCommandFallback
         };
-        let escalation_execution = Self::shell_request_escalation_execution(
-            self.sandbox_permissions,
-            &self.sandbox_policy,
-            self.prompt_permissions.as_ref(),
-            self.turn
-                .config
-                .permissions
-                .macos_seatbelt_profile_extensions
-                .as_ref(),
-        );
+        let escalation_execution = match decision_source {
+            DecisionSource::PrefixRule => EscalationExecution::Unsandboxed,
+            DecisionSource::UnmatchedCommandFallback => Self::shell_request_escalation_execution(
+                self.sandbox_permissions,
+                &self.sandbox_policy,
+                self.prompt_permissions.as_ref(),
+                self.turn
+                    .config
+                    .permissions
+                    .macos_seatbelt_profile_extensions
+                    .as_ref(),
+            ),
+            DecisionSource::SkillScript { .. } => unreachable!("handled above"),
+        };
         self.process_decision(
             evaluation.decision,
             needs_escalation,
@@ -549,6 +550,86 @@ impl EscalationPolicy for CoreShellActionProvider {
             decision_source,
         )
         .await
+    }
+}
+
+fn evaluate_intercepted_exec_policy(
+    policy: &Policy,
+    program: &AbsolutePathBuf,
+    argv: &[String],
+    approval_policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+    sandbox_permissions: SandboxPermissions,
+    enable_intercepted_exec_policy_shell_wrapper_parsing: bool,
+) -> Evaluation {
+    let CandidateCommands {
+        commands,
+        used_complex_parsing,
+    } = if enable_intercepted_exec_policy_shell_wrapper_parsing {
+        // In this codepath, the first argument in `commands` could be a bare
+        // name like `find` instead of an absolute path like `/usr/bin/find`.
+        // It could also be a shell built-in like `echo`.
+        commands_for_intercepted_exec_policy(program, argv)
+    } else {
+        // In this codepath, `commands` has a single entry where the program
+        // is always an absolute path.
+        CandidateCommands {
+            commands: vec![join_program_and_argv(program, argv)],
+            used_complex_parsing: false,
+        }
+    };
+
+    let fallback = |cmd: &[String]| {
+        crate::exec_policy::render_decision_for_unmatched_command(
+            approval_policy,
+            sandbox_policy,
+            cmd,
+            sandbox_permissions,
+            used_complex_parsing,
+        )
+    };
+
+    policy.check_multiple_with_options(
+        commands.iter(),
+        &fallback,
+        &MatchOptions {
+            resolve_host_executables: true,
+        },
+    )
+}
+
+struct CandidateCommands {
+    commands: Vec<Vec<String>>,
+    used_complex_parsing: bool,
+}
+
+fn commands_for_intercepted_exec_policy(
+    program: &AbsolutePathBuf,
+    argv: &[String],
+) -> CandidateCommands {
+    if let [_, flag, script] = argv {
+        let shell_command = [
+            program.to_string_lossy().to_string(),
+            flag.clone(),
+            script.clone(),
+        ];
+        if let Some(commands) = parse_shell_lc_plain_commands(&shell_command) {
+            return CandidateCommands {
+                commands,
+                used_complex_parsing: false,
+            };
+        }
+        if let Some(single_command) = parse_shell_lc_single_command_prefix(&shell_command) {
+            return CandidateCommands {
+                commands: vec![single_command],
+                used_complex_parsing: true,
+            };
+        }
+    }
+
+    CandidateCommands {
+        commands: vec![join_program_and_argv(program, argv)],
+        used_complex_parsing: false,
     }
 }
 
