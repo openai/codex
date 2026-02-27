@@ -835,6 +835,7 @@ async fn rollout_writer(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn write_session_meta(
     mut writer: Option<&mut JsonlWriter>,
     session_meta: SessionMeta,
