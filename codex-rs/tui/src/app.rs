@@ -1481,7 +1481,7 @@ impl App {
                     is_first_run,
                     feedback_audience,
                     model: Some(model.clone()),
-                    startup_tooltip_override: startup_tooltip_override.clone(),
+                    startup_tooltip_override,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
