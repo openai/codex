@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
+use crate::config::ConstraintResult;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::file_watcher::WatchRegistration;
@@ -65,6 +66,10 @@ impl CodexThread {
         expected_turn_id: Option<&str>,
     ) -> Result<String, SteerInputError> {
         self.codex.steer_input(input, expected_turn_id).await
+    }
+
+    pub async fn set_notify_client(&self, notify_client: Option<String>) -> ConstraintResult<()> {
+        self.codex.set_notify_client(notify_client).await
     }
 
     /// Use sparingly: this is intended to be removed soon.
