@@ -57,7 +57,7 @@ pub struct VoiceCapture {
 impl VoiceCapture {
     pub fn start() -> Result<Self, String> {
         let (device, default_config) = select_default_input_device_and_config()?;
-        let config = preferred_transcription_config(&device).unwrap_or(default_config);
+        let config = preferred_pcm16_24khz_input_config(&device).unwrap_or(default_config);
 
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
@@ -81,7 +81,8 @@ impl VoiceCapture {
     }
 
     pub fn start_realtime(config: &Config, tx: AppEventSender) -> Result<Self, String> {
-        let (device, config) = select_realtime_input_device_and_config(config)?;
+        let (device, default_config) = select_realtime_input_device_and_config(config)?;
+        let config = preferred_pcm16_24khz_input_config(&device).unwrap_or(default_config);
 
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
@@ -280,13 +281,15 @@ fn select_default_input_device_and_config()
     Ok((device, config))
 }
 
-fn preferred_transcription_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfig> {
+fn preferred_pcm16_24khz_input_config(
+    device: &cpal::Device,
+) -> Option<cpal::SupportedStreamConfig> {
     let configs = device.supported_input_configs().ok()?;
     let mut best_config = None;
     let mut best_rank = None;
 
     for config_range in configs {
-        let Some(rank) = transcription_config_rank(&config_range) else {
+        let Some(rank) = pcm16_24khz_input_config_rank(&config_range) else {
             continue;
         };
         if best_rank.is_none_or(|best| rank < best) {
@@ -299,7 +302,7 @@ fn preferred_transcription_config(device: &cpal::Device) -> Option<cpal::Support
     best_config
 }
 
-fn transcription_config_rank(config_range: &SupportedStreamConfigRange) -> Option<u8> {
+fn pcm16_24khz_input_config_rank(config_range: &SupportedStreamConfigRange) -> Option<u8> {
     if config_range.sample_format() != cpal::SampleFormat::I16 {
         return None;
     }
@@ -884,25 +887,25 @@ mod tests {
     }
 
     #[test]
-    fn transcription_config_rank_prefers_exact_mono_i16_24khz() {
+    fn pcm16_24khz_input_config_rank_prefers_exact_mono_i16_24khz() {
         let exact_mono = config_range(1, cpal::SampleFormat::I16, 24_000, 24_000);
         let ranged_mono = config_range(1, cpal::SampleFormat::I16, 16_000, 48_000);
         let exact_stereo = config_range(2, cpal::SampleFormat::I16, 24_000, 24_000);
         let exact_f32 = config_range(1, cpal::SampleFormat::F32, 24_000, 24_000);
 
-        assert_eq!(transcription_config_rank(&exact_mono), Some(0));
-        assert_eq!(transcription_config_rank(&ranged_mono), Some(1));
-        assert_eq!(transcription_config_rank(&exact_stereo), Some(2));
-        assert_eq!(transcription_config_rank(&exact_f32), None);
+        assert_eq!(pcm16_24khz_input_config_rank(&exact_mono), Some(0));
+        assert_eq!(pcm16_24khz_input_config_rank(&ranged_mono), Some(1));
+        assert_eq!(pcm16_24khz_input_config_rank(&exact_stereo), Some(2));
+        assert_eq!(pcm16_24khz_input_config_rank(&exact_f32), None);
     }
 
     #[test]
-    fn transcription_config_rank_rejects_non_24khz_ranges() {
+    fn pcm16_24khz_input_config_rank_rejects_non_24khz_ranges() {
         let too_low = config_range(1, cpal::SampleFormat::I16, 8_000, 16_000);
         let too_high = config_range(1, cpal::SampleFormat::I16, 32_000, 48_000);
 
-        assert_eq!(transcription_config_rank(&too_low), None);
-        assert_eq!(transcription_config_rank(&too_high), None);
+        assert_eq!(pcm16_24khz_input_config_rank(&too_low), None);
+        assert_eq!(pcm16_24khz_input_config_rank(&too_high), None);
     }
 
     #[test]
