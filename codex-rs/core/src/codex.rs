@@ -324,6 +324,7 @@ impl Codex {
         dynamic_tools: Vec<DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -447,6 +448,7 @@ impl Codex {
             session_source,
             dynamic_tools,
             persist_extended_history,
+            inherited_shell_snapshot,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -832,6 +834,7 @@ pub(crate) struct SessionConfiguration {
     session_source: SessionSource,
     dynamic_tools: Vec<DynamicToolSpec>,
     persist_extended_history: bool,
+    inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
 }
 
 impl SessionConfiguration {
@@ -1345,13 +1348,19 @@ impl Session {
         };
         // Create the mutable state for the Session.
         let shell_snapshot_tx = if config.features.enabled(Feature::ShellSnapshot) {
-            ShellSnapshot::start_snapshotting(
-                config.codex_home.clone(),
-                conversation_id,
-                session_configuration.cwd.clone(),
-                &mut default_shell,
-                otel_manager.clone(),
-            )
+            if let Some(snapshot) = session_configuration.inherited_shell_snapshot.clone() {
+                let (tx, rx) = watch::channel(Some(snapshot));
+                default_shell.shell_snapshot = rx;
+                tx
+            } else {
+                ShellSnapshot::start_snapshotting(
+                    config.codex_home.clone(),
+                    conversation_id,
+                    session_configuration.cwd.clone(),
+                    &mut default_shell,
+                    otel_manager.clone(),
+                )
+            }
         } else {
             let (tx, rx) = watch::channel(None);
             default_shell.shell_snapshot = rx;
@@ -2062,12 +2071,20 @@ impl Session {
         previous_cwd: &Path,
         next_cwd: &Path,
         codex_home: &Path,
+        session_source: &SessionSource,
     ) {
         if previous_cwd == next_cwd {
             return;
         }
 
         if !self.features.enabled(Feature::ShellSnapshot) {
+            return;
+        }
+
+        if matches!(
+            session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        ) {
             return;
         }
 
@@ -2092,10 +2109,16 @@ impl Session {
                 let previous_cwd = state.session_configuration.cwd.clone();
                 let next_cwd = updated.cwd.clone();
                 let codex_home = updated.codex_home.clone();
+                let session_source = updated.session_source.clone();
                 state.session_configuration = updated;
                 drop(state);
 
-                self.maybe_refresh_shell_snapshot_for_cwd(&previous_cwd, &next_cwd, &codex_home);
+                self.maybe_refresh_shell_snapshot_for_cwd(
+                    &previous_cwd,
+                    &next_cwd,
+                    &codex_home,
+                    &session_source,
+                );
 
                 Ok(())
             }
@@ -2111,7 +2134,13 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
-        let (session_configuration, sandbox_policy_changed, previous_cwd, codex_home) = {
+        let (
+            session_configuration,
+            sandbox_policy_changed,
+            previous_cwd,
+            codex_home,
+            session_source,
+        ) = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
@@ -2119,8 +2148,15 @@ impl Session {
                     let sandbox_policy_changed =
                         state.session_configuration.sandbox_policy != next.sandbox_policy;
                     let codex_home = next.codex_home.clone();
+                    let session_source = next.session_source.clone();
                     state.session_configuration = next.clone();
-                    (next, sandbox_policy_changed, previous_cwd, codex_home)
+                    (
+                        next,
+                        sandbox_policy_changed,
+                        previous_cwd,
+                        codex_home,
+                        session_source,
+                    )
                 }
                 Err(err) => {
                     drop(state);
@@ -2141,6 +2177,7 @@ impl Session {
             &previous_cwd,
             &session_configuration.cwd,
             &codex_home,
+            &session_source,
         );
 
         Ok(self
@@ -7922,6 +7959,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -8015,6 +8053,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -8327,6 +8366,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         }
     }
 
@@ -8381,6 +8421,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         };
 
         let (tx_event, _rx_event) = async_channel::unbounded();
@@ -8463,6 +8504,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline_for_tests(
@@ -8623,6 +8665,7 @@ mod tests {
             session_source: SessionSource::Exec,
             dynamic_tools,
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline_for_tests(

@@ -60,6 +60,7 @@ pub(crate) async fn run_codex_thread_interactive(
         Vec::new(),
         false,
         None,
+        None,
     )
     .await?;
     let codex = Arc::new(codex);
