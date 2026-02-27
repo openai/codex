@@ -1443,6 +1443,14 @@
           },
           "type": "array"
         },
+        "terminal_title": {
+          "default": null,
+          "description": "Ordered list of terminal title item identifiers.\n\nWhen set, the TUI renders the selected items into the terminal window/tab title. When unset, the TUI defaults to: `project` and `status`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "theme": {
           "default": null,
           "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",

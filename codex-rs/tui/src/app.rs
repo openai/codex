@@ -585,6 +585,8 @@ pub(crate) struct App {
     pub(crate) commit_anim_running: Arc<AtomicBool>,
     // Shared across ChatWidget instances so invalid status-line config warnings only emit once.
     status_line_invalid_items_warned: Arc<AtomicBool>,
+    // Shared across ChatWidget instances so invalid terminal-title config warnings only emit once.
+    terminal_title_invalid_items_warned: Arc<AtomicBool>,
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
@@ -669,6 +671,7 @@ impl App {
             feedback_audience: self.feedback_audience,
             model: Some(self.chat_widget.current_model().to_string()),
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
+            terminal_title_invalid_items_warned: self.terminal_title_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
         }
     }
@@ -1195,6 +1198,7 @@ impl App {
             feedback_audience: self.feedback_audience,
             model: Some(model),
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
+            terminal_title_invalid_items_warned: self.terminal_title_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
         };
         self.chat_widget = ChatWidget::new(init, self.server.clone());
@@ -1269,7 +1273,7 @@ impl App {
         for event in snapshot.events {
             self.handle_codex_event_replay(event);
         }
-        self.refresh_status_line();
+        self.refresh_status_surfaces();
     }
 
     fn should_wait_for_initial_session(session_selection: &SessionSelection) -> bool {
@@ -1387,6 +1391,7 @@ impl App {
         }
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
@@ -1411,6 +1416,8 @@ impl App {
                     feedback_audience,
                     model: Some(model.clone()),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
+                    terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
+                        .clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new(init, thread_manager.clone())
@@ -1445,6 +1452,8 @@ impl App {
                     feedback_audience,
                     model: config.model.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
+                    terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
+                        .clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
@@ -1481,6 +1490,8 @@ impl App {
                     feedback_audience,
                     model: config.model.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
+                    terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
+                        .clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
@@ -1514,6 +1525,7 @@ impl App {
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
+            terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
@@ -1657,7 +1669,7 @@ impl App {
         if matches!(event, TuiEvent::Draw) {
             let size = tui.terminal.size()?;
             if size != tui.terminal.last_known_screen_size {
-                self.refresh_status_line();
+                self.refresh_status_surfaces();
             }
         }
 
@@ -2008,15 +2020,15 @@ impl App {
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
-                self.refresh_status_line();
+                self.refresh_status_surfaces();
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
-                self.refresh_status_line();
+                self.refresh_status_surfaces();
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
-                self.refresh_status_line();
+                self.refresh_status_surfaces();
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
@@ -2639,7 +2651,7 @@ impl App {
             AppEvent::UpdatePlanModeReasoningEffort(effort) => {
                 self.config.plan_mode_reasoning_effort = effort;
                 self.chat_widget.set_plan_mode_reasoning_effort(effort);
-                self.refresh_status_line();
+                self.refresh_status_surfaces();
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
@@ -2932,10 +2944,37 @@ impl App {
             }
             AppEvent::StatusLineBranchUpdated { cwd, branch } => {
                 self.chat_widget.set_status_line_branch(cwd, branch);
-                self.refresh_status_line();
+                self.refresh_status_surfaces();
             }
             AppEvent::StatusLineSetupCancelled => {
                 self.chat_widget.cancel_status_line_setup();
+            }
+            AppEvent::TerminalTitleSetup { items } => {
+                let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
+                let edit = codex_core::config::edit::terminal_title_items_edit(&ids);
+                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await;
+                match apply_result {
+                    Ok(()) => {
+                        self.config.tui_terminal_title = Some(ids.clone());
+                        self.chat_widget.setup_terminal_title(items);
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist terminal title items; keeping previous selection");
+                        self.chat_widget.revert_terminal_title_setup_preview();
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save terminal title items: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::TerminalTitleSetupPreview { items } => {
+                self.chat_widget.preview_terminal_title(items);
+            }
+            AppEvent::TerminalTitleSetupCancelled => {
+                self.chat_widget.cancel_terminal_title_setup();
             }
             AppEvent::SyntaxThemeSelected { name } => {
                 let edit = codex_core::config::edit::syntax_theme_edit(&name);
@@ -3011,7 +3050,7 @@ impl App {
         self.chat_widget.handle_codex_event(event);
 
         if needs_refresh {
-            self.refresh_status_line();
+            self.refresh_status_surfaces();
         }
     }
 
@@ -3365,8 +3404,8 @@ impl App {
         };
     }
 
-    fn refresh_status_line(&mut self) {
-        self.chat_widget.refresh_status_line();
+    fn refresh_status_surfaces(&mut self) {
+        self.chat_widget.refresh_status_surfaces();
     }
 
     #[cfg(target_os = "windows")]
@@ -3955,6 +3994,7 @@ mod tests {
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+            terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
@@ -4014,6 +4054,7 @@ mod tests {
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
                 status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+                terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),

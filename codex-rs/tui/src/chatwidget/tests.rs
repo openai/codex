@@ -1582,6 +1582,7 @@ async fn helpers_are_available_and_do_not_panic() {
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
     let mut w = ChatWidget::new(init, thread_manager);
@@ -1698,6 +1699,7 @@ async fn make_chatwidget_manual(
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
+        terminal_title_status_kind: TerminalTitleStatusKind::Working,
         retry_status_header: None,
         pending_status_indicator_restore: false,
         thread_id: None,
@@ -1717,6 +1719,7 @@ async fn make_chatwidget_manual(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
+        last_plan_progress: None,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         last_separator_elapsed_secs: None,
@@ -1728,6 +1731,10 @@ async fn make_chatwidget_manual(
         current_cwd: None,
         session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        last_terminal_title: None,
+        terminal_title_setup_original_items: None,
+        status_line_project_root_name_cache: None,
         status_line_branch: None,
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
@@ -4489,6 +4496,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
 
@@ -4538,6 +4546,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         feedback_audience: FeedbackAudience::External,
         model: Some(resolved_model.clone()),
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         otel_manager,
     };
 
@@ -8122,7 +8131,7 @@ async fn status_line_invalid_items_warn_once() {
     ]);
     chat.thread_id = Some(ThreadId::new());
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one warning history cell");
     let rendered = lines_to_single_string(&cells[0]);
@@ -8131,12 +8140,85 @@ async fn status_line_invalid_items_warn_once() {
         "warning cell missing invalid item content: {rendered}"
     );
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
     let cells = drain_insert_history(&mut rx);
     assert!(
         cells.is_empty(),
         "expected invalid status line warning to emit only once"
     );
+}
+
+#[tokio::test]
+async fn terminal_title_setup_cancel_reverts_live_preview() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let original = chat.config.tui_terminal_title.clone();
+
+    chat.open_terminal_title_setup();
+    chat.preview_terminal_title(vec![TerminalTitleItem::Thread, TerminalTitleItem::Status]);
+
+    assert_eq!(
+        chat.config.tui_terminal_title,
+        Some(vec!["thread".to_string(), "status".to_string()])
+    );
+    assert_eq!(
+        chat.terminal_title_setup_original_items,
+        Some(original.clone())
+    );
+
+    chat.cancel_terminal_title_setup();
+
+    assert_eq!(chat.config.tui_terminal_title, original);
+    assert_eq!(chat.terminal_title_setup_original_items, None);
+}
+
+#[tokio::test]
+async fn terminal_title_status_uses_waiting_ellipsis_for_background_terminal() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    terminal_interaction(&mut chat, "call-1", "proc-1", "");
+
+    assert_eq!(chat.terminal_title_status_text(), "Waiting...");
+}
+
+#[tokio::test]
+async fn terminal_title_status_uses_ellipses_for_other_transient_states() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.mcp_startup_status = Some(std::collections::HashMap::new());
+    assert_eq!(chat.terminal_title_status_text(), "Starting...");
+
+    chat.mcp_startup_status = None;
+    chat.on_task_started();
+    assert_eq!(chat.terminal_title_status_text(), "Working...");
+
+    chat.handle_codex_event(Event {
+        id: "undo-1".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent {
+            message: Some("Undoing changes".to_string()),
+        }),
+    });
+    assert_eq!(chat.terminal_title_status_text(), "Undoing...");
+
+    chat.on_agent_reasoning_delta("**Planning**\nmore".to_string());
+    assert_eq!(chat.terminal_title_status_text(), "Thinking...");
+}
+
+#[tokio::test]
+async fn on_task_started_resets_terminal_title_task_progress() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.last_plan_progress = Some((2, 5));
+
+    chat.on_task_started();
+
+    assert_eq!(chat.last_plan_progress, None);
+    assert_eq!(chat.terminal_title_task_progress(), None);
+}
+
+#[test]
+fn terminal_title_part_truncation_preserves_grapheme_clusters() {
+    let value = "ab👩‍💻cdefg".to_string();
+    let truncated = ChatWidget::truncate_terminal_title_part(value, 7);
+    assert_eq!(truncated, "ab👩‍💻c...");
 }
 
 #[tokio::test]
@@ -8147,7 +8229,7 @@ async fn status_line_branch_state_resets_when_git_branch_disabled() {
     chat.status_line_branch_lookup_complete = true;
     chat.config.tui_status_line = Some(vec!["model_name".to_string()]);
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
 
     assert_eq!(chat.status_line_branch, None);
     assert!(!chat.status_line_branch_pending);
@@ -8158,6 +8240,25 @@ async fn status_line_branch_state_resets_when_git_branch_disabled() {
 async fn status_line_branch_refreshes_after_turn_complete() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.tui_status_line = Some(vec!["git-branch".to_string()]);
+    chat.status_line_branch_lookup_complete = true;
+    chat.status_line_branch_pending = false;
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    assert!(chat.status_line_branch_pending);
+}
+
+#[tokio::test]
+async fn status_line_branch_refreshes_after_turn_complete_when_terminal_title_uses_git_branch() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_status_line = Some(Vec::new());
+    chat.config.tui_terminal_title = Some(vec!["git-branch".to_string()]);
     chat.status_line_branch_lookup_complete = true;
     chat.status_line_branch_pending = false;
 

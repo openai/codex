@@ -55,7 +55,7 @@ pub enum ConfigEdit {
     ClearPath { segments: Vec<String> },
 }
 
-/// Produces a config edit that sets `[tui] theme = "<name>"`.
+/// Produces a config edit that sets `[tui].theme = "<name>"`.
 pub fn syntax_theme_edit(name: &str) -> ConfigEdit {
     ConfigEdit::SetPath {
         segments: vec!["tui".to_string(), "theme".to_string()],
@@ -63,6 +63,10 @@ pub fn syntax_theme_edit(name: &str) -> ConfigEdit {
     }
 }
 
+/// Produces a config edit that sets `[tui].status_line` to an explicit ordered list.
+///
+/// The array is written even when it is empty so "hide the status line" stays
+/// distinct from "unset, so use defaults".
 pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
     let mut array = toml_edit::Array::new();
     for item in items {
@@ -71,6 +75,22 @@ pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
 
     ConfigEdit::SetPath {
         segments: vec!["tui".to_string(), "status_line".to_string()],
+        value: TomlItem::Value(array.into()),
+    }
+}
+
+/// Produces a config edit that sets `[tui].terminal_title` to an explicit ordered list.
+///
+/// The array is written even when it is empty so "disabled title updates" stays
+/// distinct from "unset, so use defaults".
+pub fn terminal_title_items_edit(items: &[String]) -> ConfigEdit {
+    let mut array = toml_edit::Array::new();
+    for item in items {
+        array.push(item.clone());
+    }
+
+    ConfigEdit::SetPath {
+        segments: vec!["tui".to_string(), "terminal_title".to_string()],
         value: TomlItem::Value(array.into()),
     }
 }
