@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::diff_render::display_path_for;
 use crate::key_hint;
+use crate::style::user_message_style;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -29,6 +30,7 @@ use crossterm::event::KeyEventKind;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -938,7 +940,7 @@ fn render_list(
         .enumerate()
     {
         let is_sel = start + idx == state.selected;
-        let marker = if is_sel { "> ".bold() } else { "  ".into() };
+        let marker = if is_sel { "› ".into() } else { "  ".into() };
         let marker_width = 2usize;
         let created_span = if visibility.show_created {
             Some(Span::from(format!("{created_label:<max_created_width$}")).dim())
@@ -1023,9 +1025,16 @@ fn render_list(
         }
         spans.push(preview.into());
 
+        if is_sel {
+            apply_selected_row_text_style(&mut spans);
+        }
+
         let line: Line = spans.into();
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(line, rect);
+        if is_sel {
+            paint_selected_row_background(frame.buffer_mut(), rect);
+        }
         y = y.saturating_add(1);
     }
 
@@ -1164,6 +1173,23 @@ fn render_column_headers(
     }
     spans.push("Conversation".bold());
     frame.render_widget_ref(Line::from(spans), area);
+}
+
+fn apply_selected_row_text_style(spans: &mut [Span<'_>]) {
+    let selected_style = Style::default().cyan().bold();
+    for span in spans {
+        span.style = span.style.patch(selected_style);
+    }
+}
+
+fn paint_selected_row_background(buf: &mut ratatui::buffer::Buffer, area: Rect) {
+    let selected_style = user_message_style();
+    for y in area.y..area.y.saturating_add(area.height) {
+        for x in area.x..area.x.saturating_add(area.width) {
+            let cell = &mut buf[(x, y)];
+            cell.set_style(cell.style().patch(selected_style));
+        }
+    }
 }
 
 /// Pre-computed column widths and formatted labels for all visible rows.
@@ -1528,8 +1554,7 @@ mod tests {
 
     #[test]
     fn resume_table_snapshot() {
-        use crate::custom_terminal::Terminal;
-        use crate::test_backend::VT100Backend;
+        use ratatui::buffer::Buffer;
         use ratatui::layout::Constraint;
         use ratatui::layout::Layout;
 
@@ -1588,22 +1613,18 @@ mod tests {
 
         let width: u16 = 80;
         let height: u16 = 6;
-        let backend = VT100Backend::new(width, height);
-        let mut terminal = Terminal::with_options(backend).expect("terminal");
-        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        let segments = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+        let mut frame = crate::custom_terminal::Frame {
+            cursor_position: None,
+            viewport_area: area,
+            buffer: &mut buf,
+        };
+        render_column_headers(&mut frame, segments[0], &metrics, state.sort_key);
+        render_list(&mut frame, segments[1], &state, &metrics);
 
-        {
-            let mut frame = terminal.get_frame();
-            let area = frame.area();
-            let segments =
-                Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
-            render_column_headers(&mut frame, segments[0], &metrics, state.sort_key);
-            render_list(&mut frame, segments[1], &state, &metrics);
-        }
-        terminal.flush().expect("flush");
-
-        let snapshot = terminal.backend().to_string();
-        assert_snapshot!("resume_picker_table", snapshot);
+        assert_snapshot!("resume_picker_table", format!("{buf:?}"));
     }
 
     // TODO(jif) fix
@@ -1874,6 +1895,75 @@ mod tests {
 
         let snapshot = terminal.backend().to_string();
         assert_snapshot!("resume_picker_thread_names", snapshot);
+    }
+
+    #[test]
+    fn selected_row_highlighting_styles_the_full_row() {
+        use ratatui::buffer::Buffer;
+        use ratatui::style::Color;
+        use ratatui::style::Modifier;
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+
+        let now = Utc::now();
+        state.filtered_rows = vec![
+            Row {
+                path: PathBuf::from("/tmp/a.jsonl"),
+                preview: String::from("First row"),
+                thread_id: None,
+                thread_name: None,
+                created_at: Some(now - Duration::minutes(1)),
+                updated_at: Some(now - Duration::seconds(30)),
+                cwd: None,
+                git_branch: None,
+            },
+            Row {
+                path: PathBuf::from("/tmp/b.jsonl"),
+                preview: String::from("Selected row"),
+                thread_id: None,
+                thread_name: None,
+                created_at: Some(now - Duration::minutes(2)),
+                updated_at: Some(now - Duration::minutes(1)),
+                cwd: None,
+                git_branch: None,
+            },
+        ];
+        state.selected = 1;
+        state.scroll_top = 0;
+        state.view_rows = Some(2);
+
+        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        let area = Rect::new(0, 0, 80, 2);
+        let mut buf = Buffer::empty(area);
+        let mut frame = crate::custom_terminal::Frame {
+            cursor_position: None,
+            viewport_area: area,
+            buffer: &mut buf,
+        };
+        render_list(&mut frame, area, &state, &metrics);
+
+        let marker = &buf[(0, 1)];
+        assert_eq!(marker.symbol(), "›");
+        assert_eq!(marker.style().fg, Some(Color::Cyan));
+        assert!(marker.style().add_modifier.contains(Modifier::BOLD));
+
+        let metadata = &buf[(2, 1)];
+        assert_eq!(metadata.style().fg, Some(Color::Cyan));
+        assert!(metadata.style().add_modifier.contains(Modifier::BOLD));
+
+        if let Some(selected_bg) = user_message_style().bg {
+            assert_eq!(buf[(79, 1)].style().bg, Some(selected_bg));
+            assert_ne!(buf[(79, 0)].style().bg, Some(selected_bg));
+        }
     }
 
     #[test]
