@@ -16,6 +16,8 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use codex_execpolicy::Decision;
+use codex_execpolicy::Evaluation;
+use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -493,28 +495,16 @@ impl EscalationPolicy for CoreShellActionProvider {
                 .await;
         }
 
-        let command = join_program_and_argv(program, argv);
-        let (commands, used_complex_parsing) =
-            if let Some(commands) = parse_shell_lc_plain_commands(&command) {
-                (commands, false)
-            } else if let Some(single_command) = parse_shell_lc_single_command_prefix(&command) {
-                (vec![single_command], true)
-            } else {
-                (vec![command.clone()], false)
-            };
-
-        let fallback = |cmd: &[String]| {
-            crate::exec_policy::render_decision_for_unmatched_command(
-                self.approval_policy,
-                &self.sandbox_policy,
-                cmd,
-                self.sandbox_permissions,
-                used_complex_parsing,
-            )
-        };
         let evaluation = {
             let policy = self.policy.read().await;
-            policy.check_multiple(commands.iter(), &fallback)
+            evaluate_intercepted_exec_policy(
+                &policy,
+                program,
+                argv,
+                self.approval_policy,
+                &self.sandbox_policy,
+                self.sandbox_permissions,
+            )
         };
         // When true, means the Evaluation was due to *.rules, not the
         // fallback function.
@@ -550,6 +540,43 @@ impl EscalationPolicy for CoreShellActionProvider {
         )
         .await
     }
+}
+
+fn evaluate_intercepted_exec_policy(
+    policy: &Policy,
+    program: &AbsolutePathBuf,
+    argv: &[String],
+    approval_policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+    sandbox_permissions: SandboxPermissions,
+) -> Evaluation {
+    let command = join_program_and_argv(program, argv);
+    let (commands, used_complex_parsing) =
+        if let Some(commands) = parse_shell_lc_plain_commands(&command) {
+            (commands, false)
+        } else if let Some(single_command) = parse_shell_lc_single_command_prefix(&command) {
+            (vec![single_command], true)
+        } else {
+            (vec![command], false)
+        };
+
+    let fallback = |cmd: &[String]| {
+        crate::exec_policy::render_decision_for_unmatched_command(
+            approval_policy,
+            sandbox_policy,
+            cmd,
+            sandbox_permissions,
+            used_complex_parsing,
+        )
+    };
+
+    policy.check_multiple_with_options(
+        commands.iter(),
+        &fallback,
+        &MatchOptions {
+            resolve_host_executables: true,
+        },
+    )
 }
 
 struct CoreShellCommandExecutor {
@@ -804,6 +831,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::CoreShellCommandExecutor;
     use super::ParsedShellCommand;
+    use super::evaluate_intercepted_exec_policy;
     use super::extract_shell_script;
     use super::join_program_and_argv;
     use super::map_exec_result;
@@ -814,14 +842,16 @@ mod tests {
     #[cfg(target_os = "macos")]
     use crate::config::types::ShellEnvironmentPolicy;
     use crate::exec::SandboxType;
-    #[cfg(target_os = "macos")]
     use crate::protocol::AskForApproval;
     use crate::protocol::ReadOnlyAccess;
     use crate::protocol::SandboxPolicy;
-    #[cfg(target_os = "macos")]
     use crate::sandboxing::SandboxPermissions;
     #[cfg(target_os = "macos")]
     use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+    use codex_execpolicy::Decision;
+    use codex_execpolicy::Evaluation;
+    use codex_execpolicy::PolicyParser;
+    use codex_execpolicy::RuleMatch;
     #[cfg(target_os = "macos")]
     use codex_protocol::config_types::WindowsSandboxLevel;
     use codex_protocol::models::FileSystemPermissions;
@@ -840,6 +870,22 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::Duration;
+
+    fn host_absolute_path(segments: &[&str]) -> String {
+        let mut path = if cfg!(windows) {
+            PathBuf::from(r"C:\")
+        } else {
+            PathBuf::from("/")
+        };
+        for segment in segments {
+            path.push(segment);
+        }
+        path.to_string_lossy().into_owned()
+    }
+
+    fn starlark_string(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    }
 
     #[test]
     fn extract_shell_script_preserves_login_flag() {
@@ -1004,6 +1050,84 @@ mod tests {
                 },
             )),
         );
+    }
+
+    #[test]
+    fn intercepted_exec_policy_uses_host_executable_mappings() {
+        let git_path = host_absolute_path(&["usr", "bin", "git"]);
+        let git_path_literal = starlark_string(&git_path);
+        let policy_src = format!(
+            r#"
+prefix_rule(pattern = ["git", "status"], decision = "prompt")
+host_executable(name = "git", paths = ["{git_path_literal}"])
+"#
+        );
+        let mut parser = PolicyParser::new();
+        parser.parse("test.rules", &policy_src).unwrap();
+        let policy = parser.build();
+        let program = AbsolutePathBuf::try_from(git_path).unwrap();
+
+        let evaluation = evaluate_intercepted_exec_policy(
+            &policy,
+            &program,
+            &["git".to_string(), "status".to_string()],
+            AskForApproval::OnRequest,
+            &SandboxPolicy::new_read_only_policy(),
+            SandboxPermissions::UseDefault,
+        );
+
+        assert_eq!(
+            evaluation,
+            Evaluation {
+                decision: Decision::Prompt,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["git".to_string(), "status".to_string()],
+                    decision: Decision::Prompt,
+                    resolved_program: Some(program),
+                    justification: None,
+                }],
+            }
+        );
+        assert!(CoreShellActionProvider::decision_driven_by_policy(
+            &evaluation.matched_rules,
+            evaluation.decision
+        ));
+    }
+
+    #[test]
+    fn intercepted_exec_policy_rejects_disallowed_host_executable_mapping() {
+        let allowed_git = host_absolute_path(&["usr", "bin", "git"]);
+        let other_git = host_absolute_path(&["opt", "homebrew", "bin", "git"]);
+        let allowed_git_literal = starlark_string(&allowed_git);
+        let policy_src = format!(
+            r#"
+prefix_rule(pattern = ["git", "status"], decision = "prompt")
+host_executable(name = "git", paths = ["{allowed_git_literal}"])
+"#
+        );
+        let mut parser = PolicyParser::new();
+        parser.parse("test.rules", &policy_src).unwrap();
+        let policy = parser.build();
+        let program = AbsolutePathBuf::try_from(other_git.clone()).unwrap();
+
+        let evaluation = evaluate_intercepted_exec_policy(
+            &policy,
+            &program,
+            &["git".to_string(), "status".to_string()],
+            AskForApproval::OnRequest,
+            &SandboxPolicy::new_read_only_policy(),
+            SandboxPermissions::UseDefault,
+        );
+
+        assert!(matches!(
+            evaluation.matched_rules.as_slice(),
+            [RuleMatch::HeuristicsRuleMatch { command, .. }]
+                if command == &vec![other_git, "status".to_string()]
+        ));
+        assert!(!CoreShellActionProvider::decision_driven_by_policy(
+            &evaluation.matched_rules,
+            evaluation.decision
+        ));
     }
 
     #[cfg(target_os = "macos")]
