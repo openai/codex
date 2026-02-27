@@ -53,6 +53,7 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use codex_state::log_db::LogDbLayer;
 use futures::FutureExt;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
@@ -152,6 +153,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
     pub(crate) feedback: CodexFeedback,
+    pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
 }
 
@@ -168,6 +170,7 @@ impl MessageProcessor {
             loader_overrides,
             cloud_requirements,
             feedback,
+            log_db,
             config_warnings,
         } = args;
         let auth_manager = AuthManager::shared(
@@ -201,6 +204,7 @@ impl MessageProcessor {
             cloud_requirements: cloud_requirements.clone(),
             single_client_mode,
             feedback,
+            log_db,
         });
         let config_api = ConfigApi::new(
             config.codex_home.clone(),

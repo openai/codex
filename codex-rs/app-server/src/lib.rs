@@ -479,7 +479,7 @@ pub async fn run_main_with_transport(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let log_db_layer = if config.features.enabled(Feature::Sqlite) {
+    let log_db = if config.features.enabled(Feature::Sqlite) {
         codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
             config.model_provider_id.clone(),
@@ -487,10 +487,13 @@ pub async fn run_main_with_transport(
         )
         .await
         .ok()
-        .map(|db| log_db::start(db).with_filter(Targets::new().with_default(Level::TRACE)))
+        .map(log_db::start)
     } else {
         None
     };
+    let log_db_layer = log_db
+        .clone()
+        .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
@@ -578,6 +581,7 @@ pub async fn run_main_with_transport(
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
             feedback: feedback.clone(),
+            log_db,
             config_warnings,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
