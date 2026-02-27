@@ -10,6 +10,7 @@
 //! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
 //! rendered transcript output can change.
 
+use crate::chatwidget::DEFAULT_MODEL_DISPLAY_NAME;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -94,6 +95,11 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     /// Returns the logical lines for the main chat viewport.
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
+
+    /// Returns whether this cell renders any visible display lines when width is unconstrained.
+    fn has_visible_display_lines(&self) -> bool {
+        !self.display_lines(u16::MAX).is_empty()
+    }
 
     /// Returns the number of viewport rows needed to render this cell.
     ///
@@ -1019,43 +1025,30 @@ impl HistoryCell for TooltipHistoryCell {
     }
 }
 
-#[derive(Debug)]
-pub struct SessionInfoCell(CompositeHistoryCell);
+pub(crate) fn new_session_info_body(
+    config: &Config,
+    requested_model: &str,
+    event: &SessionConfiguredEvent,
+    is_first_event: bool,
+    auth_plan: Option<PlanType>,
+) -> Option<Box<dyn HistoryCell>> {
+    let parts = session_info_body_parts(config, requested_model, event, is_first_event, auth_plan);
 
-impl HistoryCell for SessionInfoCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.0.display_lines(width)
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.0.desired_height(width)
-    }
-
-    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.0.transcript_lines(width)
+    match parts.len() {
+        0 => None,
+        1 => parts.into_iter().next(),
+        _ => Some(Box::new(CompositeHistoryCell::new(parts))),
     }
 }
 
-pub(crate) fn new_session_info(
+fn session_info_body_parts(
     config: &Config,
     requested_model: &str,
-    event: SessionConfiguredEvent,
+    event: &SessionConfiguredEvent,
     is_first_event: bool,
     auth_plan: Option<PlanType>,
-) -> SessionInfoCell {
-    let SessionConfiguredEvent {
-        model,
-        reasoning_effort,
-        ..
-    } = event;
-    // Header box rendered as history (so it appears at the very top)
-    let header = SessionHeaderHistoryCell::new(
-        model.clone(),
-        reasoning_effort,
-        config.cwd.clone(),
-        CODEX_CLI_VERSION,
-    );
-    let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
+) -> Vec<Box<dyn HistoryCell>> {
+    let mut parts: Vec<Box<dyn HistoryCell>> = Vec::new();
 
     if is_first_event {
         // Help lines below the header (new copy and list)
@@ -1098,17 +1091,17 @@ pub(crate) fn new_session_info(
         {
             parts.push(Box::new(tooltips));
         }
-        if requested_model != model {
+        if requested_model != event.model {
             let lines = vec![
                 "model changed:".magenta().bold().into(),
                 format!("requested: {requested_model}").into(),
-                format!("used: {model}").into(),
+                format!("used: {}", event.model).into(),
             ];
             parts.push(Box::new(PlainHistoryCell { lines }));
         }
     }
 
-    SessionInfoCell(CompositeHistoryCell { parts })
+    parts
 }
 
 pub(crate) fn new_user_prompt(
@@ -1202,6 +1195,10 @@ impl SessionHeaderHistoryCell {
             ReasoningEffortConfig::XHigh => "xhigh",
             ReasoningEffortConfig::None => "none",
         })
+    }
+
+    pub(crate) fn is_loading_placeholder(&self) -> bool {
+        self.model == DEFAULT_MODEL_DISPLAY_NAME
     }
 }
 

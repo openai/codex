@@ -126,43 +126,7 @@ where
 
     for line in wrapped {
         queue!(writer, Print("\r\n"))?;
-        // URL lines can be wider than the terminal and will
-        // character-wrap onto continuation rows. Pre-clear those rows
-        // so stale content from a previously longer line is erased.
-        let physical_rows = line.width().max(1).div_ceil(wrap_width);
-        if physical_rows > 1 {
-            queue!(writer, SavePosition)?;
-            for _ in 1..physical_rows {
-                queue!(writer, MoveDown(1), MoveToColumn(0))?;
-                queue!(writer, Clear(ClearType::UntilNewLine))?;
-            }
-            queue!(writer, RestorePosition)?;
-        }
-        queue!(
-            writer,
-            SetColors(Colors::new(
-                line.style
-                    .fg
-                    .map(std::convert::Into::into)
-                    .unwrap_or(CColor::Reset),
-                line.style
-                    .bg
-                    .map(std::convert::Into::into)
-                    .unwrap_or(CColor::Reset)
-            ))
-        )?;
-        queue!(writer, Clear(ClearType::UntilNewLine))?;
-        // Merge line-level style into each span so that ANSI colors reflect
-        // line styles (e.g., blockquotes with green fg).
-        let merged_spans: Vec<Span> = line
-            .spans
-            .iter()
-            .map(|s| Span {
-                style: s.style.patch(line.style),
-                content: s.content.clone(),
-            })
-            .collect();
-        write_spans(writer, merged_spans.iter())?;
+        write_line(writer, &line, wrap_width)?;
     }
 
     queue!(writer, ResetScrollRegion)?;
@@ -178,6 +142,36 @@ where
         terminal.note_history_rows_inserted(wrapped_lines);
     }
 
+    Ok(())
+}
+
+pub fn replace_top_visible_history_lines<B>(
+    terminal: &mut crate::custom_terminal::Terminal<B>,
+    lines: Vec<Line>,
+) -> io::Result<()>
+where
+    B: Backend + Write,
+{
+    if lines.is_empty() {
+        return Ok(());
+    }
+
+    let top = terminal
+        .viewport_area
+        .top()
+        .saturating_sub(terminal.visible_history_rows());
+    let wrap_width = terminal.viewport_area.width.max(1) as usize;
+    let last_cursor_pos = terminal.last_known_cursor_pos;
+    let writer = terminal.backend_mut();
+
+    for (index, line) in lines.iter().enumerate() {
+        let y = top.saturating_add(index as u16);
+        queue!(writer, MoveTo(0, y))?;
+        write_line(writer, line, wrap_width)?;
+    }
+
+    queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
+    std::io::Write::flush(writer)?;
     Ok(())
 }
 
@@ -327,6 +321,43 @@ where
         SetBackgroundColor(CColor::Reset),
         SetAttribute(crossterm::style::Attribute::Reset),
     )
+}
+
+fn write_line(mut writer: &mut impl Write, line: &Line<'_>, wrap_width: usize) -> io::Result<()> {
+    // URL lines can be wider than the terminal and will character-wrap onto continuation rows.
+    // Pre-clear those rows so stale content from a previously longer line is erased.
+    let physical_rows = line.width().max(1).div_ceil(wrap_width);
+    if physical_rows > 1 {
+        queue!(writer, SavePosition)?;
+        for _ in 1..physical_rows {
+            queue!(writer, MoveDown(1), MoveToColumn(0))?;
+            queue!(writer, Clear(ClearType::UntilNewLine))?;
+        }
+        queue!(writer, RestorePosition)?;
+    }
+    queue!(
+        writer,
+        SetColors(Colors::new(
+            line.style
+                .fg
+                .map(std::convert::Into::into)
+                .unwrap_or(CColor::Reset),
+            line.style
+                .bg
+                .map(std::convert::Into::into)
+                .unwrap_or(CColor::Reset)
+        ))
+    )?;
+    queue!(writer, Clear(ClearType::UntilNewLine))?;
+    let merged_spans: Vec<Span> = line
+        .spans
+        .iter()
+        .map(|s| Span {
+            style: s.style.patch(line.style),
+            content: s.content.clone(),
+        })
+        .collect();
+    write_spans(&mut writer, merged_spans.iter())
 }
 
 #[cfg(test)]

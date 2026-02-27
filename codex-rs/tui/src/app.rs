@@ -11,6 +11,7 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
+use crate::chatwidget::DEFAULT_MODEL_DISPLAY_NAME;
 use crate::chatwidget::ExternalEditorState;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
@@ -81,6 +82,8 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -723,6 +726,41 @@ impl App {
             .add_info_message(format!("Opened {url} in your browser."), None);
     }
 
+    fn insert_history_cell(&mut self, tui: &mut tui::Tui, cell: Arc<dyn HistoryCell>) {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+        self.transcript_cells.push(cell.clone());
+        let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        if !display.is_empty() {
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, Line::from(""));
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+            if self.overlay.is_some() {
+                self.deferred_history_lines.extend(display);
+            } else {
+                tui.insert_history_lines(display);
+            }
+        }
+    }
+
+    fn insert_startup_header(&mut self, tui: &mut tui::Tui) {
+        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
+        let header = Arc::new(history_cell::SessionHeaderHistoryCell::new_with_style(
+            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
+            placeholder_style,
+            None,
+            self.config.cwd.clone(),
+            CODEX_CLI_VERSION,
+        )) as Arc<dyn HistoryCell>;
+        self.insert_history_cell(tui, header);
+    }
+
     fn clear_ui_header_lines_with_version(
         &self,
         width: u16,
@@ -1199,6 +1237,7 @@ impl App {
         };
         self.chat_widget = ChatWidget::new(init, self.server.clone());
         self.reset_thread_event_state();
+        self.insert_startup_header(tui);
         if let Some(summary) = summary {
             let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
             if let Some(command) = summary.resume_command {
@@ -1311,7 +1350,8 @@ impl App {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        emit_project_config_warnings(&app_event_tx, &config);
+        let should_insert_startup_header =
+            matches!(&session_selection, SessionSelection::StartFresh);
         tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
@@ -1493,6 +1533,7 @@ impl App {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
+        emit_project_config_warnings(&app_event_tx, &config);
 
         let mut app = Self {
             server: thread_manager.clone(),
@@ -1530,6 +1571,10 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         };
+
+        if should_insert_startup_header {
+            app.insert_startup_header(tui);
+        }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -1883,29 +1928,7 @@ impl App {
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
-                    }
-                }
+                self.insert_history_cell(tui, cell);
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
@@ -3064,6 +3087,55 @@ impl App {
             // thread, so unrelated shutdowns cannot consume this marker.
             self.pending_shutdown_exit_thread_id = None;
         }
+        if let EventMsg::SessionConfigured(session) = &event.msg
+            && let Some(loading_header_idx) = self.transcript_cells.iter().rposition(|cell| {
+                matches!(
+                    cell.as_ref()
+                        .as_any()
+                        .downcast_ref::<history_cell::SessionHeaderHistoryCell>(),
+                    Some(startup_header) if startup_header.is_loading_placeholder()
+                )
+            })
+        {
+            let cell = Arc::new(history_cell::SessionHeaderHistoryCell::new(
+                session.model.clone(),
+                session.reasoning_effort,
+                session.cwd.clone(),
+                CODEX_CLI_VERSION,
+            )) as Arc<dyn HistoryCell>;
+            self.transcript_cells[loading_header_idx] = cell.clone();
+            if matches!(&self.overlay, Some(Overlay::Transcript(_))) {
+                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+                tui.frame_requester().schedule_frame();
+            }
+            if loading_header_idx == 0 {
+                let display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+                tui.replace_top_visible_history_lines(display)?;
+            } else {
+                self.clear_terminal_ui(tui, false)?;
+                self.deferred_history_lines.clear();
+
+                let transcript_cells = self.transcript_cells.clone();
+                for transcript_cell in transcript_cells {
+                    let mut display =
+                        transcript_cell.display_lines(tui.terminal.last_known_screen_size.width);
+                    if !display.is_empty() {
+                        if !transcript_cell.is_stream_continuation() {
+                            if self.has_emitted_history_lines {
+                                display.insert(0, Line::from(""));
+                            } else {
+                                self.has_emitted_history_lines = true;
+                            }
+                        }
+                        if self.overlay.is_some() {
+                            self.deferred_history_lines.extend(display);
+                        } else {
+                            tui.insert_history_lines(display);
+                        }
+                    }
+                }
+            }
+        }
         self.handle_codex_event_now(event);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
@@ -3408,8 +3480,8 @@ mod tests {
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
+    use crate::history_cell::SessionHeaderHistoryCell;
     use crate::history_cell::UserHistoryCell;
-    use crate::history_cell::new_session_info;
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
@@ -3843,7 +3915,7 @@ mod tests {
                 true,
             )) as Arc<dyn HistoryCell>
         };
-        let make_header = |is_first| -> Arc<dyn HistoryCell> {
+        let make_header = |_is_first| -> Arc<dyn HistoryCell> {
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
                 forked_from_id: None,
@@ -3860,12 +3932,11 @@ mod tests {
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             };
-            Arc::new(new_session_info(
-                app.chat_widget.config_ref(),
-                app.chat_widget.current_model(),
-                event,
-                is_first,
-                None,
+            Arc::new(SessionHeaderHistoryCell::new(
+                event.model,
+                event.reasoning_effort,
+                event.cwd,
+                crate::version::CODEX_CLI_VERSION,
             )) as Arc<dyn HistoryCell>
         };
 
@@ -4340,7 +4411,7 @@ mod tests {
             )) as Arc<dyn HistoryCell>
         };
 
-        let make_header = |is_first| {
+        let make_header = |_is_first| {
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
                 forked_from_id: None,
@@ -4357,12 +4428,11 @@ mod tests {
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             };
-            Arc::new(new_session_info(
-                app.chat_widget.config_ref(),
-                app.chat_widget.current_model(),
-                event,
-                is_first,
-                None,
+            Arc::new(SessionHeaderHistoryCell::new(
+                event.model,
+                event.reasoning_effort,
+                event.cwd,
+                crate::version::CODEX_CLI_VERSION,
             )) as Arc<dyn HistoryCell>
         };
 

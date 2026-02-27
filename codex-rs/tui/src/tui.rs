@@ -445,6 +445,16 @@ impl Tui {
         self.frame_requester().schedule_frame();
     }
 
+    pub fn replace_top_visible_history_lines(&mut self, lines: Vec<Line<'static>>) -> Result<()> {
+        let line_count = lines.len();
+        if self.terminal.visible_history_rows() >= line_count as u16 {
+            crate::insert_history::replace_top_visible_history_lines(&mut self.terminal, lines)?;
+        } else if self.pending_history_lines.len() >= line_count {
+            self.pending_history_lines.splice(0..line_count, lines);
+        }
+        Ok(())
+    }
+
     pub fn clear_pending_history_lines(&mut self) {
         self.pending_history_lines.clear();
     }
