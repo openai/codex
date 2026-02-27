@@ -39,8 +39,8 @@ pub enum ConfigEdit {
     SetNoticeHideModelMigrationPrompt(String, bool),
     /// Record that a migration prompt was shown for an old->new model mapping.
     RecordModelMigrationSeen { from: String, to: String },
-    /// Record that an availability NUX was displayed.
-    RecordAvailabilityNuxDisplay { id: String },
+    /// Record that an availability NUX message was displayed.
+    RecordAvailabilityNuxDisplay { message: String },
     /// Replace the entire `[mcp_servers]` table.
     ReplaceMcpServers(BTreeMap<String, McpServerConfig>),
     /// Set or clear a skill config entry under `[[skills.config]]`.
@@ -333,7 +333,7 @@ impl ConfigDocument {
                 &[Notice::TABLE_KEY, "model_migrations", from.as_str()],
                 value(to.clone()),
             )),
-            ConfigEdit::RecordAvailabilityNuxDisplay { id } => {
+            ConfigEdit::RecordAvailabilityNuxDisplay { message } => {
                 let resolved = self.scoped_segments(
                     Scope::Global,
                     &[Notice::TABLE_KEY, "availability_nux_display_counts"],
@@ -342,10 +342,10 @@ impl ConfigDocument {
                     return Ok(false);
                 };
                 let current = table
-                    .get(id.as_str())
+                    .get(message.as_str())
                     .and_then(toml_edit::Item::as_integer)
                     .unwrap_or(0);
-                table[id.as_str()] = value(current + 1);
+                table[message.as_str()] = value(current + 1);
                 Ok(true)
             }
             ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged) => Ok(self.write_value(
@@ -805,9 +805,10 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn record_availability_nux_display(mut self, id: &str) -> Self {
-        self.edits
-            .push(ConfigEdit::RecordAvailabilityNuxDisplay { id: id.to_string() });
+    pub fn record_availability_nux_display(mut self, message: &str) -> Self {
+        self.edits.push(ConfigEdit::RecordAvailabilityNuxDisplay {
+            message: message.to_string(),
+        });
         self
     }
 
@@ -1467,7 +1468,7 @@ gpt-5 = "gpt-5.1"
 existing = "value"
 
 [notice.availability_nux_display_counts]
-try_spark = 1
+"*New* Spark is now available to you." = 1
 "#,
         )
         .expect("seed");
@@ -1475,7 +1476,7 @@ try_spark = 1
             codex_home,
             None,
             &[ConfigEdit::RecordAvailabilityNuxDisplay {
-                id: "try_spark".to_string(),
+                message: "*New* Spark is now available to you.".to_string(),
             }],
         )
         .expect("persist");
@@ -1486,7 +1487,7 @@ try_spark = 1
 existing = "value"
 
 [notice.availability_nux_display_counts]
-try_spark = 2
+"*New* Spark is now available to you." = 2
 "#;
         assert_eq!(contents, expected);
     }

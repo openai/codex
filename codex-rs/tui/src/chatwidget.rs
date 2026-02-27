@@ -1179,31 +1179,31 @@ impl ChatWidget {
             displayed_startup_tips,
         );
         self.apply_session_info_cell(session_info_cell);
-        let displayed_availability_nux_ids: Vec<String> = if self.show_welcome_banner {
+        let displayed_availability_nux_messages: Vec<String> = if self.show_welcome_banner {
             startup_tips
                 .first_session_tips
                 .iter()
-                .filter_map(StartupTip::availability_nux_id)
+                .filter_map(StartupTip::availability_nux_message)
                 .map(str::to_string)
                 .collect()
         } else {
             startup_tips
                 .selected_tip
                 .iter()
-                .filter_map(StartupTip::availability_nux_id)
+                .filter_map(StartupTip::availability_nux_message)
                 .map(str::to_string)
                 .collect()
         };
-        for id in displayed_availability_nux_ids {
+        for message in displayed_availability_nux_messages {
             let count = self
                 .config
                 .notices
                 .availability_nux_display_counts
-                .entry(id.clone())
+                .entry(message.clone())
                 .or_default();
             *count += 1;
             self.app_event_tx
-                .send(AppEvent::PersistAvailabilityNuxDisplayed { id });
+                .send(AppEvent::PersistAvailabilityNuxDisplayed { message });
         }
 
         if let Some(messages) = initial_messages {

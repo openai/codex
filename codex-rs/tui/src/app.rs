@@ -2743,16 +2743,16 @@ impl App {
                     ));
                 }
             }
-            AppEvent::PersistAvailabilityNuxDisplayed { id } => {
+            AppEvent::PersistAvailabilityNuxDisplayed { message } => {
                 let count = self
                     .config
                     .notices
                     .availability_nux_display_counts
-                    .entry(id.clone())
+                    .entry(message.clone())
                     .or_default();
                 *count += 1;
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .record_availability_nux_display(id.as_str())
+                    .record_availability_nux_display(message.as_str())
                     .apply()
                     .await
                 {

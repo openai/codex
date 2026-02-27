@@ -1849,7 +1849,6 @@ async fn session_configured_first_session_shows_model_nux_and_increments_display
     model_info.display_name = "GPT Test".to_string();
     model_info.description = Some("Fast, high-reliability coding model.".to_string());
     model_info.availability_nux = Some(ModelAvailabilityNux {
-        id: "try_spark".to_string(),
         message:
             "*New* You're using **GPT Test**. Fast, high-reliability coding model. Use /model to compare or switch anytime."
                 .to_string(),
@@ -1893,7 +1892,9 @@ async fn session_configured_first_session_shows_model_nux_and_increments_display
         chat.config
             .notices
             .availability_nux_display_counts
-            .get("try_spark")
+            .get(
+                "*New* You're using **GPT Test**. Fast, high-reliability coding model. Use /model to compare or switch anytime.",
+            )
     );
 }
 
@@ -1937,7 +1938,7 @@ async fn session_configured_ineligible_model_does_not_increment_display_count() 
         chat.config
             .notices
             .availability_nux_display_counts
-            .get("try_spark")
+            .get("*New* Spark is now available to you.")
     );
 }
 

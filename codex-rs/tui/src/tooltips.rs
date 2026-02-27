@@ -53,20 +53,20 @@ fn experimental_tooltips() -> Vec<&'static str> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StartupTip {
     Generic(String),
-    AvailabilityNux { id: String, message: String },
+    AvailabilityNux { message: String },
 }
 
 impl StartupTip {
     pub(crate) fn message(&self) -> String {
         match self {
-            Self::Generic(message) | Self::AvailabilityNux { message, .. } => message.clone(),
+            Self::Generic(message) | Self::AvailabilityNux { message } => message.clone(),
         }
     }
 
-    pub(crate) fn availability_nux_id(&self) -> Option<&str> {
+    pub(crate) fn availability_nux_message(&self) -> Option<&str> {
         match self {
             Self::Generic(_) => None,
-            Self::AvailabilityNux { id, .. } => Some(id.as_str()),
+            Self::AvailabilityNux { message } => Some(message.as_str()),
         }
     }
 }
@@ -188,26 +188,25 @@ fn availability_nux_tips(
     models: &[ModelPreset],
     availability_nux_display_counts: &BTreeMap<String, u32>,
 ) -> Vec<StartupTip> {
-    let mut seen_ids = HashSet::new();
+    let mut seen_messages = HashSet::new();
 
     models
         .iter()
         .filter_map(|preset| preset.availability_nux.as_ref())
         .filter(|availability_nux| {
             availability_nux_display_counts
-                .get(&availability_nux.id)
+                .get(&availability_nux.message)
                 .copied()
                 .unwrap_or(0)
                 < 4
         })
-        .filter(|availability_nux| seen_ids.insert(availability_nux.id.clone()))
+        .filter(|availability_nux| seen_messages.insert(availability_nux.message.clone()))
         .map(startup_tip_from_availability_nux)
         .collect()
 }
 
 fn startup_tip_from_availability_nux(availability_nux: &ModelAvailabilityNux) -> StartupTip {
     StartupTip::AvailabilityNux {
-        id: availability_nux.id.clone(),
         message: availability_nux.message.clone(),
     }
 }
@@ -373,7 +372,7 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
-    fn model_preset(availability_nux: Option<(&str, &str)>, description: &str) -> ModelPreset {
+    fn model_preset(availability_nux: Option<&str>, description: &str) -> ModelPreset {
         ModelPreset {
             id: "gpt-test".to_string(),
             model: "gpt-test".to_string(),
@@ -385,8 +384,7 @@ mod tests {
             is_default: false,
             upgrade: None,
             show_in_picker: true,
-            availability_nux: availability_nux.map(|(id, message)| ModelAvailabilityNux {
-                id: id.to_string(),
+            availability_nux: availability_nux.map(|message| ModelAvailabilityNux {
                 message: message.to_string(),
             }),
             supported_in_api: true,
@@ -514,7 +512,7 @@ content = "This is a test announcement"
     #[test]
     fn first_session_eligible_model_returns_all_availability_nux_tips() {
         let preset = model_preset(
-            Some(("try_spark", "*New* Spark is now available to you.")),
+            Some("*New* Spark is now available to you."),
             "Fast, high-reliability coding model.",
         );
         let mut rng = StdRng::seed_from_u64(1);
@@ -531,7 +529,6 @@ content = "This is a test announcement"
         assert_eq!(
             StartupTips {
                 first_session_tips: vec![StartupTip::AvailabilityNux {
-                    id: "try_spark".to_string(),
                     message: "*New* Spark is now available to you.".to_string(),
                 }],
                 selected_tip: None,
@@ -558,21 +555,14 @@ content = "This is a test announcement"
     }
 
     #[test]
-    fn first_session_dedupes_multiple_availability_nuxes_by_id() {
+    fn first_session_dedupes_multiple_availability_nuxes_by_message() {
         let mut rng = StdRng::seed_from_u64(1);
         let models = vec![
-            model_preset(
-                Some(("try_spark", "*New* Spark is now available to you.")),
-                "",
-            ),
-            model_preset(
-                Some(("try_spark", "*New* Spark is now available to you.")),
-                "",
-            ),
+            model_preset(Some("*New* Spark is now available to you."), ""),
+            model_preset(Some("*New* Spark is now available to you."), ""),
             ModelPreset {
                 model: "gpt-other".to_string(),
                 availability_nux: Some(ModelAvailabilityNux {
-                    id: "try_canvas".to_string(),
                     message: "*New* Canvas is now available to you.".to_string(),
                 }),
                 ..model_preset(None, "")
@@ -592,11 +582,9 @@ content = "This is a test announcement"
             StartupTips {
                 first_session_tips: vec![
                     StartupTip::AvailabilityNux {
-                        id: "try_spark".to_string(),
                         message: "*New* Spark is now available to you.".to_string(),
                     },
                     StartupTip::AvailabilityNux {
-                        id: "try_canvas".to_string(),
                         message: "*New* Canvas is now available to you.".to_string(),
                     },
                 ],
@@ -608,10 +596,7 @@ content = "This is a test announcement"
 
     #[test]
     fn later_session_can_select_availability_nux_from_weighted_pool() {
-        let preset = model_preset(
-            Some(("try_spark", "*New* Spark is now available to you.")),
-            "",
-        );
+        let preset = model_preset(Some("*New* Spark is now available to you."), "");
         let mut rng = StdRng::seed_from_u64(5);
 
         let tips = get_startup_tips_with_rng(
@@ -627,7 +612,6 @@ content = "This is a test announcement"
             StartupTips {
                 first_session_tips: Vec::new(),
                 selected_tip: Some(StartupTip::AvailabilityNux {
-                    id: "try_spark".to_string(),
                     message: "*New* Spark is now available to you.".to_string(),
                 }),
             },
@@ -637,11 +621,8 @@ content = "This is a test announcement"
 
     #[test]
     fn later_session_count_limit_disables_availability_nux() {
-        let preset = model_preset(
-            Some(("try_spark", "*New* Spark is now available to you.")),
-            "",
-        );
-        let counts = BTreeMap::from([("try_spark".to_string(), 4)]);
+        let preset = model_preset(Some("*New* Spark is now available to you."), "");
+        let counts = BTreeMap::from([("*New* Spark is now available to you.".to_string(), 4)]);
         let mut rng = StdRng::seed_from_u64(5);
 
         let tips = get_startup_tips_with_rng(
@@ -664,10 +645,7 @@ content = "This is a test announcement"
 
     #[test]
     fn later_session_eligible_model_includes_announcement_and_generic_candidates() {
-        let preset = model_preset(
-            Some(("try_spark", "*New* Spark is now available to you.")),
-            "",
-        );
+        let preset = model_preset(Some("*New* Spark is now available to you."), "");
         let mut saw_announcement = false;
         let mut saw_plan_tip = false;
         let mut saw_random_tip = false;
