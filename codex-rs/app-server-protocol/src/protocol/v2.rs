@@ -31,6 +31,7 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailabilityNux;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
@@ -1392,10 +1393,28 @@ pub struct ModelListParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ModelAvailabilityNux {
+    pub id: String,
+    pub message: String,
+}
+
+impl From<CoreModelAvailabilityNux> for ModelAvailabilityNux {
+    fn from(value: CoreModelAvailabilityNux) -> Self {
+        Self {
+            id: value.id,
+            message: value.message,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct Model {
     pub id: String,
     pub model: String,
     pub upgrade: Option<String>,
+    pub availability_nux: Option<ModelAvailabilityNux>,
     pub display_name: String,
     pub description: String,
     pub hidden: bool,

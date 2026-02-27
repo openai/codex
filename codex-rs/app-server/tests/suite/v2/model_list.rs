@@ -24,6 +24,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
         id: preset.id.clone(),
         model: preset.model.clone(),
         upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
+        availability_nux: preset.availability_nux.clone().map(Into::into),
         display_name: preset.display_name.clone(),
         description: preset.description.clone(),
         hidden: !preset.show_in_picker,

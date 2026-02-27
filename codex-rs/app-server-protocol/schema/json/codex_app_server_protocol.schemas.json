@@ -10225,6 +10225,16 @@
       },
       "Model": {
         "properties": {
+          "availabilityNux": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModelAvailabilityNux"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "defaultReasoningEffort": {
             "$ref": "#/definitions/v2/ReasoningEffort"
           },
@@ -10282,6 +10292,21 @@
           "isDefault",
           "model",
           "supportedReasoningEfforts"
+        ],
+        "type": "object"
+      },
+      "ModelAvailabilityNux": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "message"
         ],
         "type": "object"
       },
