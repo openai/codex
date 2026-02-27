@@ -12,11 +12,12 @@ use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
 use crate::skills::model::SkillPolicy;
 use crate::skills::model::SkillToolDependency;
+use crate::skills::permissions::SkillPermissionProfile;
 use crate::skills::permissions::compile_permission_profile;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::SkillScope;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
 use dunce::canonicalize as canonicalize_path;
 use serde::Deserialize;
@@ -54,7 +55,7 @@ struct SkillMetadataFile {
     #[serde(default)]
     policy: Option<Policy>,
     #[serde(default)]
-    permissions: Option<PermissionProfile>,
+    permissions: Option<SkillPermissionProfile>,
 }
 
 #[derive(Default)]
@@ -62,7 +63,7 @@ struct LoadedSkillMetadata {
     interface: Option<SkillInterface>,
     dependencies: Option<SkillDependencies>,
     policy: Option<SkillPolicy>,
-    permission_profile: Option<PermissionProfile>,
+    permission_profile: Option<SkillPermissionProfile>,
     permissions: Option<Permissions>,
 }
 
@@ -573,7 +574,10 @@ fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
         }
     };
 
-    let parsed: SkillMetadataFile = match serde_yaml::from_str(&contents) {
+    let parsed: SkillMetadataFile = match {
+        let _guard = AbsolutePathBufGuard::new(skill_dir);
+        serde_yaml::from_str(&contents)
+    } {
         Ok(parsed) => parsed,
         Err(error) => {
             tracing::warn!(
@@ -598,7 +602,7 @@ fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
         dependencies: resolve_dependencies(dependencies),
         policy: resolve_policy(policy),
         permission_profile,
-        permissions: compile_permission_profile(skill_dir, permissions),
+        permissions: compile_permission_profile(permissions.as_ref()),
     }
 }
 
@@ -838,10 +842,10 @@ mod tests {
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
     use crate::config_loader::ConfigRequirementsToml;
+    use crate::skills::permissions::SkillFileSystemPermissions;
+    use crate::skills::permissions::SkillPermissionProfile;
     use codex_config::CONFIG_TOML_FILE;
     use codex_protocol::config_types::TrustLevel;
-    use codex_protocol::models::FileSystemPermissions;
-    use codex_protocol::models::PermissionProfile;
     use codex_protocol::protocol::SkillScope;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -1373,11 +1377,17 @@ permissions:
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(
             outcome.skills[0].permission_profile,
-            Some(PermissionProfile {
+            Some(SkillPermissionProfile {
                 network: Some(true),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![PathBuf::from("./data")]),
-                    write: Some(vec![PathBuf::from("./output")]),
+                file_system: Some(SkillFileSystemPermissions {
+                    read: Some(vec![
+                        AbsolutePathBuf::try_from(normalized(skill_dir.join("data").as_path()))
+                            .expect("absolute data path"),
+                    ]),
+                    write: Some(vec![
+                        AbsolutePathBuf::try_from(normalized(skill_dir.join("output").as_path()))
+                            .expect("absolute output path"),
+                    ]),
                 }),
                 macos: None,
             })
