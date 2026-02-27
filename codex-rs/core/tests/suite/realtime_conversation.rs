@@ -26,19 +26,6 @@ use serde_json::json;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-async fn wait_for_single_response_request(
-    mock: &core_test_support::responses::ResponseMock,
-) -> core_test_support::responses::ResponsesRequest {
-    for _ in 0..50 {
-        let requests = mock.requests();
-        if let Some(request) = requests.into_iter().next() {
-            return request;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("timed out waiting for response request");
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -287,6 +274,105 @@ async fn conversation_text_before_start_emits_error() -> Result<()> {
 async fn conversation_second_start_replaces_runtime() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let server = start_websocket_server(vec![
+        vec![],
+        vec![vec![json!({
+            "type": "session.created",
+            "session": { "id": "sess_old" }
+        })]],
+        vec![
+            vec![json!({
+                "type": "session.created",
+                "session": { "id": "sess_new" }
+            })],
+            vec![json!({
+                "type": "response.output_audio.delta",
+                "delta": "AQID",
+                "sample_rate": 24000,
+                "num_channels": 1
+            })],
+        ],
+    ])
+    .await;
+    let mut builder = test_codex();
+    let test = builder.build_with_websocket_server(&server).await?;
+    assert!(server.wait_for_handshakes(1, Duration::from_secs(2)).await);
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "old".to_string(),
+            session_id: Some("conv_old".to_string()),
+        }))
+        .await?;
+    wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionCreated { session_id },
+        }) if session_id == "sess_old" => Some(Ok(())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("first conversation start failed: {err:?}"));
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "new".to_string(),
+            session_id: Some("conv_new".to_string()),
+        }))
+        .await?;
+    wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionCreated { session_id },
+        }) if session_id == "sess_new" => Some(Ok(())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("second conversation start failed: {err:?}"));
+
+    test.codex
+        .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
+            frame: RealtimeAudioFrame {
+                data: "AQID".to_string(),
+                sample_rate: 24000,
+                num_channels: 1,
+                samples_per_channel: Some(480),
+            },
+        }))
+        .await?;
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::AudioOut(frame),
+        }) if frame.data == "AQID" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let connections = server.connections();
+    assert_eq!(connections.len(), 3);
+    assert_eq!(connections[1].len(), 1);
+    assert_eq!(
+        connections[1][0].body_json()["session"]["conversation_id"].as_str(),
+        Some("conv_old")
+    );
+    assert_eq!(connections[2].len(), 2);
+    assert_eq!(
+        connections[2][0].body_json()["session"]["conversation_id"].as_str(),
+        Some("conv_new")
+    );
+    assert_eq!(
+        connections[2][1].body_json()["type"].as_str(),
+        Some("response.input_audio.delta")
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replacing_realtime_session_records_close_marker_in_next_model_request() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let api_server = start_mock_server().await;
     let response_mock = responses::mount_sse_once(
         &api_server,
@@ -298,7 +384,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     )
     .await;
 
-    let server = start_websocket_server(vec![
+    let realtime_server = start_websocket_server(vec![
         vec![
             vec![json!({
                 "type": "session.created",
@@ -323,8 +409,9 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
         ]],
     ])
     .await;
+
     let mut builder = test_codex().with_config({
-        let realtime_base_url = server.uri().to_string();
+        let realtime_base_url = realtime_server.uri().to_string();
         move |config| {
             config.experimental_realtime_ws_base_url = Some(realtime_base_url);
         }
@@ -346,6 +433,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     })
     .await
     .unwrap_or_else(|err: ErrorEvent| panic!("first conversation start failed: {err:?}"));
+
     test.codex
         .submit(Op::RealtimeConversationText(ConversationTextParams {
             text: "keepalive".to_string(),
@@ -368,22 +456,13 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     .await
     .unwrap_or_else(|err: ErrorEvent| panic!("second conversation start failed: {err:?}"));
 
-    let connections = server.connections();
-    assert_eq!(connections.len(), 2);
-    assert_eq!(connections[0].len(), 1);
-    assert_eq!(
-        connections[0][0].body_json()["session"]["conversation_id"].as_str(),
-        Some("conv_old")
-    );
-    assert_eq!(connections[1].len(), 1);
-    assert_eq!(
-        connections[1][0].body_json()["session"]["conversation_id"].as_str(),
-        Some("conv_new")
-    );
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
-    let developer_texts = wait_for_single_response_request(&response_mock)
-        .await
-        .message_input_texts("developer");
+    let request = response_mock.single_request();
+    let developer_texts = request.message_input_texts("developer");
     assert!(
         developer_texts.iter().any(|text| {
             text.contains(REALTIME_CONVERSATION_CLOSE_TAG) && text.contains("Reason: replaced")
@@ -391,7 +470,10 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
         "expected replaced realtime session to record a closing developer message: {developer_texts:?}"
     );
 
-    server.shutdown().await;
+    let user_texts = request.message_input_texts("user");
+    assert!(user_texts.iter().any(|text| text == "replacement text"));
+
+    realtime_server.shutdown().await;
     Ok(())
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
