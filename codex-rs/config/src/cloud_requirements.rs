@@ -4,24 +4,42 @@ use futures::future::FutureExt;
 use futures::future::Shared;
 use std::fmt;
 use std::future::Future;
+use thiserror::Error;
+
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+#[error("{message}")]
+pub struct CloudRequirementsLoadError {
+    message: String,
+}
+
+impl CloudRequirementsLoadError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct CloudRequirementsLoader {
-    // TODO(gt): This should return a Result once we can fail-closed.
-    fut: Shared<BoxFuture<'static, Option<ConfigRequirementsToml>>>,
+    fut: Shared<
+        BoxFuture<'static, Result<Option<ConfigRequirementsToml>, CloudRequirementsLoadError>>,
+    >,
 }
 
 impl CloudRequirementsLoader {
     pub fn new<F>(fut: F) -> Self
     where
-        F: Future<Output = Option<ConfigRequirementsToml>> + Send + 'static,
+        F: Future<Output = Result<Option<ConfigRequirementsToml>, CloudRequirementsLoadError>>
+            + Send
+            + 'static,
     {
         Self {
             fut: fut.boxed().shared(),
         }
     }
 
-    pub async fn get(&self) -> Option<ConfigRequirementsToml> {
+    pub async fn get(&self) -> Result<Option<ConfigRequirementsToml>, CloudRequirementsLoadError> {
         self.fut.clone().await
     }
 }
@@ -34,7 +52,7 @@ impl fmt::Debug for CloudRequirementsLoader {
 
 impl Default for CloudRequirementsLoader {
     fn default() -> Self {
-        Self::new(async { None })
+        Self::new(async { Ok(None) })
     }
 }
 
@@ -52,7 +70,7 @@ mod tests {
         let counter_clone = Arc::clone(&counter);
         let loader = CloudRequirementsLoader::new(async move {
             counter_clone.fetch_add(1, Ordering::SeqCst);
-            Some(ConfigRequirementsToml::default())
+            Ok(Some(ConfigRequirementsToml::default()))
         });
 
         let (first, second) = tokio::join!(loader.get(), loader.get());
