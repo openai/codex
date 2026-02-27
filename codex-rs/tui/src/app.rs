@@ -3304,8 +3304,8 @@ mod tests {
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
+    use crate::history_cell::SessionHeaderHistoryCell;
     use crate::history_cell::UserHistoryCell;
-    use crate::history_cell::new_session_info;
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
@@ -3686,12 +3686,12 @@ mod tests {
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             };
-            Arc::new(new_session_info(
-                app.chat_widget.config_ref(),
-                app.chat_widget.current_model(),
-                event,
-                is_first,
-                None,
+            let _ = is_first;
+            Arc::new(SessionHeaderHistoryCell::new(
+                event.model,
+                event.reasoning_effort,
+                event.cwd,
+                crate::version::CODEX_CLI_VERSION,
             )) as Arc<dyn HistoryCell>
         };
 
@@ -4183,12 +4183,12 @@ mod tests {
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             };
-            Arc::new(new_session_info(
-                app.chat_widget.config_ref(),
-                app.chat_widget.current_model(),
-                event,
-                is_first,
-                None,
+            let _ = is_first;
+            Arc::new(SessionHeaderHistoryCell::new(
+                event.model,
+                event.reasoning_effort,
+                event.cwd,
+                crate::version::CODEX_CLI_VERSION,
             )) as Arc<dyn HistoryCell>
         };
 

@@ -1037,33 +1037,6 @@ impl HistoryCell for SessionInfoCell {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn new_session_info(
-    config: &Config,
-    requested_model: &str,
-    event: SessionConfiguredEvent,
-    is_first_event: bool,
-    auth_plan: Option<PlanType>,
-) -> SessionInfoCell {
-    // Header box rendered as history (so it appears at the very top)
-    let header = SessionHeaderHistoryCell::new(
-        event.model.clone(),
-        event.reasoning_effort,
-        config.cwd.clone(),
-        CODEX_CLI_VERSION,
-    );
-    let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
-    parts.extend(session_info_body_parts(
-        config,
-        requested_model,
-        &event,
-        is_first_event,
-        auth_plan,
-    ));
-
-    SessionInfoCell(CompositeHistoryCell { parts })
-}
-
 pub(crate) fn new_session_info_body(
     config: &Config,
     requested_model: &str,
