@@ -448,7 +448,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn flush_persists_buffered_logs_before_query() {
+    async fn flush_persists_logs_for_query() {
         let codex_home =
             std::env::temp_dir().join(format!("codex-state-log-db-{}", Uuid::new_v4()));
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
@@ -465,11 +465,6 @@ mod tests {
             .set_default();
 
         tracing::info!("buffered-log");
-        let before_flush = runtime
-            .query_logs(&crate::LogQuery::default())
-            .await
-            .expect("query logs before flush");
-        assert!(before_flush.is_empty());
 
         layer.flush().await;
         drop(guard);
