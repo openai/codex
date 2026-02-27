@@ -116,7 +116,7 @@ pub(crate) enum DiffLineType {
 /// the terminal's queried background color.  When the background cannot be
 /// determined (common in CI or piped output), `Dark` is used as the safe
 /// default.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum DiffTheme {
     Dark,
     Light,
@@ -179,6 +179,18 @@ struct ResolvedDiffBackgrounds {
     del: Option<Color>,
 }
 
+/// Precomputed render state for diff line styling.
+///
+/// This bundles the terminal-derived theme and color depth plus theme-resolved
+/// diff backgrounds so callers rendering many lines can compute once per render
+/// pass and reuse it across all line calls.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DiffRenderStyleContext {
+    theme: DiffTheme,
+    color_level: DiffColorLevel,
+    diff_backgrounds: ResolvedDiffBackgrounds,
+}
+
 /// Resolve diff backgrounds for production rendering.
 ///
 /// Queries the active syntax theme for `markup.inserted` / `markup.deleted`
@@ -188,6 +200,17 @@ fn resolve_diff_backgrounds(
     color_level: DiffColorLevel,
 ) -> ResolvedDiffBackgrounds {
     resolve_diff_backgrounds_for(theme, color_level, diff_scope_background_rgbs())
+}
+
+pub(crate) fn current_diff_render_style_context() -> DiffRenderStyleContext {
+    let theme = diff_theme();
+    let color_level = diff_color_level();
+    let diff_backgrounds = resolve_diff_backgrounds(theme, color_level);
+    DiffRenderStyleContext {
+        theme,
+        color_level,
+        diff_backgrounds,
+    }
 }
 
 /// Core background-resolution logic, kept pure for testability.
@@ -443,9 +466,7 @@ fn render_change(
     width: usize,
     lang: Option<&str>,
 ) {
-    let theme = diff_theme();
-    let color_level = diff_color_level();
-    let diff_backgrounds = resolve_diff_backgrounds(theme, color_level);
+    let style_context = current_diff_render_style_context();
     match change {
         FileChange::Add { content } => {
             // Pre-highlight the entire file content as a whole.
@@ -461,9 +482,9 @@ fn render_change(
                         width,
                         line_number_width,
                         Some(spans),
-                        theme,
-                        color_level,
-                        diff_backgrounds,
+                        style_context.theme,
+                        style_context.color_level,
+                        style_context.diff_backgrounds,
                     ));
                 } else {
                     out.extend(push_wrapped_diff_line_inner_with_theme_and_color_level(
@@ -473,9 +494,9 @@ fn render_change(
                         width,
                         line_number_width,
                         None,
-                        theme,
-                        color_level,
-                        diff_backgrounds,
+                        style_context.theme,
+                        style_context.color_level,
+                        style_context.diff_backgrounds,
                     ));
                 }
             }
@@ -493,9 +514,9 @@ fn render_change(
                         width,
                         line_number_width,
                         Some(spans),
-                        theme,
-                        color_level,
-                        diff_backgrounds,
+                        style_context.theme,
+                        style_context.color_level,
+                        style_context.diff_backgrounds,
                     ));
                 } else {
                     out.extend(push_wrapped_diff_line_inner_with_theme_and_color_level(
@@ -505,9 +526,9 @@ fn render_change(
                         width,
                         line_number_width,
                         None,
-                        theme,
-                        color_level,
-                        diff_backgrounds,
+                        style_context.theme,
+                        style_context.color_level,
+                        style_context.diff_backgrounds,
                     ));
                 }
             }
@@ -562,7 +583,11 @@ fn render_change(
                         let spacer = format!("{:width$} ", "", width = line_number_width.max(1));
                         let spacer_span = RtSpan::styled(
                             spacer,
-                            style_gutter_for(DiffLineType::Context, theme, color_level),
+                            style_gutter_for(
+                                DiffLineType::Context,
+                                style_context.theme,
+                                style_context.color_level,
+                            ),
                         );
                         out.push(RtLine::from(vec![spacer_span, "⋮".dim()]));
                     }
@@ -602,9 +627,9 @@ fn render_change(
                                             width,
                                             line_number_width,
                                             Some(syn),
-                                            theme,
-                                            color_level,
-                                            diff_backgrounds,
+                                            style_context.theme,
+                                            style_context.color_level,
+                                            style_context.diff_backgrounds,
                                         ),
                                     );
                                 } else {
@@ -616,9 +641,9 @@ fn render_change(
                                             width,
                                             line_number_width,
                                             None,
-                                            theme,
-                                            color_level,
-                                            diff_backgrounds,
+                                            style_context.theme,
+                                            style_context.color_level,
+                                            style_context.diff_backgrounds,
                                         ),
                                     );
                                 }
@@ -635,9 +660,9 @@ fn render_change(
                                             width,
                                             line_number_width,
                                             Some(syn),
-                                            theme,
-                                            color_level,
-                                            diff_backgrounds,
+                                            style_context.theme,
+                                            style_context.color_level,
+                                            style_context.diff_backgrounds,
                                         ),
                                     );
                                 } else {
@@ -649,9 +674,9 @@ fn render_change(
                                             width,
                                             line_number_width,
                                             None,
-                                            theme,
-                                            color_level,
-                                            diff_backgrounds,
+                                            style_context.theme,
+                                            style_context.color_level,
+                                            style_context.diff_backgrounds,
                                         ),
                                     );
                                 }
@@ -668,9 +693,9 @@ fn render_change(
                                             width,
                                             line_number_width,
                                             Some(syn),
-                                            theme,
-                                            color_level,
-                                            diff_backgrounds,
+                                            style_context.theme,
+                                            style_context.color_level,
+                                            style_context.diff_backgrounds,
                                         ),
                                     );
                                 } else {
@@ -682,9 +707,9 @@ fn render_change(
                                             width,
                                             line_number_width,
                                             None,
-                                            theme,
-                                            color_level,
-                                            diff_backgrounds,
+                                            style_context.theme,
+                                            style_context.color_level,
+                                            style_context.diff_backgrounds,
                                         ),
                                     );
                                 }
@@ -742,87 +767,46 @@ pub(crate) fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
     }
 }
 
-/// Render a single diff line (no syntax highlighting) as one or more wrapped
-/// ratatui `Line`s.  The first output line carries the gutter sign; continuation
-/// lines are indented under the line number column.
-pub(crate) fn push_wrapped_diff_line(
+pub(crate) fn push_wrapped_diff_line_with_style_context(
     line_number: usize,
     kind: DiffLineType,
     text: &str,
     width: usize,
     line_number_width: usize,
+    style_context: DiffRenderStyleContext,
 ) -> Vec<RtLine<'static>> {
-    push_wrapped_diff_line_inner(line_number, kind, text, width, line_number_width, None)
-}
-
-/// Render a single diff line with pre-computed syntax spans.  The sign character
-/// uses the diff color; content gets syntax colors with a dim overlay for delete
-/// lines.
-pub(crate) fn push_wrapped_diff_line_with_syntax(
-    line_number: usize,
-    kind: DiffLineType,
-    text: &str,
-    width: usize,
-    line_number_width: usize,
-    syntax_spans: &[RtSpan<'static>],
-) -> Vec<RtLine<'static>> {
-    push_wrapped_diff_line_inner(
-        line_number,
-        kind,
-        text,
-        width,
-        line_number_width,
-        Some(syntax_spans),
-    )
-}
-
-fn push_wrapped_diff_line_inner(
-    line_number: usize,
-    kind: DiffLineType,
-    text: &str,
-    width: usize,
-    line_number_width: usize,
-    syntax_spans: Option<&[RtSpan<'static>]>,
-) -> Vec<RtLine<'static>> {
-    push_wrapped_diff_line_inner_with_theme(
-        line_number,
-        kind,
-        text,
-        width,
-        line_number_width,
-        syntax_spans,
-        diff_theme(),
-    )
-}
-
-/// Core line renderer: builds one or more wrapped `RtLine`s for a single diff
-/// line, applying gutter, sign, content, and full-width background styles
-/// according to the given `theme`.
-///
-/// Split out from `push_wrapped_diff_line_inner` so that tests can exercise
-/// specific `DiffTheme` variants without depending on the terminal's queried
-/// background.
-fn push_wrapped_diff_line_inner_with_theme(
-    line_number: usize,
-    kind: DiffLineType,
-    text: &str,
-    width: usize,
-    line_number_width: usize,
-    syntax_spans: Option<&[RtSpan<'static>]>,
-    theme: DiffTheme,
-) -> Vec<RtLine<'static>> {
-    let color_level = diff_color_level();
-    let diff_backgrounds = resolve_diff_backgrounds(theme, color_level);
     push_wrapped_diff_line_inner_with_theme_and_color_level(
         line_number,
         kind,
         text,
         width,
         line_number_width,
-        syntax_spans,
-        theme,
-        color_level,
-        diff_backgrounds,
+        None,
+        style_context.theme,
+        style_context.color_level,
+        style_context.diff_backgrounds,
+    )
+}
+
+pub(crate) fn push_wrapped_diff_line_with_syntax_and_style_context(
+    line_number: usize,
+    kind: DiffLineType,
+    text: &str,
+    width: usize,
+    line_number_width: usize,
+    syntax_spans: &[RtSpan<'static>],
+    style_context: DiffRenderStyleContext,
+) -> Vec<RtLine<'static>> {
+    push_wrapped_diff_line_inner_with_theme_and_color_level(
+        line_number,
+        kind,
+        text,
+        width,
+        line_number_width,
+        Some(syntax_spans),
+        style_context.theme,
+        style_context.color_level,
+        style_context.diff_backgrounds,
     )
 }
 
@@ -1484,8 +1468,14 @@ mod tests {
         let long_line = "this is a very long line that should wrap across multiple terminal columns and continue";
 
         // Call the wrapping function directly so we can precisely control the width
-        let lines =
-            push_wrapped_diff_line(1, DiffLineType::Insert, long_line, 80, line_number_width(1));
+        let lines = push_wrapped_diff_line_with_style_context(
+            1,
+            DiffLineType::Insert,
+            long_line,
+            80,
+            line_number_width(1),
+            current_diff_render_style_context(),
+        );
 
         // Render into a small terminal to capture the visual layout
         snapshot_lines("wrap_behavior_insert", lines, 90, 8);
@@ -1692,13 +1682,14 @@ mod tests {
             highlight_code_to_styled_spans(long_rust, "rust").expect("rust highlighting");
         let spans = &syntax_spans[0];
 
-        let lines = push_wrapped_diff_line_with_syntax(
+        let lines = push_wrapped_diff_line_with_syntax_and_style_context(
             1,
             DiffLineType::Insert,
             long_rust,
             80,
             line_number_width(1),
             spans,
+            current_diff_render_style_context(),
         );
 
         assert!(
@@ -1718,13 +1709,14 @@ mod tests {
             highlight_code_to_styled_spans(long_rust, "rust").expect("rust highlighting");
         let spans = &syntax_spans[0];
 
-        let lines = push_wrapped_diff_line_with_syntax(
+        let lines = push_wrapped_diff_line_with_syntax_and_style_context(
             1,
             DiffLineType::Insert,
             long_rust,
             80,
             line_number_width(1),
             spans,
+            current_diff_render_style_context(),
         );
 
         snapshot_lines_text("syntax_highlighted_insert_wraps_text", &lines);
@@ -2268,12 +2260,13 @@ mod tests {
     #[test]
     fn fallback_wrapping_uses_display_width_for_tabs_and_wide_chars() {
         let width = 8;
-        let lines = push_wrapped_diff_line(
+        let lines = push_wrapped_diff_line_with_style_context(
             1,
             DiffLineType::Insert,
             "abcd\t界🙂",
             width,
             line_number_width(1),
+            current_diff_render_style_context(),
         );
 
         assert!(lines.len() >= 2, "expected wrapped output, got {lines:?}");
