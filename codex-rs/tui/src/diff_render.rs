@@ -1304,6 +1304,8 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::text::Text;
     use ratatui::widgets::Paragraph;
+    use ratatui::widgets::WidgetRef;
+    use ratatui::widgets::Wrap;
 
     #[test]
     fn ansi16_add_style_uses_foreground_only() {
@@ -1345,8 +1347,6 @@ mod tests {
         assert_eq!(del_sign.fg, Some(Color::Red));
         assert_eq!(del_sign.bg, None);
     }
-    use ratatui::widgets::WidgetRef;
-    use ratatui::widgets::Wrap;
     fn diff_summary_for_tests(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
         create_diff_summary(changes, &PathBuf::from("/"), 80)
     }
