@@ -69,8 +69,11 @@ const LIGHT_256_DEL_NUM_BG_IDX: u8 = 217;
 const LIGHT_256_GUTTER_FG_IDX: u8 = 236;
 
 use crate::color::is_light;
+use crate::color::perceptual_distance;
 use crate::exec_command::relativize_to_home;
 use crate::render::Insets;
+use crate::render::highlight::DiffScopeBackgroundRgbs;
+use crate::render::highlight::diff_scope_background_rgbs;
 use crate::render::highlight::exceeds_highlight_limits;
 use crate::render::highlight::highlight_code_to_styled_spans;
 use crate::render::line_utils::prefix_lines;
@@ -78,6 +81,7 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::terminal_palette::StdoutColorLevel;
+use crate::terminal_palette::XTERM_COLORS;
 use crate::terminal_palette::default_bg;
 use crate::terminal_palette::indexed_color;
 use crate::terminal_palette::rgb_color;
@@ -140,6 +144,73 @@ impl RichDiffColorLevel {
             DiffColorLevel::Ansi256 => Some(Self::Ansi256),
             DiffColorLevel::Ansi16 => None,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ResolvedDiffBackgrounds {
+    add: Option<Color>,
+    del: Option<Color>,
+}
+
+fn resolve_diff_backgrounds(
+    theme: DiffTheme,
+    color_level: DiffColorLevel,
+) -> ResolvedDiffBackgrounds {
+    resolve_diff_backgrounds_for(theme, color_level, diff_scope_background_rgbs())
+}
+
+fn resolve_diff_backgrounds_for(
+    theme: DiffTheme,
+    color_level: DiffColorLevel,
+    scope_backgrounds: DiffScopeBackgroundRgbs,
+) -> ResolvedDiffBackgrounds {
+    let mut resolved = fallback_diff_backgrounds(theme, color_level);
+    let Some(level) = RichDiffColorLevel::from_diff_color_level(color_level) else {
+        return resolved;
+    };
+
+    if let Some(rgb) = scope_backgrounds.inserted {
+        resolved.add = Some(color_from_rgb_for_level(rgb, level));
+    }
+    if let Some(rgb) = scope_backgrounds.deleted {
+        resolved.del = Some(color_from_rgb_for_level(rgb, level));
+    }
+    resolved
+}
+
+fn fallback_diff_backgrounds(
+    theme: DiffTheme,
+    color_level: DiffColorLevel,
+) -> ResolvedDiffBackgrounds {
+    match RichDiffColorLevel::from_diff_color_level(color_level) {
+        Some(level) => ResolvedDiffBackgrounds {
+            add: Some(add_line_bg(theme, level)),
+            del: Some(del_line_bg(theme, level)),
+        },
+        None => ResolvedDiffBackgrounds::default(),
+    }
+}
+
+fn color_from_rgb_for_level(rgb: (u8, u8, u8), color_level: RichDiffColorLevel) -> Color {
+    match color_level {
+        RichDiffColorLevel::TrueColor => rgb_color(rgb),
+        RichDiffColorLevel::Ansi256 => quantize_rgb_to_ansi256(rgb),
+    }
+}
+
+fn quantize_rgb_to_ansi256(target: (u8, u8, u8)) -> Color {
+    let best_index = XTERM_COLORS
+        .iter()
+        .enumerate()
+        .skip(16)
+        .min_by(|(_, a), (_, b)| {
+            perceptual_distance(**a, target).total_cmp(&perceptual_distance(**b, target))
+        })
+        .map(|(index, _)| index as u8);
+    match best_index {
+        Some(index) => indexed_color(index),
+        None => indexed_color(DARK_256_ADD_LINE_BG_IDX),
     }
 }
 
@@ -328,6 +399,7 @@ fn render_change(
 ) {
     let theme = diff_theme();
     let color_level = diff_color_level();
+    let diff_backgrounds = resolve_diff_backgrounds(theme, color_level);
     match change {
         FileChange::Add { content } => {
             // Pre-highlight the entire file content as a whole.
@@ -345,6 +417,7 @@ fn render_change(
                         Some(spans),
                         theme,
                         color_level,
+                        diff_backgrounds,
                     ));
                 } else {
                     out.extend(push_wrapped_diff_line_inner_with_theme_and_color_level(
@@ -356,6 +429,7 @@ fn render_change(
                         None,
                         theme,
                         color_level,
+                        diff_backgrounds,
                     ));
                 }
             }
@@ -375,6 +449,7 @@ fn render_change(
                         Some(spans),
                         theme,
                         color_level,
+                        diff_backgrounds,
                     ));
                 } else {
                     out.extend(push_wrapped_diff_line_inner_with_theme_and_color_level(
@@ -386,6 +461,7 @@ fn render_change(
                         None,
                         theme,
                         color_level,
+                        diff_backgrounds,
                     ));
                 }
             }
@@ -482,6 +558,7 @@ fn render_change(
                                             Some(syn),
                                             theme,
                                             color_level,
+                                            diff_backgrounds,
                                         ),
                                     );
                                 } else {
@@ -495,6 +572,7 @@ fn render_change(
                                             None,
                                             theme,
                                             color_level,
+                                            diff_backgrounds,
                                         ),
                                     );
                                 }
@@ -513,6 +591,7 @@ fn render_change(
                                             Some(syn),
                                             theme,
                                             color_level,
+                                            diff_backgrounds,
                                         ),
                                     );
                                 } else {
@@ -526,6 +605,7 @@ fn render_change(
                                             None,
                                             theme,
                                             color_level,
+                                            diff_backgrounds,
                                         ),
                                     );
                                 }
@@ -544,6 +624,7 @@ fn render_change(
                                             Some(syn),
                                             theme,
                                             color_level,
+                                            diff_backgrounds,
                                         ),
                                     );
                                 } else {
@@ -557,6 +638,7 @@ fn render_change(
                                             None,
                                             theme,
                                             color_level,
+                                            diff_backgrounds,
                                         ),
                                     );
                                 }
@@ -683,6 +765,8 @@ fn push_wrapped_diff_line_inner_with_theme(
     syntax_spans: Option<&[RtSpan<'static>]>,
     theme: DiffTheme,
 ) -> Vec<RtLine<'static>> {
+    let color_level = diff_color_level();
+    let diff_backgrounds = resolve_diff_backgrounds(theme, color_level);
     push_wrapped_diff_line_inner_with_theme_and_color_level(
         line_number,
         kind,
@@ -691,7 +775,8 @@ fn push_wrapped_diff_line_inner_with_theme(
         line_number_width,
         syntax_spans,
         theme,
-        diff_color_level(),
+        color_level,
+        diff_backgrounds,
     )
 }
 
@@ -705,6 +790,7 @@ fn push_wrapped_diff_line_inner_with_theme_and_color_level(
     syntax_spans: Option<&[RtSpan<'static>]>,
     theme: DiffTheme,
     color_level: DiffColorLevel,
+    diff_backgrounds: ResolvedDiffBackgrounds,
 ) -> Vec<RtLine<'static>> {
     let ln_str = line_number.to_string();
 
@@ -716,18 +802,18 @@ fn push_wrapped_diff_line_inner_with_theme_and_color_level(
     let (sign_char, sign_style, content_style) = match kind {
         DiffLineType::Insert => (
             '+',
-            style_sign_add(theme, color_level),
-            style_add(theme, color_level),
+            style_sign_add(theme, color_level, diff_backgrounds),
+            style_add(theme, color_level, diff_backgrounds),
         ),
         DiffLineType::Delete => (
             '-',
-            style_sign_del(theme, color_level),
-            style_del(theme, color_level),
+            style_sign_del(theme, color_level, diff_backgrounds),
+            style_del(theme, color_level, diff_backgrounds),
         ),
         DiffLineType::Context => (' ', style_context(), style_context()),
     };
 
-    let line_bg = style_line_bg_for(kind, theme, color_level);
+    let line_bg = style_line_bg_for(kind, diff_backgrounds);
     let gutter_style = style_gutter_for(kind, theme, color_level);
 
     // When we have syntax spans, compose them with the diff style for a richer
@@ -997,12 +1083,15 @@ fn diff_color_level_for_terminal(
 /// Full-width background applied to the `RtLine` itself (not individual spans).
 /// Context lines intentionally leave the background unset so the terminal
 /// default shows through.
-fn style_line_bg_for(kind: DiffLineType, theme: DiffTheme, color_level: DiffColorLevel) -> Style {
-    match (kind, RichDiffColorLevel::from_diff_color_level(color_level)) {
-        (_, None) => Style::default(),
-        (DiffLineType::Insert, Some(level)) => Style::default().bg(add_line_bg(theme, level)),
-        (DiffLineType::Delete, Some(level)) => Style::default().bg(del_line_bg(theme, level)),
-        (DiffLineType::Context, _) => Style::default(),
+fn style_line_bg_for(kind: DiffLineType, diff_backgrounds: ResolvedDiffBackgrounds) -> Style {
+    match kind {
+        DiffLineType::Insert => diff_backgrounds
+            .add
+            .map_or_else(Style::default, |bg| Style::default().bg(bg)),
+        DiffLineType::Delete => diff_backgrounds
+            .del
+            .map_or_else(Style::default, |bg| Style::default().bg(bg)),
+        DiffLineType::Context => Style::default(),
     }
 }
 
@@ -1078,56 +1167,68 @@ fn style_gutter_for(kind: DiffLineType, theme: DiffTheme, color_level: DiffColor
 /// Sign character (`+`) for insert lines.  On dark terminals it inherits the
 /// full content style (green fg + tinted bg).  On light terminals it uses only
 /// a green foreground and lets the line-level bg show through.
-fn style_sign_add(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
+fn style_sign_add(
+    theme: DiffTheme,
+    color_level: DiffColorLevel,
+    diff_backgrounds: ResolvedDiffBackgrounds,
+) -> Style {
     match theme {
         DiffTheme::Light => Style::default().fg(Color::Green),
-        DiffTheme::Dark => style_add(theme, color_level),
+        DiffTheme::Dark => style_add(theme, color_level, diff_backgrounds),
     }
 }
 
 /// Sign character (`-`) for delete lines.  Mirror of [`style_sign_add`].
-fn style_sign_del(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
+fn style_sign_del(
+    theme: DiffTheme,
+    color_level: DiffColorLevel,
+    diff_backgrounds: ResolvedDiffBackgrounds,
+) -> Style {
     match theme {
         DiffTheme::Light => Style::default().fg(Color::Red),
-        DiffTheme::Dark => style_del(theme, color_level),
+        DiffTheme::Dark => style_del(theme, color_level, diff_backgrounds),
     }
 }
 
 /// Content style for insert lines (plain, non-syntax-highlighted text).
-fn style_add(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
-    match (theme, color_level) {
-        (_, DiffColorLevel::Ansi16) => Style::default().fg(Color::Green),
-        (DiffTheme::Light, DiffColorLevel::TrueColor) => {
-            Style::default().bg(add_line_bg(theme, RichDiffColorLevel::TrueColor))
+fn style_add(
+    theme: DiffTheme,
+    color_level: DiffColorLevel,
+    diff_backgrounds: ResolvedDiffBackgrounds,
+) -> Style {
+    match (theme, color_level, diff_backgrounds.add) {
+        (_, DiffColorLevel::Ansi16, _) => Style::default().fg(Color::Green),
+        (DiffTheme::Light, DiffColorLevel::TrueColor, Some(bg))
+        | (DiffTheme::Light, DiffColorLevel::Ansi256, Some(bg)) => Style::default().bg(bg),
+        (DiffTheme::Dark, DiffColorLevel::TrueColor, Some(bg))
+        | (DiffTheme::Dark, DiffColorLevel::Ansi256, Some(bg)) => {
+            Style::default().fg(Color::Green).bg(bg)
         }
-        (DiffTheme::Light, DiffColorLevel::Ansi256) => {
-            Style::default().bg(add_line_bg(theme, RichDiffColorLevel::Ansi256))
-        }
-        (DiffTheme::Dark, DiffColorLevel::TrueColor) => Style::default()
-            .fg(Color::Green)
-            .bg(add_line_bg(theme, RichDiffColorLevel::TrueColor)),
-        (DiffTheme::Dark, DiffColorLevel::Ansi256) => Style::default()
-            .fg(Color::Green)
-            .bg(add_line_bg(theme, RichDiffColorLevel::Ansi256)),
+        (DiffTheme::Light, DiffColorLevel::TrueColor, None)
+        | (DiffTheme::Light, DiffColorLevel::Ansi256, None) => Style::default(),
+        (DiffTheme::Dark, DiffColorLevel::TrueColor, None)
+        | (DiffTheme::Dark, DiffColorLevel::Ansi256, None) => Style::default().fg(Color::Green),
     }
 }
 
 /// Content style for delete lines (plain, non-syntax-highlighted text).
-fn style_del(theme: DiffTheme, color_level: DiffColorLevel) -> Style {
-    match (theme, color_level) {
-        (_, DiffColorLevel::Ansi16) => Style::default().fg(Color::Red),
-        (DiffTheme::Light, DiffColorLevel::TrueColor) => {
-            Style::default().bg(del_line_bg(theme, RichDiffColorLevel::TrueColor))
+fn style_del(
+    theme: DiffTheme,
+    color_level: DiffColorLevel,
+    diff_backgrounds: ResolvedDiffBackgrounds,
+) -> Style {
+    match (theme, color_level, diff_backgrounds.del) {
+        (_, DiffColorLevel::Ansi16, _) => Style::default().fg(Color::Red),
+        (DiffTheme::Light, DiffColorLevel::TrueColor, Some(bg))
+        | (DiffTheme::Light, DiffColorLevel::Ansi256, Some(bg)) => Style::default().bg(bg),
+        (DiffTheme::Dark, DiffColorLevel::TrueColor, Some(bg))
+        | (DiffTheme::Dark, DiffColorLevel::Ansi256, Some(bg)) => {
+            Style::default().fg(Color::Red).bg(bg)
         }
-        (DiffTheme::Light, DiffColorLevel::Ansi256) => {
-            Style::default().bg(del_line_bg(theme, RichDiffColorLevel::Ansi256))
-        }
-        (DiffTheme::Dark, DiffColorLevel::TrueColor) => Style::default()
-            .fg(Color::Red)
-            .bg(del_line_bg(theme, RichDiffColorLevel::TrueColor)),
-        (DiffTheme::Dark, DiffColorLevel::Ansi256) => Style::default()
-            .fg(Color::Red)
-            .bg(del_line_bg(theme, RichDiffColorLevel::Ansi256)),
+        (DiffTheme::Light, DiffColorLevel::TrueColor, None)
+        | (DiffTheme::Light, DiffColorLevel::Ansi256, None) => Style::default(),
+        (DiffTheme::Dark, DiffColorLevel::TrueColor, None)
+        | (DiffTheme::Dark, DiffColorLevel::Ansi256, None) => Style::default().fg(Color::Red),
     }
 }
 
@@ -1147,25 +1248,41 @@ mod tests {
 
     #[test]
     fn ansi16_add_style_uses_foreground_only() {
-        let style = style_add(DiffTheme::Dark, DiffColorLevel::Ansi16);
+        let style = style_add(
+            DiffTheme::Dark,
+            DiffColorLevel::Ansi16,
+            fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::Ansi16),
+        );
         assert_eq!(style.fg, Some(Color::Green));
         assert_eq!(style.bg, None);
     }
 
     #[test]
     fn ansi16_del_style_uses_foreground_only() {
-        let style = style_del(DiffTheme::Dark, DiffColorLevel::Ansi16);
+        let style = style_del(
+            DiffTheme::Dark,
+            DiffColorLevel::Ansi16,
+            fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::Ansi16),
+        );
         assert_eq!(style.fg, Some(Color::Red));
         assert_eq!(style.bg, None);
     }
 
     #[test]
     fn ansi16_sign_styles_use_foreground_only() {
-        let add_sign = style_sign_add(DiffTheme::Dark, DiffColorLevel::Ansi16);
+        let add_sign = style_sign_add(
+            DiffTheme::Dark,
+            DiffColorLevel::Ansi16,
+            fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::Ansi16),
+        );
         assert_eq!(add_sign.fg, Some(Color::Green));
         assert_eq!(add_sign.bg, None);
 
-        let del_sign = style_sign_del(DiffTheme::Dark, DiffColorLevel::Ansi16);
+        let del_sign = style_sign_del(
+            DiffTheme::Dark,
+            DiffColorLevel::Ansi16,
+            fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::Ansi16),
+        );
         assert_eq!(del_sign.fg, Some(Color::Red));
         assert_eq!(del_sign.bg, None);
     }
@@ -1580,6 +1697,7 @@ mod tests {
             None,
             DiffTheme::Dark,
             DiffColorLevel::Ansi16,
+            fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::Ansi16),
         );
         lines.extend(push_wrapped_diff_line_inner_with_theme_and_color_level(
             2,
@@ -1590,6 +1708,7 @@ mod tests {
             None,
             DiffTheme::Dark,
             DiffColorLevel::Ansi16,
+            fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::Ansi16),
         ));
 
         snapshot_lines("ansi16_insert_delete_no_background", lines, 40, 4);
@@ -1600,16 +1719,14 @@ mod tests {
         assert_eq!(
             style_line_bg_for(
                 DiffLineType::Insert,
-                DiffTheme::Dark,
-                DiffColorLevel::TrueColor
+                fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::TrueColor)
             ),
             Style::default().bg(rgb_color(DARK_TC_ADD_LINE_BG_RGB))
         );
         assert_eq!(
             style_line_bg_for(
                 DiffLineType::Delete,
-                DiffTheme::Dark,
-                DiffColorLevel::TrueColor
+                fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::TrueColor)
             ),
             Style::default().bg(rgb_color(DARK_TC_DEL_LINE_BG_RGB))
         );
@@ -1636,32 +1753,86 @@ mod tests {
         assert_eq!(
             style_line_bg_for(
                 DiffLineType::Insert,
-                DiffTheme::Dark,
-                DiffColorLevel::Ansi256
+                fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::Ansi256)
             ),
             Style::default().bg(indexed_color(DARK_256_ADD_LINE_BG_IDX))
         );
         assert_eq!(
             style_line_bg_for(
                 DiffLineType::Delete,
-                DiffTheme::Dark,
-                DiffColorLevel::Ansi256
+                fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::Ansi256)
             ),
             Style::default().bg(indexed_color(DARK_256_DEL_LINE_BG_IDX))
         );
         assert_ne!(
             style_line_bg_for(
                 DiffLineType::Insert,
-                DiffTheme::Dark,
-                DiffColorLevel::Ansi256
+                fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::Ansi256)
             ),
             style_line_bg_for(
                 DiffLineType::Delete,
-                DiffTheme::Dark,
-                DiffColorLevel::Ansi256
+                fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::Ansi256)
             ),
             "256-color mode should keep add/delete backgrounds distinct"
         );
+    }
+
+    #[test]
+    fn theme_scope_backgrounds_override_truecolor_fallback_when_available() {
+        let backgrounds = resolve_diff_backgrounds_for(
+            DiffTheme::Dark,
+            DiffColorLevel::TrueColor,
+            DiffScopeBackgroundRgbs {
+                inserted: Some((1, 2, 3)),
+                deleted: Some((4, 5, 6)),
+            },
+        );
+        assert_eq!(
+            style_line_bg_for(DiffLineType::Insert, backgrounds),
+            Style::default().bg(rgb_color((1, 2, 3)))
+        );
+        assert_eq!(
+            style_line_bg_for(DiffLineType::Delete, backgrounds),
+            Style::default().bg(rgb_color((4, 5, 6)))
+        );
+    }
+
+    #[test]
+    fn theme_scope_backgrounds_quantize_to_ansi256() {
+        let backgrounds = resolve_diff_backgrounds_for(
+            DiffTheme::Dark,
+            DiffColorLevel::Ansi256,
+            DiffScopeBackgroundRgbs {
+                inserted: Some((0, 95, 0)),
+                deleted: None,
+            },
+        );
+        assert_eq!(
+            style_line_bg_for(DiffLineType::Insert, backgrounds),
+            Style::default().bg(indexed_color(22))
+        );
+        assert_eq!(
+            style_line_bg_for(DiffLineType::Delete, backgrounds),
+            Style::default().bg(indexed_color(DARK_256_DEL_LINE_BG_IDX))
+        );
+    }
+
+    #[test]
+    fn ui_snapshot_theme_scope_background_resolution() {
+        let backgrounds = resolve_diff_backgrounds_for(
+            DiffTheme::Dark,
+            DiffColorLevel::TrueColor,
+            DiffScopeBackgroundRgbs {
+                inserted: Some((12, 34, 56)),
+                deleted: None,
+            },
+        );
+        let snapshot = format!(
+            "insert={:?}\ndelete={:?}",
+            style_line_bg_for(DiffLineType::Insert, backgrounds).bg,
+            style_line_bg_for(DiffLineType::Delete, backgrounds).bg,
+        );
+        assert_snapshot!("theme_scope_background_resolution", snapshot);
     }
 
     #[test]
@@ -1669,16 +1840,14 @@ mod tests {
         assert_eq!(
             style_line_bg_for(
                 DiffLineType::Insert,
-                DiffTheme::Dark,
-                DiffColorLevel::Ansi16
+                fallback_diff_backgrounds(DiffTheme::Dark, DiffColorLevel::Ansi16)
             ),
             Style::default()
         );
         assert_eq!(
             style_line_bg_for(
                 DiffLineType::Delete,
-                DiffTheme::Light,
-                DiffColorLevel::Ansi16
+                fallback_diff_backgrounds(DiffTheme::Light, DiffColorLevel::Ansi16)
             ),
             Style::default()
         );
@@ -1697,6 +1866,22 @@ mod tests {
                 DiffColorLevel::Ansi16
             ),
             Style::default().fg(Color::Black)
+        );
+        let themed_backgrounds = resolve_diff_backgrounds_for(
+            DiffTheme::Light,
+            DiffColorLevel::Ansi16,
+            DiffScopeBackgroundRgbs {
+                inserted: Some((8, 9, 10)),
+                deleted: Some((11, 12, 13)),
+            },
+        );
+        assert_eq!(
+            style_line_bg_for(DiffLineType::Insert, themed_backgrounds),
+            Style::default()
+        );
+        assert_eq!(
+            style_line_bg_for(DiffLineType::Delete, themed_backgrounds),
+            Style::default()
         );
     }
 
@@ -1705,16 +1890,14 @@ mod tests {
         assert_eq!(
             style_line_bg_for(
                 DiffLineType::Insert,
-                DiffTheme::Light,
-                DiffColorLevel::TrueColor
+                fallback_diff_backgrounds(DiffTheme::Light, DiffColorLevel::TrueColor)
             ),
             Style::default().bg(rgb_color(LIGHT_TC_ADD_LINE_BG_RGB))
         );
         assert_eq!(
             style_line_bg_for(
                 DiffLineType::Delete,
-                DiffTheme::Light,
-                DiffColorLevel::TrueColor
+                fallback_diff_backgrounds(DiffTheme::Light, DiffColorLevel::TrueColor)
             ),
             Style::default().bg(rgb_color(LIGHT_TC_DEL_LINE_BG_RGB))
         );
@@ -1751,6 +1934,7 @@ mod tests {
             None,
             DiffTheme::Light,
             DiffColorLevel::TrueColor,
+            fallback_diff_backgrounds(DiffTheme::Light, DiffColorLevel::TrueColor),
         );
 
         assert!(
