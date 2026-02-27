@@ -1394,14 +1394,12 @@ pub struct ModelListParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ModelAvailabilityNux {
-    pub id: String,
     pub message: String,
 }
 
 impl From<CoreModelAvailabilityNux> for ModelAvailabilityNux {
     fn from(value: CoreModelAvailabilityNux) -> Self {
         Self {
-            id: value.id,
             message: value.message,
         }
     }

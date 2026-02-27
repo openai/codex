@@ -10307,15 +10307,11 @@
       },
       "ModelAvailabilityNux": {
         "properties": {
-          "id": {
-            "type": "string"
-          },
           "message": {
             "type": "string"
           }
         },
         "required": [
-          "id",
           "message"
         ],
         "type": "object"
