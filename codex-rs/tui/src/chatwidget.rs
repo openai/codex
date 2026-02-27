@@ -252,8 +252,6 @@ mod agent;
 use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 pub(crate) use self::agent::spawn_op_forwarder;
-mod session_header;
-use self::session_header::SessionHeader;
 mod skills;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
@@ -542,7 +540,6 @@ pub(crate) struct ChatWidget {
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     otel_manager: OtelManager,
-    session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
@@ -1127,7 +1124,6 @@ impl ChatWidget {
         self.last_copyable_output = None;
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
-        self.session_header.set_model(&model_for_header);
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             Some(model_for_header.clone()),
             Some(event.reasoning_effort),
@@ -2807,7 +2803,6 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             otel_manager,
-            session_header: SessionHeader::new(DEFAULT_MODEL_DISPLAY_NAME.to_string()),
             initial_user_message,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
@@ -2984,7 +2979,6 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             otel_manager,
-            session_header: SessionHeader::new(DEFAULT_MODEL_DISPLAY_NAME.to_string()),
             initial_user_message,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
@@ -3150,7 +3144,6 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             otel_manager,
-            session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
@@ -6750,10 +6743,6 @@ impl ChatWidget {
     }
 
     fn refresh_model_display(&mut self) {
-        let effective = self.effective_collaboration_mode();
-        if self.is_session_configured() {
-            self.session_header.set_model(effective.model());
-        }
         // Keep composer paste affordances aligned with the currently effective model.
         self.sync_image_paste_enabled();
     }
