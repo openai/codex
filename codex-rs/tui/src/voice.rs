@@ -51,7 +51,7 @@ pub struct VoiceCapture {
 
 impl VoiceCapture {
     pub fn start() -> Result<Self, String> {
-        let (device, config) = select_input_device_and_config()?;
+        let (device, config) = select_default_input_device_and_config()?;
 
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
@@ -74,8 +74,8 @@ impl VoiceCapture {
         })
     }
 
-    pub fn start_realtime(tx: AppEventSender) -> Result<Self, String> {
-        let (device, config) = select_input_device_and_config()?;
+    pub fn start_realtime(config: &Config, tx: AppEventSender) -> Result<Self, String> {
+        let (device, config) = select_realtime_input_device_and_config(config)?;
 
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
@@ -262,7 +262,8 @@ pub fn transcribe_async(
 // Voice input helpers
 // -------------------------
 
-fn select_input_device_and_config() -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
+fn select_default_input_device_and_config()
+-> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -271,6 +272,12 @@ fn select_input_device_and_config() -> Result<(cpal::Device, cpal::SupportedStre
         .default_input_config()
         .map_err(|e| format!("failed to get default input config: {e}"))?;
     Ok((device, config))
+}
+
+fn select_realtime_input_device_and_config(
+    config: &Config,
+) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
+    crate::audio_device::select_configured_input_device_and_config(config)
 }
 
 fn build_input_stream(
@@ -466,14 +473,9 @@ pub(crate) struct RealtimeAudioPlayer {
 }
 
 impl RealtimeAudioPlayer {
-    pub(crate) fn start() -> Result<Self, String> {
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| "no output audio device available".to_string())?;
-        let config = device
-            .default_output_config()
-            .map_err(|e| format!("failed to get default output config: {e}"))?;
+    pub(crate) fn start(config: &Config) -> Result<Self, String> {
+        let (device, config) =
+            crate::audio_device::select_configured_output_device_and_config(config)?;
         let output_sample_rate = config.sample_rate().0;
         let output_channels = config.channels();
         let queue = Arc::new(Mutex::new(VecDeque::new()));

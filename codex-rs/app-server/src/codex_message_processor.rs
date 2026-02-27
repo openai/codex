@@ -560,7 +560,12 @@ impl CodexMessageProcessor {
         Ok((review_request, hint))
     }
 
-    pub async fn process_request(&mut self, connection_id: ConnectionId, request: ClientRequest) {
+    pub async fn process_request(
+        &mut self,
+        connection_id: ConnectionId,
+        request: ClientRequest,
+        client_name: Option<String>,
+    ) {
         let to_connection_request_id = |request_id| ConnectionRequestId {
             connection_id,
             request_id,
@@ -647,8 +652,12 @@ impl CodexMessageProcessor {
                     .await;
             }
             ClientRequest::TurnStart { request_id, params } => {
-                self.turn_start(to_connection_request_id(request_id), params)
-                    .await;
+                self.turn_start(
+                    to_connection_request_id(request_id),
+                    params,
+                    client_name.clone(),
+                )
+                .await;
             }
             ClientRequest::TurnSteer { request_id, params } => {
                 self.turn_steer(to_connection_request_id(request_id), params)
@@ -767,12 +776,20 @@ impl CodexMessageProcessor {
                     .await;
             }
             ClientRequest::SendUserMessage { request_id, params } => {
-                self.send_user_message(to_connection_request_id(request_id), params)
-                    .await;
+                self.send_user_message(
+                    to_connection_request_id(request_id),
+                    params,
+                    client_name.clone(),
+                )
+                .await;
             }
             ClientRequest::SendUserTurn { request_id, params } => {
-                self.send_user_turn(to_connection_request_id(request_id), params)
-                    .await;
+                self.send_user_turn(
+                    to_connection_request_id(request_id),
+                    params,
+                    client_name.clone(),
+                )
+                .await;
             }
             ClientRequest::InterruptConversation { request_id, params } => {
                 self.interrupt_conversation(to_connection_request_id(request_id), params)
@@ -5062,6 +5079,7 @@ impl CodexMessageProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: SendUserMessageParams,
+        client_name: Option<String>,
     ) {
         let SendUserMessageParams {
             conversation_id,
@@ -5080,6 +5098,10 @@ impl CodexMessageProcessor {
             self.outgoing.send_error(request_id, error).await;
             return;
         };
+        if let Err(error) = Self::set_notify_client(conversation.as_ref(), client_name).await {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
@@ -5110,7 +5132,12 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn send_user_turn(&self, request_id: ConnectionRequestId, params: SendUserTurnParams) {
+    async fn send_user_turn(
+        &self,
+        request_id: ConnectionRequestId,
+        params: SendUserTurnParams,
+        client_name: Option<String>,
+    ) {
         let SendUserTurnParams {
             conversation_id,
             items,
@@ -5136,6 +5163,10 @@ impl CodexMessageProcessor {
             self.outgoing.send_error(request_id, error).await;
             return;
         };
+        if let Err(error) = Self::set_notify_client(conversation.as_ref(), client_name).await {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
@@ -5160,7 +5191,7 @@ impl CodexMessageProcessor {
                 sandbox_policy,
                 model,
                 effort,
-                summary,
+                summary: Some(summary),
                 final_output_json_schema: output_schema,
                 collaboration_mode: None,
                 personality: None,
@@ -5607,7 +5638,12 @@ impl CodexMessageProcessor {
         let _ = conversation.submit(Op::Interrupt).await;
     }
 
-    async fn turn_start(&self, request_id: ConnectionRequestId, params: TurnStartParams) {
+    async fn turn_start(
+        &self,
+        request_id: ConnectionRequestId,
+        params: TurnStartParams,
+        client_name: Option<String>,
+    ) {
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
             self.outgoing.send_error(request_id, error).await;
             return;
@@ -5619,6 +5655,10 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        if let Err(error) = Self::set_notify_client(thread.as_ref(), client_name).await {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         let collaboration_modes_config = CollaborationModesConfig {
             default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
@@ -5697,6 +5737,20 @@ impl CodexMessageProcessor {
                 };
                 self.outgoing.send_error(request_id, error).await;
             }
+        }
+    }
+
+    async fn set_notify_client(
+        thread: &CodexThread,
+        client_name: Option<String>,
+    ) -> Result<(), JSONRPCErrorError> {
+        match thread.set_notify_client(client_name).await {
+            Ok(()) => Ok(()),
+            Err(err) => Err(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to set notify client: {err}"),
+                data: None,
+            }),
         }
     }
 
