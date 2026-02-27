@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -7,6 +8,7 @@ use anyhow::Result;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error;
 use codex_execpolicy::Evaluation;
+use codex_execpolicy::MatchOptions;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
@@ -16,6 +18,7 @@ use codex_execpolicy::blocking_append_allow_prefix_rule;
 use codex_execpolicy::rule::PatternToken;
 use codex_execpolicy::rule::PrefixPattern;
 use codex_execpolicy::rule::PrefixRule;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
@@ -29,6 +32,23 @@ fn allow_all(_: &[String]) -> Decision {
 
 fn prompt_all(_: &[String]) -> Decision {
     Decision::Prompt
+}
+
+fn absolute_path(path: &str) -> AbsolutePathBuf {
+    AbsolutePathBuf::try_from(path.to_string())
+        .unwrap_or_else(|error| panic!("expected absolute path `{path}`: {error}"))
+}
+
+fn host_absolute_path(segments: &[&str]) -> String {
+    let mut path = if cfg!(windows) {
+        PathBuf::from(r"C:\")
+    } else {
+        PathBuf::from("/")
+    };
+    for segment in segments {
+        path.push(segment);
+    }
+    path.to_string_lossy().into_owned()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -125,6 +145,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["git", "status"]),
                 decision: Decision::Allow,
+                resolved_program: None,
                 justification: None,
             }],
         },
@@ -156,6 +177,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["rm"]),
                 decision: Decision::Forbidden,
+                resolved_program: None,
                 justification: Some("destructive command".to_string()),
             }],
         },
@@ -184,6 +206,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["ls"]),
                 decision: Decision::Allow,
+                resolved_program: None,
                 justification: Some("safe and commonly used".to_string()),
             }],
         },
@@ -236,6 +259,7 @@ fn add_prefix_rule_extends_policy() -> Result<()> {
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["ls", "-l"]),
                 decision: Decision::Prompt,
+                resolved_program: None,
                 justification: None,
             }],
         },
@@ -305,6 +329,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["git"]),
                 decision: Decision::Prompt,
+                resolved_program: None,
                 justification: None,
             }],
         },
@@ -319,11 +344,13 @@ prefix_rule(
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "commit"]),
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 },
             ],
@@ -381,6 +408,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["bash", "-c"]),
                 decision: Decision::Allow,
+                resolved_program: None,
                 justification: None,
             }],
         },
@@ -394,6 +422,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["sh", "-l"]),
                 decision: Decision::Allow,
+                resolved_program: None,
                 justification: None,
             }],
         },
@@ -440,6 +469,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["npm", "i", "--legacy-peer-deps"]),
                 decision: Decision::Allow,
+                resolved_program: None,
                 justification: None,
             }],
         },
@@ -456,6 +486,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["npm", "install", "--no-save"]),
                 decision: Decision::Allow,
+                resolved_program: None,
                 justification: None,
             }],
         },
@@ -486,6 +517,7 @@ prefix_rule(
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["git", "status"]),
                 decision: Decision::Allow,
+                resolved_program: None,
                 justification: None,
             }],
         },
@@ -533,11 +565,13 @@ prefix_rule(
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "commit"]),
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 },
             ],
@@ -576,16 +610,19 @@ prefix_rule(
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git"]),
                     decision: Decision::Prompt,
+                    resolved_program: None,
                     justification: None,
                 },
                 RuleMatch::PrefixRuleMatch {
                     matched_prefix: tokens(&["git", "commit"]),
                     decision: Decision::Forbidden,
+                    resolved_program: None,
                     justification: None,
                 },
             ],
@@ -611,4 +648,269 @@ fn heuristics_match_is_returned_when_no_policy_matches() {
         },
         evaluation
     );
+}
+
+#[test]
+fn parses_host_executable_paths() -> Result<()> {
+    let homebrew_git = host_absolute_path(&["opt", "homebrew", "bin", "git"]);
+    let usr_git = host_absolute_path(&["usr", "bin", "git"]);
+    let policy_src = format!(
+        r#"
+host_executable(
+    name = "git",
+    paths = [
+        "{homebrew_git}",
+        "{usr_git}",
+        "{usr_git}",
+    ],
+)
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", &policy_src)?;
+    let policy = parser.build();
+
+    assert_eq!(
+        policy
+            .host_executables()
+            .get("git")
+            .expect("missing git host executable")
+            .as_ref(),
+        [absolute_path(&homebrew_git), absolute_path(&usr_git)]
+    );
+    Ok(())
+}
+
+#[test]
+fn host_executable_rejects_non_absolute_path() {
+    let policy_src = r#"
+host_executable(name = "git", paths = ["git"])
+"#;
+    let mut parser = PolicyParser::new();
+    let err = parser
+        .parse("test.rules", policy_src)
+        .expect_err("expected parse error");
+    assert!(
+        err.to_string()
+            .contains("host_executable paths must be absolute")
+    );
+}
+
+#[test]
+fn host_executable_rejects_name_with_path_separator() {
+    let git_path = host_absolute_path(&["usr", "bin", "git"]);
+    let policy_src = format!(r#"host_executable(name = "{git_path}", paths = ["{git_path}"])"#);
+    let mut parser = PolicyParser::new();
+    let err = parser
+        .parse("test.rules", &policy_src)
+        .expect_err("expected parse error");
+    assert!(
+        err.to_string()
+            .contains("host_executable name must be a bare executable name")
+    );
+}
+
+#[test]
+fn host_executable_rejects_path_with_wrong_basename() {
+    let rg_path = host_absolute_path(&["usr", "bin", "rg"]);
+    let policy_src = format!(r#"host_executable(name = "git", paths = ["{rg_path}"])"#);
+    let mut parser = PolicyParser::new();
+    let err = parser
+        .parse("test.rules", &policy_src)
+        .expect_err("expected parse error");
+    assert!(err.to_string().contains("must have basename `git`"));
+}
+
+#[test]
+fn host_executable_last_definition_wins() -> Result<()> {
+    let usr_git = host_absolute_path(&["usr", "bin", "git"]);
+    let homebrew_git = host_absolute_path(&["opt", "homebrew", "bin", "git"]);
+    let mut parser = PolicyParser::new();
+    parser.parse(
+        "shared.rules",
+        &format!(r#"host_executable(name = "git", paths = ["{usr_git}"])"#),
+    )?;
+    parser.parse(
+        "user.rules",
+        &format!(r#"host_executable(name = "git", paths = ["{homebrew_git}"])"#),
+    )?;
+    let policy = parser.build();
+
+    assert_eq!(
+        policy
+            .host_executables()
+            .get("git")
+            .expect("missing git host executable")
+            .as_ref(),
+        [absolute_path(&homebrew_git)]
+    );
+    Ok(())
+}
+
+#[test]
+fn host_executable_resolution_uses_basename_rule_when_allowed() -> Result<()> {
+    let git_path = host_absolute_path(&["usr", "bin", "git"]);
+    let policy_src = format!(
+        r#"
+prefix_rule(pattern = ["git", "status"], decision = "prompt")
+host_executable(name = "git", paths = ["{git_path}"])
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", &policy_src)?;
+    let policy = parser.build();
+
+    let evaluation = policy.check_with_options(
+        &vec![git_path.clone(), "status".to_string()],
+        &allow_all,
+        &MatchOptions {
+            resolve_host_executables: true,
+        },
+    );
+    assert_eq!(
+        evaluation,
+        Evaluation {
+            decision: Decision::Prompt,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: tokens(&["git", "status"]),
+                decision: Decision::Prompt,
+                resolved_program: Some(absolute_path(&git_path)),
+                justification: None,
+            }],
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn host_executable_resolution_respects_explicit_empty_allowlist() -> Result<()> {
+    let policy_src = r#"
+prefix_rule(pattern = ["git"], decision = "prompt")
+host_executable(name = "git", paths = [])
+"#;
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src)?;
+    let policy = parser.build();
+    let git_path = host_absolute_path(&["usr", "bin", "git"]);
+
+    let evaluation = policy.check_with_options(
+        &vec![git_path.clone(), "status".to_string()],
+        &allow_all,
+        &MatchOptions {
+            resolve_host_executables: true,
+        },
+    );
+    assert_eq!(
+        evaluation,
+        Evaluation {
+            decision: Decision::Allow,
+            matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                command: vec![git_path, "status".to_string()],
+                decision: Decision::Allow,
+            }],
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn host_executable_resolution_ignores_path_not_in_allowlist() -> Result<()> {
+    let allowed_git = host_absolute_path(&["usr", "bin", "git"]);
+    let other_git = host_absolute_path(&["opt", "homebrew", "bin", "git"]);
+    let policy_src = format!(
+        r#"
+prefix_rule(pattern = ["git"], decision = "prompt")
+host_executable(name = "git", paths = ["{allowed_git}"])
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", &policy_src)?;
+    let policy = parser.build();
+
+    let evaluation = policy.check_with_options(
+        &vec![other_git.clone(), "status".to_string()],
+        &allow_all,
+        &MatchOptions {
+            resolve_host_executables: true,
+        },
+    );
+    assert_eq!(
+        evaluation,
+        Evaluation {
+            decision: Decision::Allow,
+            matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                command: vec![other_git, "status".to_string()],
+                decision: Decision::Allow,
+            }],
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn host_executable_resolution_falls_back_without_mapping() -> Result<()> {
+    let policy_src = r#"
+prefix_rule(pattern = ["git"], decision = "prompt")
+"#;
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src)?;
+    let policy = parser.build();
+    let git_path = host_absolute_path(&["usr", "bin", "git"]);
+
+    let evaluation = policy.check_with_options(
+        &vec![git_path.clone(), "status".to_string()],
+        &allow_all,
+        &MatchOptions {
+            resolve_host_executables: true,
+        },
+    );
+    assert_eq!(
+        evaluation,
+        Evaluation {
+            decision: Decision::Prompt,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: tokens(&["git"]),
+                decision: Decision::Prompt,
+                resolved_program: Some(absolute_path(&git_path)),
+                justification: None,
+            }],
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn host_executable_resolution_does_not_override_exact_match() -> Result<()> {
+    let git_path = host_absolute_path(&["usr", "bin", "git"]);
+    let policy_src = format!(
+        r#"
+prefix_rule(pattern = ["{git_path}"], decision = "allow")
+prefix_rule(pattern = ["git"], decision = "prompt")
+host_executable(name = "git", paths = ["{git_path}"])
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", &policy_src)?;
+    let policy = parser.build();
+
+    let evaluation = policy.check_with_options(
+        &vec![git_path.clone(), "status".to_string()],
+        &allow_all,
+        &MatchOptions {
+            resolve_host_executables: true,
+        },
+    );
+    assert_eq!(
+        evaluation,
+        Evaluation {
+            decision: Decision::Allow,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: vec![git_path],
+                decision: Decision::Allow,
+                resolved_program: None,
+                justification: None,
+            }],
+        }
+    );
+    Ok(())
 }
