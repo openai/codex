@@ -63,7 +63,7 @@ pub(super) fn normalize_and_validate_additional_permissions(
     approval_policy: AskForApproval,
     sandbox_permissions: SandboxPermissions,
     additional_permissions: Option<PermissionProfile>,
-    cwd: &Path,
+    _cwd: &Path,
 ) -> Result<Option<PermissionProfile>, String> {
     let uses_additional_permissions = matches!(
         sandbox_permissions,
@@ -91,7 +91,7 @@ pub(super) fn normalize_and_validate_additional_permissions(
                     .to_string(),
             );
         };
-        let normalized = normalize_additional_permissions(additional_permissions, cwd)?;
+        let normalized = normalize_additional_permissions(additional_permissions)?;
         if normalized.is_empty() {
             return Err(
                 "`additional_permissions` must include at least one path in `file_system.read` or `file_system.write`"

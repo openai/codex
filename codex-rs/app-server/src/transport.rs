@@ -671,11 +671,16 @@ pub(crate) async fn route_outgoing_envelope(
 mod tests {
     use super::*;
     use crate::error_code::OVERLOADED_ERROR_CODE;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
     use tokio::time::Duration;
     use tokio::time::timeout;
+
+    fn absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
+    }
 
     #[test]
     fn app_server_transport_parses_stdio_listen_url() {
@@ -977,7 +982,7 @@ mod tests {
                                 network: None,
                                 file_system: Some(
                                     codex_app_server_protocol::AdditionalFileSystemPermissions {
-                                        read: Some(vec![PathBuf::from("/tmp/allowed")]),
+                                        read: Some(vec![absolute_path("/tmp/allowed")]),
                                         write: None,
                                     },
                                 ),
@@ -1039,7 +1044,7 @@ mod tests {
                                 network: None,
                                 file_system: Some(
                                     codex_app_server_protocol::AdditionalFileSystemPermissions {
-                                        read: Some(vec![PathBuf::from("/tmp/allowed")]),
+                                        read: Some(vec![absolute_path("/tmp/allowed")]),
                                         write: None,
                                     },
                                 ),
