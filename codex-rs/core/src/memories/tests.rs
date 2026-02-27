@@ -88,6 +88,7 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         rollout_slug: None,
         rollout_path: PathBuf::from("/tmp/rollout-100.jsonl"),
         cwd: PathBuf::from("/tmp/workspace"),
+        git_branch: None,
         generated_at: Utc.timestamp_opt(101, 0).single().expect("timestamp"),
     }];
 
@@ -193,6 +194,7 @@ async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename(
         rollout_slug: Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345".to_string()),
         rollout_path: PathBuf::from("/tmp/rollout-200.jsonl"),
         cwd: PathBuf::from("/tmp/workspace"),
+        git_branch: Some("feature/memory-branch".to_string()),
         generated_at: Utc.timestamp_opt(201, 0).single().expect("timestamp"),
     }];
 
@@ -248,6 +250,7 @@ async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename(
         .expect("read rollout summary");
     assert!(summary.contains(&format!("thread_id: {thread_id}")));
     assert!(summary.contains("rollout_path: /tmp/rollout-200.jsonl"));
+    assert!(summary.contains("git_branch: feature/memory-branch"));
     assert!(
         !tokio::fs::try_exists(&stale_unslugged_path)
             .await
@@ -294,6 +297,7 @@ task_outcome: success
         rollout_slug: Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345".to_string()),
         rollout_path: PathBuf::from("/tmp/rollout-200.jsonl"),
         cwd: PathBuf::from("/tmp/workspace"),
+        git_branch: None,
         generated_at: Utc.timestamp_opt(201, 0).single().expect("timestamp"),
     }];
 
@@ -378,6 +382,7 @@ mod phase2 {
             rollout_slug: None,
             rollout_path: PathBuf::from("/tmp/rollout-summary.jsonl"),
             cwd: PathBuf::from("/tmp/workspace"),
+            git_branch: None,
             generated_at: chrono::DateTime::<Utc>::from_timestamp(source_updated_at + 1, 0)
                 .expect("valid generated_at timestamp"),
         }

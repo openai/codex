@@ -32,6 +32,7 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailabilityNux;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
@@ -812,8 +813,8 @@ impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalFileSystemPermissions {
-    pub read: Option<Vec<PathBuf>>,
-    pub write: Option<Vec<PathBuf>>,
+    pub read: Option<Vec<AbsolutePathBuf>>,
+    pub write: Option<Vec<AbsolutePathBuf>>,
 }
 
 impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
@@ -1393,10 +1394,27 @@ pub struct ModelListParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ModelAvailabilityNux {
+    pub message: String,
+}
+
+impl From<CoreModelAvailabilityNux> for ModelAvailabilityNux {
+    fn from(value: CoreModelAvailabilityNux) -> Self {
+        Self {
+            message: value.message,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct Model {
     pub id: String,
     pub model: String,
     pub upgrade: Option<String>,
+    pub upgrade_info: Option<ModelUpgradeInfo>,
+    pub availability_nux: Option<ModelAvailabilityNux>,
     pub display_name: String,
     pub description: String,
     pub hidden: bool,
@@ -1408,6 +1426,16 @@ pub struct Model {
     pub supports_personality: bool,
     // Only one model should be marked as default.
     pub is_default: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelUpgradeInfo {
+    pub model: String,
+    pub upgrade_copy: Option<String>,
+    pub model_link: Option<String>,
+    pub migration_markdown: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4149,6 +4177,37 @@ mod tests {
             "/readable"
         };
         AbsolutePathBuf::from_absolute_path(path).expect("path must be absolute")
+    }
+
+    #[test]
+    fn command_execution_request_approval_rejects_relative_additional_permission_paths() {
+        let err = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
+            "threadId": "thr_123",
+            "turnId": "turn_123",
+            "itemId": "call_123",
+            "command": "cat file",
+            "cwd": "/tmp",
+            "commandActions": null,
+            "reason": null,
+            "networkApprovalContext": null,
+            "additionalPermissions": {
+                "network": null,
+                "fileSystem": {
+                    "read": ["relative/path"],
+                    "write": null
+                },
+                "macos": null
+            },
+            "proposedExecpolicyAmendment": null,
+            "proposedNetworkPolicyAmendments": null,
+            "availableDecisions": null
+        }))
+        .expect_err("relative additional permission paths should fail");
+        assert!(
+            err.to_string()
+                .contains("AbsolutePathBuf deserialized without a base path"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

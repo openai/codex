@@ -91,6 +91,7 @@ impl ToolHandler for MultiAgentHandler {
 
 mod spawn {
     use super::*;
+    use crate::agent::control::SpawnAgentOptions;
     use crate::agent::role::DEFAULT_ROLE_NAME;
     use crate::agent::role::apply_role_to_config;
 
@@ -103,6 +104,8 @@ mod spawn {
         message: Option<String>,
         items: Option<Vec<UserInput>>,
         agent_type: Option<String>,
+        #[serde(default)]
+        fork_context: bool,
     }
 
     #[derive(Debug, Serialize)]
@@ -155,7 +158,7 @@ mod spawn {
         let result = session
             .services
             .agent_control
-            .spawn_agent(
+            .spawn_agent_with_options(
                 config,
                 input_items,
                 Some(thread_spawn_source(
@@ -163,6 +166,9 @@ mod spawn {
                     child_depth,
                     role_name,
                 )),
+                SpawnAgentOptions {
+                    fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
+                },
             )
             .await
             .map_err(collab_spawn_error);
@@ -1222,7 +1228,7 @@ mod tests {
             "spawn_agent",
             function_payload(json!({
                 "message": "await this command",
-                "agent_type": "awaiter"
+                "agent_type": "explorer"
             })),
         );
         let output = MultiAgentHandler

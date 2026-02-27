@@ -105,7 +105,6 @@ async fn run_remote_compact_task_inner_impl(
             "trimmed history items before remote compaction"
         );
     }
-
     // Required to keep `/undo` available after compaction
     let ghost_snapshots: Vec<ResponseItem> = history
         .raw_items()

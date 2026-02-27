@@ -11,6 +11,7 @@ use std::time::Duration;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -24,6 +25,8 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
+use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -39,6 +42,8 @@ use crate::sandboxing::SandboxPermissions;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::SandboxablePreference;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::truncate_text;
 
 pub(crate) const JS_REPL_PRAGMA_PREFIX: &str = "// codex-js-repl:";
 const KERNEL_SOURCE: &str = include_str!("kernel.js");
@@ -51,6 +56,7 @@ const JS_REPL_STDERR_TAIL_SEPARATOR: &str = " | ";
 const JS_REPL_EXEC_ID_LOG_LIMIT: usize = 8;
 const JS_REPL_MODEL_DIAG_STDERR_MAX_BYTES: usize = 1_024;
 const JS_REPL_MODEL_DIAG_ERROR_MAX_BYTES: usize = 256;
+const JS_REPL_TOOL_RESPONSE_TEXT_PREVIEW_MAX_BYTES: usize = 512;
 
 /// Per-task js_repl handle stored on the turn context.
 pub(crate) struct JsReplHandle {
@@ -98,6 +104,7 @@ pub struct JsReplArgs {
 #[derive(Clone, Debug)]
 pub struct JsExecResult {
     pub output: String,
+    pub content_items: Vec<FunctionCallOutputContentItem>,
 }
 
 struct KernelState {
@@ -119,8 +126,35 @@ struct ExecContext {
 #[derive(Default)]
 struct ExecToolCalls {
     in_flight: usize,
+    content_items: Vec<FunctionCallOutputContentItem>,
     notify: Arc<Notify>,
     cancel: CancellationToken,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
+enum JsReplToolCallPayloadKind {
+    MessageContent,
+    FunctionText,
+    FunctionContentItems,
+    CustomText,
+    CustomContentItems,
+    McpResult,
+    McpErrorResult,
+    Error,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct JsReplToolCallResponseSummary {
+    response_type: Option<String>,
+    payload_kind: Option<JsReplToolCallPayloadKind>,
+    payload_text_preview: Option<String>,
+    payload_text_length: Option<usize>,
+    payload_item_count: Option<usize>,
+    text_item_count: Option<usize>,
+    image_item_count: Option<usize>,
+    structured_content_present: Option<bool>,
+    result_is_error: Option<bool>,
 }
 
 enum KernelStreamEnd {
@@ -338,6 +372,21 @@ impl JsReplManager {
         Some(state.cancel.clone())
     }
 
+    async fn record_exec_tool_call_content_items(
+        exec_tool_calls: &Arc<Mutex<HashMap<String, ExecToolCalls>>>,
+        exec_id: &str,
+        content_items: Vec<FunctionCallOutputContentItem>,
+    ) {
+        if content_items.is_empty() {
+            return;
+        }
+
+        let mut calls = exec_tool_calls.lock().await;
+        if let Some(state) = calls.get_mut(exec_id) {
+            state.content_items.extend(content_items);
+        }
+    }
+
     async fn finish_exec_tool_call(
         exec_tool_calls: &Arc<Mutex<HashMap<String, ExecToolCalls>>>,
         exec_id: &str,
@@ -402,6 +451,205 @@ impl JsReplManager {
             state.cancel.cancel();
             state.notify.notify_waiters();
         }
+    }
+
+    fn log_tool_call_response(
+        req: &RunToolRequest,
+        ok: bool,
+        summary: &JsReplToolCallResponseSummary,
+        response: Option<&JsonValue>,
+        error: Option<&str>,
+    ) {
+        info!(
+            exec_id = %req.exec_id,
+            tool_call_id = %req.id,
+            tool_name = %req.tool_name,
+            ok,
+            summary = ?summary,
+            "js_repl nested tool call completed"
+        );
+        if let Some(response) = response {
+            trace!(
+                exec_id = %req.exec_id,
+                tool_call_id = %req.id,
+                tool_name = %req.tool_name,
+                response_json = %response,
+                "js_repl nested tool call raw response"
+            );
+        }
+        if let Some(error) = error {
+            trace!(
+                exec_id = %req.exec_id,
+                tool_call_id = %req.id,
+                tool_name = %req.tool_name,
+                error = %error,
+                "js_repl nested tool call raw error"
+            );
+        }
+    }
+
+    fn summarize_text_payload(
+        response_type: Option<&str>,
+        payload_kind: JsReplToolCallPayloadKind,
+        text: &str,
+    ) -> JsReplToolCallResponseSummary {
+        JsReplToolCallResponseSummary {
+            response_type: response_type.map(str::to_owned),
+            payload_kind: Some(payload_kind),
+            payload_text_preview: (!text.is_empty()).then(|| {
+                truncate_text(
+                    text,
+                    TruncationPolicy::Bytes(JS_REPL_TOOL_RESPONSE_TEXT_PREVIEW_MAX_BYTES),
+                )
+            }),
+            payload_text_length: Some(text.len()),
+            ..Default::default()
+        }
+    }
+
+    fn summarize_function_output_payload(
+        response_type: &str,
+        payload_kind: JsReplToolCallPayloadKind,
+        output: &FunctionCallOutputPayload,
+    ) -> JsReplToolCallResponseSummary {
+        let (payload_item_count, text_item_count, image_item_count) =
+            if let Some(items) = output.content_items() {
+                let text_item_count = items
+                    .iter()
+                    .filter(|item| matches!(item, FunctionCallOutputContentItem::InputText { .. }))
+                    .count();
+                let image_item_count = items.len().saturating_sub(text_item_count);
+                (
+                    Some(items.len()),
+                    Some(text_item_count),
+                    Some(image_item_count),
+                )
+            } else {
+                (None, None, None)
+            };
+        let payload_text = output.body.to_text();
+        JsReplToolCallResponseSummary {
+            response_type: Some(response_type.to_string()),
+            payload_kind: Some(payload_kind),
+            payload_text_preview: payload_text.as_deref().and_then(|text| {
+                (!text.is_empty()).then(|| {
+                    truncate_text(
+                        text,
+                        TruncationPolicy::Bytes(JS_REPL_TOOL_RESPONSE_TEXT_PREVIEW_MAX_BYTES),
+                    )
+                })
+            }),
+            payload_text_length: payload_text.as_ref().map(String::len),
+            payload_item_count,
+            text_item_count,
+            image_item_count,
+            ..Default::default()
+        }
+    }
+
+    fn summarize_message_payload(content: &[ContentItem]) -> JsReplToolCallResponseSummary {
+        let text_item_count = content
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    ContentItem::InputText { .. } | ContentItem::OutputText { .. }
+                )
+            })
+            .count();
+        let image_item_count = content.len().saturating_sub(text_item_count);
+        let payload_text = content
+            .iter()
+            .filter_map(|item| match item {
+                ContentItem::InputText { text } | ContentItem::OutputText { text }
+                    if !text.trim().is_empty() =>
+                {
+                    Some(text.as_str())
+                }
+                ContentItem::InputText { .. }
+                | ContentItem::InputImage { .. }
+                | ContentItem::OutputText { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        let payload_text = if payload_text.is_empty() {
+            None
+        } else {
+            Some(payload_text.join("\n"))
+        };
+        JsReplToolCallResponseSummary {
+            response_type: Some("message".to_string()),
+            payload_kind: Some(JsReplToolCallPayloadKind::MessageContent),
+            payload_text_preview: payload_text.as_deref().and_then(|text| {
+                (!text.is_empty()).then(|| {
+                    truncate_text(
+                        text,
+                        TruncationPolicy::Bytes(JS_REPL_TOOL_RESPONSE_TEXT_PREVIEW_MAX_BYTES),
+                    )
+                })
+            }),
+            payload_text_length: payload_text.as_ref().map(String::len),
+            payload_item_count: Some(content.len()),
+            text_item_count: Some(text_item_count),
+            image_item_count: Some(image_item_count),
+            ..Default::default()
+        }
+    }
+
+    fn summarize_tool_call_response(response: &ResponseInputItem) -> JsReplToolCallResponseSummary {
+        match response {
+            ResponseInputItem::Message { content, .. } => Self::summarize_message_payload(content),
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let payload_kind = if output.content_items().is_some() {
+                    JsReplToolCallPayloadKind::FunctionContentItems
+                } else {
+                    JsReplToolCallPayloadKind::FunctionText
+                };
+                Self::summarize_function_output_payload(
+                    "function_call_output",
+                    payload_kind,
+                    output,
+                )
+            }
+            ResponseInputItem::CustomToolCallOutput { output, .. } => {
+                let payload_kind = if output.content_items().is_some() {
+                    JsReplToolCallPayloadKind::CustomContentItems
+                } else {
+                    JsReplToolCallPayloadKind::CustomText
+                };
+                Self::summarize_function_output_payload(
+                    "custom_tool_call_output",
+                    payload_kind,
+                    output,
+                )
+            }
+            ResponseInputItem::McpToolCallOutput { result, .. } => match result {
+                Ok(result) => {
+                    let output = FunctionCallOutputPayload::from(result);
+                    let mut summary = Self::summarize_function_output_payload(
+                        "mcp_tool_call_output",
+                        JsReplToolCallPayloadKind::McpResult,
+                        &output,
+                    );
+                    summary.payload_item_count = Some(result.content.len());
+                    summary.structured_content_present = Some(result.structured_content.is_some());
+                    summary.result_is_error = Some(result.is_error.unwrap_or(false));
+                    summary
+                }
+                Err(error) => {
+                    let mut summary = Self::summarize_text_payload(
+                        Some("mcp_tool_call_output"),
+                        JsReplToolCallPayloadKind::McpErrorResult,
+                        error,
+                    );
+                    summary.result_is_error = Some(true);
+                    summary
+                }
+            },
+        }
+    }
+
+    fn summarize_tool_call_error(error: &str) -> JsReplToolCallResponseSummary {
+        Self::summarize_text_payload(None, JsReplToolCallPayloadKind::Error, error)
     }
 
     pub async fn reset(&self) -> Result<(), FunctionCallError> {
@@ -546,7 +794,13 @@ impl JsReplManager {
         };
 
         match response {
-            ExecResultMessage::Ok { output } => Ok(JsExecResult { output }),
+            ExecResultMessage::Ok { content_items } => {
+                let (output, content_items) = split_exec_result_content_items(content_items);
+                Ok(JsExecResult {
+                    output,
+                    content_items,
+                })
+            }
             ExecResultMessage::Err { message } => Err(FunctionCallError::RespondToModel(message)),
         }
     }
@@ -613,6 +867,8 @@ impl JsReplManager {
                 enforce_managed_network: has_managed_network_requirements,
                 network: None,
                 sandbox_policy_cwd: &turn.cwd,
+                #[cfg(target_os = "macos")]
+                macos_seatbelt_profile_extensions: None,
                 codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_ref(),
                 use_linux_sandbox_bwrap: turn
                     .features
@@ -848,10 +1104,22 @@ impl JsReplManager {
                     error,
                 } => {
                     JsReplManager::wait_for_exec_tool_calls_map(&exec_tool_calls, &id).await;
+                    let content_items = {
+                        let calls = exec_tool_calls.lock().await;
+                        calls
+                            .get(&id)
+                            .map(|state| state.content_items.clone())
+                            .unwrap_or_default()
+                    };
                     let mut pending = pending_execs.lock().await;
                     if let Some(tx) = pending.remove(&id) {
                         let payload = if ok {
-                            ExecResultMessage::Ok { output }
+                            ExecResultMessage::Ok {
+                                content_items: build_exec_result_content_items(
+                                    output,
+                                    content_items,
+                                ),
+                            }
                         } else {
                             ExecResultMessage::Err {
                                 message: error
@@ -908,7 +1176,11 @@ impl JsReplManager {
                                         response: None,
                                         error: Some("js_repl execution reset".to_string()),
                                     },
-                                    result = JsReplManager::run_tool_request(ctx, req) => result,
+                                    result = JsReplManager::run_tool_request(
+                                        ctx,
+                                        req,
+                                        Arc::clone(&exec_tool_calls_for_task),
+                                    ) => result,
                                 }
                             }
                             None => RunToolResult {
@@ -1002,13 +1274,20 @@ impl JsReplManager {
         }
     }
 
-    async fn run_tool_request(exec: ExecContext, req: RunToolRequest) -> RunToolResult {
+    async fn run_tool_request(
+        exec: ExecContext,
+        req: RunToolRequest,
+        exec_tool_calls: Arc<Mutex<HashMap<String, ExecToolCalls>>>,
+    ) -> RunToolResult {
         if is_js_repl_internal_tool(&req.tool_name) {
+            let error = "js_repl cannot invoke itself".to_string();
+            let summary = Self::summarize_tool_call_error(&error);
+            Self::log_tool_call_response(&req, false, &summary, None, Some(&error));
             return RunToolResult {
                 id: req.id,
                 ok: false,
                 response: None,
-                error: Some("js_repl cannot invoke itself".to_string()),
+                error: Some(error),
             };
         }
 
@@ -1072,62 +1351,50 @@ impl JsReplManager {
             .await
         {
             Ok(response) => {
-                if let ResponseInputItem::FunctionCallOutput { output, .. } = &response
-                    && let Some(items) = output.content_items()
-                {
-                    let mut has_image = false;
-                    let mut content = Vec::with_capacity(items.len());
-                    for item in items {
-                        match item {
-                            FunctionCallOutputContentItem::InputText { text } => {
-                                content.push(ContentItem::InputText { text: text.clone() });
-                            }
-                            FunctionCallOutputContentItem::InputImage { image_url } => {
-                                has_image = true;
-                                content.push(ContentItem::InputImage {
-                                    image_url: image_url.clone(),
-                                });
-                            }
+                if let Some(items) = response_content_items(&response) {
+                    Self::record_exec_tool_call_content_items(
+                        &exec_tool_calls,
+                        &req.exec_id,
+                        items,
+                    )
+                    .await;
+                }
+
+                let summary = Self::summarize_tool_call_response(&response);
+                match serde_json::to_value(response) {
+                    Ok(value) => {
+                        Self::log_tool_call_response(&req, true, &summary, Some(&value), None);
+                        RunToolResult {
+                            id: req.id,
+                            ok: true,
+                            response: Some(value),
+                            error: None,
                         }
                     }
-
-                    if has_image
-                        && session
-                            .inject_response_items(vec![ResponseInputItem::Message {
-                                role: "user".to_string(),
-                                content,
-                            }])
-                            .await
-                            .is_err()
-                    {
-                        warn!(
-                            tool_name = %tool_name,
-                            "js_repl tool call returned image content but there was no active turn to attach it to"
-                        );
+                    Err(err) => {
+                        let error = format!("failed to serialize tool output: {err}");
+                        let summary = Self::summarize_tool_call_error(&error);
+                        Self::log_tool_call_response(&req, false, &summary, None, Some(&error));
+                        RunToolResult {
+                            id: req.id,
+                            ok: false,
+                            response: None,
+                            error: Some(error),
+                        }
                     }
                 }
-
-                match serde_json::to_value(response) {
-                    Ok(value) => RunToolResult {
-                        id: req.id,
-                        ok: true,
-                        response: Some(value),
-                        error: None,
-                    },
-                    Err(err) => RunToolResult {
-                        id: req.id,
-                        ok: false,
-                        response: None,
-                        error: Some(format!("failed to serialize tool output: {err}")),
-                    },
+            }
+            Err(err) => {
+                let error = err.to_string();
+                let summary = Self::summarize_tool_call_error(&error);
+                Self::log_tool_call_response(&req, false, &summary, None, Some(&error));
+                RunToolResult {
+                    id: req.id,
+                    ok: false,
+                    response: None,
+                    error: Some(error),
                 }
             }
-            Err(err) => RunToolResult {
-                id: req.id,
-                ok: false,
-                response: None,
-                error: Some(err.to_string()),
-            },
         }
     }
 
@@ -1161,6 +1428,50 @@ impl JsReplManager {
                 }
                 warn!("js_repl stderr: {bounded_line}");
             }
+        }
+    }
+}
+
+fn response_content_items(
+    response: &ResponseInputItem,
+) -> Option<Vec<FunctionCallOutputContentItem>> {
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. }
+        | ResponseInputItem::CustomToolCallOutput { output, .. } => output
+            .content_items()
+            .map(<[FunctionCallOutputContentItem]>::to_vec),
+        ResponseInputItem::McpToolCallOutput { result, .. } => match result {
+            Ok(result) => FunctionCallOutputPayload::from(result)
+                .content_items()
+                .map(<[FunctionCallOutputContentItem]>::to_vec),
+            Err(_) => None,
+        },
+        ResponseInputItem::Message { .. } => None,
+    }
+}
+
+fn build_exec_result_content_items(
+    output: String,
+    content_items: Vec<FunctionCallOutputContentItem>,
+) -> Vec<FunctionCallOutputContentItem> {
+    let mut all_content_items = Vec::with_capacity(content_items.len() + 1);
+    all_content_items.push(FunctionCallOutputContentItem::InputText { text: output });
+    all_content_items.extend(content_items);
+    all_content_items
+}
+
+fn split_exec_result_content_items(
+    mut content_items: Vec<FunctionCallOutputContentItem>,
+) -> (String, Vec<FunctionCallOutputContentItem>) {
+    match content_items.first() {
+        Some(FunctionCallOutputContentItem::InputText { .. }) => {
+            let FunctionCallOutputContentItem::InputText { text } = content_items.remove(0) else {
+                unreachable!("first content item should be input_text");
+            };
+            (text, content_items)
+        }
+        Some(FunctionCallOutputContentItem::InputImage { .. }) | None => {
+            (String::new(), content_items)
         }
     }
 }
@@ -1220,8 +1531,12 @@ struct RunToolResult {
 
 #[derive(Debug)]
 enum ExecResultMessage {
-    Ok { output: String },
-    Err { message: String },
+    Ok {
+        content_items: Vec<FunctionCallOutputContentItem>,
+    },
+    Err {
+        message: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1359,7 +1674,8 @@ mod tests {
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::dynamic_tools::DynamicToolSpec;
-    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputContentItem;
+    use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::openai_models::InputModality;
     use pretty_assertions::assert_eq;
@@ -1574,6 +1890,84 @@ mod tests {
         assert!(
             !manager.exec_tool_calls.lock().await.contains_key(&exec_id),
             "reset should clear tool-call contexts after lock acquisition"
+        );
+    }
+
+    #[test]
+    fn summarize_tool_call_response_for_multimodal_function_output() {
+        let response = ResponseInputItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,abcd".to_string(),
+                },
+            ]),
+        };
+
+        let actual = JsReplManager::summarize_tool_call_response(&response);
+
+        assert_eq!(
+            actual,
+            JsReplToolCallResponseSummary {
+                response_type: Some("function_call_output".to_string()),
+                payload_kind: Some(JsReplToolCallPayloadKind::FunctionContentItems),
+                payload_text_preview: None,
+                payload_text_length: None,
+                payload_item_count: Some(1),
+                text_item_count: Some(0),
+                image_item_count: Some(1),
+                structured_content_present: None,
+                result_is_error: None,
+            }
+        );
+    }
+
+    #[test]
+    fn summarize_tool_call_response_for_multimodal_custom_output() {
+        let response = ResponseInputItem::CustomToolCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,abcd".to_string(),
+                },
+            ]),
+        };
+
+        let actual = JsReplManager::summarize_tool_call_response(&response);
+
+        assert_eq!(
+            actual,
+            JsReplToolCallResponseSummary {
+                response_type: Some("custom_tool_call_output".to_string()),
+                payload_kind: Some(JsReplToolCallPayloadKind::CustomContentItems),
+                payload_text_preview: None,
+                payload_text_length: None,
+                payload_item_count: Some(1),
+                text_item_count: Some(0),
+                image_item_count: Some(1),
+                structured_content_present: None,
+                result_is_error: None,
+            }
+        );
+    }
+
+    #[test]
+    fn summarize_tool_call_error_marks_error_payload() {
+        let actual = JsReplManager::summarize_tool_call_error("tool failed");
+
+        assert_eq!(
+            actual,
+            JsReplToolCallResponseSummary {
+                response_type: None,
+                payload_kind: Some(JsReplToolCallPayloadKind::Error),
+                payload_text_preview: Some("tool failed".to_string()),
+                payload_text_length: Some("tool failed".len()),
+                payload_item_count: None,
+                text_item_count: None,
+                image_item_count: None,
+                structured_content_present: None,
+                result_is_error: None,
+            }
         );
     }
 
@@ -2017,20 +2411,22 @@ console.log(out.output?.body?.text ?? "");
             )
             .await?;
         assert!(result.output.contains("function_call_output"));
-
-        let pending_input = session.get_pending_input().await;
-        let [ResponseInputItem::Message { role, content }] = pending_input.as_slice() else {
-            panic!(
-                "view_image should inject exactly one pending input message, got {pending_input:?}"
-            );
-        };
-        assert_eq!(role, "user");
-        let [ContentItem::InputImage { image_url }] = content.as_slice() else {
-            panic!(
-                "view_image should inject exactly one input_image content item, got {content:?}"
-            );
+        assert_eq!(
+            result.content_items.as_slice(),
+            [FunctionCallOutputContentItem::InputImage {
+                image_url:
+                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+                        .to_string(),
+            }]
+            .as_slice()
+        );
+        let [FunctionCallOutputContentItem::InputImage { image_url }] =
+            result.content_items.as_slice()
+        else {
+            panic!("view_image should return exactly one input_image content item");
         };
         assert!(image_url.starts_with("data:image/png;base64,"));
+        assert!(session.get_pending_input().await.is_empty());
 
         Ok(())
     }
@@ -2111,22 +2507,18 @@ console.log(out.type);
         response_watcher_result?;
         let result = result?;
         assert!(result.output.contains("function_call_output"));
-
-        let pending_input = session.get_pending_input().await;
         assert_eq!(
-            pending_input,
-            vec![ResponseInputItem::Message {
-                role: "user".to_string(),
-                content: vec![
-                    ContentItem::InputText {
-                        text: "inline image note".to_string(),
-                    },
-                    ContentItem::InputImage {
-                        image_url: image_url.to_string(),
-                    },
-                ],
-            }]
+            result.content_items,
+            vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "inline image note".to_string(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: image_url.to_string(),
+                },
+            ]
         );
+        assert!(session.get_pending_input().await.is_empty());
 
         Ok(())
     }

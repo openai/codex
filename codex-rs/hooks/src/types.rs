@@ -65,6 +65,8 @@ impl Hook {
 pub struct HookPayload {
     pub session_id: ThreadId,
     pub cwd: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
     #[serde(serialize_with = "serialize_triggered_at")]
     pub triggered_at: DateTime<Utc>,
     pub hook_event: HookEvent,
@@ -181,6 +183,7 @@ mod tests {
         let payload = HookPayload {
             session_id,
             cwd: PathBuf::from("tmp"),
+            client: None,
             triggered_at: Utc
                 .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
                 .single()
@@ -218,6 +221,7 @@ mod tests {
         let payload = HookPayload {
             session_id,
             cwd: PathBuf::from("tmp"),
+            client: None,
             triggered_at: Utc
                 .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
                 .single()

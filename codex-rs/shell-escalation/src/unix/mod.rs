@@ -63,10 +63,15 @@ pub mod stopwatch;
 
 pub use self::escalate_client::run_shell_escalation_execve_wrapper;
 pub use self::escalate_protocol::EscalateAction;
+pub use self::escalate_protocol::EscalationDecision;
+pub use self::escalate_protocol::EscalationExecution;
 pub use self::escalate_server::EscalateServer;
 pub use self::escalate_server::ExecParams;
 pub use self::escalate_server::ExecResult;
+pub use self::escalate_server::PreparedExec;
 pub use self::escalate_server::ShellCommandExecutor;
 pub use self::escalation_policy::EscalationPolicy;
 pub use self::execve_wrapper::main_execve_wrapper;
 pub use self::stopwatch::Stopwatch;
+pub use codex_protocol::approvals::EscalationPermissions;
+pub use codex_protocol::approvals::Permissions;

@@ -115,6 +115,7 @@ mod seatbelt;
 mod shell_command;
 mod shell_serialization;
 mod shell_snapshot;
+mod skill_approval;
 mod skills;
 mod sqlite_state;
 mod stream_error_allows_next_turn;

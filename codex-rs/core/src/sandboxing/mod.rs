@@ -17,7 +17,7 @@ use crate::protocol::SandboxPolicy;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 #[cfg(target_os = "macos")]
-use crate::seatbelt::create_seatbelt_command_args;
+use crate::seatbelt::create_seatbelt_command_args_with_extensions;
 #[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
@@ -25,6 +25,8 @@ use crate::tools::sandboxing::SandboxablePreference;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;
+#[cfg(target_os = "macos")]
+use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::ReadOnlyAccess;
@@ -73,6 +75,8 @@ pub(crate) struct SandboxTransformRequest<'a> {
     // to make shared ownership explicit across runtime/sandbox plumbing.
     pub network: Option<&'a NetworkProxy>,
     pub sandbox_policy_cwd: &'a Path,
+    #[cfg(target_os = "macos")]
+    pub macos_seatbelt_profile_extensions: Option<&'a MacOsSeatbeltProfileExtensions>,
     pub codex_linux_sandbox_exe: Option<&'a PathBuf>,
     pub use_linux_sandbox_bwrap: bool,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -88,8 +92,6 @@ pub enum SandboxPreference {
 pub(crate) enum SandboxTransformError {
     #[error("missing codex-linux-sandbox executable path")]
     MissingLinuxSandboxExecutable,
-    #[error("invalid additional permissions path: {0}")]
-    InvalidAdditionalPermissionsPath(String),
     #[cfg(not(target_os = "macos"))]
     #[error("seatbelt sandbox is only available on macOS")]
     SeatbeltUnavailable,
@@ -97,19 +99,16 @@ pub(crate) enum SandboxTransformError {
 
 pub(crate) fn normalize_additional_permissions(
     additional_permissions: PermissionProfile,
-    command_cwd: &Path,
 ) -> Result<PermissionProfile, String> {
     let Some(file_system) = additional_permissions.file_system else {
         return Ok(PermissionProfile::default());
     };
     let read = file_system
         .read
-        .map(|paths| normalize_permission_paths(paths, command_cwd, "file_system.read"))
-        .transpose()?;
+        .map(|paths| normalize_permission_paths(paths, "file_system.read"));
     let write = file_system
         .write
-        .map(|paths| normalize_permission_paths(paths, command_cwd, "file_system.write"))
-        .transpose()?;
+        .map(|paths| normalize_permission_paths(paths, "file_system.write"));
     Ok(PermissionProfile {
         file_system: Some(FileSystemPermissions { read, write }),
         ..Default::default()
@@ -117,48 +116,25 @@ pub(crate) fn normalize_additional_permissions(
 }
 
 fn normalize_permission_paths(
-    paths: Vec<PathBuf>,
-    command_cwd: &Path,
-    permission_kind: &str,
-) -> Result<Vec<PathBuf>, String> {
+    paths: Vec<AbsolutePathBuf>,
+    _permission_kind: &str,
+) -> Vec<AbsolutePathBuf> {
     let mut out = Vec::with_capacity(paths.len());
     let mut seen = HashSet::new();
 
     for path in paths {
-        if path.as_os_str().is_empty() {
-            return Err(format!("{permission_kind} contains an empty path"));
-        }
-
-        let resolved = if path.is_absolute() {
-            AbsolutePathBuf::from_absolute_path(path.clone()).map_err(|err| {
-                format!(
-                    "{permission_kind} path `{}` is invalid: {err}",
-                    path.display()
-                )
-            })?
-        } else {
-            AbsolutePathBuf::resolve_path_against_base(&path, command_cwd).map_err(|err| {
-                format!(
-                    "{permission_kind} path `{}` cannot be resolved against cwd `{}`: {err}",
-                    path.display(),
-                    command_cwd.display()
-                )
-            })?
-        };
-
-        let canonicalized = resolved
+        let canonicalized = path
             .as_path()
             .canonicalize()
             .ok()
             .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
-            .unwrap_or(resolved);
-        let canonicalized = canonicalized.to_path_buf();
+            .unwrap_or(path);
         if seen.insert(canonicalized.clone()) {
             out.push(canonicalized);
         }
     }
 
-    Ok(out)
+    out
 }
 
 fn dedup_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
@@ -174,37 +150,23 @@ fn dedup_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
 
 fn additional_permission_roots(
     additional_permissions: &PermissionProfile,
-) -> Result<(Vec<AbsolutePathBuf>, Vec<AbsolutePathBuf>), SandboxTransformError> {
-    let to_abs = |paths: &[PathBuf]| {
-        let mut out = Vec::with_capacity(paths.len());
-        for path in paths {
-            let absolute = AbsolutePathBuf::from_absolute_path(path.clone()).map_err(|err| {
-                SandboxTransformError::InvalidAdditionalPermissionsPath(format!(
-                    "`{}`: {err}",
-                    path.display()
-                ))
-            })?;
-            out.push(absolute);
-        }
-        Ok(dedup_absolute_paths(out))
-    };
-
-    Ok((
-        to_abs(
+) -> (Vec<AbsolutePathBuf>, Vec<AbsolutePathBuf>) {
+    (
+        dedup_absolute_paths(
             additional_permissions
                 .file_system
                 .as_ref()
-                .and_then(|file_system| file_system.read.as_deref())
+                .and_then(|file_system| file_system.read.clone())
                 .unwrap_or_default(),
-        )?,
-        to_abs(
+        ),
+        dedup_absolute_paths(
             additional_permissions
                 .file_system
                 .as_ref()
-                .and_then(|file_system| file_system.write.as_deref())
+                .and_then(|file_system| file_system.write.clone())
                 .unwrap_or_default(),
-        )?,
-    ))
+        ),
+    )
 }
 
 fn merge_read_only_access_with_additional_reads(
@@ -235,7 +197,7 @@ fn sandbox_policy_with_additional_permissions(
         return Ok(sandbox_policy.clone());
     }
 
-    let (extra_reads, extra_writes) = additional_permission_roots(additional_permissions)?;
+    let (extra_reads, extra_writes) = additional_permission_roots(additional_permissions);
 
     let policy = match sandbox_policy {
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
@@ -342,6 +304,8 @@ impl SandboxManager {
             enforce_managed_network,
             network,
             sandbox_policy_cwd,
+            #[cfg(target_os = "macos")]
+            macos_seatbelt_profile_extensions,
             codex_linux_sandbox_exe,
             use_linux_sandbox_bwrap,
             windows_sandbox_level,
@@ -370,12 +334,13 @@ impl SandboxManager {
             SandboxType::MacosSeatbelt => {
                 let mut seatbelt_env = HashMap::new();
                 seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
-                let mut args = create_seatbelt_command_args(
+                let mut args = create_seatbelt_command_args_with_extensions(
                     command.clone(),
                     &effective_policy,
                     sandbox_policy_cwd,
                     enforce_managed_network,
                     network,
+                    macos_seatbelt_profile_extensions,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());

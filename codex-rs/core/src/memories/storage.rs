@@ -143,6 +143,9 @@ async fn write_rollout_summary_for_thread(
     writeln!(body, "rollout_path: {}", memory.rollout_path.display())
         .map_err(rollout_summary_format_error)?;
     writeln!(body, "cwd: {}", memory.cwd.display()).map_err(rollout_summary_format_error)?;
+    if let Some(git_branch) = memory.git_branch.as_deref() {
+        writeln!(body, "git_branch: {git_branch}").map_err(rollout_summary_format_error)?;
+    }
     writeln!(body).map_err(rollout_summary_format_error)?;
     body.push_str(&memory.rollout_summary);
     body.push('\n');
@@ -273,6 +276,7 @@ mod tests {
             rollout_slug: rollout_slug.map(ToString::to_string),
             rollout_path: PathBuf::from("/tmp/rollout.jsonl"),
             cwd: PathBuf::from("/tmp/workspace"),
+            git_branch: None,
             generated_at: Utc.timestamp_opt(124, 0).single().expect("timestamp"),
         }
     }

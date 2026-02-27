@@ -252,6 +252,8 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 cwd: PathBuf::from("/parent/workspace"),
+                current_date: None,
+                timezone: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::DangerFullAccess,
                 network: None,
@@ -286,6 +288,8 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 cwd: PathBuf::from("/fallback/workspace"),
+                current_date: None,
+                timezone: None,
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 network: None,

@@ -83,6 +83,7 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
     let rollout_summaries = read_rollout_summary_bodies(&memory_root).await?;
     assert_eq!(rollout_summaries.len(), 1);
     assert!(rollout_summaries[0].contains("rollout summary A"));
+    assert!(rollout_summaries[0].contains("git_branch: branch-rollout-a"));
 
     shutdown_test_codex(&first).await?;
 
@@ -144,6 +145,11 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
     assert!(
         rollout_summaries
             .iter()
+            .any(|summary| summary.contains("git_branch: branch-rollout-b"))
+    );
+    assert!(
+        rollout_summaries
+            .iter()
             .any(|summary| summary.contains("rollout summary A"))
     );
 
@@ -185,6 +191,7 @@ async fn seed_stage1_output(
     );
     metadata_builder.cwd = codex_home.join(format!("workspace-{rollout_slug}"));
     metadata_builder.model_provider = Some("test-provider".to_string());
+    metadata_builder.git_branch = Some(format!("branch-{rollout_slug}"));
     let metadata = metadata_builder.build("test-provider");
     db.upsert_thread(&metadata).await?;
 
