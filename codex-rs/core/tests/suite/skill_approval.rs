@@ -291,6 +291,12 @@ permissions:
     .await?;
 
     let (script_path_str, command) = skill_script_command(&test, "hello-mbolin.sh")?;
+    let skill_dir = PathBuf::from(&script_path_str)
+        .parent()
+        .expect("skill script parent")
+        .parent()
+        .expect("skill root")
+        .to_path_buf();
     let arguments = shell_command_arguments(&command)?;
     let mocks =
         mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
@@ -331,8 +337,8 @@ permissions:
         approval.additional_permissions,
         Some(PermissionProfile {
             file_system: Some(FileSystemPermissions {
-                read: Some(vec![PathBuf::from("./data")]),
-                write: Some(vec![PathBuf::from("./output")]),
+                read: Some(vec![skill_dir.join("data")]),
+                write: Some(vec![skill_dir.join("output")]),
             }),
             ..Default::default()
         })

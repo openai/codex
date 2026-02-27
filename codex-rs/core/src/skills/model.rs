@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::config::Permissions;
-use codex_protocol::models::PermissionProfile;
+use crate::skills::permissions::SkillPermissionProfile;
 use codex_protocol::protocol::SkillScope;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -15,7 +15,7 @@ pub struct SkillMetadata {
     pub interface: Option<SkillInterface>,
     pub dependencies: Option<SkillDependencies>,
     pub policy: Option<SkillPolicy>,
-    pub permission_profile: Option<PermissionProfile>,
+    pub permission_profile: Option<SkillPermissionProfile>,
     // This is an experimental field.
     pub permissions: Option<Permissions>,
     /// Path to the SKILLS.md file that declares this skill.

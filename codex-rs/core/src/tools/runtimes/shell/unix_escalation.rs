@@ -241,7 +241,8 @@ impl CoreShellActionProvider {
             .or_else(|| {
                 skill
                     .permission_profile
-                    .clone()
+                    .as_ref()
+                    .map(PermissionProfile::from)
                     .map(EscalationPermissions::PermissionProfile)
                     .map(EscalationExecution::Permissions)
             })
@@ -486,7 +487,10 @@ impl EscalationPolicy for CoreShellActionProvider {
                     program,
                     argv,
                     workdir,
-                    skill.permission_profile.clone(),
+                    skill
+                        .permission_profile
+                        .as_ref()
+                        .map(PermissionProfile::from),
                     Self::skill_escalation_execution(&skill),
                     decision_source,
                 )
