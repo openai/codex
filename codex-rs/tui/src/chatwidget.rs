@@ -80,6 +80,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::MessagePhase;
@@ -2301,6 +2302,8 @@ impl ChatWidget {
         if self.stream_controller.is_some() {
             self.flush_answer_stream_with_separator();
             self.handle_stream_finished();
+        } else if let [AgentMessageContent::Text { text }] = item.content.as_slice() {
+            self.on_agent_message(text.clone());
         }
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
@@ -4327,9 +4330,7 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
-            EventMsg::AgentMessage(AgentMessageEvent { message, .. })
-                if from_replay || self.stream_controller.is_none() =>
-            {
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) if from_replay => {
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}

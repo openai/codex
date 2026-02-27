@@ -3636,6 +3636,31 @@ async fn raw_response_item_does_not_duplicate_locally_rendered_user_message() {
 }
 
 #[tokio::test]
+async fn live_legacy_agent_message_after_item_completed_does_not_duplicate_assistant_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    complete_assistant_message(
+        &mut chat,
+        "msg-live",
+        "hello",
+        Some(MessagePhase::FinalAnswer),
+    );
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("hello"));
+
+    chat.handle_codex_event(Event {
+        id: "legacy-live".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "hello".into(),
+            phase: Some(MessagePhase::FinalAnswer),
+        }),
+    });
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
 async fn raw_response_item_only_pops_front_pending_nudge() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.pending_nudges
@@ -4201,13 +4226,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
     begin_unified_exec_startup(&mut chat, "call-wait", "proc-1", "cargo test -p codex-core");
     terminal_interaction(&mut chat, "call-wait-stdin", "proc-1", "");
 
-    chat.handle_codex_event(Event {
-        id: "turn-1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Final response.".into(),
-            phase: None,
-        }),
-    });
+    complete_assistant_message(&mut chat, "msg-1", "Final response.", None);
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
@@ -5005,7 +5024,7 @@ async fn slash_copy_state_clears_on_thread_rollback() {
 async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_turn_complete() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.handle_codex_event(Event {
+    chat.handle_codex_event_replay(Event {
         id: "turn-1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Legacy final message".into(),
@@ -8449,22 +8468,10 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     });
 
     // First finalized assistant message
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "First message".into(),
-            phase: None,
-        }),
-    });
+    complete_assistant_message(&mut chat, "msg-first", "First message", None);
 
     // Second finalized assistant message in the same turn
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Second message".into(),
-            phase: None,
-        }),
-    });
+    complete_assistant_message(&mut chat, "msg-second", "Second message", None);
 
     // End turn
     chat.handle_codex_event(Event {
@@ -8504,13 +8511,7 @@ async fn final_reasoning_then_message_without_deltas_are_rendered() {
             text: "I will first analyze the request.".into(),
         }),
     });
-    chat.handle_codex_event(Event {
-        id: "s1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Here is the result.".into(),
-            phase: None,
-        }),
-    });
+    complete_assistant_message(&mut chat, "msg-result", "Here is the result.", None);
 
     // Drain history and snapshot the combined visible content.
     let cells = drain_insert_history(&mut rx);
@@ -8527,15 +8528,12 @@ async fn final_reasoning_then_message_without_deltas_are_rendered() {
 #[tokio::test]
 async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message:
-                "I’m going to search the repo for where “Change Approved” is rendered to update that view."
-                    .into(),
-            phase: None,
-        }),
-    });
+    complete_assistant_message(
+        &mut chat,
+        "msg-search",
+        "I’m going to search the repo for where “Change Approved” is rendered to update that view.",
+        None,
+    );
 
     let command = vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()];
     let parsed_cmd = vec![
