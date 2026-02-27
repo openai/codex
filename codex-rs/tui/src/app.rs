@@ -1418,9 +1418,6 @@ impl App {
         if let Some(updated_model) = config.model.clone() {
             model = updated_model;
         }
-        let startup_tooltip_override =
-            prepare_startup_tooltip_override(&mut config, &available_models, is_first_run).await;
-
         let auth = auth_manager.auth().await;
         let auth_ref = auth.as_ref();
         // Determine who should see internal Slack routing. We treat
@@ -1464,6 +1461,9 @@ impl App {
             Self::should_wait_for_initial_session(&session_selection);
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
+                let startup_tooltip_override =
+                    prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
+                        .await;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -1516,7 +1516,7 @@ impl App {
                     is_first_run,
                     feedback_audience,
                     model: config.model.clone(),
-                    startup_tooltip_override: startup_tooltip_override.clone(),
+                    startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
@@ -1553,7 +1553,7 @@ impl App {
                     is_first_run,
                     feedback_audience,
                     model: config.model.clone(),
-                    startup_tooltip_override: startup_tooltip_override.clone(),
+                    startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
