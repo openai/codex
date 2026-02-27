@@ -304,3 +304,110 @@ impl Visit for MessageVisitor {
         self.record_field(field, format!("{value:?}"));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use pretty_assertions::assert_eq;
+    use tracing_subscriber::filter::Targets;
+    use tracing_subscriber::fmt::writer::MakeWriter;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct SharedWriter {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl SharedWriter {
+        fn snapshot(&self) -> String {
+            String::from_utf8(self.bytes.lock().expect("writer mutex poisoned").clone())
+                .expect("valid utf-8")
+        }
+    }
+
+    struct SharedWriterGuard {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl<'a> MakeWriter<'a> for SharedWriter {
+        type Writer = SharedWriterGuard;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedWriterGuard {
+                bytes: Arc::clone(&self.bytes),
+            }
+        }
+    }
+
+    impl io::Write for SharedWriterGuard {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes
+                .lock()
+                .expect("writer mutex poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_feedback_logs_match_feedback_formatter_shape() {
+        let codex_home =
+            std::env::temp_dir().join(format!("codex-state-log-db-{}", Uuid::new_v4()));
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+        let writer = SharedWriter::default();
+
+        let subscriber = tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(writer.clone())
+                    .without_time()
+                    .with_ansi(false)
+                    .with_target(false)
+                    .with_filter(Targets::new().with_default(tracing::Level::TRACE)),
+            )
+            .with(
+                start(runtime.clone())
+                    .with_filter(Targets::new().with_default(tracing::Level::TRACE)),
+            );
+        let guard = subscriber.set_default();
+
+        tracing::trace!("threadless-before");
+        tracing::info_span!("feedback-thread", thread_id = "thread-1").in_scope(|| {
+            tracing::info!("thread-scoped");
+        });
+        tracing::debug!("threadless-after");
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        drop(guard);
+
+        let sqlite_logs = String::from_utf8(
+            runtime
+                .query_feedback_logs("thread-1")
+                .await
+                .expect("query feedback logs"),
+        )
+        .expect("valid utf-8");
+        // TODO(ccunningham): Store enough span metadata in SQLite to reproduce span
+        // prefixes like `feedback-thread{thread_id="thread-1"}:` in feedback exports.
+        let feedback_logs = writer
+            .snapshot()
+            .replace("feedback-thread{thread_id=\"thread-1\"}: ", "");
+
+        assert_eq!(sqlite_logs, feedback_logs);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+}
