@@ -160,7 +160,7 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn web_search_pollution_removes_selected_thread_from_phase2_inputs() -> Result<()> {
+async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs() -> Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let db = init_state_db(&home).await?;
@@ -172,6 +172,16 @@ async fn web_search_pollution_removes_selected_thread_from_phase2_inputs() -> Re
         config.memories.no_memories_if_mcp_or_web_search = true;
     });
     let initial = initial_builder.build(&server).await?;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-initial-1"),
+            ev_assistant_message("msg-initial-1", "initial turn complete"),
+            ev_completed("resp-initial-1"),
+        ]),
+    )
+    .await;
+    initial.submit_turn("hello before memories").await?;
     let rollout_path = initial
         .session_configured
         .rollout_path
@@ -217,11 +227,6 @@ async fn web_search_pollution_removes_selected_thread_from_phase2_inputs() -> Re
                 ev_web_search_call_done("ws-1", "completed", "weather seattle"),
                 ev_completed("resp-web-1"),
             ]),
-            sse(vec![
-                ev_response_created("resp-phase2-2"),
-                ev_assistant_message("msg-phase2-2", "phase2 after pollution complete"),
-                ev_completed("resp-phase2-2"),
-            ]),
         ],
     )
     .await;
@@ -233,7 +238,7 @@ async fn web_search_pollution_removes_selected_thread_from_phase2_inputs() -> Re
         config.memories.no_memories_if_mcp_or_web_search = true;
     });
     let resumed = resumed_builder
-        .resume(&server, home.clone(), rollout_path)
+        .resume(&server, home.clone(), rollout_path.clone())
         .await?;
 
     let first_phase2_request = wait_for_request(&responses, 1).await.remove(0);
@@ -275,24 +280,30 @@ async fn web_search_pollution_removes_selected_thread_from_phase2_inputs() -> Re
         Some("polluted")
     );
 
-    let requests = wait_for_request(&responses, 3).await;
-    let second_phase2_prompt = phase2_prompt_text(&requests[2]);
-    assert!(
-        second_phase2_prompt.contains("- selected inputs this run: 0"),
-        "expected polluted thread to be excluded from selected inputs: {second_phase2_prompt}"
-    );
-    assert!(
-        second_phase2_prompt.contains("- newly added since the last successful Phase 2 run: 0"),
-        "expected no added inputs after pollution: {second_phase2_prompt}"
-    );
-    assert!(
-        second_phase2_prompt.contains("- removed from the last successful Phase 2 run: 1"),
-        "expected polluted thread to show up as removed: {second_phase2_prompt}"
-    );
-    assert!(
-        second_phase2_prompt.contains(&format!("- thread_id={thread_id},")),
-        "expected polluted thread in removed section: {second_phase2_prompt}"
-    );
+    let selection = {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let selection = db.get_phase2_input_selection(1, 30).await?;
+            if selection.selected.is_empty()
+                && selection.retained_thread_ids.is_empty()
+                && selection.removed.len() == 1
+                && selection.removed[0].thread_id == thread_id
+            {
+                break selection;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for polluted thread to move into removed phase2 inputs: \
+                 {selection:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    assert_eq!(responses.requests().len(), 2);
+    assert!(selection.selected.is_empty());
+    assert_eq!(selection.retained_thread_ids, Vec::<ThreadId>::new());
+    assert_eq!(selection.removed.len(), 1);
+    assert_eq!(selection.removed[0].thread_id, thread_id);
 
     shutdown_test_codex(&resumed).await?;
     Ok(())
