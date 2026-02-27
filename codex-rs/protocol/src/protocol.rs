@@ -2125,8 +2125,8 @@ pub struct TurnContextNetworkItem {
 }
 
 /// Persist for the first real user turn in a thread and for later turns that
-/// persist corresponding model-visible context updates, so resume/fork can
-/// recover `previous_model` without treating post-compaction reinjection as a
+/// emit model-visible context updates, so resume/fork can recover
+/// `previous_model` without treating every in-memory baseline advance as a
 /// durable `reference_context_item` baseline.
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct TurnContextItem {
