@@ -44,14 +44,32 @@ fn text_user_input_parts(texts: Vec<String>) -> serde_json::Value {
     })
 }
 
-fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
+fn assert_default_env_context(text: &str, cwd: &str, shell: &Shell) {
     let shell_name = shell.name();
-    format!(
-        r#"<environment_context>
-  <cwd>{cwd}</cwd>
-  <shell>{shell_name}</shell>
-</environment_context>"#
-    )
+    assert!(
+        text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG),
+        "expected environment context fragment: {text}"
+    );
+    assert!(
+        text.contains(&format!("<cwd>{cwd}</cwd>")),
+        "expected cwd in environment context: {text}"
+    );
+    assert!(
+        text.contains(&format!("<shell>{shell_name}</shell>")),
+        "expected shell in environment context: {text}"
+    );
+    assert!(
+        text.contains("<current_date>") && text.contains("</current_date>"),
+        "expected current_date in environment context: {text}"
+    );
+    assert!(
+        text.contains("<timezone>") && text.contains("</timezone>"),
+        "expected timezone in environment context: {text}"
+    );
+    assert!(
+        text.ends_with("</environment_context>"),
+        "expected closing environment_context tag: {text}"
+    );
 }
 
 fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
@@ -318,10 +336,13 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     let shell = default_user_shell();
     let cwd_str = config.cwd.to_string_lossy();
-    let expected_env_text = default_env_context_str(&cwd_str, &shell);
+    let env_text = input1[1]["content"][1]["text"]
+        .as_str()
+        .expect("environment context text");
+    assert_default_env_context(env_text, &cwd_str, &shell);
     assert_eq!(
-        input1[1]["content"][1]["text"].as_str(),
-        Some(expected_env_text.as_str()),
+        input1[1]["content"][1]["type"].as_str(),
+        Some("input_text"),
         "expected environment context bundled after UI message in cached contextual message"
     );
     assert_eq!(input1[2], text_user_input("hello 1".to_string()));
@@ -523,6 +544,18 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         !env_texts.is_empty(),
         "expected environment context to be emitted: {env_texts:?}"
     );
+    assert!(
+        env_texts
+            .iter()
+            .any(|text| text.contains("<current_date>") && text.contains("</current_date>")),
+        "expected current_date in environment context: {env_texts:?}"
+    );
+    assert!(
+        env_texts
+            .iter()
+            .any(|text| text.contains("<timezone>") && text.contains("</timezone>")),
+        "expected timezone in environment context: {env_texts:?}"
+    );
 
     let env_count = input
         .iter()
@@ -672,21 +705,6 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         "role": "user",
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });
-    let shell = default_user_shell();
-
-    let expected_env_text_2 = format!(
-        r#"<environment_context>
-  <cwd>{}</cwd>
-  <shell>{}</shell>
-</environment_context>"#,
-        new_cwd.path().display(),
-        shell.name()
-    );
-    let expected_env_msg_2 = serde_json::json!({
-        "type": "message",
-        "role": "user",
-        "content": [ { "type": "input_text", "text": expected_env_text_2 } ]
-    });
     let expected_permissions_msg = body1["input"][0].clone();
     let body1_input = body1["input"].as_array().expect("input array");
     let expected_settings_update_msg = body2["input"][body1_input.len()].clone();
@@ -704,6 +722,14 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         }),
         "expected model switch section after model override: {expected_settings_update_msg:?}"
     );
+    let expected_env_msg_2 = body2["input"][body1_input.len() + 1].clone();
+    assert_eq!(expected_env_msg_2["role"].as_str(), Some("user"));
+    let env_text = expected_env_msg_2["content"][0]["text"]
+        .as_str()
+        .expect("environment context text");
+    let shell = default_user_shell();
+    let expected_cwd = new_cwd.path().display().to_string();
+    assert_default_env_context(env_text, &expected_cwd, &shell);
     let mut expected_body2 = body1_input.to_vec();
     expected_body2.push(expected_settings_update_msg);
     expected_body2.push(expected_env_msg_2);
@@ -798,13 +824,18 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
 
     let shell = default_user_shell();
     let default_cwd_lossy = default_cwd.to_string_lossy();
+    let expected_env_text_1 = expected_ui_msg["content"][1]["text"]
+        .as_str()
+        .expect("cached environment context text")
+        .to_string();
+    assert_default_env_context(&expected_env_text_1, &default_cwd_lossy, &shell);
 
     let expected_contextual_user_msg_1 = text_user_input_parts(vec![
         expected_ui_msg["content"][0]["text"]
             .as_str()
             .expect("cached user instructions text")
             .to_string(),
-        default_env_context_str(&default_cwd_lossy, &shell),
+        expected_env_text_1,
     ]);
     let expected_user_message_1 = text_user_input("hello 1".to_string());
 
@@ -911,7 +942,11 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let expected_ui_msg = body1["input"][1].clone();
 
     let shell = default_user_shell();
-    let expected_env_text_1 = default_env_context_str(&default_cwd.to_string_lossy(), &shell);
+    let expected_env_text_1 = expected_ui_msg["content"][1]["text"]
+        .as_str()
+        .expect("cached environment context text")
+        .to_string();
+    assert_default_env_context(&expected_env_text_1, &default_cwd.to_string_lossy(), &shell);
     let expected_contextual_user_msg_1 = text_user_input_parts(vec![
         expected_ui_msg["content"][0]["text"]
             .as_str()

@@ -344,32 +344,21 @@ impl ContextManager {
         let policy_with_serialization_budget = policy * 1.2;
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let body = match &output.body {
-                    FunctionCallOutputBody::Text(content) => FunctionCallOutputBody::Text(
-                        truncate_text(content, policy_with_serialization_budget),
-                    ),
-                    FunctionCallOutputBody::ContentItems(items) => {
-                        FunctionCallOutputBody::ContentItems(
-                            truncate_function_output_items_with_policy(
-                                items,
-                                policy_with_serialization_budget,
-                            ),
-                        )
-                    }
-                };
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
-                    output: FunctionCallOutputPayload {
-                        body,
-                        success: output.success,
-                    },
+                    output: truncate_function_output_payload(
+                        output,
+                        policy_with_serialization_budget,
+                    ),
                 }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let truncated = truncate_text(output, policy_with_serialization_budget);
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
-                    output: truncated,
+                    output: truncate_function_output_payload(
+                        output,
+                        policy_with_serialization_budget,
+                    ),
                 }
             }
             ResponseItem::Message { .. }
@@ -382,6 +371,25 @@ impl ContextManager {
             | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Other => item.clone(),
         }
+    }
+}
+
+fn truncate_function_output_payload(
+    output: &FunctionCallOutputPayload,
+    policy: TruncationPolicy,
+) -> FunctionCallOutputPayload {
+    let body = match &output.body {
+        FunctionCallOutputBody::Text(content) => {
+            FunctionCallOutputBody::Text(truncate_text(content, policy))
+        }
+        FunctionCallOutputBody::ContentItems(items) => FunctionCallOutputBody::ContentItems(
+            truncate_function_output_items_with_policy(items, policy),
+        ),
+    };
+
+    FunctionCallOutputPayload {
+        body,
+        success: output.success,
     }
 }
 
@@ -508,7 +516,8 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
                 }
             }
         }
-        ResponseItem::FunctionCallOutput { output, .. } => {
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => {
             if let FunctionCallOutputBody::ContentItems(items) = &output.body {
                 for content_item in items {
                     if let FunctionCallOutputContentItem::InputImage { image_url } = content_item {

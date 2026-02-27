@@ -1386,6 +1386,8 @@ mod tests {
             item: RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 cwd: latest_cwd.clone(),
+                current_date: None,
+                timezone: None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 network: None,

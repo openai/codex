@@ -67,7 +67,7 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
 fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
     ResponseItem::CustomToolCallOutput {
         call_id: call_id.to_string(),
-        output: output.to_string(),
+        output: FunctionCallOutputPayload::from_text(output.to_string()),
     }
 }
 
@@ -279,6 +279,24 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                 },
             ]),
         },
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "tool-1".to_string(),
+            name: "js_repl".to_string(),
+            input: "view_image".to_string(),
+        },
+        ResponseItem::CustomToolCallOutput {
+            call_id: "tool-1".to_string(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "js repl result".to_string(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "https://example.com/js-repl-result.png".to_string(),
+                },
+            ]),
+        },
     ];
     let history = create_history_with_items(items);
     let text_only_modalities = vec![InputModality::Text];
@@ -314,6 +332,25 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputText {
                     text: "image result".to_string(),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: "image content omitted because you do not support image input"
+                        .to_string(),
+                },
+            ]),
+        },
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "tool-1".to_string(),
+            name: "js_repl".to_string(),
+            input: "view_image".to_string(),
+        },
+        ResponseItem::CustomToolCallOutput {
+            call_id: "tool-1".to_string(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "js repl result".to_string(),
                 },
                 FunctionCallOutputContentItem::InputText {
                     text: "image content omitted because you do not support image input"
@@ -671,7 +708,7 @@ fn remove_first_item_handles_custom_tool_pair() {
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "tool-1".to_string(),
-            output: "ok".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
         },
     ];
     let mut h = create_history_with_items(items);
@@ -750,7 +787,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
     let long_output = line.repeat(2_500);
     let item = ResponseItem::CustomToolCallOutput {
         call_id: "tool-200".to_string(),
-        output: long_output.clone(),
+        output: FunctionCallOutputPayload::from_text(long_output.clone()),
     };
 
     history.record_items([&item], policy);
@@ -758,7 +795,8 @@ fn record_items_truncates_custom_tool_call_output_content() {
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
         ResponseItem::CustomToolCallOutput { output, .. } => {
-            assert_ne!(output, &long_output);
+            let output = output.text_content().unwrap_or_default();
+            assert_ne!(output, long_output);
             assert!(
                 output.contains("tokens truncated"),
                 "expected token-based truncation marker, got {output}"
@@ -949,7 +987,7 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "tool-x".to_string(),
-                output: "aborted".to_string(),
+                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
             },
         ]
     );
@@ -1016,7 +1054,7 @@ fn normalize_removes_orphan_function_call_output() {
 fn normalize_removes_orphan_custom_tool_call_output() {
     let items = vec![ResponseItem::CustomToolCallOutput {
         call_id: "orphan-2".to_string(),
-        output: "ok".to_string(),
+        output: FunctionCallOutputPayload::from_text("ok".to_string()),
     }];
     let mut h = create_history_with_items(items);
 
@@ -1089,7 +1127,7 @@ fn normalize_mixed_inserts_and_removals() {
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "t1".to_string(),
-                output: "aborted".to_string(),
+                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
             },
             ResponseItem::LocalShellCall {
                 id: None,
@@ -1191,7 +1229,7 @@ fn normalize_removes_orphan_function_call_output_panics_in_debug() {
 fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
     let items = vec![ResponseItem::CustomToolCallOutput {
         call_id: "orphan-2".to_string(),
-        output: "ok".to_string(),
+        output: FunctionCallOutputPayload::from_text("ok".to_string()),
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1278,6 +1316,28 @@ fn image_data_url_payload_does_not_dominate_function_call_output_estimate() {
     let image_url = format!("data:image/png;base64,{payload}");
     let item = ResponseItem::FunctionCallOutput {
         call_id: "call-abc".to_string(),
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "Screenshot captured".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage { image_url },
+        ]),
+    };
+
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+    let expected = raw_len - payload.len() as i64 + IMAGE_BYTES_ESTIMATE;
+
+    assert_eq!(estimated, expected);
+    assert!(estimated < raw_len);
+}
+
+#[test]
+fn image_data_url_payload_does_not_dominate_custom_tool_call_output_estimate() {
+    let payload = "C".repeat(50_000);
+    let image_url = format!("data:image/png;base64,{payload}");
+    let item = ResponseItem::CustomToolCallOutput {
+        call_id: "call-js-repl".to_string(),
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputText {
                 text: "Screenshot captured".to_string(),
