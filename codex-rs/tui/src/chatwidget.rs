@@ -5316,14 +5316,9 @@ impl ChatWidget {
         })
         .collect();
 
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Realtime audio".bold()));
-        header.push(Line::from(
-            "Choose microphone and speaker for realtime voice.".dim(),
-        ));
-
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            header: Box::new(header),
+            title: Some("Settings".to_string()),
+            subtitle: Some("Configure settings for Codex.".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()

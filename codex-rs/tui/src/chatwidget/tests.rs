@@ -6014,6 +6014,16 @@ async fn realtime_audio_selection_popup_snapshot() {
 
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 #[tokio::test]
+async fn realtime_audio_selection_popup_narrow_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.open_realtime_audio_popup();
+
+    let popup = render_bottom_popup(&chat, 56);
+    assert_snapshot!("realtime_audio_selection_popup_narrow", popup);
+}
+
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[tokio::test]
 async fn realtime_microphone_picker_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
     chat.config.realtime_audio.microphone = Some("Studio Mic".to_string());
