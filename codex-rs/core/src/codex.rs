@@ -3078,6 +3078,7 @@ impl Session {
         if let Some(memory_prompt) =
             build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
             && turn_context.features.enabled(Feature::MemoryTool)
+            && turn_context.config.memories.use_memories
         {
             developer_sections.push(memory_prompt);
         }

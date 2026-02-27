@@ -371,6 +371,8 @@ pub struct FeedbackConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct MemoriesToml {
+    /// When `false`, skip injecting memory usage instructions into developer prompts.
+    pub use_memories: Option<bool>,
     /// Maximum number of recent raw memories retained for global consolidation.
     pub max_raw_memories_for_global: Option<usize>,
     /// Maximum number of days since a memory was last used before it becomes ineligible for phase 2 selection.
@@ -390,6 +392,7 @@ pub struct MemoriesToml {
 /// Effective memories settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoriesConfig {
+    pub use_memories: bool,
     pub max_raw_memories_for_global: usize,
     pub max_unused_days: i64,
     pub max_rollout_age_days: i64,
@@ -402,6 +405,7 @@ pub struct MemoriesConfig {
 impl Default for MemoriesConfig {
     fn default() -> Self {
         Self {
+            use_memories: true,
             max_raw_memories_for_global: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
             max_unused_days: DEFAULT_MEMORIES_MAX_UNUSED_DAYS,
             max_rollout_age_days: DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS,
@@ -417,6 +421,7 @@ impl From<MemoriesToml> for MemoriesConfig {
     fn from(toml: MemoriesToml) -> Self {
         let defaults = Self::default();
         Self {
+            use_memories: toml.use_memories.unwrap_or(defaults.use_memories),
             max_raw_memories_for_global: toml
                 .max_raw_memories_for_global
                 .unwrap_or(defaults.max_raw_memories_for_global)

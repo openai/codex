@@ -647,6 +647,10 @@
         "phase_2_model": {
           "description": "Model used for memory consolidation.",
           "type": "string"
+        },
+        "use_memories": {
+          "description": "When `false`, skip injecting memory usage instructions into developer prompts.",
+          "type": "boolean"
         }
       },
       "type": "object"
