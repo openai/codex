@@ -4,6 +4,10 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingError;
 use crate::outgoing_message::OutgoingMessage;
+use ::tracing::debug;
+use ::tracing::error;
+use ::tracing::info;
+use ::tracing::warn;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerRequest;
@@ -35,10 +39,6 @@ use tokio_tungstenite::accept_async_with_config;
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
-use tracing::error;
-use tracing::info;
-use tracing::warn;
 
 /// Size of the bounded channels used to communicate between tasks. The value
 /// is a balance between throughput and memory usage - 128 messages should be
@@ -739,6 +739,7 @@ mod tests {
             id: codex_app_server_protocol::RequestId::Integer(7),
             method: "config/read".to_string(),
             params: Some(json!({ "includeLayers": false })),
+            trace: None,
         });
         assert!(
             enqueue_incoming_message(&transport_event_tx, &writer_tx, connection_id, request).await
@@ -880,6 +881,7 @@ mod tests {
             id: codex_app_server_protocol::RequestId::Integer(7),
             method: "config/read".to_string(),
             params: Some(json!({ "includeLayers": false })),
+            trace: None,
         });
 
         let enqueue_result = tokio::time::timeout(

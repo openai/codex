@@ -28,6 +28,10 @@ Supported transports:
 
 Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
+Inbound JSON-RPC requests may include an optional top-level `trace` object with
+W3C Trace Context fields (`traceparent` and optional `tracestate`). This keeps
+trace propagation transport-level and independent of method-specific params.
+
 Tracing/log output:
 
 - `RUST_LOG` controls log filtering/verbosity.
@@ -84,6 +88,9 @@ Example (from OpenAI's official VSCode extension):
 {
   "method": "initialize",
   "id": 0,
+  "trace": {
+    "traceparent": "00-00000000000000000000000000000001-0000000000000002-01"
+  },
   "params": {
     "clientInfo": {
       "name": "codex_vscode",

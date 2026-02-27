@@ -1,3 +1,4 @@
+use ::tracing::error;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_core::CodexThread;
@@ -6,7 +7,6 @@ use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolRespons
 use codex_protocol::protocol::Op;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tracing::error;
 
 use crate::outgoing_message::ClientRequestResult;
 

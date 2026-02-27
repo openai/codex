@@ -3,13 +3,12 @@ use crate::config::OtelHttpProtocol;
 use crate::config::OtelSettings;
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
+use crate::trace_context::context_from_trace_headers;
 use gethostname::gethostname;
 use opentelemetry::Context;
 use opentelemetry::KeyValue;
 use opentelemetry::context::ContextGuard;
 use opentelemetry::global;
-use opentelemetry::propagation::TextMapPropagator;
-use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::LogExporter;
@@ -30,7 +29,6 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::trace::Tracer;
 use opentelemetry_semantic_conventions as semconv;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::sync::OnceLock;
@@ -172,7 +170,7 @@ impl Drop for OtelProvider {
     }
 }
 
-pub(crate) fn traceparent_context_from_env() -> Option<Context> {
+pub fn traceparent_context_from_env() -> Option<Context> {
     TRACEPARENT_CONTEXT
         .get_or_init(load_traceparent_context)
         .clone()
@@ -194,7 +192,7 @@ fn load_traceparent_context() -> Option<Context> {
     let traceparent = env::var(TRACEPARENT_ENV_VAR).ok()?;
     let tracestate = env::var(TRACESTATE_ENV_VAR).ok();
 
-    match extract_traceparent_context(traceparent, tracestate) {
+    match context_from_trace_headers(Some(&traceparent), tracestate.as_deref()) {
         Some(context) => {
             debug!("TRACEPARENT detected; continuing trace from parent context");
             Some(context)
@@ -204,22 +202,6 @@ fn load_traceparent_context() -> Option<Context> {
             None
         }
     }
-}
-
-fn extract_traceparent_context(traceparent: String, tracestate: Option<String>) -> Option<Context> {
-    let mut headers = HashMap::new();
-    headers.insert("traceparent".to_string(), traceparent);
-    if let Some(tracestate) = tracestate {
-        headers.insert("tracestate".to_string(), tracestate);
-    }
-
-    let context = TraceContextPropagator::new().extract(&headers);
-    let span = context.span();
-    let span_context = span.span_context();
-    if !span_context.is_valid() {
-        return None;
-    }
-    Some(context)
 }
 
 fn make_resource(settings: &OtelSettings) -> Resource {
@@ -407,8 +389,9 @@ mod tests {
     fn parses_valid_traceparent() {
         let trace_id = "00000000000000000000000000000001";
         let span_id = "0000000000000002";
-        let context = extract_traceparent_context(format!("00-{trace_id}-{span_id}-01"), None)
-            .expect("trace context");
+        let context =
+            context_from_trace_headers(Some(&format!("00-{trace_id}-{span_id}-01")), None)
+                .expect("trace context");
         let span = context.span();
         let span_context = span.span_context();
         assert_eq!(
@@ -421,7 +404,7 @@ mod tests {
 
     #[test]
     fn invalid_traceparent_returns_none() {
-        assert!(extract_traceparent_context("not-a-traceparent".to_string(), None).is_none());
+        assert!(context_from_trace_headers(Some("not-a-traceparent"), None).is_none());
     }
 
     #[test]

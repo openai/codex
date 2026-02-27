@@ -70,7 +70,17 @@
         "method": {
           "type": "string"
         },
-        "params": true
+        "params": true,
+        "trace": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/W3cTraceContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
       },
       "required": [
         "id",
@@ -102,6 +112,23 @@
           "type": "integer"
         }
       ]
+    },
+    "W3cTraceContext": {
+      "properties": {
+        "traceparent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tracestate": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     }
   },
   "description": "Refers to any valid JSON-RPC object that can be decoded off the wire, or encoded to be sent.",

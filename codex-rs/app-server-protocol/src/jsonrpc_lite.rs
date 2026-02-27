@@ -1,6 +1,7 @@
 //! We do not do true JSON-RPC 2.0, as we neither send nor expect the
 //! "jsonrpc": "2.0" field.
 
+use codex_protocol::protocol::W3cTraceContext;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -36,6 +37,9 @@ pub struct JSONRPCRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub params: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub trace: Option<W3cTraceContext>,
 }
 
 /// A notification which does not expect a response.

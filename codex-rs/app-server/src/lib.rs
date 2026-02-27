@@ -29,6 +29,9 @@ use crate::transport::TransportEvent;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
+use ::tracing::error;
+use ::tracing::info;
+use ::tracing::warn;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -43,9 +46,6 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
-use tracing::error;
-use tracing::info;
-use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -65,6 +65,7 @@ mod models;
 mod outgoing_message;
 mod thread_state;
 mod thread_status;
+mod tracing;
 mod transport;
 
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
@@ -674,6 +675,7 @@ pub async fn run_main_with_transport(
                                             .process_request(
                                                 connection_id,
                                                 request,
+                                                transport,
                                                 &mut connection_state.session,
                                                 &connection_state.outbound_initialized,
                                             )

@@ -1428,6 +1428,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-login",
+ "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
  "codex-shell-command",
