@@ -1,6 +1,9 @@
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
+use crate::policy::MatchOptions;
+use crate::policy::Policy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use shlex::try_join;
@@ -63,6 +66,8 @@ pub enum RuleMatch {
         #[serde(rename = "matchedPrefix")]
         matched_prefix: Vec<String>,
         decision: Decision,
+        #[serde(rename = "resolvedProgram", skip_serializing_if = "Option::is_none")]
+        resolved_program: Option<AbsolutePathBuf>,
         /// Optional rationale for why this rule exists.
         ///
         /// This can be supplied for any decision and may be surfaced in different contexts
@@ -81,6 +86,23 @@ impl RuleMatch {
         match self {
             Self::PrefixRuleMatch { decision, .. } => *decision,
             Self::HeuristicsRuleMatch { decision, .. } => *decision,
+        }
+    }
+
+    pub fn with_resolved_program(self, resolved_program: &AbsolutePathBuf) -> Self {
+        match self {
+            Self::PrefixRuleMatch {
+                matched_prefix,
+                decision,
+                justification,
+                ..
+            } => Self::PrefixRuleMatch {
+                matched_prefix,
+                decision,
+                resolved_program: Some(resolved_program.clone()),
+                justification,
+            },
+            other => other,
         }
     }
 }
@@ -210,6 +232,7 @@ impl Rule for PrefixRule {
             .map(|matched_prefix| RuleMatch::PrefixRuleMatch {
                 matched_prefix,
                 decision: self.decision,
+                resolved_program: None,
                 justification: self.justification.clone(),
             })
     }
@@ -220,11 +243,21 @@ impl Rule for PrefixRule {
 }
 
 /// Count how many rules match each provided example and error if any example is unmatched.
-pub(crate) fn validate_match_examples(rules: &[RuleRef], matches: &[Vec<String>]) -> Result<()> {
+pub(crate) fn validate_match_examples(
+    policy: &Policy,
+    rules: &[RuleRef],
+    matches: &[Vec<String>],
+) -> Result<()> {
     let mut unmatched_examples = Vec::new();
+    let options = MatchOptions {
+        resolve_host_executables: true,
+    };
 
     for example in matches {
-        if rules.iter().any(|rule| rule.matches(example).is_some()) {
+        if !policy
+            .matches_for_command_with_options(example, None, &options)
+            .is_empty()
+        {
             continue;
         }
 
@@ -240,21 +273,31 @@ pub(crate) fn validate_match_examples(rules: &[RuleRef], matches: &[Vec<String>]
         Err(Error::ExampleDidNotMatch {
             rules: rules.iter().map(|rule| format!("{rule:?}")).collect(),
             examples: unmatched_examples,
+            location: None,
         })
     }
 }
 
 /// Ensure that no rule matches any provided negative example.
 pub(crate) fn validate_not_match_examples(
-    rules: &[RuleRef],
+    policy: &Policy,
+    _rules: &[RuleRef],
     not_matches: &[Vec<String>],
 ) -> Result<()> {
+    let options = MatchOptions {
+        resolve_host_executables: true,
+    };
+
     for example in not_matches {
-        if let Some(rule) = rules.iter().find(|rule| rule.matches(example).is_some()) {
+        if let Some(rule) = policy
+            .matches_for_command_with_options(example, None, &options)
+            .first()
+        {
             return Err(Error::ExampleDidMatch {
                 rule: format!("{rule:?}"),
                 example: try_join(example.iter().map(String::as_str))
                     .unwrap_or_else(|_| "unable to render example".to_string()),
+                location: None,
             });
         }
     }

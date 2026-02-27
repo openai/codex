@@ -22,6 +22,7 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ContextCompactedEvent;
 use codex_protocol::protocol::DynamicToolCallResponseEvent;
@@ -126,6 +127,9 @@ impl ThreadHistoryBuilder {
             EventMsg::WebSearchEnd(payload) => self.handle_web_search_end(payload),
             EventMsg::ExecCommandBegin(payload) => self.handle_exec_command_begin(payload),
             EventMsg::ExecCommandEnd(payload) => self.handle_exec_command_end(payload),
+            EventMsg::ApplyPatchApprovalRequest(payload) => {
+                self.handle_apply_patch_approval_request(payload)
+            }
             EventMsg::PatchApplyBegin(payload) => self.handle_patch_apply_begin(payload),
             EventMsg::PatchApplyEnd(payload) => self.handle_patch_apply_end(payload),
             EventMsg::DynamicToolCallRequest(payload) => {
@@ -362,6 +366,19 @@ impl ThreadHistoryBuilder {
         // newer user turn may already have started. Route by event turn_id so
         // replay preserves the original turn association.
         self.upsert_item_in_turn_id(&payload.turn_id, item);
+    }
+
+    fn handle_apply_patch_approval_request(&mut self, payload: &ApplyPatchApprovalRequestEvent) {
+        let item = ThreadItem::FileChange {
+            id: payload.call_id.clone(),
+            changes: convert_patch_changes(&payload.changes),
+            status: PatchApplyStatus::InProgress,
+        };
+        if payload.turn_id.is_empty() {
+            self.upsert_item_in_current_turn(item);
+        } else {
+            self.upsert_item_in_turn_id(&payload.turn_id, item);
+        }
     }
 
     fn handle_patch_apply_begin(&mut self, payload: &PatchApplyBeginEvent) {
@@ -1080,6 +1097,7 @@ mod tests {
     use codex_protocol::protocol::AgentMessageEvent;
     use codex_protocol::protocol::AgentReasoningEvent;
     use codex_protocol::protocol::AgentReasoningRawContentEvent;
+    use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::CompactedItem;
     use codex_protocol::protocol::DynamicToolCallResponseEvent;
@@ -1088,6 +1106,7 @@ mod tests {
     use codex_protocol::protocol::ItemStartedEvent;
     use codex_protocol::protocol::McpInvocation;
     use codex_protocol::protocol::McpToolCallEndEvent;
+    use codex_protocol::protocol::PatchApplyBeginEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
@@ -1977,6 +1996,133 @@ mod tests {
                     text_elements: Vec::new(),
                 }],
             }
+        );
+    }
+
+    #[test]
+    fn patch_apply_begin_updates_active_turn_snapshot_with_file_change() {
+        let turn_id = "turn-1";
+        let mut builder = ThreadHistoryBuilder::new();
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "apply patch".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+                call_id: "patch-call".into(),
+                turn_id: turn_id.to_string(),
+                auto_approved: false,
+                changes: [(
+                    PathBuf::from("README.md"),
+                    codex_protocol::protocol::FileChange::Add {
+                        content: "hello\n".into(),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+        ];
+
+        for event in &events {
+            builder.handle_event(event);
+        }
+
+        let snapshot = builder
+            .active_turn_snapshot()
+            .expect("active turn snapshot");
+        assert_eq!(snapshot.id, turn_id);
+        assert_eq!(snapshot.status, TurnStatus::InProgress);
+        assert_eq!(
+            snapshot.items,
+            vec![
+                ThreadItem::UserMessage {
+                    id: "item-1".into(),
+                    content: vec![UserInput::Text {
+                        text: "apply patch".into(),
+                        text_elements: Vec::new(),
+                    }],
+                },
+                ThreadItem::FileChange {
+                    id: "patch-call".into(),
+                    changes: vec![FileUpdateChange {
+                        path: "README.md".into(),
+                        kind: PatchChangeKind::Add,
+                        diff: "hello\n".into(),
+                    }],
+                    status: PatchApplyStatus::InProgress,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_patch_approval_request_updates_active_turn_snapshot_with_file_change() {
+        let turn_id = "turn-1";
+        let mut builder = ThreadHistoryBuilder::new();
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "apply patch".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                call_id: "patch-call".into(),
+                turn_id: turn_id.to_string(),
+                changes: [(
+                    PathBuf::from("README.md"),
+                    codex_protocol::protocol::FileChange::Add {
+                        content: "hello\n".into(),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                reason: None,
+                grant_root: None,
+            }),
+        ];
+
+        for event in &events {
+            builder.handle_event(event);
+        }
+
+        let snapshot = builder
+            .active_turn_snapshot()
+            .expect("active turn snapshot");
+        assert_eq!(snapshot.id, turn_id);
+        assert_eq!(snapshot.status, TurnStatus::InProgress);
+        assert_eq!(
+            snapshot.items,
+            vec![
+                ThreadItem::UserMessage {
+                    id: "item-1".into(),
+                    content: vec![UserInput::Text {
+                        text: "apply patch".into(),
+                        text_elements: Vec::new(),
+                    }],
+                },
+                ThreadItem::FileChange {
+                    id: "patch-call".into(),
+                    changes: vec![FileUpdateChange {
+                        path: "README.md".into(),
+                        kind: PatchChangeKind::Add,
+                        diff: "hello\n".into(),
+                    }],
+                    status: PatchApplyStatus::InProgress,
+                },
+            ]
         );
     }
 

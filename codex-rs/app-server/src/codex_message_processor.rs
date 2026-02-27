@@ -100,6 +100,7 @@ use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::ProductSurface as ApiProductSurface;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
 use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
@@ -112,6 +113,7 @@ use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
@@ -297,8 +299,12 @@ use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
+#[cfg(test)]
+use codex_app_server_protocol::ServerRequest;
+
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
+use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
 
@@ -3221,11 +3227,11 @@ impl CodexMessageProcessor {
             };
 
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
-                crate::thread_state::PendingThreadResumeRequest {
+                Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
                     rollout_path,
                     config_snapshot,
-                },
+                }),
             );
             if listener_command_tx.send(command).is_err() {
                 let err = JSONRPCErrorError {
@@ -4844,7 +4850,9 @@ impl CodexMessageProcessor {
 
     async fn finalize_thread_teardown(&mut self, thread_id: ThreadId) {
         self.pending_thread_unloads.lock().await.remove(&thread_id);
-        self.outgoing.cancel_requests_for_thread(thread_id).await;
+        self.outgoing
+            .cancel_requests_for_thread(thread_id, None)
+            .await;
         self.thread_state_manager
             .remove_thread_state(thread_id)
             .await;
@@ -4905,7 +4913,9 @@ impl CodexMessageProcessor {
             self.pending_thread_unloads.lock().await.insert(thread_id);
             // Any pending app-server -> client requests for this thread can no longer be
             // answered; cancel their callbacks before shutdown/unload.
-            self.outgoing.cancel_requests_for_thread(thread_id).await;
+            self.outgoing
+                .cancel_requests_for_thread(thread_id, None)
+                .await;
             self.thread_state_manager
                 .remove_thread_state(thread_id)
                 .await;
@@ -6507,21 +6517,15 @@ impl CodexMessageProcessor {
                         let Some(listener_command) = listener_command else {
                             break;
                         };
-                        match listener_command {
-                            crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
-                                resume_request,
-                            ) => {
-                                handle_pending_thread_resume_request(
-                                    conversation_id,
-                                    codex_home.as_path(),
-                                    &thread_state,
-                                    &thread_watch_manager,
-                                    &outgoing_for_task,
-                                    resume_request,
-                                )
-                                .await;
-                            }
-                        }
+                        handle_thread_listener_command(
+                            conversation_id,
+                            codex_home.as_path(),
+                            &thread_state,
+                            &thread_watch_manager,
+                            &outgoing_for_task,
+                            listener_command,
+                        )
+                        .await;
                     }
                 }
             }
@@ -6830,6 +6834,37 @@ impl CodexMessageProcessor {
     }
 }
 
+async fn handle_thread_listener_command(
+    conversation_id: ThreadId,
+    codex_home: &Path,
+    thread_state: &Arc<Mutex<ThreadState>>,
+    thread_watch_manager: &ThreadWatchManager,
+    outgoing: &Arc<OutgoingMessageSender>,
+    listener_command: ThreadListenerCommand,
+) {
+    match listener_command {
+        ThreadListenerCommand::SendThreadResumeResponse(resume_request) => {
+            handle_pending_thread_resume_request(
+                conversation_id,
+                codex_home,
+                thread_state,
+                thread_watch_manager,
+                outgoing,
+                *resume_request,
+            )
+            .await;
+        }
+        ThreadListenerCommand::ResolveServerRequest {
+            request_id,
+            completion_tx,
+        } => {
+            resolve_pending_server_request(conversation_id, thread_state, outgoing, request_id)
+                .await;
+            let _ = completion_tx.send(());
+        }
+    }
+}
+
 async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
     codex_home: &Path,
@@ -6918,7 +6953,34 @@ async fn handle_pending_thread_resume_request(
         reasoning_effort,
     };
     outgoing.send_response(request_id, response).await;
+    outgoing
+        .replay_requests_to_connection_for_thread(connection_id, conversation_id)
+        .await;
+
     thread_state.lock().await.add_connection(connection_id);
+}
+
+async fn resolve_pending_server_request(
+    conversation_id: ThreadId,
+    thread_state: &Arc<Mutex<ThreadState>>,
+    outgoing: &Arc<OutgoingMessageSender>,
+    request_id: RequestId,
+) {
+    let thread_id = conversation_id.to_string();
+    let subscribed_connection_ids = thread_state.lock().await.subscribed_connection_ids();
+    let outgoing = ThreadScopedOutgoingMessageSender::new(
+        outgoing.clone(),
+        subscribed_connection_ids,
+        conversation_id,
+    );
+    outgoing
+        .send_server_notification(ServerNotification::ServerRequestResolved(
+            ServerRequestResolvedNotification {
+                thread_id,
+                request_id,
+            },
+        ))
+        .await;
 }
 
 async fn load_thread_for_running_resume_response(
@@ -7668,7 +7730,11 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outgoing_message::OutgoingEnvelope;
+    use crate::outgoing_message::OutgoingMessage;
     use anyhow::Result;
+    use codex_app_server_protocol::ServerRequestPayload;
+    use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
     use pretty_assertions::assert_eq;
@@ -7859,6 +7925,67 @@ mod tests {
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aborting_pending_request_clears_pending_state() -> Result<()> {
+        let thread_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
+        let thread_state = Arc::new(Mutex::new(ThreadState::default()));
+        let connection_id = ConnectionId(7);
+        thread_state.lock().await.add_connection(connection_id);
+
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+        let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing.clone(),
+            vec![connection_id],
+            thread_id,
+        );
+
+        let (request_id, client_request_rx) = thread_outgoing
+            .send_request(ServerRequestPayload::ToolRequestUserInput(
+                ToolRequestUserInputParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "call-1".to_string(),
+                    questions: vec![],
+                },
+            ))
+            .await;
+        thread_outgoing.abort_pending_server_requests().await;
+
+        let request_message = outgoing_rx.recv().await.expect("request should be sent");
+        let OutgoingEnvelope::ToConnection {
+            connection_id: request_connection_id,
+            message:
+                OutgoingMessage::Request(ServerRequest::ToolRequestUserInput {
+                    request_id: sent_request_id,
+                    ..
+                }),
+        } = request_message
+        else {
+            panic!("expected tool request to be sent to the subscribed connection");
+        };
+        assert_eq!(request_connection_id, connection_id);
+        assert_eq!(sent_request_id, request_id);
+
+        let response = client_request_rx
+            .await
+            .expect("callback should be resolved");
+        let error = response.expect_err("request should be aborted during cleanup");
+        assert_eq!(
+            error.message,
+            "client request resolved because the turn state was changed"
+        );
+        assert_eq!(error.data, Some(json!({ "reason": "turnTransition" })));
+        assert!(
+            outgoing
+                .pending_requests_for_thread(thread_id)
+                .await
+                .is_empty()
+        );
+        assert!(outgoing_rx.try_recv().is_err());
         Ok(())
     }
 
