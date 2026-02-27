@@ -96,6 +96,7 @@ export type { GitDiffToRemoteParams } from "./GitDiffToRemoteParams";
 export type { GitDiffToRemoteResponse } from "./GitDiffToRemoteResponse";
 export type { GitSha } from "./GitSha";
 export type { HistoryEntry } from "./HistoryEntry";
+export type { ImageDetail } from "./ImageDetail";
 export type { InitializeCapabilities } from "./InitializeCapabilities";
 export type { InitializeParams } from "./InitializeParams";
 export type { InitializeResponse } from "./InitializeResponse";
